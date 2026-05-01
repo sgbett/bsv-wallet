@@ -1,7 +1,7 @@
 # BSV Wallet — Ruby Implementation Design
 
 **Status:** In progress
-**Source spec:** [BRC-100](reference/BRC100.md)
+**Source spec:** [BRC-100](https://github.com/bitcoin-sv/BRCs/blob/master/wallet/0100.md)
 **Gems:** `bsv-wallet` (core) + `bsv-wallet-postgres` (adapter) — see [Gem Structure](#gem-structure)
 
 ---

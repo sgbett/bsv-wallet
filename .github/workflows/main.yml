@@ -1,0 +1,33 @@
+name: Ruby
+
+on:
+  push:
+    branches:
+      - master
+
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Ruby ${{ matrix.ruby }}
+    strategy:
+      matrix:
+        ruby:
+          - '3.0'
+          - '3.1'
+          - '3.2'
+          - '3.3'
+          - '3.4'
+
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+          working-directory: gem/bsv-wallet
+      - name: Run the default task
+        run: bundle exec rake
+        working-directory: gem/bsv-wallet

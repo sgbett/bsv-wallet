@@ -4,10 +4,10 @@ source 'https://rubygems.org'
 
 gemspec
 
-# Local SDK — remove once bsv-sdk is published to rubygems
-gem 'bsv-sdk', path: '/opt/ruby/bsv-ruby-sdk/gem/bsv-sdk'
-
 group :development, :test do
+  gem 'rake'
   gem 'rspec', '~> 3.13'
   gem 'rubocop', '~> 1.75', require: false
+  gem 'yard'
+  gem 'yard-markdown'
 end
