@@ -197,11 +197,214 @@ module BSV
         { relinquished: true }
       end
 
-      # --- Remaining methods (HLR #5 stubs) ---
-      # Key management, crypto, certificates, auth, network
-      # Left as NotImplementedError from Interface::BRC100 until HLR #5
+      # --- Public Key Management (codes 8-10) ---
 
-      # Override network and version since they're configuration, not computation
+      def public_key(identity_key: false, protocol_id: nil, key_id: nil,
+                     privileged: false, privileged_reason: nil,
+                     counterparty: nil, for_self: false,
+                     seek_permission: true, originator: nil)
+        require_key_deriver!
+
+        if identity_key
+          { public_key: @key_deriver.identity_key }
+        else
+          pub = @key_deriver.derive_public_key(
+            protocol_id: protocol_id, key_id: key_id,
+            counterparty: counterparty || 'self',
+            for_self: for_self, privileged: privileged
+          )
+          { public_key: pub }
+        end
+      end
+
+      def reveal_counterparty_key_linkage(counterparty:, verifier:,
+                                         privileged: false, privileged_reason: nil,
+                                         originator: nil)
+        require_key_deriver!
+        @key_deriver.reveal_counterparty_linkage(
+          counterparty: counterparty, verifier: verifier, privileged: privileged
+        )
+      end
+
+      def reveal_specific_key_linkage(counterparty:, verifier:, protocol_id:, key_id:,
+                                     privileged: false, privileged_reason: nil,
+                                     originator: nil)
+        require_key_deriver!
+        @key_deriver.reveal_specific_linkage(
+          counterparty: counterparty, verifier: verifier,
+          protocol_id: protocol_id, key_id: key_id, privileged: privileged
+        )
+      end
+
+      # --- Cryptography Operations (codes 11-16) ---
+
+      def encrypt(plaintext:, protocol_id:, key_id:,
+                  privileged: false, privileged_reason: nil,
+                  counterparty: nil, seek_permission: true, originator: nil)
+        require_key_deriver!
+        ciphertext = @key_deriver.encrypt(
+          plaintext: plaintext, protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty || 'self', privileged: privileged
+        )
+        { ciphertext: ciphertext }
+      end
+
+      def decrypt(ciphertext:, protocol_id:, key_id:,
+                  privileged: false, privileged_reason: nil,
+                  counterparty: nil, seek_permission: true, originator: nil)
+        require_key_deriver!
+        plaintext = @key_deriver.decrypt(
+          ciphertext: ciphertext, protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty || 'self', privileged: privileged
+        )
+        { plaintext: plaintext }
+      end
+
+      def create_hmac(data:, protocol_id:, key_id:,
+                      privileged: false, privileged_reason: nil,
+                      counterparty: nil, seek_permission: true, originator: nil)
+        require_key_deriver!
+        hmac = @key_deriver.create_hmac(
+          data: data, protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty || 'self', privileged: privileged
+        )
+        { hmac: hmac }
+      end
+
+      def verify_hmac(data:, hmac:, protocol_id:, key_id:,
+                      privileged: false, privileged_reason: nil,
+                      counterparty: nil, seek_permission: true, originator: nil)
+        require_key_deriver!
+        expected = @key_deriver.create_hmac(
+          data: data, protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty || 'self', privileged: privileged
+        )
+        raise BSV::Wallet::InvalidHmacError unless secure_compare(expected, hmac)
+
+        { valid: true }
+      end
+
+      def create_signature(protocol_id:, key_id:, data: nil, hash_to_directly_sign: nil,
+                           privileged: false, privileged_reason: nil,
+                           counterparty: nil, seek_permission: true, originator: nil)
+        require_key_deriver!
+        signature = @key_deriver.create_signature(
+          data: data, hash_to_directly_sign: hash_to_directly_sign,
+          protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty || 'self', privileged: privileged
+        )
+        { signature: signature }
+      end
+
+      def verify_signature(signature:, protocol_id:, key_id:, data: nil,
+                           hash_to_directly_verify: nil,
+                           privileged: false, privileged_reason: nil,
+                           counterparty: nil, for_self: false,
+                           seek_permission: true, originator: nil)
+        require_key_deriver!
+        valid = @key_deriver.verify_signature(
+          signature: signature, data: data,
+          hash_to_directly_verify: hash_to_directly_verify,
+          protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty || 'self',
+          for_self: for_self, privileged: privileged
+        )
+        raise BSV::Wallet::InvalidSignatureError unless valid
+
+        { valid: true }
+      end
+
+      # --- Identity and Certificate Management (codes 17-22) ---
+
+      def acquire_certificate(type:, certifier:, acquisition_protocol:, fields:,
+                              serial_number: nil, revocation_outpoint: nil,
+                              signature: nil, certifier_url: nil,
+                              keyring_revealer: nil, keyring_for_subject: nil,
+                              privileged: false, privileged_reason: nil, originator: nil)
+        case acquisition_protocol
+        when :direct, 'direct'
+          @store.save_certificate(
+            type: type, certifier: certifier, fields: fields,
+            serial_number: serial_number, revocation_outpoint: revocation_outpoint,
+            signature: signature, subject: @key_deriver&.identity_key,
+            keyring: keyring_for_subject
+          )
+        when :issuance, 'issuance'
+          raise BSV::Wallet::UnsupportedActionError, 'certificate issuance protocol'
+        else
+          raise BSV::Wallet::InvalidParameterError.new('acquisition_protocol',
+            'either :direct or :issuance')
+        end
+      end
+
+      def list_certificates(certifiers:, types:, limit: 10, offset: 0,
+                            privileged: false, privileged_reason: nil, originator: nil)
+        result = @store.query_certificates(
+          certifiers: certifiers, types: types,
+          limit: [limit, 10_000].min, offset: offset
+        )
+        { total_certificates: result[:total], certificates: result[:certificates] }
+      end
+
+      def prove_certificate(certificate:, fields_to_reveal:, verifier:,
+                            privileged: false, privileged_reason: nil, originator: nil)
+        require_key_deriver!
+        keyring = @key_deriver.derive_revelation_keyring(
+          certificate: certificate,
+          fields_to_reveal: fields_to_reveal,
+          verifier: verifier,
+          privileged: privileged
+        )
+        { keyring_for_verifier: keyring }
+      end
+
+      def relinquish_certificate(type:, serial_number:, certifier:, originator: nil)
+        @store.delete_certificate(type: type, serial_number: serial_number, certifier: certifier)
+        { relinquished: true }
+      end
+
+      def discover_by_identity_key(identity_key:, limit: 10, offset: 0,
+                                   seek_permission: true, originator: nil)
+        # Local lookup — external discovery is a future concern
+        result = @store.query_certificates(
+          certifiers: [], types: [],
+          limit: [limit, 10_000].min, offset: offset
+        )
+        # Filter by subject (identity_key) in application layer
+        matching = result[:certificates].select { |c| c[:subject] == identity_key }
+        { total_certificates: matching.size, certificates: matching }
+      end
+
+      def discover_by_attributes(attributes:, limit: 10, offset: 0,
+                                 seek_permission: true, originator: nil)
+        # Local lookup — external discovery is a future concern
+        # This requires scanning certificate fields, which the Store
+        # doesn't support yet. Return empty for now.
+        { total_certificates: 0, certificates: [] }
+      end
+
+      # --- Authentication (codes 23-24) ---
+
+      def authenticated?(originator: nil)
+        { authenticated: !@key_deriver.nil? }
+      end
+
+      def wait_for_authentication(originator: nil)
+        raise BSV::Wallet::Error.new('wallet is not authenticated', 2) unless @key_deriver
+
+        { authenticated: true }
+      end
+
+      # --- Blockchain and Network Data (codes 25-28) ---
+
+      def height(originator: nil)
+        raise BSV::Wallet::UnsupportedActionError, 'height'
+      end
+
+      def header_for_height(height:, originator: nil)
+        raise BSV::Wallet::UnsupportedActionError, 'header_for_height'
+      end
+
       def network(originator: nil)
         { network: @network_name }
       end
@@ -339,7 +542,20 @@ module BSV
         spec
       end
 
-      # Placeholder — SDK transaction construction (HLR #5)
+      def require_key_deriver!
+        raise BSV::Wallet::Error.new('wallet has no key deriver configured', 2) unless @key_deriver
+      end
+
+      def secure_compare(a, b)
+        return false unless a.bytesize == b.bytesize
+
+        # Constant-time comparison
+        result = 0
+        a.bytes.zip(b.bytes) { |x, y| result |= x ^ y }
+        result.zero?
+      end
+
+      # Placeholder — SDK transaction construction
       def build_transaction(_inputs, _outputs, _lock_time, _version, _randomize)
         # In production: construct and sign via SDK
         # For now: generate a dummy txid

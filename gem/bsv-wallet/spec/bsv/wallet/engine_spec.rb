@@ -370,6 +370,285 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
+  # --- Key Management, Crypto, Certificates, Auth, Network (HLR #5) ---
+
+  # Mock key deriver for crypto tests
+  let(:mock_identity_key) { '02' + SecureRandom.hex(32) }
+  let(:mock_derived_public_key) { SecureRandom.random_bytes(33) }
+  let(:mock_ciphertext) { SecureRandom.random_bytes(48) }
+  let(:mock_plaintext) { 'hello world'.b }
+  let(:mock_hmac_value) { SecureRandom.random_bytes(32) }
+  let(:mock_signature_value) { SecureRandom.random_bytes(72) }
+
+  let(:key_deriver) do
+    deriver = double('KeyDeriver')
+    allow(deriver).to receive(:identity_key).and_return(mock_identity_key)
+    allow(deriver).to receive(:derive_public_key).and_return(mock_derived_public_key)
+    allow(deriver).to receive(:encrypt).and_return(mock_ciphertext)
+    allow(deriver).to receive(:decrypt).and_return(mock_plaintext)
+    allow(deriver).to receive(:create_hmac).and_return(mock_hmac_value)
+    allow(deriver).to receive(:create_signature).and_return(mock_signature_value)
+    allow(deriver).to receive(:verify_signature).and_return(true)
+    allow(deriver).to receive(:reveal_counterparty_linkage).and_return({
+      prover: mock_identity_key, verifier: SecureRandom.random_bytes(33),
+      counterparty: SecureRandom.random_bytes(33),
+      revelation_time: Time.now.iso8601,
+      encrypted_linkage: SecureRandom.random_bytes(32),
+      encrypted_linkage_proof: SecureRandom.random_bytes(32)
+    })
+    allow(deriver).to receive(:reveal_specific_linkage).and_return({
+      prover: mock_identity_key, verifier: SecureRandom.random_bytes(33),
+      counterparty: SecureRandom.random_bytes(33),
+      encrypted_linkage: SecureRandom.random_bytes(32),
+      encrypted_linkage_proof: SecureRandom.random_bytes(32),
+      proof_type: 0
+    })
+    allow(deriver).to receive(:derive_revelation_keyring).and_return({
+      'name' => SecureRandom.random_bytes(32),
+      'email' => SecureRandom.random_bytes(32)
+    })
+    deriver
+  end
+
+  let(:engine_with_keys) do
+    described_class.new(
+      store: store, utxo_pool: utxo_pool,
+      broadcast_queue: broadcast_queue, proof_store: proof_store,
+      key_deriver: key_deriver, network: :mainnet
+    )
+  end
+
+  describe '#public_key' do
+    it 'returns the identity key when identity_key: true' do
+      result = engine_with_keys.public_key(identity_key: true)
+      expect(result[:public_key]).to eq(mock_identity_key)
+    end
+
+    it 'derives a public key with protocol_id and key_id' do
+      result = engine_with_keys.public_key(
+        protocol_id: [1, 'test protocol'], key_id: 'key1', counterparty: 'self'
+      )
+      expect(result[:public_key]).to eq(mock_derived_public_key)
+      expect(key_deriver).to have_received(:derive_public_key).with(
+        protocol_id: [1, 'test protocol'], key_id: 'key1',
+        counterparty: 'self', for_self: false, privileged: false
+      )
+    end
+
+    it 'raises without key_deriver' do
+      expect { engine.public_key(identity_key: true) }
+        .to raise_error(BSV::Wallet::Error, /key deriver/)
+    end
+  end
+
+  describe '#reveal_counterparty_key_linkage' do
+    it 'delegates to key_deriver' do
+      result = engine_with_keys.reveal_counterparty_key_linkage(
+        counterparty: SecureRandom.random_bytes(33),
+        verifier: SecureRandom.random_bytes(33)
+      )
+      expect(result).to include(:prover, :verifier, :counterparty)
+    end
+  end
+
+  describe '#reveal_specific_key_linkage' do
+    it 'delegates to key_deriver' do
+      result = engine_with_keys.reveal_specific_key_linkage(
+        counterparty: SecureRandom.random_bytes(33),
+        verifier: SecureRandom.random_bytes(33),
+        protocol_id: [1, 'test protocol'], key_id: 'key1'
+      )
+      expect(result).to include(:prover, :encrypted_linkage)
+    end
+  end
+
+  describe '#encrypt / #decrypt' do
+    it 'encrypts data' do
+      result = engine_with_keys.encrypt(
+        plaintext: mock_plaintext,
+        protocol_id: [1, 'encryption test'], key_id: 'enc1'
+      )
+      expect(result[:ciphertext]).to eq(mock_ciphertext)
+    end
+
+    it 'decrypts data' do
+      result = engine_with_keys.decrypt(
+        ciphertext: mock_ciphertext,
+        protocol_id: [1, 'encryption test'], key_id: 'enc1'
+      )
+      expect(result[:plaintext]).to eq(mock_plaintext)
+    end
+
+    it 'raises without key_deriver' do
+      expect {
+        engine.encrypt(plaintext: 'data'.b, protocol_id: [1, 'test proto'], key_id: 'k')
+      }.to raise_error(BSV::Wallet::Error, /key deriver/)
+    end
+  end
+
+  describe '#create_hmac / #verify_hmac' do
+    it 'creates an HMAC' do
+      result = engine_with_keys.create_hmac(
+        data: 'test data'.b, protocol_id: [1, 'hmac test proto'], key_id: 'h1'
+      )
+      expect(result[:hmac]).to eq(mock_hmac_value)
+    end
+
+    it 'verifies a valid HMAC' do
+      result = engine_with_keys.verify_hmac(
+        data: 'test data'.b, hmac: mock_hmac_value,
+        protocol_id: [1, 'hmac test proto'], key_id: 'h1'
+      )
+      expect(result).to eq({ valid: true })
+    end
+
+    it 'raises InvalidHmacError for wrong HMAC' do
+      expect {
+        engine_with_keys.verify_hmac(
+          data: 'test data'.b, hmac: SecureRandom.random_bytes(32),
+          protocol_id: [1, 'hmac test proto'], key_id: 'h1'
+        )
+      }.to raise_error(BSV::Wallet::InvalidHmacError)
+    end
+  end
+
+  describe '#create_signature / #verify_signature' do
+    it 'creates a signature' do
+      result = engine_with_keys.create_signature(
+        data: 'sign me'.b, protocol_id: [1, 'sig test proto'], key_id: 's1'
+      )
+      expect(result[:signature]).to eq(mock_signature_value)
+    end
+
+    it 'verifies a valid signature' do
+      result = engine_with_keys.verify_signature(
+        signature: mock_signature_value, data: 'sign me'.b,
+        protocol_id: [1, 'sig test proto'], key_id: 's1'
+      )
+      expect(result).to eq({ valid: true })
+    end
+
+    it 'raises InvalidSignatureError for invalid signature' do
+      allow(key_deriver).to receive(:verify_signature).and_return(false)
+
+      expect {
+        engine_with_keys.verify_signature(
+          signature: 'bad'.b, data: 'sign me'.b,
+          protocol_id: [1, 'sig test proto'], key_id: 's1'
+        )
+      }.to raise_error(BSV::Wallet::InvalidSignatureError)
+    end
+  end
+
+  describe '#acquire_certificate' do
+    it 'acquires a certificate directly' do
+      result = engine_with_keys.acquire_certificate(
+        type: 'identity', certifier: 'certifier_key',
+        acquisition_protocol: :direct,
+        fields: { 'name' => 'Alice', 'email' => 'alice@test.com' },
+        serial_number: 'sn001', signature: 'sig_hex'
+      )
+
+      expect(result[:id]).to be_a(Integer)
+      expect(result[:fields]).to eq({ 'name' => 'Alice', 'email' => 'alice@test.com' })
+    end
+
+    it 'raises for issuance protocol (not yet supported)' do
+      expect {
+        engine_with_keys.acquire_certificate(
+          type: 'identity', certifier: 'c1',
+          acquisition_protocol: :issuance,
+          fields: {}, certifier_url: 'https://cert.example.com'
+        )
+      }.to raise_error(BSV::Wallet::UnsupportedActionError)
+    end
+  end
+
+  describe '#list_certificates' do
+    before do
+      engine_with_keys.acquire_certificate(
+        type: 'id', certifier: 'c1', acquisition_protocol: :direct,
+        fields: { 'name' => 'Alice' }, serial_number: 'sn1', signature: 's1'
+      )
+      engine_with_keys.acquire_certificate(
+        type: 'id', certifier: 'c2', acquisition_protocol: :direct,
+        fields: { 'name' => 'Bob' }, serial_number: 'sn2', signature: 's2'
+      )
+    end
+
+    it 'lists certificates filtered by certifier and type' do
+      result = engine_with_keys.list_certificates(certifiers: ['c1'], types: ['id'])
+      expect(result[:total_certificates]).to eq(1)
+      expect(result[:certificates].first[:fields]['name']).to eq('Alice')
+    end
+  end
+
+  describe '#prove_certificate' do
+    it 'derives revelation keyring for the verifier' do
+      cert = engine_with_keys.acquire_certificate(
+        type: 'id', certifier: 'c1', acquisition_protocol: :direct,
+        fields: { 'name' => 'Alice', 'email' => 'alice@test.com' },
+        serial_number: 'sn1', signature: 's1'
+      )
+
+      result = engine_with_keys.prove_certificate(
+        certificate: cert, fields_to_reveal: ['name'],
+        verifier: SecureRandom.random_bytes(33)
+      )
+
+      expect(result[:keyring_for_verifier]).to be_a(Hash)
+    end
+  end
+
+  describe '#relinquish_certificate' do
+    it 'soft-deletes a certificate' do
+      engine_with_keys.acquire_certificate(
+        type: 'id', certifier: 'c1', acquisition_protocol: :direct,
+        fields: { 'name' => 'Alice' }, serial_number: 'sn1', signature: 's1'
+      )
+
+      result = engine_with_keys.relinquish_certificate(
+        type: 'id', serial_number: 'sn1', certifier: 'c1'
+      )
+      expect(result).to eq({ relinquished: true })
+
+      listed = engine_with_keys.list_certificates(certifiers: ['c1'], types: ['id'])
+      expect(listed[:total_certificates]).to eq(0)
+    end
+  end
+
+  describe '#authenticated?' do
+    it 'returns true with key_deriver' do
+      expect(engine_with_keys.authenticated?).to eq({ authenticated: true })
+    end
+
+    it 'returns false without key_deriver' do
+      expect(engine.authenticated?).to eq({ authenticated: false })
+    end
+  end
+
+  describe '#wait_for_authentication' do
+    it 'returns immediately when authenticated' do
+      expect(engine_with_keys.wait_for_authentication).to eq({ authenticated: true })
+    end
+
+    it 'raises when not authenticated' do
+      expect { engine.wait_for_authentication }.to raise_error(BSV::Wallet::Error)
+    end
+  end
+
+  describe '#height' do
+    it 'raises UnsupportedActionError (chain data source not configured)' do
+      expect { engine.height }.to raise_error(BSV::Wallet::UnsupportedActionError)
+    end
+  end
+
+  describe '#header_for_height' do
+    it 'raises UnsupportedActionError (chain data source not configured)' do
+      expect { engine.header_for_height(height: 1) }.to raise_error(BSV::Wallet::UnsupportedActionError)
+    end
+  end
+
   describe '#network' do
     it 'returns the configured network' do
       expect(engine.network).to eq({ network: :mainnet })
