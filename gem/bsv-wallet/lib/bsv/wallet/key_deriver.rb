@@ -75,7 +75,66 @@ module BSV
         key.derive_child(counterparty_pub, invoice)
       end
 
+      # Encrypt plaintext using AES-256-GCM with an ECDH-derived symmetric key.
+      #
+      # Derives child keys for both parties, computes the ECDH shared secret,
+      # and encrypts using AES-256-GCM.
+      #
+      # @param plaintext [String] binary data to encrypt
+      # @param protocol_id [Array<Integer, String>] [security_level, protocol_name]
+      # @param key_id [String] key identifier
+      # @param counterparty [String] "self", "anyone", or hex public key
+      # @param privileged [Boolean] use privileged keyring
+      # @return [String] binary ciphertext (IV + ciphertext + auth tag)
+      def encrypt(plaintext:, protocol_id:, key_id:, counterparty:, privileged: false)
+        sym_key = derive_symmetric_key(
+          protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty, privileged: privileged
+        )
+        sym_key.encrypt(plaintext)
+      end
+
+      # Decrypt ciphertext using AES-256-GCM with an ECDH-derived symmetric key.
+      #
+      # Derives the same symmetric key used for encryption and decrypts.
+      #
+      # @param ciphertext [String] binary data to decrypt (IV + ciphertext + auth tag)
+      # @param protocol_id [Array<Integer, String>] [security_level, protocol_name]
+      # @param key_id [String] key identifier
+      # @param counterparty [String] "self", "anyone", or hex public key
+      # @param privileged [Boolean] use privileged keyring
+      # @return [String] decrypted binary plaintext
+      # @raise [OpenSSL::Cipher::CipherError] if authentication fails
+      def decrypt(ciphertext:, protocol_id:, key_id:, counterparty:, privileged: false)
+        sym_key = derive_symmetric_key(
+          protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty, privileged: privileged
+        )
+        sym_key.decrypt(ciphertext)
+      end
+
       private
+
+      # Derive a symmetric key via ECDH between child keys.
+      #
+      # Derives our child private key and the counterparty's child public key,
+      # then computes the ECDH shared secret to produce an AES-256-GCM key.
+      #
+      # @param protocol_id [Array<Integer, String>] [security_level, protocol_name]
+      # @param key_id [String] key identifier
+      # @param counterparty [String] "self", "anyone", or hex public key
+      # @param privileged [Boolean] use privileged keyring
+      # @return [BSV::Primitives::SymmetricKey]
+      def derive_symmetric_key(protocol_id:, key_id:, counterparty:, privileged: false)
+        key = select_key(privileged)
+        invoice = compute_invoice_number(protocol_id, key_id)
+        counterparty_pub = resolve_counterparty(counterparty)
+
+        child_priv = key.derive_child(counterparty_pub, invoice)
+        child_pub = counterparty_pub.derive_child(key, invoice)
+
+        BSV::Primitives::SymmetricKey.from_ecdh(child_priv, child_pub)
+      end
 
       # Format a BRC-43 invoice number from protocol_id and key_id.
       #

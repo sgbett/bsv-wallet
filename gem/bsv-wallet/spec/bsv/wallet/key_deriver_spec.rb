@@ -188,6 +188,86 @@ RSpec.describe BSV::Wallet::KeyDeriver do
     end
   end
 
+  describe '#encrypt / #decrypt' do
+    let(:plaintext) { 'hello world'.b }
+
+    it 'round-trips: encrypt then decrypt returns original plaintext' do
+      ciphertext = deriver.encrypt(
+        plaintext: plaintext, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      result = deriver.decrypt(
+        ciphertext: ciphertext, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      expect(result).to eq(plaintext)
+    end
+
+    it 'round-trips empty plaintext' do
+      ciphertext = deriver.encrypt(
+        plaintext: ''.b, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      result = deriver.decrypt(
+        ciphertext: ciphertext, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      expect(result).to eq(''.b)
+    end
+
+    it 'round-trips with counterparty self' do
+      ciphertext = deriver.encrypt(
+        plaintext: plaintext, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      result = deriver.decrypt(
+        ciphertext: ciphertext, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      expect(result).to eq(plaintext)
+    end
+
+    it 'produces different ciphertexts for different counterparties' do
+      other_key = BSV::Primitives::PrivateKey.generate
+      ct_self = deriver.encrypt(
+        plaintext: plaintext, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      ct_other = deriver.encrypt(
+        plaintext: plaintext, protocol_id: protocol_id, key_id: key_id,
+        counterparty: other_key.public_key.to_hex
+      )
+      expect(ct_self).not_to eq(ct_other)
+    end
+
+    it 'produces different ciphertext with privileged: true' do
+      kd = described_class.new(private_key: root_key, privileged_key: privileged_key)
+      ct_normal = kd.encrypt(
+        plaintext: plaintext, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      ct_priv = kd.encrypt(
+        plaintext: plaintext, protocol_id: protocol_id, key_id: key_id,
+        counterparty: 'self', privileged: true
+      )
+      expect(ct_normal).not_to eq(ct_priv)
+    end
+
+    it 'raises CipherError when decrypting with wrong parameters' do
+      ciphertext = deriver.encrypt(
+        plaintext: plaintext, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      expect do
+        deriver.decrypt(
+          ciphertext: ciphertext, protocol_id: protocol_id, key_id: 'wrong_key', counterparty: 'self'
+        )
+      end.to raise_error(OpenSSL::Cipher::CipherError)
+    end
+
+    it 'handles binary data correctly' do
+      binary = (0..255).to_a.pack('C*')
+      ciphertext = deriver.encrypt(
+        plaintext: binary, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      result = deriver.decrypt(
+        ciphertext: ciphertext, protocol_id: protocol_id, key_id: key_id, counterparty: 'self'
+      )
+      expect(result).to eq(binary)
+    end
+  end
+
   describe 'BRC-43 validation' do
     context 'security level' do
       it 'rejects level -1' do
