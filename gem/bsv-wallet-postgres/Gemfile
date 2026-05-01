@@ -1,0 +1,14 @@
+# frozen_string_literal: true
+
+source 'https://rubygems.org'
+
+gemspec
+
+# Local gems — remove once published to rubygems
+gem 'bsv-wallet', path: '../bsv-wallet'
+gem 'bsv-sdk', path: '/opt/ruby/bsv-ruby-sdk/gem/bsv-sdk'
+
+group :development, :test do
+  gem 'rspec', '~> 3.13'
+  gem 'rubocop', '~> 1.75', require: false
+end
