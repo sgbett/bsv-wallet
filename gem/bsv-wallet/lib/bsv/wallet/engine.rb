@@ -526,7 +526,10 @@ module BSV
             tags: out[:tags],
             description: out[:output_description],
             custom_instructions: out[:custom_instructions],
-            change: out[:change]
+            change: out[:change],
+            derivation_prefix: out[:derivation_prefix],
+            derivation_suffix: out[:derivation_suffix],
+            sender_identity_key: out[:sender_identity_key]
           }
         end
         @store.promote_action(action_id: action_id, outputs: output_specs)
