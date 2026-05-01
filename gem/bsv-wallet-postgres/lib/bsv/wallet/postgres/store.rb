@@ -300,6 +300,46 @@ module BSV
           Setting.set(key, value)
         end
 
+        # --- Input Resolution ---
+
+        def resolve_inputs_for_signing(action_id:)
+          rows = @db[:inputs]
+            .join(:outputs, id: :output_id)
+            .join(Sequel[:actions].as(:source_actions), id: Sequel[:outputs][:action_id])
+            .where(Sequel[:inputs][:action_id] => action_id)
+            .order(Sequel[:inputs][:vin])
+            .select(
+              Sequel[:inputs][:vin],
+              Sequel[:inputs][:nsequence].as(:sequence),
+              Sequel[:source_actions][:txid].as(:source_txid),
+              Sequel[:outputs][:vout].as(:source_vout),
+              Sequel[:outputs][:satoshis].as(:source_satoshis),
+              Sequel[:outputs][:locking_script].as(:source_locking_script),
+              Sequel[:outputs][:derivation_prefix],
+              Sequel[:outputs][:derivation_suffix],
+              Sequel[:outputs][:sender_identity_key]
+            )
+            .all
+
+          rows.map do |row|
+            if row[:source_txid].nil?
+              raise "Source action has nil txid for input vin #{row[:vin]} of action #{action_id}"
+            end
+
+            {
+              vin:                  row[:vin],
+              sequence:             row[:sequence],
+              source_txid:          row[:source_txid],
+              source_vout:          row[:source_vout],
+              source_satoshis:      row[:source_satoshis],
+              source_locking_script: row[:source_locking_script],
+              derivation_prefix:    row[:derivation_prefix],
+              derivation_suffix:    row[:derivation_suffix],
+              sender_identity_key:  row[:sender_identity_key]
+            }
+          end
+        end
+
         # --- UTXO Selection ---
 
         def find_spendable(satoshis:, basket: nil, exclude: [])

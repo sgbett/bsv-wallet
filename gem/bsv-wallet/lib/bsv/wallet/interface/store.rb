@@ -163,6 +163,25 @@ module BSV
           raise NotImplementedError
         end
 
+        # --- Input Resolution ---
+
+        # Resolve the full context for each locked input of an action.
+        #
+        # Joins inputs → outputs → actions (the action that *created* the
+        # output, not the current action) to gather the source outpoint,
+        # satoshis, locking script, and derivation parameters needed for
+        # transaction construction and signing.
+        #
+        # @param action_id [Integer]
+        # @return [Array<Hash>] ordered by vin, each:
+        #   :vin, :sequence, :source_txid (32-byte binary),
+        #   :source_vout, :source_satoshis, :source_locking_script (binary),
+        #   :derivation_prefix, :derivation_suffix, :sender_identity_key
+        # @raise [RuntimeError] if any source action has a nil txid
+        def resolve_inputs_for_signing(action_id:)
+          raise NotImplementedError
+        end
+
         # --- UTXO Selection ---
 
         # Find spendable outputs totalling at least the required satoshis.
