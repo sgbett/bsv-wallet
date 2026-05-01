@@ -10,4 +10,9 @@ group :development, :test do
   gem 'rubocop', '~> 1.75', require: false
   gem 'yard'
   gem 'yard-markdown'
+
+  # Integration testing — engine specs need a real Store
+  gem 'bsv-wallet-postgres', path: '../bsv-wallet-postgres'
+  gem 'sequel', '~> 5.0'
+  gem 'pg'
 end
