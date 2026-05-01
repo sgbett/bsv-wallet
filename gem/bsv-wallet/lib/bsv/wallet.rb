@@ -17,6 +17,9 @@ module BSV
     # Interfaces (abstract contracts)
     autoload :Interface,        'bsv/wallet/interface'
 
+    # Key derivation (BRC-42/43)
+    autoload :KeyDeriver,       'bsv/wallet/key_deriver'
+
     # Engine (Layer 3 — orchestration)
     autoload :Engine,           'bsv/wallet/engine'
 
