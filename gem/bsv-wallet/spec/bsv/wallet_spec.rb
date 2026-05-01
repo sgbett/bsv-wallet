@@ -11,8 +11,8 @@ RSpec.describe BSV::Wallet do
     it 'defines all 28 BRC-100 methods' do
       expected_methods = %i[
         create_action sign_action abort_action list_actions
-        internalise_action list_outputs relinquish_output
-        public_key
+        internalize_action list_outputs relinquish_output
+        get_public_key
         reveal_counterparty_key_linkage reveal_specific_key_linkage
         encrypt decrypt create_hmac verify_hmac
         create_signature verify_signature
@@ -20,7 +20,7 @@ RSpec.describe BSV::Wallet do
         relinquish_certificate
         discover_by_identity_key discover_by_attributes
         authenticated? wait_for_authentication
-        height header_for_height network version
+        get_height get_header_for_height get_network get_version
       ]
 
       expected_methods.each do |method|
@@ -30,7 +30,7 @@ RSpec.describe BSV::Wallet do
     end
 
     it 'raises NotImplementedError for unimplemented methods' do
-      expect { subject.height }.to raise_error(NotImplementedError)
+      expect { subject.get_height }.to raise_error(NotImplementedError)
     end
   end
 

@@ -244,10 +244,10 @@ module BSV
 
       # --- Public Key Management (codes 8-10) ---
 
-      def public_key(identity_key: false, protocol_id: nil, key_id: nil,
-                     privileged: false, privileged_reason: nil,
-                     counterparty: nil, for_self: false,
-                     seek_permission: true, originator: nil)
+      def get_public_key(identity_key: false, protocol_id: nil, key_id: nil,
+                         privileged: false, privileged_reason: nil,
+                         counterparty: nil, for_self: false,
+                         seek_permission: true, originator: nil)
         require_key_deriver!
 
         if identity_key
@@ -442,19 +442,19 @@ module BSV
 
       # --- Blockchain and Network Data (codes 25-28) ---
 
-      def height(originator: nil)
-        raise BSV::Wallet::UnsupportedActionError, 'height'
+      def get_height(originator: nil)
+        raise BSV::Wallet::UnsupportedActionError, 'get_height'
       end
 
-      def header_for_height(height:, originator: nil)
-        raise BSV::Wallet::UnsupportedActionError, 'header_for_height'
+      def get_header_for_height(height:, originator: nil)
+        raise BSV::Wallet::UnsupportedActionError, 'get_header_for_height'
       end
 
-      def network(originator: nil)
+      def get_network(originator: nil)
         { network: @network_name }
       end
 
-      def version(originator: nil)
+      def get_version(originator: nil)
         { version: "bsv-wallet-#{BSV::Wallet::VERSION}" }
       end
 

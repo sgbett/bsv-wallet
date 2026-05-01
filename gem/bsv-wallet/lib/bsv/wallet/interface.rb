@@ -2,16 +2,15 @@
 
 module BSV
   module Wallet
-    # Abstract interfaces (contracts) for the wallet ecosystem.
+    # Wallet-specific abstract interfaces (contracts).
     #
-    # Each module under Interface defines what an implementation must do,
-    # not how. Include the relevant interface in your concrete class.
+    # BRC100 is defined in bsv-sdk and available via the gem dependency.
+    # This file reopens Interface to add the wallet's internal contracts.
     module Interface
-      autoload :BRC100,         'bsv/wallet/interface/brc100'
       autoload :Store,          'bsv/wallet/interface/store'
       autoload :BroadcastQueue, 'bsv/wallet/interface/broadcast_queue'
-      autoload :ProofStore,     'bsv/wallet/interface/proof_store'
       autoload :UTXOPool,       'bsv/wallet/interface/utxo_pool'
+      autoload :ProofStore,     'bsv/wallet/interface/proof_store'
     end
   end
 end

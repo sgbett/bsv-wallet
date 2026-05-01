@@ -1459,9 +1459,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     )
   end
 
-  describe '#public_key' do
+  describe '#get_public_key' do
     it 'returns the identity key when identity_key: true' do
-      result = engine_with_keys.public_key(identity_key: true)
+      result = engine_with_keys.get_public_key(identity_key: true)
       expect(result[:public_key]).to be_a(String)
       expect(result[:public_key].length).to eq(66)
       expect(result[:public_key]).to match(/\A(?:02|03)[0-9a-f]{64}\z/)
@@ -1469,21 +1469,21 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
 
     it 'derives a public key with protocol_id and key_id' do
-      result = engine_with_keys.public_key(
+      result = engine_with_keys.get_public_key(
         protocol_id: [1, 'test proto'], key_id: 'key1', counterparty: 'self'
       )
       expect(result[:public_key]).to be_a(String)
       expect(result[:public_key].bytesize).to eq(33)
 
       # Verify determinism — same params yield same key
-      result2 = engine_with_keys.public_key(
+      result2 = engine_with_keys.get_public_key(
         protocol_id: [1, 'test proto'], key_id: 'key1', counterparty: 'self'
       )
       expect(result2[:public_key]).to eq(result[:public_key])
     end
 
     it 'raises without key_deriver' do
-      expect { engine.public_key(identity_key: true) }
+      expect { engine.get_public_key(identity_key: true) }
         .to raise_error(BSV::Wallet::Error, /key deriver/)
     end
   end
@@ -1732,10 +1732,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
   describe 'privileged mode' do
     it 'derives a different public key with privileged: true' do
-      normal = engine_with_privileged_keys.public_key(
+      normal = engine_with_privileged_keys.get_public_key(
         protocol_id: [1, 'test proto'], key_id: 'key1', counterparty: 'self'
       )
-      privileged = engine_with_privileged_keys.public_key(
+      privileged = engine_with_privileged_keys.get_public_key(
         protocol_id: [1, 'test proto'], key_id: 'key1', counterparty: 'self',
         privileged: true
       )
@@ -1785,7 +1785,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
     it 'raises when privileged key is not configured' do
       expect do
-        engine_with_keys.public_key(
+        engine_with_keys.get_public_key(
           protocol_id: [1, 'test proto'], key_id: 'key1',
           counterparty: 'self', privileged: true
         )
@@ -1793,27 +1793,27 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
   end
 
-  describe '#height' do
+  describe '#get_height' do
     it 'raises UnsupportedActionError (chain data source not configured)' do
-      expect { engine.height }.to raise_error(BSV::Wallet::UnsupportedActionError)
+      expect { engine.get_height }.to raise_error(BSV::Wallet::UnsupportedActionError)
     end
   end
 
-  describe '#header_for_height' do
+  describe '#get_header_for_height' do
     it 'raises UnsupportedActionError (chain data source not configured)' do
-      expect { engine.header_for_height(height: 1) }.to raise_error(BSV::Wallet::UnsupportedActionError)
+      expect { engine.get_header_for_height(height: 1) }.to raise_error(BSV::Wallet::UnsupportedActionError)
     end
   end
 
-  describe '#network' do
+  describe '#get_network' do
     it 'returns the configured network' do
-      expect(engine.network).to eq({ network: :mainnet })
+      expect(engine.get_network).to eq({ network: :mainnet })
     end
   end
 
-  describe '#version' do
+  describe '#get_version' do
     it 'returns the wallet version' do
-      result = engine.version
+      result = engine.get_version
       expect(result[:version]).to start_with('bsv-wallet-')
     end
   end
