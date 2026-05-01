@@ -10,7 +10,11 @@ module BSV
       autoload :VERSION,          'bsv/wallet/postgres/version'
 
       # Component services (Layer 2a)
-      autoload :Store,            'bsv/wallet/postgres/store'
+      autoload :Store,             'bsv/wallet/postgres/store'
+      autoload :UTXOPool,          'bsv/wallet/postgres/utxo_pool'
+      autoload :BroadcastQueue,    'bsv/wallet/postgres/broadcast_queue'
+      autoload :BroadcastCallback, 'bsv/wallet/postgres/broadcast_callback'
+      autoload :ProofStore,        'bsv/wallet/postgres/proof_store'
 
       # Models (Layer 2b — atomic services)
       autoload :TxProof,          'bsv/wallet/postgres/tx_proof'
