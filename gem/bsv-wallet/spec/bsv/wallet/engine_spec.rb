@@ -908,4 +908,216 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       end
     end
   end
+
+  # --- Input Resolution and P2PKH Signing (#22) ---
+
+  describe '#build_inputs (private)' do
+    # Use engine_with_keys for key derivation
+    def build_inputs(resolved_inputs, caller_inputs)
+      engine_with_keys.send(:build_inputs, resolved_inputs, caller_inputs)
+    end
+
+    # Helper: generate a P2PKH locking script for a derived key
+    def p2pkh_locking_script_for(private_key)
+      pubkey_hash = BSV::Primitives::Digest.hash160(private_key.public_key.compressed)
+      BSV::Script::Script.p2pkh_lock(pubkey_hash)
+    end
+
+    # Helper: build a resolved input hash matching Store#resolve_inputs_for_signing output
+    def make_resolved_input(vin:, private_key: nil, locking_script: nil,
+                            satoshis: 1000, sender_identity_key: nil,
+                            derivation_prefix: 'wallet payment',
+                            derivation_suffix: 'suffix1')
+      script = if locking_script
+                 locking_script
+               elsif private_key
+                 p2pkh_locking_script_for(private_key).to_binary
+               else
+                 SecureRandom.random_bytes(25)
+               end
+
+      {
+        vin: vin,
+        sequence: 0xFFFFFFFF,
+        source_txid: SecureRandom.random_bytes(32),
+        source_vout: 0,
+        source_satoshis: satoshis,
+        source_locking_script: script,
+        derivation_prefix: derivation_prefix,
+        derivation_suffix: derivation_suffix,
+        sender_identity_key: sender_identity_key
+      }
+    end
+
+    it 'returns empty arrays for nil inputs' do
+      tx_inputs, signing_keys = build_inputs(nil, nil)
+      expect(tx_inputs).to eq([])
+      expect(signing_keys).to eq({})
+    end
+
+    it 'returns empty arrays for empty inputs' do
+      tx_inputs, signing_keys = build_inputs([], [])
+      expect(tx_inputs).to eq([])
+      expect(signing_keys).to eq({})
+    end
+
+    it 'builds TransactionInput with correct outpoint' do
+      source_txid = SecureRandom.random_bytes(32)
+      # Derive the key the same way the engine will
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, 'wallet payment'], key_id: 'suffix1', counterparty: 'self'
+      )
+      resolved = [make_resolved_input(vin: 0, private_key: derived_key).merge(source_txid: source_txid, source_vout: 2)]
+
+      tx_inputs, _signing_keys = build_inputs(resolved, nil)
+
+      expect(tx_inputs.length).to eq(1)
+      expect(tx_inputs[0]).to be_a(BSV::Transaction::TransactionInput)
+      expect(tx_inputs[0].prev_tx_id).to eq(source_txid)
+      expect(tx_inputs[0].prev_tx_out_index).to eq(2)
+      expect(tx_inputs[0].sequence).to eq(0xFFFFFFFF)
+    end
+
+    it 'sets source_satoshis and source_locking_script for sighash' do
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, 'wallet payment'], key_id: 'suffix1', counterparty: 'self'
+      )
+      script = p2pkh_locking_script_for(derived_key)
+      resolved = [make_resolved_input(vin: 0, private_key: derived_key, satoshis: 5000)]
+
+      tx_inputs, _signing_keys = build_inputs(resolved, nil)
+
+      expect(tx_inputs[0].source_satoshis).to eq(5000)
+      expect(tx_inputs[0].source_locking_script).to be_a(BSV::Script::Script)
+      expect(tx_inputs[0].source_locking_script.p2pkh?).to be true
+    end
+
+    it 'derives signing key for P2PKH inputs' do
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, 'wallet payment'], key_id: 'suffix1', counterparty: 'self'
+      )
+      resolved = [make_resolved_input(vin: 0, private_key: derived_key)]
+
+      _tx_inputs, signing_keys = build_inputs(resolved, nil)
+
+      expect(signing_keys[0]).to be_a(BSV::Primitives::PrivateKey)
+      # The derived key should produce the same public key
+      expect(signing_keys[0].public_key.compressed).to eq(derived_key.public_key.compressed)
+    end
+
+    it 'signs a P2PKH input that verifies correctly' do
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, 'wallet payment'], key_id: 'suffix1', counterparty: 'self'
+      )
+      script = p2pkh_locking_script_for(derived_key)
+      resolved = [make_resolved_input(vin: 0, private_key: derived_key, satoshis: 1000)]
+
+      tx_inputs, signing_keys = build_inputs(resolved, nil)
+
+      # Build a minimal transaction to verify signing works end-to-end
+      tx = BSV::Transaction::Transaction.new
+      tx.add_input(tx_inputs[0])
+      tx.add_output(BSV::Transaction::TransactionOutput.new(satoshis: 900, locking_script: script))
+
+      # Sign with the derived key
+      tx.sign(0, signing_keys[0])
+
+      expect(tx_inputs[0].unlocking_script).not_to be_nil
+      expect(tx.verify_input(0)).to be true
+    end
+
+    it 'applies caller-provided unlocking script for custom inputs' do
+      custom_unlock = "\x01\x02\x03".b
+      custom_lock = "\x04\x05\x06".b  # Non-P2PKH locking script
+      resolved = [make_resolved_input(vin: 0, locking_script: custom_lock)]
+      caller_inputs = [{ vin: 0, unlocking_script: custom_unlock }]
+
+      tx_inputs, signing_keys = build_inputs(resolved, caller_inputs)
+
+      expect(tx_inputs[0].unlocking_script).to be_a(BSV::Script::Script)
+      expect(tx_inputs[0].unlocking_script.to_binary).to eq(custom_unlock)
+      expect(signing_keys).to be_empty
+    end
+
+    it 'uses counterparty self for nil sender_identity_key' do
+      # Derive a key as self-payment
+      self_key = key_deriver.derive_private_key(
+        protocol_id: [2, 'wallet payment'], key_id: 'self-suffix', counterparty: 'self'
+      )
+      resolved = [make_resolved_input(
+        vin: 0, private_key: self_key,
+        sender_identity_key: nil,
+        derivation_suffix: 'self-suffix'
+      )]
+
+      _tx_inputs, signing_keys = build_inputs(resolved, nil)
+
+      # The derived key should match the self-payment derivation
+      expect(signing_keys[0].public_key.compressed).to eq(self_key.public_key.compressed)
+    end
+
+    it 'uses sender_identity_key as counterparty when present' do
+      sender_key = BSV::Primitives::PrivateKey.generate
+      sender_hex = sender_key.public_key.to_hex
+
+      # Derive a key with the sender as counterparty
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, 'wallet payment'], key_id: 'from-sender',
+        counterparty: sender_hex
+      )
+      resolved = [make_resolved_input(
+        vin: 0, private_key: derived_key,
+        sender_identity_key: sender_hex,
+        derivation_suffix: 'from-sender'
+      )]
+
+      _tx_inputs, signing_keys = build_inputs(resolved, nil)
+
+      expect(signing_keys[0].public_key.compressed).to eq(derived_key.public_key.compressed)
+    end
+
+    it 'raises for non-P2PKH input without unlocking_script' do
+      custom_lock = "\x04\x05\x06".b  # Non-P2PKH
+      resolved = [make_resolved_input(vin: 0, locking_script: custom_lock)]
+
+      expect do
+        build_inputs(resolved, nil)
+      end.to raise_error(BSV::Wallet::Error, /non-P2PKH.*no unlocking_script/)
+    end
+
+    it 'handles multiple inputs with mixed types' do
+      # Input 0: P2PKH
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, 'wallet payment'], key_id: 'suffix1', counterparty: 'self'
+      )
+      # Input 1: custom script
+      custom_lock = "\x04\x05\x06".b
+      custom_unlock = "\x07\x08\x09".b
+
+      resolved = [
+        make_resolved_input(vin: 0, private_key: derived_key),
+        make_resolved_input(vin: 1, locking_script: custom_lock)
+      ]
+      caller_inputs = [
+        { vin: 0 },
+        { vin: 1, unlocking_script: custom_unlock }
+      ]
+
+      tx_inputs, signing_keys = build_inputs(resolved, caller_inputs)
+
+      expect(tx_inputs.length).to eq(2)
+      expect(signing_keys).to have_key(0)
+      expect(signing_keys).not_to have_key(1)
+      expect(tx_inputs[1].unlocking_script.to_binary).to eq(custom_unlock)
+    end
+
+    it 'raises without key_deriver for P2PKH input' do
+      derived_key = BSV::Primitives::PrivateKey.generate
+      resolved = [make_resolved_input(vin: 0, private_key: derived_key)]
+
+      expect do
+        engine.send(:build_inputs, resolved, nil)
+      end.to raise_error(BSV::Wallet::Error, /key deriver/)
+    end
+  end
 end

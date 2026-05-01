@@ -603,6 +603,114 @@ module BSV
         end
       end
 
+      # Build TransactionInput objects from resolved input data.
+      #
+      # For each resolved input (from Store#resolve_inputs_for_signing):
+      # - Creates a TransactionInput with the source outpoint
+      # - Sets source_satoshis and source_locking_script for sighash computation
+      # - For P2PKH inputs: derives the signing key via KeyDeriver
+      # - For custom scripts: uses the caller-provided unlocking_script
+      #
+      # @param resolved_inputs [Array<Hash>] from Store#resolve_inputs_for_signing
+      # @param caller_inputs [Array<Hash>, nil] the original inputs array from create_action
+      # @return [Array(Array<TransactionInput>, Hash<Integer, PrivateKey>)]
+      #   the ordered inputs and a mapping of input index to derived PrivateKey
+      #   (nil for custom script inputs)
+      def build_inputs(resolved_inputs, caller_inputs)
+        return [[], {}] if resolved_inputs.nil? || resolved_inputs.empty?
+
+        tx_inputs = []
+        signing_keys = {}
+
+        resolved_inputs.each_with_index do |resolved, idx|
+          input = BSV::Transaction::TransactionInput.new(
+            prev_tx_id: resolved[:source_txid],
+            prev_tx_out_index: resolved[:source_vout],
+            sequence: resolved[:sequence] || 0xFFFFFFFF
+          )
+          input.source_satoshis = resolved[:source_satoshis]
+
+          locking_script = resolve_source_locking_script(resolved[:source_locking_script])
+          input.source_locking_script = locking_script
+
+          # Find the caller's input spec for this vin (for custom unlocking scripts)
+          caller_input = find_caller_input(caller_inputs, resolved[:vin])
+
+          if caller_input&.dig(:unlocking_script)
+            # Custom unlocking script provided by the caller
+            input.unlocking_script = resolve_unlocking_script(caller_input[:unlocking_script])
+          elsif locking_script&.p2pkh?
+            # P2PKH: derive the signing key
+            require_key_deriver!
+            signing_keys[idx] = derive_signing_key(resolved)
+          else
+            raise BSV::Wallet::Error,
+                  "input at vin #{resolved[:vin]} has a non-P2PKH locking script " \
+                  'and no unlocking_script was provided'
+          end
+
+          tx_inputs << input
+        end
+
+        [tx_inputs, signing_keys]
+      end
+
+      # Resolve a source locking script (binary) into a Script object.
+      #
+      # @param script_data [String, nil] binary locking script
+      # @return [Script::Script, nil]
+      def resolve_source_locking_script(script_data)
+        return if script_data.nil?
+
+        BSV::Script::Script.from_binary(script_data)
+      end
+
+      # Resolve an unlocking script value to a Script object.
+      #
+      # @param script_data [String] binary or hex unlocking script
+      # @return [Script::Script]
+      def resolve_unlocking_script(script_data)
+        if script_data.encoding == Encoding::ASCII_8BIT || !script_data.match?(/\A[0-9a-fA-F]*\z/)
+          BSV::Script::Script.from_binary(script_data)
+        else
+          BSV::Script::Script.from_hex(script_data)
+        end
+      end
+
+      # Find the caller's input spec matching a given vin.
+      #
+      # @param caller_inputs [Array<Hash>, nil]
+      # @param vin [Integer]
+      # @return [Hash, nil]
+      def find_caller_input(caller_inputs, vin)
+        return unless caller_inputs
+
+        caller_inputs.each_with_index do |inp, idx|
+          return inp if (inp[:vin] || idx) == vin
+        end
+        nil
+      end
+
+      # Derive a private key for signing a P2PKH input.
+      #
+      # Maps the resolved input's derivation parameters to KeyDeriver's
+      # protocol_id/key_id/counterparty format:
+      # - protocol_id: [2, derivation_prefix]
+      # - key_id: derivation_suffix
+      # - counterparty: sender_identity_key, or 'self' for self-payments
+      #
+      # @param resolved [Hash] a single resolved input hash
+      # @return [BSV::Primitives::PrivateKey]
+      def derive_signing_key(resolved)
+        counterparty = resolved[:sender_identity_key] || 'self'
+
+        @key_deriver.derive_private_key(
+          protocol_id: [2, resolved[:derivation_prefix]],
+          key_id: resolved[:derivation_suffix],
+          counterparty: counterparty
+        )
+      end
+
       # Placeholder — SDK transaction construction
       def build_transaction(_inputs, _outputs, _lock_time, _version, _randomize)
         # In production: construct and sign via SDK
