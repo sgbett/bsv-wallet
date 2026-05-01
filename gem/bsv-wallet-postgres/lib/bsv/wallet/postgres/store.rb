@@ -54,10 +54,14 @@ module BSV
         end
 
         def sign_action(action_id:, txid:, raw_tx:)
-          Action.where(id: action_id).update(
-            txid:   Sequel.blob(txid),
-            raw_tx: Sequel.blob(raw_tx)
-          )
+          @db.transaction do
+            Action.where(id: action_id).update(
+              txid:   Sequel.blob(txid),
+              raw_tx: Sequel.blob(raw_tx)
+            )
+            TxProof.dataset.insert_conflict(target: :txid, update: { raw_tx: Sequel.blob(raw_tx) })
+                          .insert(txid: Sequel.blob(txid), raw_tx: Sequel.blob(raw_tx))
+          end
         end
 
         def promote_action(action_id:, outputs:)

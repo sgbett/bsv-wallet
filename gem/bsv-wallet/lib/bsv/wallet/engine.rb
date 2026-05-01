@@ -632,7 +632,7 @@ module BSV
           source_txid = resolved[:source_txid]
           proof = @proof_store.find_proof(txid: source_txid)
 
-          next unless proof && proof[:raw_tx]
+          next unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
 
           source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
 
@@ -665,7 +665,7 @@ module BSV
           source_txid = resolved[:source_txid]
           proof = @proof_store.find_proof(txid: source_txid)
 
-          next unless proof && proof[:raw_tx]
+          next unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
 
           source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
 
