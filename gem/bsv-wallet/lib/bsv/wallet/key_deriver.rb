@@ -113,6 +113,25 @@ module BSV
         sym_key.decrypt(ciphertext)
       end
 
+      # Compute an HMAC-SHA-256 over data using an ECDH-derived symmetric key.
+      #
+      # Derives the symmetric key for the given derivation parameters and
+      # returns the HMAC-SHA-256 of the data keyed with that symmetric key.
+      #
+      # @param data [String] binary data to authenticate
+      # @param protocol_id [Array<Integer, String>] [security_level, protocol_name]
+      # @param key_id [String] key identifier
+      # @param counterparty [String] "self", "anyone", or hex public key
+      # @param privileged [Boolean] use privileged keyring
+      # @return [String] 32-byte HMAC
+      def create_hmac(data:, protocol_id:, key_id:, counterparty:, privileged: false)
+        sym_key = derive_symmetric_key(
+          protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty, privileged: privileged
+        )
+        BSV::Primitives::Digest.hmac_sha256(sym_key.to_bytes, data)
+      end
+
       # Sign data using ECDSA with a derived private key.
       #
       # Either +data+ or +hash_to_directly_sign+ must be provided.

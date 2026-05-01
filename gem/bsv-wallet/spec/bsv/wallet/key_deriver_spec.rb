@@ -268,6 +268,48 @@ RSpec.describe BSV::Wallet::KeyDeriver do
     end
   end
 
+  describe '#create_hmac' do
+    let(:data) { 'hello world'.b }
+    let(:derivation_params) { { protocol_id: protocol_id, key_id: key_id, counterparty: 'self' } }
+
+    it 'is deterministic: same inputs produce identical HMAC' do
+      hmac1 = deriver.create_hmac(data: data, **derivation_params)
+      hmac2 = deriver.create_hmac(data: data, **derivation_params)
+      expect(hmac1).to eq(hmac2)
+    end
+
+    it 'returns a 32-byte value' do
+      hmac = deriver.create_hmac(data: data, **derivation_params)
+      expect(hmac.bytesize).to eq(32)
+    end
+
+    it 'produces a different HMAC for a different key_id' do
+      hmac1 = deriver.create_hmac(data: data, **derivation_params)
+      hmac2 = deriver.create_hmac(data: data, **derivation_params.merge(key_id: 'key2'))
+      expect(hmac1).not_to eq(hmac2)
+    end
+
+    it 'produces a different HMAC for a different protocol_id' do
+      hmac1 = deriver.create_hmac(data: data, **derivation_params)
+      hmac2 = deriver.create_hmac(data: data, **derivation_params.merge(protocol_id: [2, 'other proto']))
+      expect(hmac1).not_to eq(hmac2)
+    end
+
+    it 'produces a different HMAC for a different counterparty' do
+      other_key = BSV::Primitives::PrivateKey.generate
+      hmac1 = deriver.create_hmac(data: data, **derivation_params)
+      hmac2 = deriver.create_hmac(data: data, **derivation_params.merge(counterparty: other_key.public_key.to_hex))
+      expect(hmac1).not_to eq(hmac2)
+    end
+
+    it 'produces a different HMAC with privileged: true' do
+      kd = described_class.new(private_key: root_key, privileged_key: privileged_key)
+      hmac_normal = kd.create_hmac(data: data, **derivation_params)
+      hmac_priv = kd.create_hmac(data: data, **derivation_params.merge(privileged: true))
+      expect(hmac_normal).not_to eq(hmac_priv)
+    end
+  end
+
   describe '#create_signature / #verify_signature' do
     let(:data) { 'hello world'.b }
     let(:derivation_params) { { protocol_id: protocol_id, key_id: key_id, counterparty: 'self' } }
