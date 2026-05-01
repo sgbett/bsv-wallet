@@ -268,6 +268,124 @@ RSpec.describe BSV::Wallet::KeyDeriver do
     end
   end
 
+  describe '#create_signature / #verify_signature' do
+    let(:data) { 'hello world'.b }
+    let(:derivation_params) { { protocol_id: protocol_id, key_id: key_id, counterparty: 'self' } }
+
+    describe 'round-trip with data:' do
+      it 'signs and verifies successfully' do
+        sig = deriver.create_signature(data: data, **derivation_params)
+        expect(sig).to be_a(BSV::Primitives::Signature)
+
+        valid = deriver.verify_signature(signature: sig, data: data, **derivation_params)
+        expect(valid).to be true
+      end
+    end
+
+    describe 'round-trip with hash_to_directly_sign / hash_to_directly_verify' do
+      it 'signs and verifies with a pre-computed hash' do
+        hash = BSV::Primitives::Digest.sha256(data)
+        sig = deriver.create_signature(hash_to_directly_sign: hash, **derivation_params)
+
+        valid = deriver.verify_signature(
+          signature: sig, hash_to_directly_verify: hash, **derivation_params
+        )
+        expect(valid).to be true
+      end
+    end
+
+    describe 'cross-verify: sign with data, verify with pre-computed hash' do
+      it 'verifies when the hash matches the data' do
+        sig = deriver.create_signature(data: data, **derivation_params)
+        hash = BSV::Primitives::Digest.sha256(data)
+
+        valid = deriver.verify_signature(
+          signature: sig, hash_to_directly_verify: hash, **derivation_params
+        )
+        expect(valid).to be true
+      end
+    end
+
+    describe 'wrong data' do
+      it 'returns false when data does not match the signature' do
+        sig = deriver.create_signature(data: data, **derivation_params)
+
+        valid = deriver.verify_signature(signature: sig, data: 'wrong data'.b, **derivation_params)
+        expect(valid).to be false
+      end
+    end
+
+    describe 'wrong counterparty' do
+      it 'returns false when counterparty does not match' do
+        sig = deriver.create_signature(data: data, **derivation_params)
+        other_key = BSV::Primitives::PrivateKey.generate
+
+        valid = deriver.verify_signature(
+          signature: sig, data: data,
+          protocol_id: protocol_id, key_id: key_id,
+          counterparty: other_key.public_key.to_hex
+        )
+        expect(valid).to be false
+      end
+    end
+
+    describe 'for_self: true verification' do
+      it 'verifies when signer and verifier are different derivers' do
+        alice_key = BSV::Primitives::PrivateKey.generate
+        bob_key = BSV::Primitives::PrivateKey.generate
+        alice = described_class.new(private_key: alice_key)
+        bob = described_class.new(private_key: bob_key)
+
+        # Alice signs for Bob (counterparty = Bob's public key)
+        sig = alice.create_signature(
+          data: data, protocol_id: protocol_id, key_id: key_id,
+          counterparty: bob_key.public_key.to_hex
+        )
+
+        # Bob verifies with for_self: true (counterparty = Alice's public key)
+        valid = bob.verify_signature(
+          signature: sig, data: data,
+          protocol_id: protocol_id, key_id: key_id,
+          counterparty: alice_key.public_key.to_hex,
+          for_self: true
+        )
+        expect(valid).to be true
+      end
+    end
+
+    describe 'privileged: true' do
+      it 'uses the privileged keyring' do
+        kd = described_class.new(private_key: root_key, privileged_key: privileged_key)
+
+        sig_normal = kd.create_signature(data: data, **derivation_params)
+        sig_priv = kd.create_signature(data: data, **derivation_params.merge(privileged: true))
+
+        # Different keyrings produce different signatures
+        expect(sig_normal.to_der).not_to eq(sig_priv.to_der)
+
+        # Each verifies only with the matching keyring
+        expect(kd.verify_signature(signature: sig_priv, data: data,
+                                   **derivation_params.merge(privileged: true))).to be true
+        expect(kd.verify_signature(signature: sig_priv, data: data, **derivation_params)).to be false
+      end
+    end
+
+    describe 'error handling' do
+      it 'raises when both data and hash are nil' do
+        expect do
+          deriver.create_signature(**derivation_params)
+        end.to raise_error(BSV::Wallet::Error, /data or a pre-computed hash/)
+      end
+
+      it 'raises on verify when both data and hash are nil' do
+        sig = deriver.create_signature(data: data, **derivation_params)
+        expect do
+          deriver.verify_signature(signature: sig, **derivation_params)
+        end.to raise_error(BSV::Wallet::Error, /data or a pre-computed hash/)
+      end
+    end
+  end
+
   describe 'BRC-43 validation' do
     context 'security level' do
       it 'rejects level -1' do

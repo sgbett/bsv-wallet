@@ -113,7 +113,67 @@ module BSV
         sym_key.decrypt(ciphertext)
       end
 
+      # Sign data using ECDSA with a derived private key.
+      #
+      # Either +data+ or +hash_to_directly_sign+ must be provided.
+      # When +data+ is given, it is SHA-256 hashed before signing.
+      # When +hash_to_directly_sign+ is given, it is used as-is (must be 32 bytes).
+      #
+      # @param data [String, nil] raw data to hash and sign
+      # @param hash_to_directly_sign [String, nil] pre-computed 32-byte hash to sign directly
+      # @param protocol_id [Array<Integer, String>] [security_level, protocol_name]
+      # @param key_id [String] key identifier
+      # @param counterparty [String] "self", "anyone", or hex public key
+      # @param privileged [Boolean] use privileged keyring
+      # @return [BSV::Primitives::Signature] the ECDSA signature
+      def create_signature(protocol_id:, key_id:, counterparty:, data: nil, hash_to_directly_sign: nil,
+                           privileged: false)
+        hash = resolve_hash(data, hash_to_directly_sign)
+        private_key = derive_private_key(protocol_id: protocol_id, key_id: key_id,
+                                         counterparty: counterparty, privileged: privileged)
+        private_key.sign(hash)
+      end
+
+      # Verify an ECDSA signature against data using a derived public key.
+      #
+      # Either +data+ or +hash_to_directly_verify+ must be provided.
+      # When +data+ is given, it is SHA-256 hashed before verification.
+      #
+      # @param signature [BSV::Primitives::Signature] the signature to verify
+      # @param data [String, nil] raw data that was signed
+      # @param hash_to_directly_verify [String, nil] pre-computed 32-byte hash
+      # @param protocol_id [Array<Integer, String>] [security_level, protocol_name]
+      # @param key_id [String] key identifier
+      # @param counterparty [String] "self", "anyone", or hex public key
+      # @param for_self [Boolean] reverse derivation direction for verification
+      # @param privileged [Boolean] use privileged keyring
+      # @return [Boolean] true if the signature is valid
+      def verify_signature(signature:, protocol_id:, key_id:, counterparty:, data: nil, hash_to_directly_verify: nil,
+                           for_self: false, privileged: false)
+        hash = resolve_hash(data, hash_to_directly_verify)
+        pub_bytes = derive_public_key(protocol_id: protocol_id, key_id: key_id,
+                                      counterparty: counterparty, for_self: for_self,
+                                      privileged: privileged)
+        public_key = BSV::Primitives::PublicKey.from_bytes(pub_bytes)
+        public_key.verify(hash, signature)
+      end
+
       private
+
+      # Resolve data or a pre-computed hash into a 32-byte digest for signing/verification.
+      #
+      # @param data [String, nil] raw data to SHA-256 hash
+      # @param direct_hash [String, nil] pre-computed 32-byte hash
+      # @return [String] 32-byte hash
+      def resolve_hash(data, direct_hash)
+        if direct_hash
+          direct_hash
+        elsif data
+          BSV::Primitives::Digest.sha256(data)
+        else
+          raise BSV::Wallet::Error, 'either data or a pre-computed hash must be provided'
+        end
+      end
 
       # Derive a symmetric key via ECDH between child keys.
       #
