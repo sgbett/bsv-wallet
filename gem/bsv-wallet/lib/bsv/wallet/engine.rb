@@ -978,8 +978,11 @@ module BSV
 
       # Derive a private key for signing a P2PKH input.
       #
-      # Maps the resolved input's derivation parameters to KeyDeriver's
-      # protocol_id/key_id/counterparty format:
+      # When derivation_prefix is nil, the output was paid directly to the
+      # identity (root) key — return it without BRC-42/43 derivation.
+      #
+      # Otherwise maps the resolved input's derivation parameters to
+      # KeyDeriver's protocol_id/key_id/counterparty format:
       # - protocol_id: [2, derivation_prefix]
       # - key_id: derivation_suffix
       # - counterparty: sender_identity_key, or 'self' for self-payments
@@ -987,6 +990,8 @@ module BSV
       # @param resolved [Hash] a single resolved input hash
       # @return [BSV::Primitives::PrivateKey]
       def derive_signing_key(resolved)
+        return @key_deriver.root_private_key if resolved[:derivation_prefix].nil?
+
         counterparty = resolved[:sender_identity_key] || 'self'
 
         @key_deriver.derive_private_key(
