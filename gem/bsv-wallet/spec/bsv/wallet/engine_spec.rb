@@ -1,20 +1,28 @@
 # frozen_string_literal: true
 
 require 'securerandom'
-require 'sequel'
-require 'bsv-wallet-postgres'
 
-# Connect to test database for integration tests
-TEST_DB_URL = ENV.fetch('DATABASE_URL', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_test')
-ENGINE_DB = Sequel.connect(TEST_DB_URL)
-ENGINE_DB.extension :pg_enum
-ENGINE_DB.extension :pg_array
-Sequel.extension :migration
-migrations_path = File.expand_path('../../../../bsv-wallet-postgres/db/migrations', __dir__)
-Sequel::Migrator.run(ENGINE_DB, migrations_path)
-BSV::Wallet::Postgres.connect(ENGINE_DB)
+# Engine integration tests require PostgreSQL.
+# Skip gracefully when the database is unavailable (e.g. CI for the core gem).
+begin
+  require 'sequel'
+  require 'bsv-wallet-postgres'
 
-RSpec.describe BSV::Wallet::Engine do
+  TEST_DB_URL = ENV.fetch('DATABASE_URL', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_test')
+  ENGINE_DB = Sequel.connect(TEST_DB_URL)
+  ENGINE_DB.extension :pg_enum
+  ENGINE_DB.extension :pg_array
+  Sequel.extension :migration
+  migrations_path = File.expand_path('../../../../bsv-wallet-postgres/db/migrations', __dir__)
+  Sequel::Migrator.run(ENGINE_DB, migrations_path)
+  BSV::Wallet::Postgres.connect(ENGINE_DB)
+  POSTGRES_AVAILABLE = true
+rescue LoadError, Sequel::DatabaseConnectionError => e
+  warn "Skipping engine integration specs: #{e.message}"
+  POSTGRES_AVAILABLE = false
+end
+
+RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   let(:store) { BSV::Wallet::Postgres::Store.new }
   let(:utxo_pool) { BSV::Wallet::Postgres::UTXOPool.new(store: store) }
   let(:broadcast_queue) { BSV::Wallet::Postgres::BroadcastQueue.new }
