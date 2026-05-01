@@ -764,4 +764,148 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       expect(result[:version]).to start_with('bsv-wallet-')
     end
   end
+
+  # --- Output Construction and Randomization (#21) ---
+
+  describe '#build_outputs (private)' do
+    # Access the private method for direct testing
+    def build_outputs(outputs, randomize)
+      engine.send(:build_outputs, outputs, randomize)
+    end
+
+    def resolve_locking_script(data)
+      engine.send(:resolve_locking_script, data)
+    end
+
+    it 'returns empty array and empty mapping for nil outputs' do
+      tx_outputs, vout_mapping = build_outputs(nil, false)
+      expect(tx_outputs).to eq([])
+      expect(vout_mapping).to eq({})
+    end
+
+    it 'returns empty array and empty mapping for empty outputs' do
+      tx_outputs, vout_mapping = build_outputs([], false)
+      expect(tx_outputs).to eq([])
+      expect(vout_mapping).to eq({})
+    end
+
+    it 'builds TransactionOutput objects from binary locking scripts' do
+      script_bytes = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b  # P2PKH pattern
+      outputs = [
+        { satoshis: 1000, locking_script: script_bytes },
+        { satoshis: 2000, locking_script: "\x6a\x05hello".b }  # OP_RETURN
+      ]
+
+      tx_outputs, vout_mapping = build_outputs(outputs, false)
+
+      expect(tx_outputs.length).to eq(2)
+      expect(tx_outputs[0]).to be_a(BSV::Transaction::TransactionOutput)
+      expect(tx_outputs[0].satoshis).to eq(1000)
+      expect(tx_outputs[0].locking_script.to_binary).to eq(script_bytes)
+      expect(tx_outputs[1].satoshis).to eq(2000)
+      expect(vout_mapping).to eq({ 0 => 0, 1 => 1 })
+    end
+
+    it 'builds TransactionOutput objects from hex locking scripts' do
+      hex_script = '76a914' + '00' * 20 + '88ac'
+      outputs = [{ satoshis: 500, locking_script: hex_script }]
+
+      tx_outputs, _vout_mapping = build_outputs(outputs, false)
+
+      expect(tx_outputs.length).to eq(1)
+      expect(tx_outputs[0].locking_script.p2pkh?).to be true
+    end
+
+    it 'defaults satoshis to 0 when not specified' do
+      outputs = [{ locking_script: "\x6a".b }]
+
+      tx_outputs, _vout_mapping = build_outputs(outputs, false)
+
+      expect(tx_outputs[0].satoshis).to eq(0)
+    end
+
+    it 'preserves OP_RETURN scripts without modification' do
+      op_return_script = "\x00\x6a\x05hello".b  # OP_FALSE OP_RETURN <data>
+      outputs = [{ satoshis: 0, locking_script: op_return_script }]
+
+      tx_outputs, _vout_mapping = build_outputs(outputs, false)
+
+      expect(tx_outputs[0].locking_script.to_binary).to eq(op_return_script)
+      expect(tx_outputs[0].locking_script.op_return?).to be true
+    end
+
+    context 'with randomization disabled' do
+      it 'preserves original output order' do
+        outputs = 5.times.map do |i|
+          { satoshis: (i + 1) * 100, locking_script: "\x6a#{[i].pack('C')}".b }
+        end
+
+        tx_outputs, vout_mapping = build_outputs(outputs, false)
+
+        expect(tx_outputs.map(&:satoshis)).to eq([100, 200, 300, 400, 500])
+        expect(vout_mapping).to eq({ 0 => 0, 1 => 1, 2 => 2, 3 => 3, 4 => 4 })
+      end
+    end
+
+    context 'with randomization enabled' do
+      it 'shuffles output order (statistical)' do
+        outputs = 10.times.map do |i|
+          { satoshis: (i + 1) * 100, locking_script: SecureRandom.random_bytes(25) }
+        end
+
+        original_order = outputs.map { |o| o[:satoshis] }
+
+        # Run multiple times — at least one should differ from original order
+        shuffled = false
+        20.times do
+          tx_outputs, _vout_mapping = build_outputs(outputs, true)
+          if tx_outputs.map(&:satoshis) != original_order
+            shuffled = true
+            break
+          end
+        end
+
+        expect(shuffled).to be(true), 'Expected shuffle to change order at least once in 20 attempts'
+      end
+
+      it 'preserves all outputs (no data loss)' do
+        outputs = 5.times.map do |i|
+          { satoshis: (i + 1) * 100, locking_script: SecureRandom.random_bytes(25) }
+        end
+
+        tx_outputs, _vout_mapping = build_outputs(outputs, true)
+
+        expect(tx_outputs.map(&:satoshis).sort).to eq([100, 200, 300, 400, 500])
+      end
+
+      it 'produces correct vout mapping' do
+        outputs = 5.times.map do |i|
+          { satoshis: (i + 1) * 100, locking_script: SecureRandom.random_bytes(25) }
+        end
+
+        tx_outputs, vout_mapping = build_outputs(outputs, true)
+
+        # Every original index should map to exactly one new position
+        expect(vout_mapping.keys.sort).to eq([0, 1, 2, 3, 4])
+        expect(vout_mapping.values.sort).to eq([0, 1, 2, 3, 4])
+
+        # Verify the mapping is consistent: the output at vout_mapping[i]
+        # should have the satoshis of the original output at index i
+        outputs.each_with_index do |out, orig_idx|
+          new_vout = vout_mapping[orig_idx]
+          expect(tx_outputs[new_vout].satoshis).to eq(out[:satoshis])
+        end
+      end
+
+      it 'is a no-op for a single output' do
+        outputs = [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }]
+
+        tx_outputs, vout_mapping = build_outputs(outputs, true)
+
+        expect(tx_outputs.length).to eq(1)
+        expect(tx_outputs[0].satoshis).to eq(1000)
+        expect(vout_mapping).to eq({ 0 => 0 })
+      end
+    end
+  end
 end

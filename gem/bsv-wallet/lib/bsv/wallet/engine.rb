@@ -185,7 +185,7 @@ module BSV
         result = @store.query_outputs(
           basket: basket, tags: tags, tag_query_mode: tag_query_mode,
           limit: [limit, 10_000].min, offset: offset,
-          include_locking_scripts: include == :locking_scripts || include == 'locking scripts',
+          include_locking_scripts: [:locking_scripts, 'locking scripts'].include?(include),
           include_custom_instructions: include_custom_instructions,
           include_tags: include_tags, include_labels: include_labels
         )
@@ -218,8 +218,8 @@ module BSV
       end
 
       def reveal_counterparty_key_linkage(counterparty:, verifier:,
-                                         privileged: false, privileged_reason: nil,
-                                         originator: nil)
+                                          privileged: false, privileged_reason: nil,
+                                          originator: nil)
         require_key_deriver!
         @key_deriver.reveal_counterparty_linkage(
           counterparty: counterparty, verifier: verifier, privileged: privileged
@@ -227,8 +227,8 @@ module BSV
       end
 
       def reveal_specific_key_linkage(counterparty:, verifier:, protocol_id:, key_id:,
-                                     privileged: false, privileged_reason: nil,
-                                     originator: nil)
+                                      privileged: false, privileged_reason: nil,
+                                      originator: nil)
         require_key_deriver!
         @key_deriver.reveal_specific_linkage(
           counterparty: counterparty, verifier: verifier,
@@ -333,7 +333,7 @@ module BSV
           raise BSV::Wallet::UnsupportedActionError, 'certificate issuance protocol'
         else
           raise BSV::Wallet::InvalidParameterError.new('acquisition_protocol',
-            'either :direct or :issuance')
+                                                       'either :direct or :issuance')
         end
       end
 
@@ -426,7 +426,8 @@ module BSV
         has_outputs = outputs&.any?
         return if has_inputs || has_outputs
 
-        raise BSV::Wallet::InvalidParameterError.new('inputs/outputs', 'present (at least one input or output required)')
+        raise BSV::Wallet::InvalidParameterError.new('inputs/outputs',
+                                                     'present (at least one input or output required)')
       end
 
       def determine_broadcast(no_send, accept_delayed_broadcast)
@@ -441,9 +442,9 @@ module BSV
 
         inputs.each_with_index.map do |inp, idx|
           {
-            output_id:  inp[:output_id],
-            vin:        inp[:vin] || idx,
-            nsequence:  inp[:sequence_number],
+            output_id: inp[:output_id],
+            vin: inp[:vin] || idx,
+            nsequence: inp[:sequence_number],
             description: inp[:input_description]
           }
         end
@@ -467,14 +468,14 @@ module BSV
 
         output_specs = outputs.each_with_index.map do |out, idx|
           {
-            satoshis:            out[:satoshis],
-            vout:                out[:vout] || idx,
-            locking_script:      out[:locking_script],
-            basket:              out[:basket],
-            tags:                out[:tags],
-            description:         out[:output_description],
+            satoshis: out[:satoshis],
+            vout: out[:vout] || idx,
+            locking_script: out[:locking_script],
+            basket: out[:basket],
+            tags: out[:tags],
+            description: out[:output_description],
             custom_instructions: out[:custom_instructions],
-            change:              out[:change]
+            change: out[:change]
           }
         end
         @store.promote_action(action_id: action_id, outputs: output_specs)
@@ -492,8 +493,8 @@ module BSV
         proof_id = @proof_store.save_proof(
           txid: broadcast_result[:txid] || @store.find_action(id: action_id)&.dig(:txid),
           proof: {
-            height:      broadcast_result[:block_height],
-            block_hash:  broadcast_result[:block_hash],
+            height: broadcast_result[:block_height],
+            block_hash: broadcast_result[:block_hash],
             merkle_path: broadcast_result[:merkle_path]
           }
         )
@@ -517,7 +518,7 @@ module BSV
         end
       end
 
-      def query_change_outpoints(action_id)
+      def query_change_outpoints(_action_id)
         # Query outputs marked as change for this action
         # Returns outpoint strings for no_send_change
         []
@@ -555,6 +556,53 @@ module BSV
         result.zero?
       end
 
+      # Build TransactionOutput objects from caller output specs.
+      #
+      # Each output spec has :satoshis and :locking_script (binary or hex).
+      # When randomize is true, the output order is shuffled and a mapping
+      # from original index to new vout position is returned.
+      #
+      # @param outputs [Array<Hash>] output specifications
+      # @param randomize [Boolean] whether to shuffle output order
+      # @return [Array(Array<TransactionOutput>, Hash<Integer,Integer>)]
+      #   the ordered outputs and original-index-to-vout mapping
+      def build_outputs(outputs, randomize)
+        return [[], {}] if outputs.nil? || outputs.empty?
+
+        tx_outputs = outputs.map do |out|
+          script = resolve_locking_script(out[:locking_script])
+          BSV::Transaction::TransactionOutput.new(
+            satoshis: out[:satoshis] || 0,
+            locking_script: script
+          )
+        end
+
+        indices = (0...tx_outputs.length).to_a
+
+        if randomize && tx_outputs.length > 1
+          indices.shuffle!
+          tx_outputs = indices.map { |i| tx_outputs[i] }
+        end
+
+        # Map original index → new vout position
+        vout_mapping = {}
+        indices.each_with_index { |orig, new_pos| vout_mapping[orig] = new_pos }
+
+        [tx_outputs, vout_mapping]
+      end
+
+      # Resolve a locking script value to a Script object.
+      #
+      # Binary strings (ASCII-8BIT / non-hex) are wrapped via from_binary.
+      # Hex strings are decoded via from_hex.
+      def resolve_locking_script(script_data)
+        if script_data.encoding == Encoding::ASCII_8BIT || !script_data.match?(/\A[0-9a-fA-F]*\z/)
+          BSV::Script::Script.from_binary(script_data)
+        else
+          BSV::Script::Script.from_hex(script_data)
+        end
+      end
+
       # Placeholder — SDK transaction construction
       def build_transaction(_inputs, _outputs, _lock_time, _version, _randomize)
         # In production: construct and sign via SDK
@@ -565,7 +613,7 @@ module BSV
       end
 
       # Placeholder — SDK signing for deferred (HLR #5)
-      def apply_spends(action, _spends)
+      def apply_spends(_action, _spends)
         txid = SecureRandom.random_bytes(32)
         raw_tx = SecureRandom.random_bytes(100)
         [txid, raw_tx]
