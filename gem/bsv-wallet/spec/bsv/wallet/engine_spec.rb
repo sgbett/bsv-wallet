@@ -12,6 +12,7 @@ begin
   ENGINE_DB = Sequel.connect(TEST_DB_URL)
   ENGINE_DB.extension :pg_enum
   ENGINE_DB.extension :pg_array
+  ENGINE_DB.extension :pg_json
   Sequel.extension :migration
   migrations_path = File.expand_path('../../../../bsv-wallet-postgres/db/migrations', __dir__)
   Sequel::Migrator.run(ENGINE_DB, migrations_path)
@@ -171,10 +172,16 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   end
 
   describe '#sign_action' do
-    it 'completes a deferred signing flow' do
-      # Create deferred
+    it 'raises for invalid reference' do
+      expect do
+        engine.sign_action(spends: {}, reference: 'nonexistent')
+      end.to raise_error(BSV::Wallet::InvalidParameterError)
+    end
+
+    it 'completes a deferred signing flow with outputs only' do
+      # Deferred action with outputs but no inputs
       create_result = engine.create_action(
-        description: 'deferred signing',
+        description: 'deferred outputs',
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
@@ -184,21 +191,270 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       reference = create_result[:signable_transaction][:reference]
 
-      # Sign
+      # Sign with empty spends (no inputs to sign)
       result = engine.sign_action(
-        spends: { 0 => { unlocking_script: SecureRandom.random_bytes(72) } },
+        spends: {},
         reference: reference,
         no_send: true
       )
 
       expect(result[:txid]).to be_a(String)
-      expect(result[:txid].length).to eq(32)
+      expect(result[:txid].bytesize).to eq(32)
+      expect(result[:tx]).to be_a(String)
+
+      # Verify the transaction can be deserialized
+      parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+      expect(parsed.outputs.length).to eq(1)
+      expect(parsed.outputs[0].satoshis).to eq(500)
+    end
+  end
+
+  # --- apply_spends (deferred signing) (#24) ---
+
+  describe '#apply_spends (private)' do
+    # Helpers for building realistic test data
+    def p2pkh_locking_script_for(private_key)
+      pubkey_hash = BSV::Primitives::Digest.hash160(private_key.public_key.compressed)
+      BSV::Script::Script.p2pkh_lock(pubkey_hash)
     end
 
-    it 'raises for invalid reference' do
-      expect do
-        engine.sign_action(spends: {}, reference: 'nonexistent')
-      end.to raise_error(BSV::Wallet::InvalidParameterError)
+    def derive_key(prefix: 'wallet payment', suffix: 'suffix1', counterparty: 'self')
+      key_deriver.derive_private_key(
+        protocol_id: [2, prefix], key_id: suffix, counterparty: counterparty
+      )
+    end
+
+    # Fund the wallet with a real P2PKH output that can be signed
+    def fund_wallet_with_keys(satoshis: 1000, count: 1,
+                              prefix: 'wallet payment', suffix: 'suffix1',
+                              sender_identity_key: nil)
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, prefix], key_id: suffix,
+        counterparty: sender_identity_key || 'self'
+      )
+      script = p2pkh_locking_script_for(derived_key)
+
+      # Create a source action with a txid (needed for input resolution)
+      source_action = store.create_action(
+        action: { description: 'funding source', broadcast: :none, outgoing: false }
+      )
+      # Set a real txid on the source action
+      source_txid = SecureRandom.random_bytes(32)
+      store.sign_action(action_id: source_action[:id], txid: source_txid, raw_tx: "\x00".b)
+
+      outputs = count.times.map do |i|
+        {
+          satoshis: satoshis, vout: i,
+          locking_script: script.to_binary,
+          basket: 'default',
+          derivation_prefix: prefix,
+          derivation_suffix: i.zero? ? suffix : "#{suffix}-#{i}",
+          sender_identity_key: sender_identity_key
+        }
+      end
+      store.promote_action(action_id: source_action[:id], outputs: outputs)
+    end
+
+    context 'full deferred flow with P2PKH inputs' do
+      it 'wallet signs all P2PKH inputs when spends is empty' do
+        fund_wallet_with_keys(satoshis: 1000)
+        output_script = p2pkh_locking_script_for(derive_key).to_binary
+
+        # Get the funded output ID
+        listed = engine_with_keys.list_outputs(basket: 'default')
+        output_id = listed[:outputs].first[:id]
+
+        # Create a deferred action with an input
+        create_result = engine_with_keys.create_action(
+          description: 'deferred p2pkh',
+          sign_and_process: false,
+          inputs: [{ output_id: output_id }],
+          outputs: [{ satoshis: 900, locking_script: output_script }]
+        )
+
+        reference = create_result[:signable_transaction][:reference]
+
+        # Sign with empty spends — wallet signs the P2PKH input
+        result = engine_with_keys.sign_action(
+          spends: {},
+          reference: reference,
+          no_send: true
+        )
+
+        expect(result[:txid]).to be_a(String)
+        expect(result[:txid].bytesize).to eq(32)
+
+        # Verify the transaction is valid
+        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        expect(parsed.inputs.length).to eq(1)
+        expect(parsed.outputs.length).to eq(1)
+        expect(parsed.outputs[0].satoshis).to eq(900)
+
+        # Verify the txid matches
+        expected_txid = BSV::Primitives::Digest.sha256d(result[:tx]).reverse
+        expect(result[:txid]).to eq(expected_txid)
+      end
+    end
+
+    context 'caller provides unlocking scripts for all inputs' do
+      it 'applies caller scripts without wallet signing' do
+        fund_wallet_with_keys(satoshis: 1000)
+        output_script = SecureRandom.random_bytes(25)
+
+        listed = engine.list_outputs(basket: 'default')
+        output_id = listed[:outputs].first[:id]
+
+        create_result = engine.create_action(
+          description: 'deferred caller',
+          sign_and_process: false,
+          inputs: [{ output_id: output_id }],
+          outputs: [{ satoshis: 900, locking_script: output_script }]
+        )
+
+        reference = create_result[:signable_transaction][:reference]
+        custom_unlock = "\x01\x02\x03".b
+
+        # Caller provides unlocking script for input 0
+        result = engine.sign_action(
+          spends: { 0 => { unlocking_script: custom_unlock } },
+          reference: reference,
+          no_send: true
+        )
+
+        expect(result[:txid]).to be_a(String)
+        expect(result[:txid].bytesize).to eq(32)
+
+        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        expect(parsed.inputs[0].unlocking_script.to_binary).to eq(custom_unlock)
+      end
+    end
+
+    context 'mixed signing' do
+      it 'applies caller scripts for some inputs, wallet signs the rest' do
+        # Fund with two outputs
+        fund_wallet_with_keys(satoshis: 1000, count: 2)
+        output_script = SecureRandom.random_bytes(25)
+
+        listed = engine_with_keys.list_outputs(basket: 'default')
+        output_ids = listed[:outputs].map { |o| o[:id] }
+
+        create_result = engine_with_keys.create_action(
+          description: 'deferred mixed',
+          sign_and_process: false,
+          inputs: output_ids.each_with_index.map { |id, i| { output_id: id, vin: i } },
+          outputs: [{ satoshis: 1800, locking_script: output_script }]
+        )
+
+        reference = create_result[:signable_transaction][:reference]
+        custom_unlock = "\x04\x05\x06".b
+
+        # Caller provides script for input 0, wallet signs input 1
+        result = engine_with_keys.sign_action(
+          spends: { 0 => { unlocking_script: custom_unlock } },
+          reference: reference,
+          no_send: true
+        )
+
+        expect(result[:txid]).to be_a(String)
+        expect(result[:txid].bytesize).to eq(32)
+
+        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        expect(parsed.inputs.length).to eq(2)
+        # Input 0: caller-provided
+        expect(parsed.inputs[0].unlocking_script.to_binary).to eq(custom_unlock)
+        # Input 1: wallet-signed (has an unlocking script)
+        expect(parsed.inputs[1].unlocking_script).not_to be_nil
+      end
+    end
+
+    context 'invalid input reference' do
+      it 'raises for non-existent vin in spends' do
+        create_result = engine.create_action(
+          description: 'deferred invalid',
+          sign_and_process: false,
+          outputs: [{ satoshis: 500, locking_script: SecureRandom.random_bytes(25) }]
+        )
+
+        reference = create_result[:signable_transaction][:reference]
+
+        expect do
+          engine.sign_action(
+            spends: { 99 => { unlocking_script: "\x00".b } },
+            reference: reference,
+            no_send: true
+          )
+        end.to raise_error(BSV::Wallet::InvalidParameterError, /vin 99/)
+      end
+    end
+
+    context 'pending outputs' do
+      it 'clears pending outputs after signing' do
+        create_result = engine.create_action(
+          description: 'deferred clear',
+          sign_and_process: false,
+          outputs: [{ satoshis: 500, locking_script: SecureRandom.random_bytes(25) }]
+        )
+
+        action = store.find_action(reference: create_result[:signable_transaction][:reference])
+
+        # Verify pending outputs exist before signing
+        pending = store.get_pending_outputs(action_id: action[:id])
+        expect(pending).not_to be_nil
+        expect(pending.length).to eq(1)
+        expect(pending[0][:satoshis]).to eq(500)
+
+        # Sign
+        engine.sign_action(
+          spends: {},
+          reference: create_result[:signable_transaction][:reference],
+          no_send: true
+        )
+
+        # Verify pending outputs are cleared
+        pending_after = store.get_pending_outputs(action_id: action[:id])
+        expect(pending_after).to be_nil
+      end
+
+      it 'preserves locking scripts through serialization round-trip' do
+        binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
+        create_result = engine.create_action(
+          description: 'deferred script',
+          sign_and_process: false,
+          outputs: [{ satoshis: 500, locking_script: binary_script }]
+        )
+
+        action = store.find_action(reference: create_result[:signable_transaction][:reference])
+        pending = store.get_pending_outputs(action_id: action[:id])
+        expect(pending[0][:locking_script]).to eq(binary_script)
+      end
+    end
+
+    context 'sequence number override' do
+      it 'applies sequence number from spends' do
+        fund_wallet_with_keys(satoshis: 1000)
+        output_script = SecureRandom.random_bytes(25)
+
+        listed = engine.list_outputs(basket: 'default')
+        output_id = listed[:outputs].first[:id]
+
+        create_result = engine.create_action(
+          description: 'deferred seqnum',
+          sign_and_process: false,
+          inputs: [{ output_id: output_id }],
+          outputs: [{ satoshis: 900, locking_script: output_script }]
+        )
+
+        reference = create_result[:signable_transaction][:reference]
+
+        result = engine.sign_action(
+          spends: { 0 => { unlocking_script: "\x01".b, sequence_number: 42 } },
+          reference: reference,
+          no_send: true
+        )
+
+        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        expect(parsed.inputs[0].sequence).to eq(42)
+      end
     end
   end
 

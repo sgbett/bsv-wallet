@@ -182,6 +182,35 @@ module BSV
           raise NotImplementedError
         end
 
+        # --- Pending Outputs (deferred signing) ---
+
+        # Store output specs for a deferred-signing action.
+        #
+        # During create_action with sign_and_process: false, the output
+        # specs are not yet promoted to the outputs table. They are stored
+        # here so that apply_spends can reconstruct the transaction later.
+        #
+        # @param action_id [Integer]
+        # @param outputs [Array<Hash>] the caller's output specs (serializable)
+        def store_pending_outputs(action_id:, outputs:)
+          raise NotImplementedError
+        end
+
+        # Retrieve stored pending output specs for a deferred-signing action.
+        #
+        # @param action_id [Integer]
+        # @return [Array<Hash>, nil] the stored output specs, or nil if none
+        def get_pending_outputs(action_id:)
+          raise NotImplementedError
+        end
+
+        # Clear pending output specs after signing completes.
+        #
+        # @param action_id [Integer]
+        def clear_pending_outputs(action_id:)
+          raise NotImplementedError
+        end
+
         # --- UTXO Selection ---
 
         # Find spendable outputs totalling at least the required satoshis.

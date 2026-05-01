@@ -340,6 +340,25 @@ module BSV
           end
         end
 
+        # --- Pending Outputs (deferred signing) ---
+
+        def store_pending_outputs(action_id:, outputs:)
+          Action.where(id: action_id).update(
+            pending_outputs: Sequel.pg_jsonb(outputs.map { |o| serialize_output_spec(o) })
+          )
+        end
+
+        def get_pending_outputs(action_id:)
+          row = Action[action_id]
+          return unless row&.pending_outputs
+
+          row.pending_outputs.map { |o| symbolize_output_spec(o) }
+        end
+
+        def clear_pending_outputs(action_id:)
+          Action.where(id: action_id).update(pending_outputs: nil)
+        end
+
         # --- UTXO Selection ---
 
         def find_spendable(satoshis:, basket: nil, exclude: [])
@@ -486,6 +505,35 @@ module BSV
             signature:           record.signature,
             fields:              fields
           }
+        end
+
+        # Serialize an output spec hash for JSON storage.
+        # Binary locking scripts are hex-encoded for JSON compatibility.
+        def serialize_output_spec(out)
+          h = {}
+          out.each do |k, v|
+            h[k.to_s] = if k == :locking_script && v.is_a?(String) && v.encoding == Encoding::ASCII_8BIT
+                           { '_hex' => v.unpack1('H*') }
+                         else
+                           v
+                         end
+          end
+          h
+        end
+
+        # Deserialize a stored output spec back to symbol keys,
+        # restoring binary locking scripts from hex.
+        def symbolize_output_spec(h)
+          result = {}
+          h.each do |k, v|
+            val = if v.is_a?(Hash) && v.key?('_hex')
+                    [v['_hex']].pack('H*')
+                  else
+                    v
+                  end
+            result[k.to_sym] = val
+          end
+          result
         end
       end
     end

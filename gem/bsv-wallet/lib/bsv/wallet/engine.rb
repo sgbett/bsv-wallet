@@ -64,6 +64,7 @@ module BSV
                    inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
 
         if deferred
+          @store.store_pending_outputs(action_id: action_result[:id], outputs: outputs || [])
           return {
             signable_transaction: {
               tx: nil,
@@ -111,10 +112,21 @@ module BSV
         action = @store.find_action(reference: reference)
         raise BSV::Wallet::InvalidParameterError.new('reference') unless action
 
+        # Retrieve pending outputs before apply_spends clears them
+        pending_outputs = @store.get_pending_outputs(action_id: action[:id])
+
         txid, raw_tx = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], txid: txid, raw_tx: raw_tx)
 
         broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
+
+        if no_send
+          # No-send path: promote immediately
+          promote_with_outputs(action[:id], pending_outputs) if pending_outputs
+          result = { txid: txid, tx: raw_tx }
+          result[:send_with_results] = process_send_with(send_with) if send_with&.any?
+          return result
+        end
 
         unless broadcast == :none
           broadcast_result = @broadcast_queue.submit(
@@ -124,6 +136,7 @@ module BSV
           )
 
           if broadcast == :inline && accepted?(broadcast_result)
+            promote_with_outputs(action[:id], pending_outputs) if pending_outputs
             handle_proof_from_broadcast(action[:id], broadcast_result)
           end
         end
@@ -755,10 +768,93 @@ module BSV
         [txid, raw_tx, vout_mapping]
       end
 
-      # Placeholder — SDK signing for deferred (HLR #5)
-      def apply_spends(_action, _spends)
-        txid = SecureRandom.random_bytes(32)
-        raw_tx = SecureRandom.random_bytes(100)
+      # Apply caller-provided unlocking scripts and sign remaining inputs.
+      #
+      # Reconstructs the unsigned transaction from the Store (inputs and
+      # pending outputs), applies unlocking scripts from the spends hash,
+      # signs any remaining P2PKH inputs the wallet can sign, serializes,
+      # and returns [txid, raw_tx].
+      #
+      # @param action [Hash] the action record from find_action
+      # @param spends [Hash{Integer => Hash}] vin => { unlocking_script:, sequence_number: }
+      # @return [Array(String, String)] txid (32-byte display order), raw_tx (binary)
+      def apply_spends(action, spends)
+        # Reconstruct outputs from pending storage
+        pending = @store.get_pending_outputs(action_id: action[:id])
+        raise BSV::Wallet::Error, 'no pending outputs for deferred action' unless pending
+
+        # Build outputs (no randomization — order is fixed at reconstruction time)
+        tx_outputs, _vout_mapping = build_outputs(pending, false)
+
+        # Resolve inputs from the Store
+        resolved_inputs = @store.resolve_inputs_for_signing(action_id: action[:id])
+
+        # Build the transaction shell
+        tx = BSV::Transaction::Transaction.new(
+          version: action[:version] || 1,
+          lock_time: action[:nlocktime] || 0
+        )
+
+        # Build inputs and track which need wallet signing
+        signing_keys = {}
+        resolved_inputs.each_with_index do |resolved, idx|
+          input = BSV::Transaction::TransactionInput.new(
+            prev_tx_id: resolved[:source_txid],
+            prev_tx_out_index: resolved[:source_vout],
+            sequence: resolved[:sequence] || 0xFFFFFFFF
+          )
+          input.source_satoshis = resolved[:source_satoshis]
+          input.source_locking_script = resolve_source_locking_script(resolved[:source_locking_script])
+
+          tx.add_input(input)
+
+          spend = spends[resolved[:vin]] || spends[idx]
+          if spend
+            # Apply sequence override if provided
+            input.sequence = spend[:sequence_number] if spend[:sequence_number]
+
+            # Apply caller-provided unlocking script
+            input.unlocking_script = resolve_unlocking_script(spend[:unlocking_script]) if spend[:unlocking_script]
+          elsif input.source_locking_script&.p2pkh?
+            # No spend provided for this P2PKH input — wallet signs it
+            require_key_deriver!
+            signing_keys[idx] = derive_signing_key(resolved)
+          end
+        end
+
+        # Validate: check for unresolvable inputs (no spend + no P2PKH)
+        resolved_inputs.each_with_index do |resolved, idx|
+          spend = spends[resolved[:vin]] || spends[idx]
+          next if spend&.dig(:unlocking_script)
+          next if signing_keys.key?(idx)
+
+          raise BSV::Wallet::Error,
+                "input at vin #{resolved[:vin]} has no unlocking script in spends " \
+                'and is not a P2PKH input the wallet can sign'
+        end
+
+        tx_outputs.each { |out| tx.add_output(out) }
+
+        # Sign wallet-owned P2PKH inputs
+        signing_keys.each { |idx, key| tx.sign(idx, key) }
+
+        # Validate spends don't reference non-existent input indices
+        valid_vins = resolved_inputs.map { |r| r[:vin] }
+        valid_indices = (0...resolved_inputs.length).to_a
+        spends.each_key do |vin|
+          next if valid_vins.include?(vin) || valid_indices.include?(vin)
+
+          raise BSV::Wallet::InvalidParameterError.new(
+            'spends', "vin #{vin} does not exist in the transaction"
+          )
+        end
+
+        raw_tx = tx.to_binary
+        txid = tx.txid
+
+        # Clean up pending outputs now that signing is complete
+        @store.clear_pending_outputs(action_id: action[:id])
+
         [txid, raw_tx]
       end
     end
