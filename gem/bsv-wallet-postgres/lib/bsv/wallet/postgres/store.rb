@@ -73,16 +73,17 @@ module BSV
                 sender_identity_key: out[:sender_identity_key]
               )
 
-              Spendable.create(output_id: output.id)
+              Spendable.create(output_id: output.id, action_id: action_id)
 
               if out[:basket]
                 basket_id = find_or_create_basket(name: out[:basket])
-                OutputBasket.create(output_id: output.id, basket_id: basket_id)
+                OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: action_id)
               end
 
               if out[:description] || out[:custom_instructions] || out.key?(:change)
                 OutputDetail.create(
                   output_id:          output.id,
+                  action_id:          action_id,
                   description:        out[:description],
                   custom_instructions: out[:custom_instructions],
                   change:             out[:change] || false
@@ -102,7 +103,15 @@ module BSV
         end
 
         def abort_action(action_id:)
-          Action.where(id: action_id, txid: nil).delete
+          # Allow deletion of actions that haven't been broadcast.
+          # After the deferred signing rework, actions may have an unsigned
+          # raw_tx and txid before broadcast — the guard checks for absence
+          # of a broadcast entry rather than absence of txid.
+          broadcast_exists = Broadcast.where(
+            Sequel[:broadcasts][:action_id] => Sequel[:actions][:id]
+          ).select(1)
+
+          Action.where(id: action_id).exclude(broadcast_exists.exists).delete
         end
 
         # --- Queries ---
@@ -340,25 +349,6 @@ module BSV
           end
         end
 
-        # --- Pending Outputs (deferred signing) ---
-
-        def store_pending_outputs(action_id:, outputs:)
-          Action.where(id: action_id).update(
-            pending_outputs: Sequel.pg_jsonb(outputs.map { |o| serialize_output_spec(o) })
-          )
-        end
-
-        def get_pending_outputs(action_id:)
-          row = Action[action_id]
-          return unless row&.pending_outputs
-
-          row.pending_outputs.map { |o| symbolize_output_spec(o) }
-        end
-
-        def clear_pending_outputs(action_id:)
-          Action.where(id: action_id).update(pending_outputs: nil)
-        end
-
         # --- UTXO Selection ---
 
         def find_spendable(satoshis:, basket: nil, exclude: [])
@@ -408,6 +398,7 @@ module BSV
           h = {
             id:          record.id,
             txid:        record.txid,
+            raw_tx:      record.raw_tx,
             reference:   record.reference,
             satoshis:    record.satoshis,
             status:      record.derived_status,
@@ -505,35 +496,6 @@ module BSV
             signature:           record.signature,
             fields:              fields
           }
-        end
-
-        # Serialize an output spec hash for JSON storage.
-        # Binary locking scripts are hex-encoded for JSON compatibility.
-        def serialize_output_spec(out)
-          h = {}
-          out.each do |k, v|
-            h[k.to_s] = if k == :locking_script && v.is_a?(String) && v.encoding == Encoding::ASCII_8BIT
-                           { '_hex' => v.unpack1('H*') }
-                         else
-                           v
-                         end
-          end
-          h
-        end
-
-        # Deserialize a stored output spec back to symbol keys,
-        # restoring binary locking scripts from hex.
-        def symbolize_output_spec(h)
-          result = {}
-          h.each do |k, v|
-            val = if v.is_a?(Hash) && v.key?('_hex')
-                    [v['_hex']].pack('H*')
-                  else
-                    v
-                  end
-            result[k.to_sym] = val
-          end
-          result
         end
       end
     end

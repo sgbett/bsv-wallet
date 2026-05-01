@@ -157,15 +157,29 @@ RSpec.describe BSV::Wallet::Postgres::Store do
       expect(output.reload.spendable?).to be true
     end
 
-    it 'refuses to abort a signed action' do
-      result = store.create_action(action: { description: 'signed' })
+    it 'refuses to abort a broadcast action' do
+      result = store.create_action(action: { description: 'broadcast' })
       store.sign_action(action_id: result[:id], txid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
 
+      # Create a broadcast entry — simulates having been submitted to ARC
+      BSV::Wallet::Postgres::Broadcast.create(action_id: result[:id])
+
       store.abort_action(action_id: result[:id])
 
-      # Action should still exist — the WHERE txid IS NULL guard prevented deletion
+      # Action should still exist — the broadcast guard prevented deletion
       expect(BSV::Wallet::Postgres::Action[result[:id]]).not_to be_nil
+    end
+
+    it 'allows aborting a signed but not-broadcast action (deferred)' do
+      result = store.create_action(action: { description: 'deferred' })
+      store.sign_action(action_id: result[:id], txid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+
+      # No broadcast entry — this is a deferred action with unsigned tx
+      store.abort_action(action_id: result[:id])
+
+      expect(BSV::Wallet::Postgres::Action[result[:id]]).to be_nil
     end
   end
 

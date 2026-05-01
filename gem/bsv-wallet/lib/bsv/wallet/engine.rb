@@ -63,8 +63,17 @@ module BSV
         deferred = !sign_and_process ||
                    inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
 
+        # Phase 2: Build transaction (sign unless deferred)
+        txid, raw_tx, vout_mapping = build_transaction(
+          action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,
+          sign: !deferred
+        )
         if deferred
-          @store.store_pending_outputs(action_id: action_result[:id], outputs: outputs || [])
+          # Store unsigned raw_tx (empty unlocking scripts) and promote outputs now.
+          # Outputs are fully known at createAction time — the deferral is about
+          # inputs (waiting for caller-provided unlocking scripts), not outputs.
+          @store.sign_action(action_id: action_result[:id], txid: txid, raw_tx: raw_tx)
+          promote_with_outputs(action_result[:id], outputs, vout_mapping)
           return {
             signable_transaction: {
               tx: nil,
@@ -73,10 +82,6 @@ module BSV
           }
         end
 
-        # Phase 2: Sign
-        txid, raw_tx, vout_mapping = build_transaction(
-          action_result[:id], inputs, outputs, lock_time, version, randomize_outputs
-        )
         @store.sign_action(action_id: action_result[:id], txid: txid, raw_tx: raw_tx)
 
         # No-send path: promote immediately, return change outpoints
@@ -112,17 +117,15 @@ module BSV
         action = @store.find_action(reference: reference)
         raise BSV::Wallet::InvalidParameterError.new('reference') unless action
 
-        # Retrieve pending outputs before apply_spends clears them
-        pending_outputs = @store.get_pending_outputs(action_id: action[:id])
-
+        # Outputs were already written during create_action — sign_action only
+        # deserializes the unsigned tx, applies caller unlocking scripts, signs
+        # remaining P2PKH inputs, and updates the action with signed raw_tx + txid.
         txid, raw_tx = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], txid: txid, raw_tx: raw_tx)
 
         broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
 
         if no_send
-          # No-send path: promote immediately
-          promote_with_outputs(action[:id], pending_outputs) if pending_outputs
           result = { txid: txid, tx: raw_tx }
           result[:send_with_results] = process_send_with(send_with) if send_with&.any?
           return result
@@ -136,7 +139,6 @@ module BSV
           )
 
           if broadcast == :inline && accepted?(broadcast_result)
-            promote_with_outputs(action[:id], pending_outputs) if pending_outputs
             handle_proof_from_broadcast(action[:id], broadcast_result)
           end
         end
@@ -732,11 +734,15 @@ module BSV
         )
       end
 
-      # Assemble, sign, and serialize an SDK transaction.
+      # Assemble, optionally sign, and serialize an SDK transaction.
       #
       # Resolves locked inputs from the Store, builds TransactionInput and
       # TransactionOutput objects via the helpers from Tasks 21/22, signs
-      # P2PKH inputs, and serializes.
+      # P2PKH inputs (unless sign: false), and serializes.
+      #
+      # When sign is false, the transaction is assembled with empty unlocking
+      # scripts for P2PKH inputs. This produces a valid serialized transaction
+      # that can be deserialized later for deferred signing.
       #
       # @param action_id [Integer] the action whose locked inputs to resolve
       # @param inputs [Array<Hash>, nil] caller's input specs (for custom unlocking scripts)
@@ -744,9 +750,10 @@ module BSV
       # @param lock_time [Integer, nil] nLockTime
       # @param version [Integer, nil] transaction version
       # @param randomize [Boolean] whether to shuffle output order
+      # @param sign [Boolean] whether to sign P2PKH inputs (default: true)
       # @return [Array(String, String, Hash)] txid (32-byte display order),
       #   raw_tx (binary), and vout_mapping (original index -> new vout)
-      def build_transaction(action_id, inputs, outputs, lock_time, version, randomize)
+      def build_transaction(action_id, inputs, outputs, lock_time, version, randomize, sign: true)
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
 
         tx_outputs, vout_mapping = build_outputs(outputs, randomize)
@@ -760,7 +767,7 @@ module BSV
         tx_inputs.each { |inp| tx.add_input(inp) }
         tx_outputs.each { |out| tx.add_output(out) }
 
-        signing_keys.each { |idx, key| tx.sign(idx, key) }
+        signing_keys.each { |idx, key| tx.sign(idx, key) } if sign
 
         raw_tx = tx.to_binary
         txid = tx.txid
@@ -770,8 +777,8 @@ module BSV
 
       # Apply caller-provided unlocking scripts and sign remaining inputs.
       #
-      # Reconstructs the unsigned transaction from the Store (inputs and
-      # pending outputs), applies unlocking scripts from the spends hash,
+      # Deserializes the unsigned transaction stored during deferred
+      # create_action, applies unlocking scripts from the spends hash,
       # signs any remaining P2PKH inputs the wallet can sign, serializes,
       # and returns [txid, raw_tx].
       #
@@ -779,34 +786,22 @@ module BSV
       # @param spends [Hash{Integer => Hash}] vin => { unlocking_script:, sequence_number: }
       # @return [Array(String, String)] txid (32-byte display order), raw_tx (binary)
       def apply_spends(action, spends)
-        # Reconstruct outputs from pending storage
-        pending = @store.get_pending_outputs(action_id: action[:id])
-        raise BSV::Wallet::Error, 'no pending outputs for deferred action' unless pending
+        # Deserialize the unsigned transaction stored during create_action
+        unsigned_raw = action[:raw_tx]
+        raise BSV::Wallet::Error, 'no unsigned transaction for deferred action' unless unsigned_raw
 
-        # Build outputs (no randomization — order is fixed at reconstruction time)
-        tx_outputs, _vout_mapping = build_outputs(pending, false)
+        tx = BSV::Transaction::Transaction.from_binary(unsigned_raw)
 
-        # Resolve inputs from the Store
+        # Resolve inputs from the Store — needed for source data (satoshis,
+        # locking script, derivation params) which are not in the wire format
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action[:id])
 
-        # Build the transaction shell
-        tx = BSV::Transaction::Transaction.new(
-          version: action[:version] || 1,
-          lock_time: action[:nlocktime] || 0
-        )
-
-        # Build inputs and track which need wallet signing
+        # Re-attach source data and apply spends
         signing_keys = {}
         resolved_inputs.each_with_index do |resolved, idx|
-          input = BSV::Transaction::TransactionInput.new(
-            prev_tx_id: resolved[:source_txid],
-            prev_tx_out_index: resolved[:source_vout],
-            sequence: resolved[:sequence] || 0xFFFFFFFF
-          )
+          input = tx.inputs[idx]
           input.source_satoshis = resolved[:source_satoshis]
           input.source_locking_script = resolve_source_locking_script(resolved[:source_locking_script])
-
-          tx.add_input(input)
 
           spend = spends[resolved[:vin]] || spends[idx]
           if spend
@@ -833,8 +828,6 @@ module BSV
                 'and is not a P2PKH input the wallet can sign'
         end
 
-        tx_outputs.each { |out| tx.add_output(out) }
-
         # Sign wallet-owned P2PKH inputs
         signing_keys.each { |idx, key| tx.sign(idx, key) }
 
@@ -851,9 +844,6 @@ module BSV
 
         raw_tx = tx.to_binary
         txid = tx.txid
-
-        # Clean up pending outputs now that signing is complete
-        @store.clear_pending_outputs(action_id: action[:id])
 
         [txid, raw_tx]
       end

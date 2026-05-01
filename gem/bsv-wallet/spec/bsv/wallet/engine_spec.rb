@@ -111,18 +111,26 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       expect(result[:txid].length).to eq(32)
     end
 
-    it 'creates a deferred signing action' do
+    it 'creates a deferred signing action with outputs promoted immediately' do
       result = engine.create_action(
         description: 'deferred action',
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'output' }
+            output_description: 'output', basket: 'deferred' }
         ]
       )
 
       expect(result).to include(:signable_transaction)
       expect(result[:signable_transaction][:reference]).to be_a(String)
+
+      # Outputs are promoted during create_action, not deferred to sign_action
+      listed = engine.list_outputs(basket: 'deferred')
+      expect(listed[:total_outputs]).to eq(1)
+
+      # Unsigned raw_tx is stored on the action
+      action = store.find_action(reference: result[:signable_transaction][:reference])
+      expect(action[:raw_tx]).to be_a(String)
     end
 
     it 'creates a no-send action' do
@@ -205,16 +213,21 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
     it 'completes a deferred signing flow with outputs only' do
       # Deferred action with outputs but no inputs
+      locking_script = SecureRandom.random_bytes(25)
       create_result = engine.create_action(
         description: 'deferred outputs',
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'output' }
+          { satoshis: 500, locking_script: locking_script,
+            output_description: 'output', basket: 'deferred_sign' }
         ]
       )
 
       reference = create_result[:signable_transaction][:reference]
+
+      # Outputs are already in the database from create_action
+      listed_before = engine.list_outputs(basket: 'deferred_sign')
+      expect(listed_before[:total_outputs]).to eq(1)
 
       # Sign with empty spends (no inputs to sign)
       result = engine.sign_action(
@@ -231,6 +244,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
       expect(parsed.outputs.length).to eq(1)
       expect(parsed.outputs[0].satoshis).to eq(500)
+
+      # Outputs remain after sign_action (not duplicated)
+      listed_after = engine.list_outputs(basket: 'deferred_sign')
+      expect(listed_after[:total_outputs]).to eq(1)
     end
   end
 
@@ -326,10 +343,12 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         fund_wallet_with_keys(satoshis: 1000)
         output_script = SecureRandom.random_bytes(25)
 
-        listed = engine.list_outputs(basket: 'default')
+        listed = engine_with_keys.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
 
-        create_result = engine.create_action(
+        # engine_with_keys is needed because build_transaction (now called
+        # during deferred create_action) requires a key_deriver for P2PKH inputs
+        create_result = engine_with_keys.create_action(
           description: 'deferred caller',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
@@ -340,7 +359,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         custom_unlock = "\x01\x02\x03".b
 
         # Caller provides unlocking script for input 0
-        result = engine.sign_action(
+        result = engine_with_keys.sign_action(
           spends: { 0 => { unlocking_script: custom_unlock } },
           reference: reference,
           no_send: true
@@ -412,45 +431,66 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       end
     end
 
-    context 'pending outputs' do
-      it 'clears pending outputs after signing' do
+    context 'output promotion at create time' do
+      it 'writes outputs to the database during deferred create_action' do
+        binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
         create_result = engine.create_action(
-          description: 'deferred clear',
+          description: 'deferred promo',
+          sign_and_process: false,
+          outputs: [
+            { satoshis: 500, locking_script: binary_script,
+              basket: 'deferred_test', output_description: 'test output' }
+          ]
+        )
+
+        # Outputs are in the database immediately after create_action
+        listed = engine.list_outputs(basket: 'deferred_test')
+        expect(listed[:total_outputs]).to eq(1)
+        expect(listed[:outputs].first[:satoshis]).to eq(500)
+      end
+
+      it 'stores unsigned raw_tx on the action' do
+        create_result = engine.create_action(
+          description: 'deferred rawtx',
           sign_and_process: false,
           outputs: [{ satoshis: 500, locking_script: SecureRandom.random_bytes(25) }]
         )
 
         action = store.find_action(reference: create_result[:signable_transaction][:reference])
+        expect(action[:raw_tx]).to be_a(String)
 
-        # Verify pending outputs exist before signing
-        pending = store.get_pending_outputs(action_id: action[:id])
-        expect(pending).not_to be_nil
-        expect(pending.length).to eq(1)
-        expect(pending[0][:satoshis]).to eq(500)
-
-        # Sign
-        engine.sign_action(
-          spends: {},
-          reference: create_result[:signable_transaction][:reference],
-          no_send: true
-        )
-
-        # Verify pending outputs are cleared
-        pending_after = store.get_pending_outputs(action_id: action[:id])
-        expect(pending_after).to be_nil
+        # The unsigned raw_tx is a valid serialized transaction
+        parsed = BSV::Transaction::Transaction.from_binary(action[:raw_tx])
+        expect(parsed.outputs.length).to eq(1)
+        expect(parsed.outputs[0].satoshis).to eq(500)
       end
+    end
 
-      it 'preserves locking scripts through serialization round-trip' do
-        binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
+    context 'cascade cleanup' do
+      it 'deleting an action cascades to spendable entries' do
         create_result = engine.create_action(
-          description: 'deferred script',
+          description: 'cascade test action',
           sign_and_process: false,
-          outputs: [{ satoshis: 500, locking_script: binary_script }]
+          outputs: [
+            { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+              basket: 'cascade_test' }
+          ]
         )
 
-        action = store.find_action(reference: create_result[:signable_transaction][:reference])
-        pending = store.get_pending_outputs(action_id: action[:id])
-        expect(pending[0][:locking_script]).to eq(binary_script)
+        # Outputs and spendable entries exist
+        listed = engine.list_outputs(basket: 'cascade_test')
+        expect(listed[:total_outputs]).to eq(1)
+
+        # Abort (delete) the action
+        reference = create_result[:signable_transaction][:reference]
+        action = store.find_action(reference: reference)
+
+        # Delete the action directly (simulating reaper)
+        BSV::Wallet::Postgres::Action.where(id: action[:id]).delete
+
+        # Spendable entries are gone (cascade)
+        listed_after = engine.list_outputs(basket: 'cascade_test')
+        expect(listed_after[:total_outputs]).to eq(0)
       end
     end
 
@@ -459,10 +499,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         fund_wallet_with_keys(satoshis: 1000)
         output_script = SecureRandom.random_bytes(25)
 
-        listed = engine.list_outputs(basket: 'default')
+        listed = engine_with_keys.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
 
-        create_result = engine.create_action(
+        create_result = engine_with_keys.create_action(
           description: 'deferred seqnum',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
@@ -471,7 +511,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
         reference = create_result[:signable_transaction][:reference]
 
-        result = engine.sign_action(
+        result = engine_with_keys.sign_action(
           spends: { 0 => { unlocking_script: "\x01".b, sequence_number: 42 } },
           reference: reference,
           no_send: true
