@@ -1120,4 +1120,174 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       end.to raise_error(BSV::Wallet::Error, /key deriver/)
     end
   end
+
+  # --- Transaction Assembly, Serialization, and Txid (#23) ---
+
+  describe '#build_transaction (private)' do
+    # Helper: generate a P2PKH locking script for a derived key
+    def p2pkh_locking_script_for(private_key)
+      pubkey_hash = BSV::Primitives::Digest.hash160(private_key.public_key.compressed)
+      BSV::Script::Script.p2pkh_lock(pubkey_hash)
+    end
+
+    # Helper: derive a key the same way the engine will
+    def derive_key(prefix: 'wallet payment', suffix: 'suffix1', counterparty: 'self')
+      key_deriver.derive_private_key(
+        protocol_id: [2, prefix], key_id: suffix, counterparty: counterparty
+      )
+    end
+
+    # Helper: build a resolved input hash
+    def make_resolved_input(vin:, private_key:, satoshis: 1000, source_vout: 0)
+      {
+        vin: vin,
+        sequence: 0xFFFFFFFF,
+        source_txid: SecureRandom.random_bytes(32),
+        source_vout: source_vout,
+        source_satoshis: satoshis,
+        source_locking_script: p2pkh_locking_script_for(private_key).to_binary,
+        derivation_prefix: 'wallet payment',
+        derivation_suffix: 'suffix1',
+        sender_identity_key: nil
+      }
+    end
+
+    let(:derived_key) { derive_key }
+    let(:resolved_inputs) { [make_resolved_input(vin: 0, private_key: derived_key)] }
+    let(:output_script) { p2pkh_locking_script_for(derived_key).to_binary }
+    let(:caller_outputs) { [{ satoshis: 900, locking_script: output_script }] }
+
+    before do
+      allow(store).to receive(:resolve_inputs_for_signing).and_return(resolved_inputs)
+    end
+
+    def build_transaction(action_id, inputs, outputs, lock_time, version, randomize)
+      engine_with_keys.send(:build_transaction, action_id, inputs, outputs, lock_time, version, randomize)
+    end
+
+    it 'assembles a transaction and returns txid, raw_tx, and vout_mapping' do
+      txid, raw_tx, vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
+
+      expect(txid).to be_a(String)
+      expect(txid.bytesize).to eq(32)
+      expect(raw_tx).to be_a(String)
+      expect(raw_tx.bytesize).to be > 10
+      expect(vout_mapping).to eq({ 0 => 0 })
+    end
+
+    it 'produces a txid that is the double-SHA-256 of serialized tx (display order)' do
+      txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
+
+      expected_txid = BSV::Primitives::Digest.sha256d(raw_tx).reverse
+      expect(txid).to eq(expected_txid)
+    end
+
+    it 'produces a serialized tx that can be deserialized back' do
+      _txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
+
+      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      expect(parsed.inputs.length).to eq(1)
+      expect(parsed.outputs.length).to eq(1)
+      expect(parsed.outputs[0].satoshis).to eq(900)
+    end
+
+    it 'round-trips: serialize -> deserialize -> re-serialize produces identical bytes' do
+      _txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
+
+      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      expect(parsed.to_binary).to eq(raw_tx)
+    end
+
+    it 'sets version and lock_time correctly' do
+      _txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, 500, 2, false)
+
+      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      expect(parsed.version).to eq(2)
+      expect(parsed.lock_time).to eq(500)
+    end
+
+    it 'defaults version to 1 and lock_time to 0' do
+      _txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
+
+      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      expect(parsed.version).to eq(1)
+      expect(parsed.lock_time).to eq(0)
+    end
+
+    it 'signs P2PKH inputs that pass verify_input' do
+      txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
+
+      # Reconstruct the transaction with source data for verification
+      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      parsed.inputs[0].source_satoshis = resolved_inputs[0][:source_satoshis]
+      parsed.inputs[0].source_locking_script = BSV::Script::Script.from_binary(
+        resolved_inputs[0][:source_locking_script]
+      )
+
+      expect(parsed.inputs[0].unlocking_script).not_to be_nil
+      expect(parsed.verify_input(0)).to be true
+    end
+
+    it 'handles outputs-only transaction (no inputs)' do
+      allow(store).to receive(:resolve_inputs_for_signing).and_return([])
+
+      txid, raw_tx, vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
+
+      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      expect(parsed.inputs.length).to eq(0)
+      expect(parsed.outputs.length).to eq(1)
+      expect(vout_mapping).to eq({ 0 => 0 })
+    end
+
+    it 'handles multiple inputs and outputs' do
+      derived_key2 = derive_key(suffix: 'suffix2')
+      multi_resolved = [
+        make_resolved_input(vin: 0, private_key: derived_key),
+        make_resolved_input(vin: 1, private_key: derived_key2,
+                            satoshis: 2000, source_vout: 1).merge(
+                              derivation_suffix: 'suffix2'
+                            )
+      ]
+      allow(store).to receive(:resolve_inputs_for_signing).and_return(multi_resolved)
+
+      script2 = p2pkh_locking_script_for(derived_key2).to_binary
+      multi_outputs = [
+        { satoshis: 800, locking_script: output_script },
+        { satoshis: 1500, locking_script: script2 }
+      ]
+
+      txid, raw_tx, vout_mapping = build_transaction(1, nil, multi_outputs, nil, nil, false)
+
+      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      expect(parsed.inputs.length).to eq(2)
+      expect(parsed.outputs.length).to eq(2)
+
+      # Verify both inputs are signed
+      multi_resolved.each_with_index do |resolved, idx|
+        parsed.inputs[idx].source_satoshis = resolved[:source_satoshis]
+        parsed.inputs[idx].source_locking_script = BSV::Script::Script.from_binary(
+          resolved[:source_locking_script]
+        )
+      end
+      expect(parsed.verify_input(0)).to be true
+      expect(parsed.verify_input(1)).to be true
+    end
+
+    it 'resolves inputs from the store using the action_id' do
+      build_transaction(42, nil, caller_outputs, nil, nil, false)
+
+      expect(store).to have_received(:resolve_inputs_for_signing).with(action_id: 42)
+    end
+
+    it 'passes vout_mapping through from build_outputs' do
+      multi_outputs = 3.times.map do |i|
+        { satoshis: (i + 1) * 100, locking_script: output_script }
+      end
+
+      _txid, _raw_tx, vout_mapping = build_transaction(1, nil, multi_outputs, nil, nil, false)
+
+      expect(vout_mapping.keys.sort).to eq([0, 1, 2])
+      expect(vout_mapping.values.sort).to eq([0, 1, 2])
+    end
+  end
 end

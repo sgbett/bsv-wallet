@@ -73,12 +73,14 @@ module BSV
         end
 
         # Phase 2: Sign
-        txid, raw_tx = build_transaction(inputs, outputs, lock_time, version, randomize_outputs)
+        txid, raw_tx, vout_mapping = build_transaction(
+          action_result[:id], inputs, outputs, lock_time, version, randomize_outputs
+        )
         @store.sign_action(action_id: action_result[:id], txid: txid, raw_tx: raw_tx)
 
         # No-send path: promote immediately, return change outpoints
         if no_send
-          promote_with_outputs(action_result[:id], outputs)
+          promote_with_outputs(action_result[:id], outputs, vout_mapping)
           change = query_change_outpoints(action_result[:id])
           result = { txid: txid, tx: raw_tx, no_send_change: change }
           result[:send_with_results] = process_send_with(send_with) if send_with&.any?
@@ -94,7 +96,7 @@ module BSV
 
         # Phase 4: Promote (if inline broadcast accepted)
         if broadcast == :inline && accepted?(broadcast_result)
-          promote_with_outputs(action_result[:id], outputs)
+          promote_with_outputs(action_result[:id], outputs, vout_mapping)
           handle_proof_from_broadcast(action_result[:id], broadcast_result)
         end
 
@@ -463,13 +465,19 @@ module BSV
         @store.label_action(action_id: action_id, label_ids: label_ids)
       end
 
-      def promote_with_outputs(action_id, outputs)
+      def promote_with_outputs(action_id, outputs, vout_mapping = nil)
         return unless outputs&.any?
 
         output_specs = outputs.each_with_index.map do |out, idx|
+          vout = if vout_mapping
+                   vout_mapping[idx] || idx
+                 else
+                   out[:vout] || idx
+                 end
+
           {
             satoshis: out[:satoshis],
-            vout: out[:vout] || idx,
+            vout: vout,
             locking_script: out[:locking_script],
             basket: out[:basket],
             tags: out[:tags],
@@ -711,13 +719,40 @@ module BSV
         )
       end
 
-      # Placeholder — SDK transaction construction
-      def build_transaction(_inputs, _outputs, _lock_time, _version, _randomize)
-        # In production: construct and sign via SDK
-        # For now: generate a dummy txid
-        txid = SecureRandom.random_bytes(32)
-        raw_tx = SecureRandom.random_bytes(100)
-        [txid, raw_tx]
+      # Assemble, sign, and serialize an SDK transaction.
+      #
+      # Resolves locked inputs from the Store, builds TransactionInput and
+      # TransactionOutput objects via the helpers from Tasks 21/22, signs
+      # P2PKH inputs, and serializes.
+      #
+      # @param action_id [Integer] the action whose locked inputs to resolve
+      # @param inputs [Array<Hash>, nil] caller's input specs (for custom unlocking scripts)
+      # @param outputs [Array<Hash>, nil] caller's output specs
+      # @param lock_time [Integer, nil] nLockTime
+      # @param version [Integer, nil] transaction version
+      # @param randomize [Boolean] whether to shuffle output order
+      # @return [Array(String, String, Hash)] txid (32-byte display order),
+      #   raw_tx (binary), and vout_mapping (original index -> new vout)
+      def build_transaction(action_id, inputs, outputs, lock_time, version, randomize)
+        resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
+
+        tx_outputs, vout_mapping = build_outputs(outputs, randomize)
+        tx_inputs, signing_keys = build_inputs(resolved_inputs, inputs)
+
+        tx = BSV::Transaction::Transaction.new(
+          version: version || 1,
+          lock_time: lock_time || 0
+        )
+
+        tx_inputs.each { |inp| tx.add_input(inp) }
+        tx_outputs.each { |out| tx.add_output(out) }
+
+        signing_keys.each { |idx, key| tx.sign(idx, key) }
+
+        raw_tx = tx.to_binary
+        txid = tx.txid
+
+        [txid, raw_tx, vout_mapping]
       end
 
       # Placeholder — SDK signing for deferred (HLR #5)
