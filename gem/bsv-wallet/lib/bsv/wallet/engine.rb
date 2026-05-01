@@ -22,12 +22,13 @@ module BSV
       ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK MINED ACCEPTED_BY_NETWORK IMMUTABLE].freeze
 
       def initialize(store:, utxo_pool:, broadcast_queue:, proof_store:,
-                     key_deriver: nil, network: :mainnet)
+                     key_deriver: nil, chain_tracker: nil, network: :mainnet)
         @store = store
         @utxo_pool = utxo_pool
         @broadcast_queue = broadcast_queue
         @proof_store = proof_store
         @key_deriver = key_deriver
+        @chain_tracker = chain_tracker
         @network_name = network
       end
 
@@ -180,6 +181,12 @@ module BSV
 
         # Parse tx: as Atomic BEEF (BRC-95)
         beef, subject_tx = parse_beef(tx)
+
+        # SPV validation: structural integrity and optional merkle root verification
+        validate_beef!(beef)
+
+        # Fee adequacy: inputs must exceed outputs (BRC-67)
+        validate_fee_adequacy!(subject_tx)
 
         # Create action (incoming, no broadcast, already completed)
         action_result = @store.create_action(
@@ -613,6 +620,43 @@ module BSV
         end
 
         @store.link_proof(action_id: action_id, tx_proof_id: subject_proof_id) if subject_proof_id
+      end
+
+      # Validate structural integrity and optionally verify merkle roots
+      # against a chain tracker.
+      #
+      # @param beef [BSV::Transaction::Beef] parsed BEEF bundle
+      # @raise [InvalidBeefError] if validation fails
+      def validate_beef!(beef)
+        raise BSV::Wallet::InvalidBeefError, 'BEEF failed structural validation' unless beef.valid?
+
+        return unless @chain_tracker
+
+        return if beef.verify(@chain_tracker)
+
+        raise BSV::Wallet::InvalidBeefError, 'BEEF failed merkle root verification'
+      end
+
+      # Check that the subject transaction's input satoshis exceed output satoshis (BRC-67).
+      #
+      # Inputs without wired source transactions (i.e. missing satoshi data)
+      # are skipped — the structural BEEF validation already ensures ancestry
+      # is complete. Transactions with no wired inputs (e.g. coinbase) are also skipped.
+      #
+      # @param subject_tx [BSV::Transaction::Transaction]
+      # @raise [InvalidBeefError] if outputs exceed inputs
+      def validate_fee_adequacy!(subject_tx)
+        sourced = subject_tx.inputs.select(&:source_transaction)
+        return if sourced.empty?
+
+        input_sats = sourced.sum do |input|
+          input.source_transaction.outputs[input.prev_tx_out_index]&.satoshis || 0
+        end
+        output_sats = subject_tx.outputs.sum(&:satoshis)
+        return if input_sats > output_sats
+
+        raise BSV::Wallet::InvalidBeefError,
+              "inadequate fee: inputs #{input_sats} must exceed outputs #{output_sats}"
       end
 
       def resolve_internalize_output(out)
