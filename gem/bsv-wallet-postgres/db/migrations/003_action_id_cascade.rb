@@ -2,10 +2,6 @@
 
 Sequel.migration do
   up do
-    # Drop the pending_outputs jsonb column — output specs are now written
-    # to the outputs table during deferred create_action, not stashed in jsonb.
-    drop_column :actions, :pending_outputs
-
     # Add action_id with ON DELETE CASCADE to relationship tables.
     # Denormalized (derivable via output_id -> outputs.action_id) but
     # justified: set once at creation, never changes, enables cascade
@@ -66,6 +62,5 @@ Sequel.migration do
       drop_constraint :output_details_action_id_fkey
       drop_column :action_id
     end
-    add_column :actions, :pending_outputs, :jsonb
   end
 end
