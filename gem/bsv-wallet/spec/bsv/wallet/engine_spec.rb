@@ -2026,7 +2026,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       expect(tx_inputs.length).to eq(1)
       expect(tx_inputs[0]).to be_a(BSV::Transaction::TransactionInput)
-      expect(tx_inputs[0].prev_tx_id).to eq(source_txid)
+      expect(tx_inputs[0].prev_tx_id).to eq(source_txid.reverse)
       expect(tx_inputs[0].prev_tx_out_index).to eq(2)
       expect(tx_inputs[0].sequence).to eq(0xFFFFFFFF)
     end

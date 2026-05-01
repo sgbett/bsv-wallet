@@ -906,8 +906,10 @@ module BSV
         signing_keys = {}
 
         resolved_inputs.each_with_index do |resolved, idx|
+          # The wallet stores txids in display byte order (tx.txid); the SDK's
+          # TransactionInput expects wire byte order (reversed) for prev_tx_id.
           input = BSV::Transaction::TransactionInput.new(
-            prev_tx_id: resolved[:source_txid],
+            prev_tx_id: resolved[:source_txid].reverse,
             prev_tx_out_index: resolved[:source_vout],
             sequence: resolved[:sequence] || 0xFFFFFFFF
           )
