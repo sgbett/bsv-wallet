@@ -132,6 +132,67 @@ module BSV
         BSV::Primitives::Digest.hmac_sha256(sym_key.to_bytes, data)
       end
 
+      # Derive a revelation keyring for a verifier from a certificate's master keyring.
+      #
+      # For each field in +fields_to_reveal+, decrypts the encrypted field key from the
+      # certificate's keyring (using the certifier as counterparty per BRC-52), then
+      # re-encrypts it for the specified verifier.
+      #
+      # @param certificate [Hash] certificate hash with :type, :serial_number, :certifier, :keyring
+      # @param fields_to_reveal [Array<String>] field names whose keys to reveal
+      # @param verifier [String] verifier's public key (hex string)
+      # @param privileged [Boolean] use privileged keyring
+      # @return [Hash{String => String}] field names mapped to re-encrypted keys
+      # @raise [BSV::Wallet::Error] if a field is not in the keyring or keyring is missing
+      def derive_revelation_keyring(certificate:, fields_to_reveal:, verifier:, privileged: false)
+        return {} if fields_to_reveal.nil? || fields_to_reveal.empty?
+
+        keyring = certificate[:keyring]
+        raise BSV::Wallet::Error, 'certificate has no keyring' if keyring.nil? || keyring.empty?
+
+        cert_type = certificate[:type]
+        serial = certificate[:serial_number]
+        certifier = certificate[:certifier]
+
+        # BRC-52: master keyring was encrypted with protocol "authrite certificate field encryption {type}"
+        decrypt_protocol = [2, "authrite certificate field encryption #{cert_type}"]
+
+        # BRC-52: revelation keyring uses protocol "authrite certificate field encryption"
+        encrypt_protocol = [2, 'authrite certificate field encryption']
+
+        verifier_hex = normalize_pubkey_to_hex(verifier)
+
+        fields_to_reveal.each_with_object({}) do |field_name, result|
+          field_key_name = field_name.to_s
+          encrypted_key = keyring[field_key_name]
+
+          unless encrypted_key
+            raise BSV::Wallet::Error,
+                  "field '#{field_key_name}' not found in certificate keyring"
+          end
+
+          key_id = "#{serial} #{field_key_name}"
+
+          # Decrypt the field key (certifier encrypted it for us)
+          field_key = decrypt(
+            ciphertext: encrypted_key,
+            protocol_id: decrypt_protocol,
+            key_id: key_id,
+            counterparty: certifier,
+            privileged: privileged
+          )
+
+          # Re-encrypt the field key for the verifier
+          result[field_key_name] = encrypt(
+            plaintext: field_key,
+            protocol_id: encrypt_protocol,
+            key_id: key_id,
+            counterparty: verifier_hex,
+            privileged: privileged
+          )
+        end
+      end
+
       # Sign data using ECDSA with a derived private key.
       #
       # Either +data+ or +hash_to_directly_sign+ must be provided.
@@ -405,6 +466,17 @@ module BSV
         return unless key_id.is_a?(String) && key_id.length > 800
 
         raise BSV::Wallet::InvalidParameterError.new('key_id', 'no longer than 800 characters')
+      end
+
+      # Normalize a public key to hex string, accepting either hex or binary.
+      def normalize_pubkey_to_hex(key)
+        if key.is_a?(String) && key.match?(/\A(?:02|03|04)[0-9a-fA-F]{64}\z/)
+          key
+        elsif key.is_a?(String) && key.bytesize == 33
+          key.unpack1('H*')
+        else
+          key
+        end
       end
 
       def validate_counterparty_hex!(hex)

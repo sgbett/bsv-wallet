@@ -643,6 +643,188 @@ RSpec.describe BSV::Wallet::KeyDeriver do
     end
   end
 
+  describe '#derive_revelation_keyring' do
+    let(:certifier_key) { BSV::Primitives::PrivateKey.generate }
+    let(:verifier_key) { BSV::Primitives::PrivateKey.generate }
+    let(:verifier_hex) { verifier_key.public_key.to_hex }
+    let(:certifier_hex) { certifier_key.public_key.to_hex }
+    let(:cert_type) { 'test-cert-type' }
+    let(:serial) { 'serial-001' }
+
+    # Simulate a certifier creating an encrypted keyring for the subject.
+    # BRC-52: certifier encrypts field keys using:
+    #   protocol: [2, "authrite certificate field encryption {type}"]
+    #   key_id: "{serial} {field_name}"
+    #   counterparty: subject's public key
+    let(:certifier_deriver) { described_class.new(private_key: certifier_key) }
+    let(:field_key_name) { SecureRandom.random_bytes(32) }
+    let(:field_key_email) { SecureRandom.random_bytes(32) }
+
+    let(:keyring) do
+      decrypt_protocol = [2, "authrite certificate field encryption #{cert_type}"]
+      {
+        'name' => certifier_deriver.encrypt(
+          plaintext: field_key_name,
+          protocol_id: decrypt_protocol,
+          key_id: "#{serial} name",
+          counterparty: deriver.identity_key
+        ),
+        'email' => certifier_deriver.encrypt(
+          plaintext: field_key_email,
+          protocol_id: decrypt_protocol,
+          key_id: "#{serial} email",
+          counterparty: deriver.identity_key
+        )
+      }
+    end
+
+    let(:certificate) do
+      {
+        type: cert_type,
+        serial_number: serial,
+        certifier: certifier_hex,
+        subject: deriver.identity_key,
+        keyring: keyring
+      }
+    end
+
+    it 'returns empty hash for empty fields_to_reveal' do
+      result = deriver.derive_revelation_keyring(
+        certificate: certificate,
+        fields_to_reveal: [],
+        verifier: verifier_hex
+      )
+      expect(result).to eq({})
+    end
+
+    it 'returns empty hash for nil fields_to_reveal' do
+      result = deriver.derive_revelation_keyring(
+        certificate: certificate,
+        fields_to_reveal: nil,
+        verifier: verifier_hex
+      )
+      expect(result).to eq({})
+    end
+
+    it 'raises when certificate has no keyring' do
+      cert_no_keyring = certificate.merge(keyring: nil)
+      expect do
+        deriver.derive_revelation_keyring(
+          certificate: cert_no_keyring,
+          fields_to_reveal: ['name'],
+          verifier: verifier_hex
+        )
+      end.to raise_error(BSV::Wallet::Error, /no keyring/)
+    end
+
+    it 'raises when certificate has empty keyring' do
+      cert_empty_keyring = certificate.merge(keyring: {})
+      expect do
+        deriver.derive_revelation_keyring(
+          certificate: cert_empty_keyring,
+          fields_to_reveal: ['name'],
+          verifier: verifier_hex
+        )
+      end.to raise_error(BSV::Wallet::Error, /no keyring/)
+    end
+
+    it 'raises when a field is not in the keyring' do
+      expect do
+        deriver.derive_revelation_keyring(
+          certificate: certificate,
+          fields_to_reveal: ['nonexistent'],
+          verifier: verifier_hex
+        )
+      end.to raise_error(BSV::Wallet::Error, /not found in certificate keyring/)
+    end
+
+    it 'returns a hash mapping field names to re-encrypted keys' do
+      result = deriver.derive_revelation_keyring(
+        certificate: certificate,
+        fields_to_reveal: %w[name email],
+        verifier: verifier_hex
+      )
+      expect(result).to be_a(Hash)
+      expect(result.keys).to contain_exactly('name', 'email')
+      expect(result['name']).to be_a(String)
+      expect(result['email']).to be_a(String)
+    end
+
+    context 'round-trip: verifier can decrypt the re-encrypted keys' do
+      it 'decrypts to the original field keys' do
+        result = deriver.derive_revelation_keyring(
+          certificate: certificate,
+          fields_to_reveal: %w[name email],
+          verifier: verifier_hex
+        )
+
+        verifier_deriver = described_class.new(private_key: verifier_key)
+        encrypt_protocol = [2, 'authrite certificate field encryption']
+
+        decrypted_name = verifier_deriver.decrypt(
+          ciphertext: result['name'],
+          protocol_id: encrypt_protocol,
+          key_id: "#{serial} name",
+          counterparty: deriver.identity_key
+        )
+
+        decrypted_email = verifier_deriver.decrypt(
+          ciphertext: result['email'],
+          protocol_id: encrypt_protocol,
+          key_id: "#{serial} email",
+          counterparty: deriver.identity_key
+        )
+
+        expect(decrypted_name).to eq(field_key_name)
+        expect(decrypted_email).to eq(field_key_email)
+      end
+    end
+
+    context 'with privileged: true' do
+      it 'uses the privileged keyring' do
+        priv_deriver = described_class.new(private_key: root_key, privileged_key: privileged_key)
+
+        # Build keyring encrypted for the privileged key's identity
+        decrypt_protocol = [2, "authrite certificate field encryption #{cert_type}"]
+        priv_keyring = {
+          'name' => certifier_deriver.encrypt(
+            plaintext: field_key_name,
+            protocol_id: decrypt_protocol,
+            key_id: "#{serial} name",
+            counterparty: privileged_key.public_key.to_hex
+          )
+        }
+        priv_cert = certificate.merge(keyring: priv_keyring)
+
+        result = priv_deriver.derive_revelation_keyring(
+          certificate: priv_cert,
+          fields_to_reveal: ['name'],
+          verifier: verifier_hex,
+          privileged: true
+        )
+
+        # Verifier should be able to decrypt using the privileged identity
+        verifier_deriver = described_class.new(private_key: verifier_key)
+        decrypted = verifier_deriver.decrypt(
+          ciphertext: result['name'],
+          protocol_id: [2, 'authrite certificate field encryption'],
+          key_id: "#{serial} name",
+          counterparty: privileged_key.public_key.to_hex
+        )
+        expect(decrypted).to eq(field_key_name)
+      end
+    end
+
+    it 'reveals only the requested fields' do
+      result = deriver.derive_revelation_keyring(
+        certificate: certificate,
+        fields_to_reveal: ['name'],
+        verifier: verifier_hex
+      )
+      expect(result.keys).to eq(['name'])
+    end
+  end
+
   describe 'BRC-43 validation' do
     context 'security level' do
       it 'rejects level -1' do
