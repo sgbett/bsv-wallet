@@ -177,7 +177,124 @@ module BSV
         public_key.verify(hash, signature)
       end
 
+      # Reveal the ECDH shared secret between this wallet and a counterparty,
+      # encrypted for a verifier with a Schnorr proof (BRC-69 Method 1).
+      #
+      # @param counterparty [String] hex public key (not 'self' or 'anyone')
+      # @param verifier [String] hex public key of the verifier
+      # @param privileged [Boolean] use privileged keyring
+      # @return [Hash] revelation result with encrypted linkage and proof
+      def reveal_counterparty_linkage(counterparty:, verifier:, privileged: false)
+        validate_linkage_counterparty!(counterparty)
+        key = select_key(privileged)
+        counterparty_pub = resolve_counterparty(counterparty)
+
+        # Compute the ECDH shared secret (the linkage being revealed)
+        shared_secret = key.derive_shared_secret(counterparty_pub)
+        linkage = shared_secret.compressed
+
+        revelation_time = Time.now.utc.iso8601
+
+        # Encrypt the linkage for the verifier
+        encrypted_linkage = encrypt(
+          plaintext: linkage,
+          protocol_id: [2, 'counterparty linkage revelation'],
+          key_id: revelation_time,
+          counterparty: verifier,
+          privileged: privileged
+        )
+
+        # Generate Schnorr proof of the shared secret
+        proof = BSV::Primitives::Schnorr.generate_proof(
+          key, key.public_key, counterparty_pub, shared_secret
+        )
+
+        # Serialize the proof: R (33 bytes) + S' (33 bytes) + z (32 bytes, zero-padded)
+        z_bytes = proof.z.to_s(2)
+        z_bytes = ("\x00".b * (32 - z_bytes.length)) + z_bytes if z_bytes.length < 32
+        proof_bin = proof.r.compressed + proof.s_prime.compressed + z_bytes
+
+        # Encrypt the proof for the verifier
+        encrypted_proof = encrypt(
+          plaintext: proof_bin,
+          protocol_id: [2, 'counterparty linkage revelation'],
+          key_id: revelation_time,
+          counterparty: verifier,
+          privileged: privileged
+        )
+
+        {
+          prover: identity_key,
+          verifier: verifier,
+          counterparty: counterparty,
+          revelation_time: revelation_time,
+          encrypted_linkage: encrypted_linkage,
+          encrypted_linkage_proof: encrypted_proof
+        }
+      end
+
+      # Reveal the specific key offset for a particular derived key,
+      # encrypted for a verifier (BRC-69 Method 2).
+      #
+      # @param counterparty [String] hex public key (not 'self' or 'anyone')
+      # @param verifier [String] hex public key of the verifier
+      # @param protocol_id [Array<Integer, String>] [security_level, protocol_name]
+      # @param key_id [String] key identifier
+      # @param privileged [Boolean] use privileged keyring
+      # @return [Hash] revelation result with encrypted linkage and proof_type 0
+      def reveal_specific_linkage(counterparty:, verifier:, protocol_id:, key_id:, privileged: false)
+        validate_linkage_counterparty!(counterparty)
+        key = select_key(privileged)
+        counterparty_pub = resolve_counterparty(counterparty)
+
+        # Compute the specific key offset (HMAC of shared secret with invoice number)
+        shared_secret = key.derive_shared_secret(counterparty_pub)
+        invoice = compute_invoice_number(protocol_id, key_id)
+        linkage = BSV::Primitives::Digest.hmac_sha256(shared_secret.compressed, invoice.encode('UTF-8'))
+
+        derived_protocol = "specific linkage revelation #{protocol_id[0]} #{protocol_id[1]}"
+
+        # Encrypt the linkage for the verifier
+        encrypted_linkage = encrypt(
+          plaintext: linkage,
+          protocol_id: [2, derived_protocol],
+          key_id: key_id,
+          counterparty: verifier,
+          privileged: privileged
+        )
+
+        # Encrypt proof_type 0 for the verifier
+        encrypted_proof = encrypt(
+          plaintext: "\x00".b,
+          protocol_id: [2, derived_protocol],
+          key_id: key_id,
+          counterparty: verifier,
+          privileged: privileged
+        )
+
+        {
+          prover: identity_key,
+          verifier: verifier,
+          counterparty: counterparty,
+          protocol_id: protocol_id,
+          key_id: key_id,
+          encrypted_linkage: encrypted_linkage,
+          encrypted_linkage_proof: encrypted_proof,
+          proof_type: 0
+        }
+      end
+
       private
+
+      # Validate that a counterparty is valid for linkage revelation.
+      # 'self' and 'anyone' are not allowed.
+      def validate_linkage_counterparty!(counterparty)
+        raise BSV::Wallet::Error, 'cannot reveal linkage with yourself' if counterparty == 'self'
+
+        return unless counterparty == 'anyone'
+
+        raise BSV::Wallet::Error, 'cannot reveal linkage with "anyone"'
+      end
 
       # Resolve data or a pre-computed hash into a 32-byte digest for signing/verification.
       #

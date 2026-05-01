@@ -428,6 +428,221 @@ RSpec.describe BSV::Wallet::KeyDeriver do
     end
   end
 
+  describe '#reveal_counterparty_linkage' do
+    let(:counterparty_key) { BSV::Primitives::PrivateKey.generate }
+    let(:verifier_key) { BSV::Primitives::PrivateKey.generate }
+    let(:counterparty_hex) { counterparty_key.public_key.to_hex }
+    let(:verifier_hex) { verifier_key.public_key.to_hex }
+
+    it 'returns a hash with all required keys' do
+      result = deriver.reveal_counterparty_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex
+      )
+      expect(result).to include(
+        :prover, :verifier, :counterparty,
+        :revelation_time, :encrypted_linkage, :encrypted_linkage_proof
+      )
+    end
+
+    it 'sets prover to the identity key' do
+      result = deriver.reveal_counterparty_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex
+      )
+      expect(result[:prover]).to eq(deriver.identity_key)
+    end
+
+    it 'sets verifier and counterparty correctly' do
+      result = deriver.reveal_counterparty_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex
+      )
+      expect(result[:verifier]).to eq(verifier_hex)
+      expect(result[:counterparty]).to eq(counterparty_hex)
+    end
+
+    it 'sets revelation_time to UTC ISO 8601' do
+      result = deriver.reveal_counterparty_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex
+      )
+      expect(result[:revelation_time]).to match(/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\z/)
+    end
+
+    it 'raises when counterparty is self' do
+      expect do
+        deriver.reveal_counterparty_linkage(counterparty: 'self', verifier: verifier_hex)
+      end.to raise_error(BSV::Wallet::Error, /yourself/)
+    end
+
+    it 'raises when counterparty is anyone' do
+      expect do
+        deriver.reveal_counterparty_linkage(counterparty: 'anyone', verifier: verifier_hex)
+      end.to raise_error(BSV::Wallet::Error, /anyone/)
+    end
+
+    it 'uses privileged keyring when privileged: true' do
+      kd = described_class.new(private_key: root_key, privileged_key: privileged_key)
+      normal = kd.reveal_counterparty_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex
+      )
+      priv_result = kd.reveal_counterparty_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex, privileged: true
+      )
+      expect(normal[:encrypted_linkage]).not_to eq(priv_result[:encrypted_linkage])
+    end
+
+    context 'integration: verifier can decrypt the linkage' do
+      it 'decrypts to the ECDH shared secret' do
+        result = deriver.reveal_counterparty_linkage(
+          counterparty: counterparty_hex, verifier: verifier_hex
+        )
+
+        verifier_deriver = described_class.new(private_key: verifier_key)
+        decrypted = verifier_deriver.decrypt(
+          ciphertext: result[:encrypted_linkage],
+          protocol_id: [2, 'counterparty linkage revelation'],
+          key_id: result[:revelation_time],
+          counterparty: deriver.identity_key
+        )
+
+        # The decrypted value should be 33 bytes (compressed point)
+        expect(decrypted.bytesize).to eq(33)
+
+        # Verify it matches the actual ECDH shared secret
+        expected = root_key.derive_shared_secret(counterparty_key.public_key).compressed
+        expect(decrypted).to eq(expected)
+      end
+    end
+
+    context 'integration: Schnorr proof verifies' do
+      it 'decrypted proof passes Schnorr.verify_proof' do
+        result = deriver.reveal_counterparty_linkage(
+          counterparty: counterparty_hex, verifier: verifier_hex
+        )
+
+        verifier_deriver = described_class.new(private_key: verifier_key)
+
+        # Decrypt the linkage (shared secret)
+        linkage = verifier_deriver.decrypt(
+          ciphertext: result[:encrypted_linkage],
+          protocol_id: [2, 'counterparty linkage revelation'],
+          key_id: result[:revelation_time],
+          counterparty: deriver.identity_key
+        )
+        shared_secret = BSV::Primitives::PublicKey.from_bytes(linkage)
+
+        # Decrypt the proof
+        proof_bin = verifier_deriver.decrypt(
+          ciphertext: result[:encrypted_linkage_proof],
+          protocol_id: [2, 'counterparty linkage revelation'],
+          key_id: result[:revelation_time],
+          counterparty: deriver.identity_key
+        )
+        proof = BSV::Primitives::Schnorr::Proof.from_binary(proof_bin)
+
+        prover_pub = BSV::Primitives::PublicKey.from_hex(result[:prover])
+        counterparty_pub = BSV::Primitives::PublicKey.from_hex(result[:counterparty])
+
+        valid = BSV::Primitives::Schnorr.verify_proof(
+          prover_pub, counterparty_pub, shared_secret, proof
+        )
+        expect(valid).to be true
+      end
+    end
+  end
+
+  describe '#reveal_specific_linkage' do
+    let(:counterparty_key) { BSV::Primitives::PrivateKey.generate }
+    let(:verifier_key) { BSV::Primitives::PrivateKey.generate }
+    let(:counterparty_hex) { counterparty_key.public_key.to_hex }
+    let(:verifier_hex) { verifier_key.public_key.to_hex }
+
+    it 'returns a hash with all required keys' do
+      result = deriver.reveal_specific_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex,
+        protocol_id: protocol_id, key_id: key_id
+      )
+      expect(result).to include(
+        :prover, :verifier, :counterparty, :protocol_id, :key_id,
+        :encrypted_linkage, :encrypted_linkage_proof, :proof_type
+      )
+    end
+
+    it 'sets proof_type to 0' do
+      result = deriver.reveal_specific_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex,
+        protocol_id: protocol_id, key_id: key_id
+      )
+      expect(result[:proof_type]).to eq(0)
+    end
+
+    it 'preserves protocol_id and key_id in the result' do
+      result = deriver.reveal_specific_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex,
+        protocol_id: protocol_id, key_id: key_id
+      )
+      expect(result[:protocol_id]).to eq(protocol_id)
+      expect(result[:key_id]).to eq(key_id)
+    end
+
+    it 'raises when counterparty is self' do
+      expect do
+        deriver.reveal_specific_linkage(
+          counterparty: 'self', verifier: verifier_hex,
+          protocol_id: protocol_id, key_id: key_id
+        )
+      end.to raise_error(BSV::Wallet::Error, /yourself/)
+    end
+
+    it 'raises when counterparty is anyone' do
+      expect do
+        deriver.reveal_specific_linkage(
+          counterparty: 'anyone', verifier: verifier_hex,
+          protocol_id: protocol_id, key_id: key_id
+        )
+      end.to raise_error(BSV::Wallet::Error, /anyone/)
+    end
+
+    it 'uses privileged keyring when privileged: true' do
+      kd = described_class.new(private_key: root_key, privileged_key: privileged_key)
+      normal = kd.reveal_specific_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex,
+        protocol_id: protocol_id, key_id: key_id
+      )
+      priv_result = kd.reveal_specific_linkage(
+        counterparty: counterparty_hex, verifier: verifier_hex,
+        protocol_id: protocol_id, key_id: key_id, privileged: true
+      )
+      expect(normal[:encrypted_linkage]).not_to eq(priv_result[:encrypted_linkage])
+    end
+
+    context 'integration: verifier can decrypt the linkage' do
+      it 'decrypts to the HMAC key offset' do
+        result = deriver.reveal_specific_linkage(
+          counterparty: counterparty_hex, verifier: verifier_hex,
+          protocol_id: protocol_id, key_id: key_id
+        )
+
+        verifier_deriver = described_class.new(private_key: verifier_key)
+        derived_protocol = "specific linkage revelation #{protocol_id[0]} #{protocol_id[1]}"
+
+        decrypted = verifier_deriver.decrypt(
+          ciphertext: result[:encrypted_linkage],
+          protocol_id: [2, derived_protocol],
+          key_id: key_id,
+          counterparty: deriver.identity_key
+        )
+
+        # The decrypted value should be 32 bytes (HMAC-SHA256)
+        expect(decrypted.bytesize).to eq(32)
+
+        # Verify it matches the actual HMAC key offset
+        shared_secret = root_key.derive_shared_secret(counterparty_key.public_key)
+        invoice = "#{protocol_id[0]}-#{protocol_id[1]}-#{key_id}"
+        expected = BSV::Primitives::Digest.hmac_sha256(shared_secret.compressed, invoice.encode('UTF-8'))
+        expect(decrypted).to eq(expected)
+      end
+    end
+  end
+
   describe 'BRC-43 validation' do
     context 'security level' do
       it 'rejects level -1' do
