@@ -1197,6 +1197,185 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(result).to eq({ accepted: true })
       end
     end
+
+    # --- Ancestor proof chain storage (#33) ---
+
+    context 'ancestor proof chain storage' do
+      it 'stores raw_tx for each ancestor in ProofStore' do
+        beef_data = build_test_beef(satoshis: 500, ancestor_count: 2)
+
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        ancestor_txids = beef.transactions
+                             .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                             .map(&:txid)
+
+        engine.internalize_action(
+          tx: beef_data,
+          description: 'raw_tx storage test',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'raw_tx_test' } }
+          ]
+        )
+
+        ancestor_txids.each do |txid|
+          proof = proof_store.find_proof(txid: txid)
+          expect(proof).not_to be_nil
+          expect(proof[:raw_tx]).to be_a(String)
+          expect(proof[:raw_tx].bytesize).to be > 0
+
+          # Verify the raw_tx can be deserialized back to a valid transaction
+          tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
+          expect(tx.txid).to eq(txid)
+        end
+      end
+
+      it 'stores consistent format from BEEF and broadcast sources' do
+        # BEEF source: internalize action stores merkle_path as BRC-74 binary
+        beef_data = build_test_beef(satoshis: 500, ancestor_count: 1)
+
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        ancestor_bt = beef.transactions.find do |bt|
+          bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP
+        end
+        ancestor_txid = ancestor_bt.txid
+
+        engine.internalize_action(
+          tx: beef_data,
+          description: 'format consistency',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'fmt_test' } }
+          ]
+        )
+
+        proof = proof_store.find_proof(txid: ancestor_txid)
+        expect(proof[:merkle_path].encoding).to eq(Encoding::ASCII_8BIT)
+
+        # Verify it can be deserialized as BRC-74
+        mp, = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path])
+        expect(mp).to be_a(BSV::Transaction::MerklePath)
+        expect(mp.block_height).to be_a(Integer)
+      end
+    end
+
+    context 'handle_proof_from_broadcast normalization' do
+      it 'normalizes hex merkle_path to binary before storing' do
+        # Create an action that will receive a broadcast proof
+        beef_data = build_test_beef(satoshis: 500)
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        subject_txid = beef.subject_txid
+
+        engine.internalize_action(
+          tx: beef_data,
+          description: 'hex proof normal',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'hex_test' } }
+          ]
+        )
+
+        # Build a valid merkle path and encode as hex
+        txid_internal = subject_txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        mp = BSV::Transaction::MerklePath.new(
+          block_height: 850_000,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+        merkle_path_hex = mp.to_binary.unpack1('H*')
+
+        # Find the action and simulate broadcast proof with hex merkle_path
+        action = store.find_action(txid: subject_txid)
+        engine.send(:handle_proof_from_broadcast, action[:id], {
+                      txid: subject_txid,
+                      block_height: 850_000,
+                      merkle_path: merkle_path_hex
+                    })
+
+        proof = proof_store.find_proof(txid: subject_txid)
+        expect(proof).not_to be_nil
+        expect(proof[:merkle_path].encoding).to eq(Encoding::ASCII_8BIT)
+
+        # Verify it can be deserialized
+        stored_mp, = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path])
+        expect(stored_mp.block_height).to eq(850_000)
+      end
+
+      it 'passes through binary merkle_path unchanged' do
+        beef_data = build_test_beef(satoshis: 500)
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        subject_txid = beef.subject_txid
+
+        engine.internalize_action(
+          tx: beef_data,
+          description: 'bin proof pass',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'bin_test' } }
+          ]
+        )
+
+        txid_internal = subject_txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        mp = BSV::Transaction::MerklePath.new(
+          block_height: 850_000,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+        merkle_path_binary = mp.to_binary
+
+        action = store.find_action(txid: subject_txid)
+        engine.send(:handle_proof_from_broadcast, action[:id], {
+                      txid: subject_txid,
+                      block_height: 850_000,
+                      merkle_path: merkle_path_binary
+                    })
+
+        proof = proof_store.find_proof(txid: subject_txid)
+        expect(proof[:merkle_path]).to eq(merkle_path_binary)
+      end
+
+      it 'stores raw_tx from the action for BEEF construction' do
+        # Create an outgoing action so it has raw_tx set
+        locking_script = SecureRandom.random_bytes(25)
+        result = engine.create_action(
+          description: 'broadcast raw_tx',
+          no_send: true,
+          outputs: [{ satoshis: 500, locking_script: locking_script,
+                      basket: 'proof_raw_tx' }]
+        )
+
+        txid = result[:txid]
+        action = store.find_action(txid: txid)
+
+        # Simulate ARC returning MINED with merkle_path
+        txid_internal = txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        mp = BSV::Transaction::MerklePath.new(
+          block_height: 850_000,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+
+        engine.send(:handle_proof_from_broadcast, action[:id], {
+                      txid: txid,
+                      block_height: 850_000,
+                      merkle_path: mp.to_binary
+                    })
+
+        proof = proof_store.find_proof(txid: txid)
+        expect(proof).not_to be_nil
+        expect(proof[:raw_tx]).not_to be_nil
+        expect(proof[:raw_tx].bytesize).to be > 0
+      end
+    end
   end
 
   describe '#list_outputs' do
@@ -2458,6 +2637,138 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         computed_txid = parse_beef_tx(result[:tx]).txid
         expect(result[:txid]).to eq(computed_txid)
       end
+    end
+  end
+
+  # --- Ancestor proof chain storage (#33) ---
+
+  describe '#collect_input_ancestry (private)' do
+    def p2pkh_locking_script_for(private_key)
+      pubkey_hash = BSV::Primitives::Digest.hash160(private_key.public_key.compressed)
+      BSV::Script::Script.p2pkh_lock(pubkey_hash)
+    end
+
+    def derive_key(prefix: 'wallet payment', suffix: 'suffix', counterparty: 'self')
+      key_deriver.derive_private_key(
+        protocol_id: [2, prefix], key_id: suffix, counterparty: counterparty
+      )
+    end
+
+    it 'returns empty for action with no proven ancestors' do
+      fund_wallet(satoshis: 1000)
+      listed = engine_with_keys.list_outputs(basket: 'default')
+      output_id = listed[:outputs].first[:id]
+
+      result = engine_with_keys.create_action(
+        description: 'no ancestors test',
+        no_send: true,
+        inputs: [{ output_id: output_id }],
+        outputs: [{ satoshis: 900, locking_script: SecureRandom.random_bytes(25) }]
+      )
+
+      action = store.find_action(txid: result[:txid])
+      ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
+      expect(ancestry).to eq([])
+    end
+
+    it 'returns ancestor transactions with merkle_path for proven inputs' do
+      fund_wallet(satoshis: 1000)
+      listed = engine_with_keys.list_outputs(basket: 'default')
+      output_id = listed[:outputs].first[:id]
+
+      result = engine_with_keys.create_action(
+        description: 'proven ancestry test',
+        no_send: true,
+        inputs: [{ output_id: output_id }],
+        outputs: [{ satoshis: 900, locking_script: SecureRandom.random_bytes(25) }]
+      )
+
+      # Simulate a proof arriving for the source transaction
+      source_action = store.find_action(txid: result[:txid])
+      resolved = store.resolve_inputs_for_signing(action_id: source_action[:id])
+      source_txid = resolved.first[:source_txid]
+
+      # Build a fake source raw_tx and merkle proof
+      fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      fake_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                           satoshis: 1000,
+                           locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                         ))
+      fake_raw_tx = fake_tx.to_binary
+
+      txid_internal = source_txid.is_a?(String) ? source_txid.reverse : source_txid
+      sibling_hash = SecureRandom.random_bytes(32)
+      mp = BSV::Transaction::MerklePath.new(
+        block_height: 800_000,
+        path: [[
+          BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+          BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+        ]]
+      )
+
+      proof_store.save_proof(
+        txid: source_txid,
+        proof: { height: 800_000, merkle_path: mp.to_binary, raw_tx: fake_raw_tx }
+      )
+
+      ancestry = engine_with_keys.send(:collect_input_ancestry, source_action[:id])
+      expect(ancestry.length).to eq(1)
+      expect(ancestry.first).to be_a(BSV::Transaction::Transaction)
+      expect(ancestry.first.merkle_path).to be_a(BSV::Transaction::MerklePath)
+      expect(ancestry.first.merkle_path.block_height).to eq(800_000)
+    end
+
+    it 'collects ancestry for multi-input transactions' do
+      fund_wallet(satoshis: 500, suffix: 'anc0')
+      fund_wallet(satoshis: 500, suffix: 'anc1')
+      fund_wallet(satoshis: 500, suffix: 'anc2')
+
+      listed = engine_with_keys.list_outputs(basket: 'default')
+      output_ids = listed[:outputs].sort_by { |o| o[:id] }.map { |o| o[:id] }
+
+      result = engine_with_keys.create_action(
+        description: 'multi anc test 33',
+        no_send: true,
+        inputs: output_ids.each_with_index.map { |id, i| { output_id: id, vin: i } },
+        outputs: [{ satoshis: 1400, locking_script: SecureRandom.random_bytes(25) }]
+      )
+
+      action = store.find_action(txid: result[:txid])
+      resolved = store.resolve_inputs_for_signing(action_id: action[:id])
+
+      # Add proofs for 2 of 3 inputs (different block heights)
+      proven_count = 0
+      resolved.each_with_index do |r, i|
+        next if i == 2 # leave the third without proof
+
+        fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        fake_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                             satoshis: 500,
+                             locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                           ))
+
+        txid_internal = r[:source_txid].reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        mp = BSV::Transaction::MerklePath.new(
+          block_height: 800_000 + i,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+
+        proof_store.save_proof(
+          txid: r[:source_txid],
+          proof: { height: 800_000 + i, merkle_path: mp.to_binary, raw_tx: fake_tx.to_binary }
+        )
+        proven_count += 1
+      end
+
+      ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
+      expect(ancestry.length).to eq(proven_count)
+
+      block_heights = ancestry.map { |tx| tx.merkle_path.block_height }
+      expect(block_heights).to contain_exactly(800_000, 800_001)
     end
   end
 end

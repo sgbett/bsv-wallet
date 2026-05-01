@@ -541,12 +541,20 @@ module BSV
       def handle_proof_from_broadcast(action_id, broadcast_result)
         return unless broadcast_result[:merkle_path]
 
+        txid = broadcast_result[:txid] || @store.find_action(id: action_id)&.dig(:txid)
+        merkle_path = normalize_merkle_path(broadcast_result[:merkle_path], txid)
+
+        # Store raw_tx from the action so BEEF construction can use it
+        raw_tx = broadcast_result[:raw_tx]
+        raw_tx ||= @store.find_action(id: action_id)&.dig(:raw_tx)
+
         proof_id = @proof_store.save_proof(
-          txid: broadcast_result[:txid] || @store.find_action(id: action_id)&.dig(:txid),
+          txid: txid,
           proof: {
             height: broadcast_result[:block_height],
             block_hash: broadcast_result[:block_hash],
-            merkle_path: broadcast_result[:merkle_path]
+            merkle_path: merkle_path,
+            raw_tx: raw_tx
           }
         )
         @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
@@ -575,6 +583,64 @@ module BSV
         []
       end
 
+      # Normalize a merkle_path value to BRC-74 binary format.
+      #
+      # ARC may return merkle_path as:
+      # - Binary (ASCII-8BIT) — already in BRC-74 format, pass through
+      # - Hex string — decode to binary
+      # - TSC format hash — convert via MerklePath.from_tsc
+      #
+      # @param merkle_path [String, Hash] raw merkle_path from broadcast response
+      # @param txid [String] 32-byte binary txid (needed for TSC conversion)
+      # @return [String] BRC-74 binary merkle_path
+      def normalize_merkle_path(merkle_path, txid)
+        return normalize_tsc_merkle_path(merkle_path, txid) if merkle_path.is_a?(Hash)
+        return merkle_path if merkle_path.encoding == Encoding::ASCII_8BIT
+        return [merkle_path].pack('H*') if merkle_path.match?(/\A[0-9a-fA-F]+\z/)
+
+        merkle_path.b
+      end
+
+      # Convert a TSC-format merkle proof hash to BRC-74 binary.
+      def normalize_tsc_merkle_path(tsc, txid)
+        txid_hex = txid.reverse.unpack1('H*')
+        BSV::Transaction::MerklePath.from_tsc(
+          txid: tsc[:txOrId] || tsc[:tx_or_id] || txid_hex,
+          index: tsc[:index],
+          nodes: tsc[:nodes],
+          block_height: tsc[:blockHeight] || tsc[:block_height]
+        ).to_binary
+      end
+
+      # Collect ancestor Transaction objects for BEEF construction.
+      #
+      # For each input of the action, finds the source transaction's proof
+      # in ProofStore, reconstructs an SDK Transaction object with its
+      # merkle_path wired, and returns the list. These ancestor objects are
+      # ready to be passed to Transaction#to_beef or merged into a Beef.
+      #
+      # @param action_id [Integer] the action whose inputs to resolve
+      # @return [Array<BSV::Transaction::Transaction>] ancestor transactions
+      #   with merkle_path set for proven ancestors
+      def collect_input_ancestry(action_id)
+        resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
+
+        resolved_inputs.filter_map do |resolved|
+          source_txid = resolved[:source_txid]
+          proof = @proof_store.find_proof(txid: source_txid)
+
+          next unless proof && proof[:raw_tx]
+
+          source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
+
+          if proof[:merkle_path]
+            source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
+          end
+
+          source_tx
+        end
+      end
+
       # Build an Atomic BEEF (BRC-95) envelope for a signed transaction.
       #
       # For each input, looks up the ancestor proof from ProofStore.
@@ -600,7 +666,9 @@ module BSV
 
           source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
 
-          source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]) if proof[:merkle_path]
+          if proof[:merkle_path]
+            source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
+          end
 
           input.source_transaction = source_tx
         end
