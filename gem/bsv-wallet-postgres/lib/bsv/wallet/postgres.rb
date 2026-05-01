@@ -9,6 +9,9 @@ module BSV
     module Postgres
       autoload :VERSION,          'bsv/wallet/postgres/version'
 
+      # Component services (Layer 2a)
+      autoload :Store,            'bsv/wallet/postgres/store'
+
       # Models (Layer 2b — atomic services)
       autoload :TxProof,          'bsv/wallet/postgres/tx_proof'
       autoload :Action,           'bsv/wallet/postgres/action'
