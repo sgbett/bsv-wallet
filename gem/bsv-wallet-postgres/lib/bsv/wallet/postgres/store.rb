@@ -24,7 +24,7 @@ module BSV
             record = Action.create(
               description: action[:description],
               broadcast:   action[:broadcast]&.to_s || 'delayed',
-              nlocktime:   action[:nlocktime] || 0,
+              nlocktime:   action[:nlocktime],
               version:     action[:version],
               outgoing:    action.fetch(:outgoing, true),
               input_beef:  action[:input_beef]

@@ -1,0 +1,46 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# List spendable outputs with metadata.
+#
+# Usage:
+#   bin/list_outputs [wallet] [--basket <name>] [--limit <n>] [--scripts]
+#
+# Prints JSON to stdout, summary to stderr.
+
+require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+
+options = { basket: 'default', limit: 100 }
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/list_outputs [wallet] [--basket <name>] [--limit <n>] [--scripts]'
+  opts.on('--basket NAME', 'Basket to query (default: default)') { |v| options[:basket] = v }
+  opts.on('--limit N', Integer, 'Max outputs to return (default: 100)') { |v| options[:limit] = v }
+  opts.on('--scripts', 'Include locking scripts in output') { options[:scripts] = true }
+end.parse!(args)
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+engine = ctx[:engine]
+
+listed = engine.list_outputs(
+  basket: options[:basket],
+  limit: options[:limit],
+  include: options[:scripts] ? :locking_scripts : nil
+)
+
+outputs = listed[:outputs].map do |o|
+  entry = { id: o[:id], satoshis: o[:satoshis], vout: o[:vout] }
+  entry[:locking_script] = o[:locking_script]&.unpack1('H*') if options[:scripts]
+  entry
+end
+
+BSV::Wallet::CLI::Output.write_json(
+  { total: listed[:total_outputs], outputs: outputs }
+)
+
+$stderr.puts "wallet:  #{wallet_name || '(default)'}"
+$stderr.puts "basket:  #{options[:basket]}"
+$stderr.puts "outputs: #{listed[:total_outputs]}"
+$stderr.puts "total:   #{outputs.sum { |o| o[:satoshis] }} sats"

@@ -170,7 +170,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         inputs: [],
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'payment', basket: 'payments' }
+            output_description: 'payment', basket: 'payments', output_type: 'change' }
         ]
       )
 
@@ -209,7 +209,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         no_send: true,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'output', basket: 'pending' }
+            output_description: 'output', basket: 'pending', output_type: 'change' }
         ]
       )
 
@@ -748,7 +748,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
             insertion_remittance: {
               basket: 'tokens',
               tags: ['nft'],
-              custom_instructions: 'token-id-123'
+              custom_instructions: 'token-id-123',
+              derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self'
             }
           }
         ]
@@ -798,7 +799,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         labels: ['test'],
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-            insertion_remittance: { basket: 'wtxid_test' } }
+            insertion_remittance: { basket: 'wtxid_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -821,7 +822,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'ancestor proof test',
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-            insertion_remittance: { basket: 'ancestor_test' } }
+            insertion_remittance: { basket: 'ancestor_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -845,7 +846,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         labels: ['proof-link'],
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-            insertion_remittance: { basket: 'proof_link_test' } }
+            insertion_remittance: { basket: 'proof_link_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -873,7 +874,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         labels: ['no-proof'],
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-            insertion_remittance: { basket: 'no_proof_test' } }
+            insertion_remittance: { basket: 'no_proof_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -938,7 +939,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'valid beef passes',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'spv_valid' } }
+              insertion_remittance: { basket: 'spv_valid', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1017,7 +1018,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'chain tracker ok',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'tracker_ok' } }
+              insertion_remittance: { basket: 'tracker_ok', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1054,7 +1055,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'no tracker struct',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'no_tracker' } }
+              insertion_remittance: { basket: 'no_tracker', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1108,7 +1109,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'fee adequate test',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 900,
-              insertion_remittance: { basket: 'fee_ok' } }
+              insertion_remittance: { basket: 'fee_ok', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1163,7 +1164,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           trust_self: 'known',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'trust_all' } }
+              insertion_remittance: { basket: 'trust_all', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1190,7 +1191,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           trust_self: 'known',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'trust_some' } }
+              insertion_remittance: { basket: 'trust_some', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1246,7 +1247,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           known_txids: [ancestor_wtxid],
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'known_txids' } }
+              insertion_remittance: { basket: 'known_txids', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1274,7 +1275,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'no trust self full',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'no_trust' } }
+              insertion_remittance: { basket: 'no_trust', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1298,7 +1299,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'raw_tx storage test',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'raw_tx_test' } }
+              insertion_remittance: { basket: 'raw_tx_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1329,7 +1330,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'format consistency',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'fmt_test' } }
+              insertion_remittance: { basket: 'fmt_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1355,7 +1356,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'hex proof normal',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'hex_test' } }
+              insertion_remittance: { basket: 'hex_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1398,7 +1399,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'bin proof pass',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'bin_test' } }
+              insertion_remittance: { basket: 'bin_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 

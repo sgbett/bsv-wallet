@@ -1,0 +1,40 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Show wallet balance and spendable outputs.
+#
+# Usage:
+#   bin/balance [wallet] [--basket <name>]
+#
+# Prints total satoshis to stdout (machine-readable).
+# Prints detail to stderr (human-readable).
+
+require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+
+options = { basket: 'default' }
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/balance [wallet] [--basket <name>]'
+  opts.on('--basket NAME', 'Basket to query (default: default)') { |v| options[:basket] = v }
+end.parse!(args)
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+engine = ctx[:engine]
+
+listed = engine.list_outputs(basket: options[:basket], limit: 10_000)
+total = listed[:outputs].sum { |o| o[:satoshis] }
+
+# Machine-readable to stdout
+$stdout.puts total
+
+# Human-readable to stderr
+$stderr.puts "wallet:   #{wallet_name || '(default)'}"
+$stderr.puts "identity: #{ctx[:identity_key]}"
+$stderr.puts "basket:   #{options[:basket]}"
+$stderr.puts "outputs:  #{listed[:total_outputs]}"
+$stderr.puts "balance:  #{total} sats"
+listed[:outputs].each_with_index do |o, i|
+  $stderr.puts "  [#{i}] #{o[:satoshis]} sats (id: #{o[:id]})"
+end

@@ -1,0 +1,83 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Raw Engine#create_action wrapper.
+#
+# Reads a JSON specification of inputs and outputs from stdin,
+# calls create_action, and writes BEEF to stdout.
+#
+# Usage:
+#   echo '{"inputs":[...], "outputs":[...]}' | \
+#     bin/create_action [wallet] --description "payment" [--no-send] [--label <name>]...
+#
+# JSON input format:
+#   {
+#     "inputs": [{"output_id": 42}],
+#     "outputs": [
+#       {"satoshis": 1000, "locking_script": "76a914...88ac", "output_type": "change"},
+#       {"satoshis": 500, "locking_script": "76a914...88ac"}
+#     ]
+#   }
+#
+# Locking scripts in JSON are hex strings; they are decoded to binary before
+# being passed to the engine.
+
+require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
+require 'json'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+
+options = { labels: [] }
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/create_action [wallet] --description "..." [--no-send] [--label <name>]...'
+  opts.on('--description DESC', 'Action description (5-50 chars)') { |v| options[:description] = v }
+  opts.on('--no-send', 'Build and sign but do not broadcast (default)') { options[:no_send] = true }
+  opts.on('--send', 'Broadcast the transaction') { options[:no_send] = false }
+  opts.on('--label NAME', 'Add label (repeatable)') { |v| options[:labels] << v }
+  opts.on('-b', 'Force binary output to TTY') { options[:binary] = true }
+  opts.on('-o FILE', 'Write BEEF to file') { |v| options[:output_file] = v }
+end.parse!(args)
+
+abort 'Missing --description' unless options[:description]
+
+# Default to no_send for CLI usage
+options[:no_send] = true if options[:no_send].nil?
+
+# Read JSON from stdin
+abort 'No JSON on stdin (pipe input/output specs)' if $stdin.tty?
+spec = JSON.parse($stdin.read, symbolize_names: true)
+
+# Convert hex locking scripts to binary
+inputs = spec[:inputs] || []
+outputs = (spec[:outputs] || []).map do |out|
+  out = out.dup
+  if out[:locking_script].is_a?(String) && out[:locking_script].match?(/\A[0-9a-fA-F]+\z/)
+    out[:locking_script] = [out[:locking_script]].pack('H*')
+  end
+  out
+end
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+engine = ctx[:engine]
+
+result = engine.create_action(
+  description: options[:description],
+  inputs: inputs.any? ? inputs : nil,
+  outputs: outputs.any? ? outputs : nil,
+  labels: options[:labels].any? ? options[:labels] : nil,
+  no_send: options[:no_send],
+  randomize_outputs: false
+)
+
+# Output BEEF
+BSV::Wallet::CLI::Output.write_binary(result[:tx],
+  output_file: options[:output_file],
+  binary: options[:binary])
+
+# Summary to stderr
+dtxid = result[:txid].reverse.unpack1('H*')
+$stderr.puts "dtxid:   #{dtxid}"
+$stderr.puts "inputs:  #{inputs.length}"
+$stderr.puts "outputs: #{outputs.length}"
+$stderr.puts "no_send: #{options[:no_send]}"
