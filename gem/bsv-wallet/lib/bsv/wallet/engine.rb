@@ -178,19 +178,29 @@ module BSV
                              seek_permission: true, originator: nil)
         validate_description!(description)
 
+        # Parse tx: as Atomic BEEF (BRC-95)
+        beef, subject_tx = parse_beef(tx)
+
         # Create action (incoming, no broadcast, already completed)
         action_result = @store.create_action(
           action: { description: description, broadcast: :none, outgoing: false }
         )
 
+        # Store txid and raw_tx on the action
+        @store.sign_action(
+          action_id: action_result[:id],
+          txid: subject_tx.txid,
+          raw_tx: subject_tx.to_binary
+        )
+
         attach_labels(action_result[:id], labels)
+
+        # Save ancestor proofs and link subject proof
+        save_beef_proofs(beef, subject_tx.txid, action_result[:id])
 
         # Process outputs by protocol
         output_specs = outputs.map { |out| resolve_internalize_output(out) }
         @store.promote_action(action_id: action_result[:id], outputs: output_specs)
-
-        # TODO: Extract and save proof from BEEF data
-        # TODO: Link proof to action
 
         { accepted: true }
       end
@@ -545,6 +555,64 @@ module BSV
         # Query outputs marked as change for this action
         # Returns outpoint strings for no_send_change
         []
+      end
+
+      # Parse the tx: parameter as BEEF and extract the subject transaction.
+      #
+      # @param data [String] binary BEEF data (Atomic, V1, or V2)
+      # @return [Array(BSV::Transaction::Beef, BSV::Transaction::Transaction)]
+      # @raise [InvalidBeefError] if the data is invalid or the subject tx is missing
+      def parse_beef(data)
+        beef = BSV::Transaction::Beef.from_binary(data)
+
+        raise BSV::Wallet::InvalidBeefError, 'BEEF contains no transactions' if beef.transactions.empty?
+
+        subject_txid = beef.subject_txid
+        subject_tx = if subject_txid
+                       beef.find_atomic_transaction(subject_txid)
+                     else
+                       # Non-atomic BEEF: the last transaction is the subject
+                       beef.transactions.last&.transaction
+                     end
+
+        raise BSV::Wallet::InvalidBeefError, 'subject transaction not found in BEEF' unless subject_tx
+
+        [beef, subject_tx]
+      rescue ArgumentError => e
+        raise BSV::Wallet::InvalidBeefError, e.message
+      end
+
+      # Save merkle proofs from a parsed BEEF to ProofStore.
+      # Links the subject transaction's proof to the action when present.
+      #
+      # @param beef [BSV::Transaction::Beef] parsed BEEF bundle
+      # @param subject_txid [String] 32-byte txid of the subject transaction
+      # @param action_id [Integer] the action to link the subject proof to
+      def save_beef_proofs(beef, subject_txid, action_id)
+        subject_proof_id = nil
+
+        beef.transactions.each do |beef_tx|
+          next unless beef_tx.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP
+          next unless beef_tx.transaction
+
+          txid = beef_tx.transaction.txid
+          merkle_path = beef_tx.transaction.merkle_path ||
+                        (beef_tx.bump_index && beef.bumps[beef_tx.bump_index])
+          next unless merkle_path
+
+          proof_id = @proof_store.save_proof(
+            txid: txid,
+            proof: {
+              height: merkle_path.block_height,
+              merkle_path: merkle_path.to_binary,
+              raw_tx: beef_tx.transaction.to_binary
+            }
+          )
+
+          subject_proof_id = proof_id if txid == subject_txid
+        end
+
+        @store.link_proof(action_id: action_id, tx_proof_id: subject_proof_id) if subject_proof_id
       end
 
       def resolve_internalize_output(out)

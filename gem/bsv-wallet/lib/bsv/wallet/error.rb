@@ -55,5 +55,11 @@ module BSV
         super("UTXO pool '#{pool_name}' is depleted; no outputs available for acquisition")
       end
     end
+
+    class InvalidBeefError < Error
+      def initialize(message = 'invalid BEEF data')
+        super(message, 7)
+      end
+    end
   end
 end

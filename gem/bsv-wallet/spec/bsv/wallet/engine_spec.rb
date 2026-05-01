@@ -434,7 +434,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     context 'output promotion at create time' do
       it 'writes outputs to the database during deferred create_action' do
         binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
-        create_result = engine.create_action(
+        engine.create_action(
           description: 'deferred promo',
           sign_and_process: false,
           outputs: [
@@ -591,9 +591,63 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   end
 
   describe '#internalize_action' do
+    # Build a minimal valid BEEF (V1) containing one transaction.
+    # Optionally includes a merkle proof for the subject transaction.
+    def build_test_beef(satoshis: 500, with_proof: false, ancestor_count: 0)
+      # Build a subject transaction
+      subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                              satoshis: satoshis,
+                              locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                            ))
+
+      beef = BSV::Transaction::Beef.new
+
+      # Add proven ancestors if requested
+      ancestor_count.times do |i|
+        ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                 satoshis: 1000 + i,
+                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                               ))
+
+        # Create a merkle path for the ancestor
+        txid_internal = ancestor_tx.txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        merkle_path = BSV::Transaction::MerklePath.new(
+          block_height: 800_000 + i,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+        ancestor_tx.merkle_path = merkle_path
+        beef.merge_transaction(ancestor_tx)
+      end
+
+      if with_proof
+        # Create a merkle path for the subject
+        txid_internal = subject_tx.txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        merkle_path = BSV::Transaction::MerklePath.new(
+          block_height: 900_000,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+        subject_tx.merkle_path = merkle_path
+      end
+
+      beef.merge_transaction(subject_tx)
+      beef.to_atomic_binary(subject_tx.txid)
+    end
+
     it 'creates a completed incoming action with basket insertion' do
+      beef_data = build_test_beef(satoshis: 500)
+
       result = engine.internalize_action(
-        tx: SecureRandom.random_bytes(200),
+        tx: beef_data,
         description: 'incoming payment',
         labels: ['incoming'],
         outputs: [
@@ -619,8 +673,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
 
     it 'creates a completed incoming action with wallet payment' do
+      beef_data = build_test_beef(satoshis: 1000)
+
       result = engine.internalize_action(
-        tx: SecureRandom.random_bytes(200),
+        tx: beef_data,
         description: 'incoming payment',
         outputs: [
           {
@@ -637,6 +693,142 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
 
       expect(result).to eq({ accepted: true })
+    end
+
+    it 'stores txid and raw_tx on the action' do
+      beef_data = build_test_beef(satoshis: 500)
+
+      # Parse the BEEF to get expected txid
+      beef = BSV::Transaction::Beef.from_binary(beef_data)
+      expected_txid = beef.subject_txid
+
+      engine.internalize_action(
+        tx: beef_data,
+        description: 'txid storage test',
+        labels: ['test'],
+        outputs: [
+          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'txid_test' } }
+        ]
+      )
+
+      listed = engine.list_actions(labels: ['test'])
+      action = listed[:actions].first
+      expect(action[:txid]).to eq(expected_txid)
+    end
+
+    it 'saves ancestor proofs to ProofStore' do
+      beef_data = build_test_beef(satoshis: 500, ancestor_count: 2)
+
+      # Parse to get ancestor txids
+      beef = BSV::Transaction::Beef.from_binary(beef_data)
+      ancestor_txids = beef.transactions
+                           .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                           .map(&:txid)
+
+      engine.internalize_action(
+        tx: beef_data,
+        description: 'ancestor proof test',
+        outputs: [
+          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'ancestor_test' } }
+        ]
+      )
+
+      ancestor_txids.each do |txid|
+        proof = proof_store.find_proof(txid: txid)
+        expect(proof).not_to be_nil
+        expect(proof[:height]).to be_a(Integer)
+        expect(proof[:merkle_path]).to be_a(String)
+      end
+    end
+
+    it 'links the subject proof to the action when subject is mined' do
+      beef_data = build_test_beef(satoshis: 500, with_proof: true)
+
+      beef = BSV::Transaction::Beef.from_binary(beef_data)
+      subject_txid = beef.subject_txid
+
+      engine.internalize_action(
+        tx: beef_data,
+        description: 'proof link test',
+        labels: ['proof-link'],
+        outputs: [
+          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'proof_link_test' } }
+        ]
+      )
+
+      # Verify the proof exists
+      proof = proof_store.find_proof(txid: subject_txid)
+      expect(proof).not_to be_nil
+
+      # Verify the action has the proof linked via the txid
+      action = store.find_action(txid: subject_txid)
+      expect(action).not_to be_nil
+
+      # Query the underlying record to check tx_proof_id
+      action_record = BSV::Wallet::Postgres::Action.first(
+        txid: Sequel.blob(subject_txid)
+      )
+      expect(action_record.tx_proof_id).to eq(proof[:id])
+    end
+
+    it 'does not link proof when subject has no BUMP' do
+      beef_data = build_test_beef(satoshis: 500, with_proof: false)
+
+      engine.internalize_action(
+        tx: beef_data,
+        description: 'no proof link test',
+        labels: ['no-proof'],
+        outputs: [
+          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'no_proof_test' } }
+        ]
+      )
+
+      listed = engine.list_actions(labels: ['no-proof'])
+      action = listed[:actions].first
+      expect(action[:tx_proof_id]).to be_nil
+    end
+
+    it 'raises InvalidBeefError for truncated BEEF' do
+      expect do
+        engine.internalize_action(
+          tx: "\x01\x00".b,
+          description: 'truncated test',
+          outputs: []
+        )
+      end.to raise_error(BSV::Wallet::InvalidBeefError, /truncated/)
+    end
+
+    it 'raises InvalidBeefError for non-BEEF data' do
+      expect do
+        engine.internalize_action(
+          tx: SecureRandom.random_bytes(200),
+          description: 'random data test',
+          outputs: []
+        )
+      end.to raise_error(BSV::Wallet::InvalidBeefError)
+    end
+
+    it 'raises InvalidBeefError for BEEF with no transactions' do
+      # Construct a BEEF with zero transactions
+      BSV::Transaction::Beef.new
+      # Manually build atomic BEEF with no transactions
+      buf = [BSV::Transaction::Beef::ATOMIC_BEEF].pack('V')
+      buf << ("\x00" * 32) # subject txid
+      buf << [BSV::Transaction::Beef::BEEF_V1].pack('V')
+      buf << "\x00" # 0 bumps
+      buf << "\x00" # 0 transactions
+
+      expect do
+        engine.internalize_action(
+          tx: buf,
+          description: 'empty beef test',
+          outputs: []
+        )
+      end.to raise_error(BSV::Wallet::InvalidBeefError, /no transactions/)
     end
 
     it 'validates description' do
