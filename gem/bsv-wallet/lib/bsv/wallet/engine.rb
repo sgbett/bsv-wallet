@@ -85,11 +85,14 @@ module BSV
 
         @store.sign_action(action_id: action_result[:id], txid: txid, raw_tx: raw_tx)
 
+        # Build Atomic BEEF envelope for the :tx return value
+        atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
+
         # No-send path: promote immediately, return change outpoints
         if no_send
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           change = query_change_outpoints(action_result[:id])
-          result = { txid: txid, tx: raw_tx, no_send_change: change }
+          result = { txid: txid, tx: atomic_beef, no_send_change: change }
           result[:send_with_results] = process_send_with(send_with) if send_with&.any?
           return result
         end
@@ -107,7 +110,7 @@ module BSV
           handle_proof_from_broadcast(action_result[:id], broadcast_result)
         end
 
-        result = { txid: txid, tx: return_txid_only ? nil : raw_tx }
+        result = { txid: txid, tx: return_txid_only ? nil : atomic_beef }
         result[:send_with_results] = process_send_with(send_with) if send_with&.any?
         result
       end
@@ -124,10 +127,13 @@ module BSV
         txid, raw_tx = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], txid: txid, raw_tx: raw_tx)
 
+        # Build Atomic BEEF envelope for the :tx return value
+        atomic_beef = build_atomic_beef(raw_tx, action[:id])
+
         broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
 
         if no_send
-          result = { txid: txid, tx: raw_tx }
+          result = { txid: txid, tx: atomic_beef }
           result[:send_with_results] = process_send_with(send_with) if send_with&.any?
           return result
         end
@@ -144,7 +150,7 @@ module BSV
           end
         end
 
-        result = { txid: txid, tx: return_txid_only ? nil : raw_tx }
+        result = { txid: txid, tx: return_txid_only ? nil : atomic_beef }
         result[:send_with_results] = process_send_with(send_with) if send_with&.any?
         result
       end
@@ -176,14 +182,19 @@ module BSV
       end
 
       def internalize_action(tx:, outputs:, description:, labels: nil,
+                             trust_self: nil, known_txids: nil,
                              seek_permission: true, originator: nil)
         validate_description!(description)
 
         # Parse tx: as Atomic BEEF (BRC-95)
         beef, subject_tx = parse_beef(tx)
 
+        # trustSelf: replace known ancestors with TXID-only entries before validation
+        has_txid_only = trust_self == 'known' &&
+                        replace_known_ancestors!(beef, subject_tx.txid, known_txids)
+
         # SPV validation: structural integrity and optional merkle root verification
-        validate_beef!(beef)
+        validate_beef!(beef, allow_txid_only: has_txid_only)
 
         # Fee adequacy: inputs must exceed outputs (BRC-67)
         validate_fee_adequacy!(subject_tx)
@@ -564,6 +575,41 @@ module BSV
         []
       end
 
+      # Build an Atomic BEEF (BRC-95) envelope for a signed transaction.
+      #
+      # For each input, looks up the ancestor proof from ProofStore.
+      # Proven ancestors get their merkle_path wired; unproven ancestors
+      # are included as raw transactions without a BUMP.
+      #
+      # @param raw_tx [String] signed transaction binary (wire format)
+      # @param action_id [Integer] action whose inputs to resolve for ancestry
+      # @return [String] Atomic BEEF binary
+      def build_atomic_beef(raw_tx, action_id)
+        tx = BSV::Transaction::Transaction.from_binary(raw_tx)
+        resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
+
+        # Wire source_transaction and merkle_path on each input
+        resolved_inputs.each_with_index do |resolved, idx|
+          input = tx.inputs[idx]
+          next unless input
+
+          source_txid = resolved[:source_txid]
+          proof = @proof_store.find_proof(txid: source_txid)
+
+          next unless proof && proof[:raw_tx]
+
+          source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
+
+          source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]) if proof[:merkle_path]
+
+          input.source_transaction = source_tx
+        end
+
+        beef = BSV::Transaction::Beef.new
+        beef.merge_transaction(tx)
+        beef.to_atomic_binary(tx.txid)
+      end
+
       # Parse the tx: parameter as BEEF and extract the subject transaction.
       #
       # @param data [String] binary BEEF data (Atomic, V1, or V2)
@@ -626,15 +672,46 @@ module BSV
       # against a chain tracker.
       #
       # @param beef [BSV::Transaction::Beef] parsed BEEF bundle
+      # @param allow_txid_only [Boolean] accept TXID-only entries (trustSelf)
       # @raise [InvalidBeefError] if validation fails
-      def validate_beef!(beef)
-        raise BSV::Wallet::InvalidBeefError, 'BEEF failed structural validation' unless beef.valid?
+      def validate_beef!(beef, allow_txid_only: false)
+        unless beef.valid?(allow_txid_only: allow_txid_only)
+          raise BSV::Wallet::InvalidBeefError, 'BEEF failed structural validation'
+        end
 
         return unless @chain_tracker
 
-        return if beef.verify(@chain_tracker)
+        return if beef.verify(@chain_tracker, allow_txid_only: allow_txid_only)
 
         raise BSV::Wallet::InvalidBeefError, 'BEEF failed merkle root verification'
+      end
+
+      # Replace known ancestor transactions with TXID-only entries in the BEEF.
+      #
+      # An ancestor is "known" if it has a proof in ProofStore or its txid
+      # appears in the known_txids array. The subject transaction is never
+      # replaced.
+      #
+      # @param beef [BSV::Transaction::Beef] the BEEF bundle to modify
+      # @param subject_txid [String] 32-byte subject txid (never replaced)
+      # @param known_txids [Array<String>, nil] additional known txids (binary)
+      # @return [Boolean] true if any entries were replaced
+      def replace_known_ancestors!(beef, subject_txid, known_txids)
+        known_set = Set.new(known_txids || [])
+        replaced = false
+
+        beef.transactions.each do |beef_tx|
+          txid = beef_tx.txid
+          next if txid == subject_txid
+          next if beef_tx.format == BSV::Transaction::Beef::FORMAT_TXID_ONLY
+
+          next unless known_set.include?(txid) || @proof_store.proof_exists?(txid: txid)
+
+          beef.make_txid_only(txid)
+          replaced = true
+        end
+
+        replaced
       end
 
       # Check that the subject transaction's input satoshis exceed output satoshis (BRC-67).
