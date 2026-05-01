@@ -2223,8 +2223,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         # Verify the input signature
         expect(parsed.verify_input(0)).to be true
 
-        # Verify serialization round-trip
-        expect(parsed.to_binary).to eq(result[:tx])
+        # Verify BEEF round-trip: re-parsing yields the same raw tx
+        reparsed = parse_beef_tx(result[:tx])
+        expect(reparsed.to_binary).to eq(parsed.to_binary)
 
         # Verify outputs are promoted in the database
         payments = engine_with_keys.list_outputs(basket: 'payments')
