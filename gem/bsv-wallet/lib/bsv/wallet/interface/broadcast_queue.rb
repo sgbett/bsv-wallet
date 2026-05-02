@@ -53,8 +53,9 @@ module BSV
         # can decide whether to promote.
         #
         # @param event [Hash] parsed TransactionStatus:
-        #   :txid (binary), :tx_status, :status, :block_hash (binary),
-        #   :block_height, :merkle_path (binary), :extra_info, :competing_txs
+        #   :wtxid (binary, wire byte order), :tx_status, :status,
+        #   :block_hash (binary), :block_height, :merkle_path (binary),
+        #   :extra_info, :competing_txs
         # @return [Hash, nil] :action_id, :tx_status, and proof data,
         #   or nil if the event doesn't match a known broadcast
         def handle_event(event)
