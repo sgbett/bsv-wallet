@@ -62,9 +62,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     source_action = store.create_action(
       action: { description: 'funding source', broadcast: :none, outgoing: false }
     )
-    # Source actions need a real txid for input resolution
-    source_txid = SecureRandom.random_bytes(32)
-    store.sign_action(action_id: source_action[:id], txid: source_txid, raw_tx: "\x00".b)
+    # Source actions need a real wtxid for input resolution
+    source_wtxid = SecureRandom.random_bytes(32)
+    store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: "\x00".b)
 
     outputs = count.times.map do |i|
       out_suffix = count > 1 ? "#{suffix}#{i}" : suffix
@@ -282,13 +282,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
       script = p2pkh_locking_script_for(derived_key)
 
-      # Create a source action with a txid (needed for input resolution)
+      # Create a source action with a wtxid (needed for input resolution)
       source_action = store.create_action(
         action: { description: 'funding source', broadcast: :none, outgoing: false }
       )
-      # Set a real txid on the source action
-      source_txid = SecureRandom.random_bytes(32)
-      store.sign_action(action_id: source_action[:id], txid: source_txid, raw_tx: "\x00".b)
+      # Set a real wtxid on the source action
+      source_wtxid = SecureRandom.random_bytes(32)
+      store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: "\x00".b)
 
       outputs = count.times.map do |i|
         {
@@ -339,7 +339,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(parsed.outputs[0].satoshis).to eq(900)
 
         # Verify the txid matches
-        expected_txid = parse_beef_tx(result[:tx]).txid
+        expected_txid = parse_beef_tx(result[:tx]).wtxid
         expect(result[:txid]).to eq(expected_txid)
       end
     end
@@ -618,12 +618,12 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                                ))
 
         # Create a merkle path for the ancestor
-        txid_internal = ancestor_tx.txid.reverse
+        wtxid_internal = ancestor_tx.wtxid
         sibling_hash = SecureRandom.random_bytes(32)
         merkle_path = BSV::Transaction::MerklePath.new(
           block_height: 800_000 + i,
           path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid_internal, txid: true),
             BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
           ]]
         )
@@ -633,12 +633,12 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       if with_proof
         # Create a merkle path for the subject
-        txid_internal = subject_tx.txid.reverse
+        wtxid_internal = subject_tx.wtxid
         sibling_hash = SecureRandom.random_bytes(32)
         merkle_path = BSV::Transaction::MerklePath.new(
           block_height: 900_000,
           path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid_internal, txid: true),
             BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
           ]]
         )
@@ -646,7 +646,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       end
 
       beef.merge_transaction(subject_tx)
-      beef.to_atomic_binary(subject_tx.txid)
+      beef.to_atomic_binary(subject_tx.wtxid)
     end
 
     it 'creates a completed incoming action with basket insertion' do
@@ -701,26 +701,26 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       expect(result).to eq({ accepted: true })
     end
 
-    it 'stores txid and raw_tx on the action' do
+    it 'stores wtxid and raw_tx on the action' do
       beef_data = build_test_beef(satoshis: 500)
 
-      # Parse the BEEF to get expected txid
+      # Parse the BEEF to get expected wtxid
       beef = BSV::Transaction::Beef.from_binary(beef_data)
-      expected_txid = beef.subject_txid
+      expected_wtxid = beef.subject_wtxid
 
       engine.internalize_action(
         tx: beef_data,
-        description: 'txid storage test',
+        description: 'wtxid storage test',
         labels: ['test'],
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-            insertion_remittance: { basket: 'txid_test' } }
+            insertion_remittance: { basket: 'wtxid_test' } }
         ]
       )
 
       listed = engine.list_actions(labels: ['test'])
       action = listed[:actions].first
-      expect(action[:txid]).to eq(expected_txid)
+      expect(action[:wtxid]).to eq(expected_wtxid)
     end
 
     it 'saves ancestor proofs to ProofStore' do
@@ -730,7 +730,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       beef = BSV::Transaction::Beef.from_binary(beef_data)
       ancestor_txids = beef.transactions
                            .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
-                           .map(&:txid)
+                           .map(&:wtxid)
 
       engine.internalize_action(
         tx: beef_data,
@@ -742,7 +742,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
 
       ancestor_txids.each do |txid|
-        proof = proof_store.find_proof(txid: txid)
+        proof = proof_store.find_proof(wtxid: txid)
         expect(proof).not_to be_nil
         expect(proof[:height]).to be_a(Integer)
         expect(proof[:merkle_path]).to be_a(String)
@@ -753,7 +753,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       beef_data = build_test_beef(satoshis: 500, with_proof: true)
 
       beef = BSV::Transaction::Beef.from_binary(beef_data)
-      subject_txid = beef.subject_txid
+      subject_txid = beef.subject_wtxid
 
       engine.internalize_action(
         tx: beef_data,
@@ -766,16 +766,16 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
 
       # Verify the proof exists
-      proof = proof_store.find_proof(txid: subject_txid)
+      proof = proof_store.find_proof(wtxid: subject_txid)
       expect(proof).not_to be_nil
 
       # Verify the action has the proof linked via the txid
-      action = store.find_action(txid: subject_txid)
+      action = store.find_action(wtxid: subject_txid)
       expect(action).not_to be_nil
 
       # Query the underlying record to check tx_proof_id
       action_record = BSV::Wallet::Postgres::Action.first(
-        txid: Sequel.blob(subject_txid)
+        wtxid: Sequel.blob(subject_txid)
       )
       expect(action_record.tx_proof_id).to eq(proof[:id])
     end
@@ -872,7 +872,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         tampered_hash.setbyte(0, tampered_hash.getbyte(0) ^ 0xFF)
         txid_leaf.instance_variable_set(:@hash, tampered_hash)
 
-        subject_txid = beef.subject_txid
+        subject_txid = beef.subject_wtxid
         tampered_data = beef.to_atomic_binary(subject_txid)
 
         expect do
@@ -892,9 +892,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                                ))
 
         subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
-        # prev_tx_id is internal byte order (reverse of display-order txid)
+        # prev_tx_id expects wire byte order — wtxid is already wire order
         subject_tx.add_input(BSV::Transaction::TransactionInput.new(
-                               prev_tx_id: ancestor_tx.txid.reverse,
+                               prev_tx_id: ancestor_tx.wtxid,
                                prev_tx_out_index: 0,
                                sequence: 0xFFFFFFFF
                              ))
@@ -905,7 +905,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
         beef = BSV::Transaction::Beef.new
         beef.merge_transaction(subject_tx)
-        beef_data = beef.to_atomic_binary(subject_tx.txid)
+        beef_data = beef.to_atomic_binary(subject_tx.wtxid)
 
         expect do
           engine.internalize_action(
@@ -986,21 +986,21 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                                  locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
                                ))
 
-        txid_internal = ancestor_tx.txid.reverse
+        wtxid_internal = ancestor_tx.wtxid
         sibling_hash = SecureRandom.random_bytes(32)
         merkle_path = BSV::Transaction::MerklePath.new(
           block_height: 800_000,
           path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid_internal, txid: true),
             BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
           ]]
         )
         ancestor_tx.merkle_path = merkle_path
 
         subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
-        # prev_tx_id is internal byte order (reverse of display-order txid)
+        # prev_tx_id expects wire byte order — wtxid is already wire order
         subject_tx.add_input(BSV::Transaction::TransactionInput.new(
-                               prev_tx_id: ancestor_tx.txid.reverse,
+                               prev_tx_id: ancestor_tx.wtxid,
                                prev_tx_out_index: 0,
                                sequence: 0xFFFFFFFF
                              ))
@@ -1013,7 +1013,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         beef = BSV::Transaction::Beef.new
         beef.merge_transaction(ancestor_tx)
         beef.merge_transaction(subject_tx)
-        beef.to_atomic_binary(subject_tx.txid)
+        beef.to_atomic_binary(subject_tx.wtxid)
       end
 
       it 'accepts a transaction with adequate fee' do
@@ -1068,7 +1068,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
             .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
             .each do |bt|
           proof_store.save_proof(
-            txid: bt.txid,
+            wtxid: bt.wtxid,
             proof: { height: 800_000, merkle_path: "\x00".b }
           )
         end
@@ -1093,10 +1093,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         proven_txids = beef.transactions
                            .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
-                           .map(&:txid)
+                           .map(&:wtxid)
 
         proof_store.save_proof(
-          txid: proven_txids.first,
+          wtxid: proven_txids.first,
           proof: { height: 800_000, merkle_path: "\x00".b }
         )
 
@@ -1123,7 +1123,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
         subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         subject_tx.add_input(BSV::Transaction::TransactionInput.new(
-                               prev_tx_id: ancestor_tx.txid.reverse,
+                               prev_tx_id: ancestor_tx.wtxid,
                                prev_tx_out_index: 0,
                                sequence: 0xFFFFFFFF
                              ))
@@ -1134,7 +1134,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
         beef = BSV::Transaction::Beef.new
         beef.merge_transaction(subject_tx)
-        beef_data = beef.to_atomic_binary(subject_tx.txid)
+        beef_data = beef.to_atomic_binary(subject_tx.wtxid)
 
         expect do
           engine.internalize_action(
@@ -1153,7 +1153,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         ancestor_txid = beef.transactions
                             .find { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
-                            &.txid
+                            &.wtxid
 
         result = engine.internalize_action(
           tx: beef_data,
@@ -1178,7 +1178,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
             .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
             .each do |bt|
           proof_store.save_proof(
-            txid: bt.txid,
+            wtxid: bt.wtxid,
             proof: { height: 800_000, merkle_path: "\x00".b }
           )
         end
@@ -1207,7 +1207,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         ancestor_txids = beef.transactions
                              .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
-                             .map(&:txid)
+                             .map(&:wtxid)
 
         engine.internalize_action(
           tx: beef_data,
@@ -1219,14 +1219,14 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         )
 
         ancestor_txids.each do |txid|
-          proof = proof_store.find_proof(txid: txid)
+          proof = proof_store.find_proof(wtxid: txid)
           expect(proof).not_to be_nil
           expect(proof[:raw_tx]).to be_a(String)
           expect(proof[:raw_tx].bytesize).to be > 0
 
           # Verify the raw_tx can be deserialized back to a valid transaction
           tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
-          expect(tx.txid).to eq(txid)
+          expect(tx.wtxid).to eq(txid)
         end
       end
 
@@ -1238,7 +1238,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         ancestor_bt = beef.transactions.find do |bt|
           bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP
         end
-        ancestor_txid = ancestor_bt.txid
+        ancestor_txid = ancestor_bt.wtxid
 
         engine.internalize_action(
           tx: beef_data,
@@ -1249,7 +1249,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           ]
         )
 
-        proof = proof_store.find_proof(txid: ancestor_txid)
+        proof = proof_store.find_proof(wtxid: ancestor_txid)
         expect(proof[:merkle_path].encoding).to eq(Encoding::ASCII_8BIT)
 
         # Verify it can be deserialized as BRC-74
@@ -1264,7 +1264,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         # Create an action that will receive a broadcast proof
         beef_data = build_test_beef(satoshis: 500)
         beef = BSV::Transaction::Beef.from_binary(beef_data)
-        subject_txid = beef.subject_txid
+        subject_txid = beef.subject_wtxid
 
         engine.internalize_action(
           tx: beef_data,
@@ -1276,26 +1276,26 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         )
 
         # Build a valid merkle path and encode as hex
-        txid_internal = subject_txid.reverse
+        # subject_txid from beef is wire order — use directly as merkle path hash
         sibling_hash = SecureRandom.random_bytes(32)
         mp = BSV::Transaction::MerklePath.new(
           block_height: 850_000,
           path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: subject_txid, txid: true),
             BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
           ]]
         )
         merkle_path_hex = mp.to_binary.unpack1('H*')
 
         # Find the action and simulate broadcast proof with hex merkle_path
-        action = store.find_action(txid: subject_txid)
+        action = store.find_action(wtxid: subject_txid)
         engine.send(:handle_proof_from_broadcast, action[:id], {
-                      txid: subject_txid,
+                      wtxid: subject_txid,
                       block_height: 850_000,
                       merkle_path: merkle_path_hex
                     })
 
-        proof = proof_store.find_proof(txid: subject_txid)
+        proof = proof_store.find_proof(wtxid: subject_txid)
         expect(proof).not_to be_nil
         expect(proof[:merkle_path].encoding).to eq(Encoding::ASCII_8BIT)
 
@@ -1307,7 +1307,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       it 'passes through binary merkle_path unchanged' do
         beef_data = build_test_beef(satoshis: 500)
         beef = BSV::Transaction::Beef.from_binary(beef_data)
-        subject_txid = beef.subject_txid
+        subject_txid = beef.subject_wtxid
 
         engine.internalize_action(
           tx: beef_data,
@@ -1318,25 +1318,25 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           ]
         )
 
-        txid_internal = subject_txid.reverse
+        # subject_txid from beef is wire order — use directly as merkle path hash
         sibling_hash = SecureRandom.random_bytes(32)
         mp = BSV::Transaction::MerklePath.new(
           block_height: 850_000,
           path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: subject_txid, txid: true),
             BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
           ]]
         )
         merkle_path_binary = mp.to_binary
 
-        action = store.find_action(txid: subject_txid)
+        action = store.find_action(wtxid: subject_txid)
         engine.send(:handle_proof_from_broadcast, action[:id], {
-                      txid: subject_txid,
+                      wtxid: subject_txid,
                       block_height: 850_000,
                       merkle_path: merkle_path_binary
                     })
 
-        proof = proof_store.find_proof(txid: subject_txid)
+        proof = proof_store.find_proof(wtxid: subject_txid)
         expect(proof[:merkle_path]).to eq(merkle_path_binary)
       end
 
@@ -1350,27 +1350,27 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                       basket: 'proof_raw_tx' }]
         )
 
-        txid = result[:txid]
-        action = store.find_action(txid: txid)
+        wtxid = result[:txid]
+        action = store.find_action(wtxid: wtxid)
 
         # Simulate ARC returning MINED with merkle_path
-        txid_internal = txid.reverse
+        # wtxid is wire order — use directly as merkle path hash
         sibling_hash = SecureRandom.random_bytes(32)
         mp = BSV::Transaction::MerklePath.new(
           block_height: 850_000,
           path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid, txid: true),
             BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
           ]]
         )
 
         engine.send(:handle_proof_from_broadcast, action[:id], {
-                      txid: txid,
+                      wtxid: wtxid,
                       block_height: 850_000,
                       merkle_path: mp.to_binary
                     })
 
-        proof = proof_store.find_proof(txid: txid)
+        proof = proof_store.find_proof(wtxid: wtxid)
         expect(proof).not_to be_nil
         expect(proof[:raw_tx]).not_to be_nil
         expect(proof[:raw_tx].bytesize).to be > 0
@@ -1992,7 +1992,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       {
         vin: vin,
         sequence: 0xFFFFFFFF,
-        source_txid: SecureRandom.random_bytes(32),
+        source_wtxid: SecureRandom.random_bytes(32),
         source_vout: 0,
         source_satoshis: satoshis,
         source_locking_script: script,
@@ -2015,18 +2015,18 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
 
     it 'builds TransactionInput with correct outpoint' do
-      source_txid = SecureRandom.random_bytes(32)
+      source_wtxid = SecureRandom.random_bytes(32)
       # Derive the key the same way the engine will
       derived_key = key_deriver.derive_private_key(
         protocol_id: [2, 'wallet payment'], key_id: 'suffix1', counterparty: 'self'
       )
-      resolved = [make_resolved_input(vin: 0, private_key: derived_key).merge(source_txid: source_txid, source_vout: 2)]
+      resolved = [make_resolved_input(vin: 0, private_key: derived_key).merge(source_wtxid: source_wtxid, source_vout: 2)]
 
       tx_inputs, _signing_keys = build_inputs(resolved, nil)
 
       expect(tx_inputs.length).to eq(1)
       expect(tx_inputs[0]).to be_a(BSV::Transaction::TransactionInput)
-      expect(tx_inputs[0].prev_tx_id).to eq(source_txid.reverse)
+      expect(tx_inputs[0].prev_tx_id).to eq(source_wtxid)
       expect(tx_inputs[0].prev_tx_out_index).to eq(2)
       expect(tx_inputs[0].sequence).to eq(0xFFFFFFFF)
     end
@@ -2195,7 +2195,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       {
         vin: vin,
         sequence: 0xFFFFFFFF,
-        source_txid: SecureRandom.random_bytes(32),
+        source_wtxid: SecureRandom.random_bytes(32),
         source_vout: source_vout,
         source_satoshis: satoshis,
         source_locking_script: p2pkh_locking_script_for(private_key).to_binary,
@@ -2228,11 +2228,11 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       expect(vout_mapping).to eq({ 0 => 0 })
     end
 
-    it 'produces a txid that is the double-SHA-256 of serialized tx (display order)' do
-      txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
+    it 'produces a wtxid that is the double-SHA-256 of serialized tx (wire order)' do
+      wtxid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
 
-      expected_txid = BSV::Primitives::Digest.sha256d(raw_tx).reverse
-      expect(txid).to eq(expected_txid)
+      expected_wtxid = BSV::Primitives::Digest.sha256d(raw_tx)
+      expect(wtxid).to eq(expected_wtxid)
     end
 
     it 'produces a serialized tx that can be deserialized back' do
@@ -2392,7 +2392,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(parsed.outputs[0].satoshis).to eq(900)
 
         # Verify txid = double-SHA-256 of serialized tx (display byte order)
-        expected_txid = parse_beef_tx(result[:tx]).txid
+        expected_txid = parse_beef_tx(result[:tx]).wtxid
         expect(result[:txid]).to eq(expected_txid)
 
         # Set source data for script verification
@@ -2453,7 +2453,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         end
 
         # Verify txid
-        expected_txid = parse_beef_tx(result[:tx]).txid
+        expected_txid = parse_beef_tx(result[:tx]).wtxid
         expect(result[:txid]).to eq(expected_txid)
       end
     end
@@ -2569,9 +2569,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         parsed.inputs[0].source_locking_script = p2pkh_locking_script_for(derive_key)
         expect(parsed.verify_input(0)).to be true
 
-        # Verify txid
-        expected_txid = parse_beef_tx(sign_result[:tx]).txid
-        expect(sign_result[:txid]).to eq(expected_txid)
+        # Verify wtxid
+        expected_wtxid = parse_beef_tx(sign_result[:tx]).wtxid
+        expect(sign_result[:txid]).to eq(expected_wtxid)
       end
     end
 
@@ -2608,7 +2608,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(parsed.outputs[0].satoshis).to eq(900)
 
         # Txid is still valid (even though the custom script won't verify against P2PKH)
-        expected_txid = parse_beef_tx(result[:tx]).txid
+        expected_txid = parse_beef_tx(result[:tx]).wtxid
         expect(result[:txid]).to eq(expected_txid)
       end
     end
@@ -2633,9 +2633,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           randomize_outputs: false
         )
 
-        # The txid from create_action should match the double-SHA-256
-        computed_txid = parse_beef_tx(result[:tx]).txid
-        expect(result[:txid]).to eq(computed_txid)
+        # The wtxid from create_action should match the wire-order hash
+        computed_wtxid = parse_beef_tx(result[:tx]).wtxid
+        expect(result[:txid]).to eq(computed_wtxid)
       end
     end
   end
@@ -2666,7 +2666,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         outputs: [{ satoshis: 900, locking_script: SecureRandom.random_bytes(25) }]
       )
 
-      action = store.find_action(txid: result[:txid])
+      action = store.find_action(wtxid: result[:txid])
       ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
       expect(ancestry).to eq([])
     end
@@ -2684,9 +2684,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
 
       # Simulate a proof arriving for the source transaction
-      source_action = store.find_action(txid: result[:txid])
+      source_action = store.find_action(wtxid: result[:txid])
       resolved = store.resolve_inputs_for_signing(action_id: source_action[:id])
-      source_txid = resolved.first[:source_txid]
+      source_wtxid = resolved.first[:source_wtxid]
 
       # Build a fake source raw_tx and merkle proof
       fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
@@ -2696,18 +2696,18 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                          ))
       fake_raw_tx = fake_tx.to_binary
 
-      txid_internal = source_txid.is_a?(String) ? source_txid.reverse : source_txid
+      # wtxid is already wire order — use directly as merkle path hash
       sibling_hash = SecureRandom.random_bytes(32)
       mp = BSV::Transaction::MerklePath.new(
         block_height: 800_000,
         path: [[
-          BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+          BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: source_wtxid, txid: true),
           BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
         ]]
       )
 
       proof_store.save_proof(
-        txid: source_txid,
+        wtxid: source_wtxid,
         proof: { height: 800_000, merkle_path: mp.to_binary, raw_tx: fake_raw_tx }
       )
 
@@ -2733,7 +2733,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         outputs: [{ satoshis: 1400, locking_script: SecureRandom.random_bytes(25) }]
       )
 
-      action = store.find_action(txid: result[:txid])
+      action = store.find_action(wtxid: result[:txid])
       resolved = store.resolve_inputs_for_signing(action_id: action[:id])
 
       # Add proofs for 2 of 3 inputs (different block heights)
@@ -2747,18 +2747,18 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                              locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
                            ))
 
-        txid_internal = r[:source_txid].reverse
+        # wtxid is already wire order — use directly as merkle path hash
         sibling_hash = SecureRandom.random_bytes(32)
         mp = BSV::Transaction::MerklePath.new(
           block_height: 800_000 + i,
           path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: r[:source_wtxid], txid: true),
             BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
           ]]
         )
 
         proof_store.save_proof(
-          txid: r[:source_txid],
+          wtxid: r[:source_wtxid],
           proof: { height: 800_000 + i, merkle_path: mp.to_binary, raw_tx: fake_tx.to_binary }
         )
         proven_count += 1
