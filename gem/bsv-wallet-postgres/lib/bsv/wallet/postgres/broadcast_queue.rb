@@ -41,9 +41,9 @@ module BSV
 
           stale.filter_map do |broadcast|
             action = broadcast.action
-            next unless action&.txid && @arc_client
+            next unless action&.wtxid && @arc_client
 
-            result = @arc_client.call(:get_tx_status, txid: action.txid)
+            result = @arc_client.call(:get_tx_status, txid: action.wtxid)
             next unless result.success?
 
             update_from_response!(broadcast, result.data)
@@ -52,7 +52,7 @@ module BSV
         end
 
         def handle_event(event)
-          action = Action.first(txid: Sequel.blob(event[:txid]))
+          action = Action.first(wtxid: Sequel.blob(event[:wtxid]))
           return unless action
 
           broadcast = Broadcast.first(action_id: action.id)

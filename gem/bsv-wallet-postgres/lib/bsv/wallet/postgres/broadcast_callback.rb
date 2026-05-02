@@ -31,7 +31,7 @@ module BSV
 
         def decode_event(body)
           {
-            txid:          decode_hex(body[:txid]),
+            wtxid:         decode_hex(body[:txid])&.reverse,
             tx_status:     body[:txStatus],
             status:        body[:status],
             block_hash:    decode_hex(body[:blockHash]),

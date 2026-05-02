@@ -12,30 +12,30 @@ module BSV
           @arc_client = arc_client
         end
 
-        def save_proof(txid:, proof:)
-          existing = TxProof.first(txid: Sequel.blob(txid))
+        def save_proof(wtxid:, proof:)
+          existing = TxProof.first(wtxid: Sequel.blob(wtxid))
           if existing
             existing.update(proof_columns(proof))
             existing.id
           else
-            TxProof.create({ txid: txid }.merge(proof_columns(proof))).id
+            TxProof.create({ wtxid: wtxid }.merge(proof_columns(proof))).id
           end
         end
 
-        def find_proof(txid:)
-          record = TxProof.first(txid: Sequel.blob(txid))
+        def find_proof(wtxid:)
+          record = TxProof.first(wtxid: Sequel.blob(wtxid))
           return unless record
 
           proof_to_hash(record)
         end
 
-        def proof_exists?(txid:)
-          TxProof.where(txid: Sequel.blob(txid)).any?
+        def proof_exists?(wtxid:)
+          TxProof.where(wtxid: Sequel.blob(wtxid)).any?
         end
 
-        def request_proof(txid:, raw_tx: nil, input_beef: nil)
-          @db[:tx_reqs].insert_conflict(target: :txid).insert(
-            txid:       Sequel.blob(txid),
+        def request_proof(wtxid:, raw_tx: nil, input_beef: nil)
+          @db[:tx_reqs].insert_conflict(target: :wtxid).insert(
+            wtxid:      Sequel.blob(wtxid),
             raw_tx:     raw_tx ? Sequel.blob(raw_tx) : nil,
             input_beef: input_beef ? Sequel.blob(input_beef) : nil
           )
@@ -52,20 +52,20 @@ module BSV
           pending.filter_map do |req|
             next unless @arc_client
 
-            result = @arc_client.call(:get_tx_status, txid: req.txid)
+            result = @arc_client.call(:get_tx_status, txid: req.wtxid)
             next unless result.success?
 
             data = result.data
             tx_status = data[:txStatus] || data[:tx_status]
 
             if tx_status == 'MINED'
-              proof_id = save_proof(txid: req.txid, proof: {
+              proof_id = save_proof(wtxid: req.wtxid, proof: {
                 height:      data[:blockHeight] || data[:block_height],
                 block_hash:  decode_hex(data[:blockHash] || data[:block_hash]),
                 merkle_path: decode_hex(data[:merklePath] || data[:merkle_path])
               })
               req.update(tx_proof_id: proof_id, status: 'completed')
-              { txid: req.txid, tx_proof_id: proof_id }
+              { wtxid: req.wtxid, tx_proof_id: proof_id }
             else
               req.update(attempts: req.attempts + 1)
               nil
@@ -89,7 +89,7 @@ module BSV
         def proof_to_hash(record)
           {
             id:           record.id,
-            txid:         record.txid,
+            wtxid:        record.wtxid,
             height:       record.height,
             block_index:  record.block_index,
             merkle_path:  record.merkle_path,
