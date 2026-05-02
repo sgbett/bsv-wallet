@@ -52,7 +52,7 @@ module BSV
           pending.filter_map do |req|
             next unless @arc_client
 
-            result = @arc_client.call(:get_tx_status, txid: req.wtxid)
+            result = @arc_client.call(:get_tx_status, txid: req.dtxid)
             next unless result.success?
 
             data = result.data
