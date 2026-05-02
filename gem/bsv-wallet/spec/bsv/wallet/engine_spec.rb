@@ -1149,17 +1149,17 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       it 'treats known_txids entries as known ancestors' do
         beef_data = build_test_beef(satoshis: 500, ancestor_count: 1)
 
-        # Get the ancestor txid but do NOT put it in ProofStore
+        # Get the ancestor wtxid but do NOT put it in ProofStore
         beef = BSV::Transaction::Beef.from_binary(beef_data)
-        ancestor_txid = beef.transactions
-                            .find { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
-                            &.wtxid
+        ancestor_wtxid = beef.transactions
+                             .find { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                             &.wtxid
 
         result = engine.internalize_action(
           tx: beef_data,
           description: 'known txids supple',
           trust_self: 'known',
-          known_txids: [ancestor_txid],
+          known_txids: [ancestor_wtxid],
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
               insertion_remittance: { basket: 'known_txids' } }

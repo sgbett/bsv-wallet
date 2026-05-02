@@ -190,6 +190,7 @@ module BSV
         beef, subject_tx = parse_beef(tx)
 
         # trustSelf: replace known ancestors with TXID-only entries before validation
+        # known_txids is the BRC-100 spec param name; values are wire-order wtxids
         has_txid_only = trust_self == 'known' &&
                         replace_known_ancestors!(beef, subject_tx.wtxid, known_txids)
 
@@ -563,6 +564,10 @@ module BSV
         @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
       end
 
+      # Broadcast companion transactions listed in send_with.
+      #
+      # @param send_with [Array<String>] wtxids (wire order) of companion transactions
+      # @return [Array<Hash>] :txid (wire-order wtxid, BRC-100 key name), :status
       def process_send_with(send_with)
         return unless send_with
 
@@ -760,16 +765,16 @@ module BSV
 
       # Replace known ancestor transactions with TXID-only entries in the BEEF.
       #
-      # An ancestor is "known" if it has a proof in ProofStore or its txid
-      # appears in the known_txids array. The subject transaction is never
+      # An ancestor is "known" if it has a proof in ProofStore or its wtxid
+      # appears in the known_wtxids array. The subject transaction is never
       # replaced.
       #
       # @param beef [BSV::Transaction::Beef] the BEEF bundle to modify
       # @param subject_wtxid [String] 32-byte subject wtxid (wire order, never replaced)
-      # @param known_txids [Array<String>, nil] additional known txids (binary)
+      # @param known_wtxids [Array<String>, nil] additional known wtxids (wire order binary)
       # @return [Boolean] true if any entries were replaced
-      def replace_known_ancestors!(beef, subject_wtxid, known_txids)
-        known_set = Set.new(known_txids || [])
+      def replace_known_ancestors!(beef, subject_wtxid, known_wtxids)
+        known_set = Set.new(known_wtxids || [])
         replaced = false
 
         beef.transactions.each do |beef_tx|
