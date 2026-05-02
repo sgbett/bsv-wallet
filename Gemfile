@@ -13,6 +13,8 @@ group :development, :test do
   gem 'rspec', '~> 3.13'
   gem 'rubocop', '~> 1.75', require: false
   gem 'rubocop-rspec', '~> 3.9', require: false
+  gem 'simplecov', require: false
+  gem 'simplecov-cobertura', require: false
   gem 'yard'
   gem 'yard-markdown'
 
