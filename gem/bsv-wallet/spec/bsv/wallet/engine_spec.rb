@@ -894,7 +894,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         # prev_tx_id expects wire byte order — wtxid is already wire order
         subject_tx.add_input(BSV::Transaction::TransactionInput.new(
-                               prev_tx_id: ancestor_tx.wtxid,
+                               prev_wtxid: ancestor_tx.wtxid,
                                prev_tx_out_index: 0,
                                sequence: 0xFFFFFFFF
                              ))
@@ -1000,7 +1000,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         # prev_tx_id expects wire byte order — wtxid is already wire order
         subject_tx.add_input(BSV::Transaction::TransactionInput.new(
-                               prev_tx_id: ancestor_tx.wtxid,
+                               prev_wtxid: ancestor_tx.wtxid,
                                prev_tx_out_index: 0,
                                sequence: 0xFFFFFFFF
                              ))
@@ -1123,7 +1123,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
         subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         subject_tx.add_input(BSV::Transaction::TransactionInput.new(
-                               prev_tx_id: ancestor_tx.wtxid,
+                               prev_wtxid: ancestor_tx.wtxid,
                                prev_tx_out_index: 0,
                                sequence: 0xFFFFFFFF
                              ))
@@ -2026,7 +2026,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       expect(tx_inputs.length).to eq(1)
       expect(tx_inputs[0]).to be_a(BSV::Transaction::TransactionInput)
-      expect(tx_inputs[0].prev_tx_id).to eq(source_wtxid)
+      expect(tx_inputs[0].prev_wtxid).to eq(source_wtxid)
       expect(tx_inputs[0].prev_tx_out_index).to eq(2)
       expect(tx_inputs[0].sequence).to eq(0xFFFFFFFF)
     end

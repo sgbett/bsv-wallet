@@ -610,11 +610,11 @@ module BSV
       end
 
       # Convert a TSC-format merkle proof hash to BRC-74 binary.
-      # from_tsc expects display-order hex; wtxid is wire order, so reverse first.
+      # from_tsc expects display-order hex; wtxid is wire order, so reverse for display.
       def normalize_tsc_merkle_path(tsc, wtxid)
-        txid_hex = wtxid.reverse.unpack1('H*')
+        dtxid = wtxid.reverse.unpack1('H*')
         BSV::Transaction::MerklePath.from_tsc(
-          txid: tsc[:txOrId] || tsc[:tx_or_id] || txid_hex,
+          txid: tsc[:txOrId] || tsc[:tx_or_id] || dtxid,
           index: tsc[:index],
           nodes: tsc[:nodes],
           block_height: tsc[:blockHeight] || tsc[:block_height]
@@ -912,10 +912,9 @@ module BSV
         signing_keys = {}
 
         resolved_inputs.each_with_index do |resolved, idx|
-          # The wallet stores wtxids in wire byte order (tx.wtxid); the SDK's
-          # TransactionInput expects wire byte order for prev_tx_id — no reversal needed.
+          # source_wtxid is wire order; TransactionInput#prev_wtxid expects wire order.
           input = BSV::Transaction::TransactionInput.new(
-            prev_tx_id: resolved[:source_wtxid],
+            prev_wtxid: resolved[:source_wtxid],
             prev_tx_out_index: resolved[:source_vout],
             sequence: resolved[:sequence] || 0xFFFFFFFF
           )
