@@ -55,6 +55,7 @@ module BSV
 
         def sign_action(action_id:, wtxid:, raw_tx:)
           BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'sign_action wtxid')
+          BSV.logger&.debug { "[Store] sign_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
           @db.transaction do
             Action.where(id: action_id).update(
               wtxid:  Sequel.blob(wtxid),
@@ -336,10 +337,12 @@ module BSV
             )
             .all
 
-          rows.map do |row|
+          result = rows.map do |row|
             if row[:source_wtxid].nil?
               raise "Source action has nil wtxid for input vin #{row[:vin]} of action #{action_id}"
             end
+
+            BSV::Primitives::Hex.validate_wtxid!(row[:source_wtxid], name: "resolve_inputs source vin=#{row[:vin]}")
 
             {
               vin:                  row[:vin],
@@ -353,6 +356,13 @@ module BSV
               sender_identity_key:  row[:sender_identity_key]
             }
           end
+
+          BSV.logger&.debug do
+            dtxids = result.map { |r| r[:source_wtxid].reverse.unpack1('H*') }
+            "[Store] resolve_inputs_for_signing: action_id=#{action_id} inputs=#{result.size} sources=#{dtxids.join(',')}"
+          end
+
+          result
         end
 
         # --- UTXO Selection ---

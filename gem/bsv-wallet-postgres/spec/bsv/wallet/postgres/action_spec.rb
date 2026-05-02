@@ -18,6 +18,12 @@ RSpec.describe BSV::Wallet::Postgres::Action do
       expect(action.reload.wtxid.encoding).to eq(Encoding::BINARY)
       expect(action.wtxid).to eq(wtxid)
     end
+
+    it 'dtxid raises on corrupt wtxid (hex stored as binary)' do
+      hex_value = 'a' * 64 # 64 chars, not 32 bytes
+      action = described_class.create(outgoing: true, wtxid: Sequel.blob(hex_value))
+      expect { action.dtxid }.to raise_error(ArgumentError, /dtxid/)
+    end
   end
 
   describe 'associations' do

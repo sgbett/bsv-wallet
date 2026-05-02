@@ -522,6 +522,26 @@ RSpec.describe BSV::Wallet::Postgres::Store do
         store.resolve_inputs_for_signing(action_id: action[:id])
       }.to raise_error(RuntimeError, /nil wtxid/)
     end
+
+    it 'raises when source action has corrupt wtxid (hex instead of binary)' do
+      # Create a source output whose parent action has hex wtxid (wrong format)
+      hex_wtxid = 'a' * 64 # 64-char hex string, not 32-byte binary
+      source_action = BSV::Wallet::Postgres::Action.create(outgoing: false, wtxid: Sequel.blob(hex_wtxid))
+      output = BSV::Wallet::Postgres::Output.create(
+        action_id: source_action.id, satoshis: 500, vout: 0,
+        locking_script: SecureRandom.random_bytes(25)
+      )
+      BSV::Wallet::Postgres::Spendable.create(output_id: output.id)
+
+      action = store.create_action(
+        action: { description: 'corrupt wtxid source' },
+        inputs: [{ output_id: output.id, vin: 0 }]
+      )
+
+      expect {
+        store.resolve_inputs_for_signing(action_id: action[:id])
+      }.to raise_error(ArgumentError, /resolve_inputs source vin=0/)
+    end
   end
 
   # --- UTXO Selection ---
