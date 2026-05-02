@@ -800,7 +800,7 @@ module BSV
       # @return [Boolean] true if any entries were replaced
       def replace_known_ancestors!(beef, subject_wtxid, known_wtxids)
         known_set = Set.new(known_wtxids || [])
-        replaced = false
+        replaced_count = 0
 
         beef.transactions.each do |beef_tx|
           wtxid = beef_tx.wtxid
@@ -811,11 +811,11 @@ module BSV
 
           BSV.logger&.debug { "[Engine] replace_known_ancestors!: replacing dtxid=#{wtxid.reverse.unpack1('H*')}" }
           beef.make_txid_only(wtxid)
-          replaced = true
+          replaced_count += 1
         end
 
-        BSV.logger&.debug { "[Engine] replace_known_ancestors!: replaced=#{replaced}" }
-        replaced
+        BSV.logger&.debug { "[Engine] replace_known_ancestors!: replaced_count=#{replaced_count}" }
+        replaced_count > 0
       end
 
       # Check that the subject transaction's input satoshis exceed output satoshis (BRC-67).

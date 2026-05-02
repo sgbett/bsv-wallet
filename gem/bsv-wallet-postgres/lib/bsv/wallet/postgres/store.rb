@@ -358,8 +358,9 @@ module BSV
           end
 
           BSV.logger&.debug do
-            dtxids = result.map { |r| r[:source_wtxid].reverse.unpack1('H*') }
-            "[Store] resolve_inputs_for_signing: action_id=#{action_id} inputs=#{result.size} sources=#{dtxids.join(',')}"
+            dtxids = result.first(5).map { |r| r[:source_wtxid].reverse.unpack1('H*') }
+            suffix = result.size > 5 ? " (+#{result.size - 5} more)" : ''
+            "[Store] resolve_inputs_for_signing: action_id=#{action_id} inputs=#{result.size} sources=#{dtxids.join(',')}#{suffix}"
           end
 
           result
