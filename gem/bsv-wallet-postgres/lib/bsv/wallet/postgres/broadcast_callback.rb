@@ -30,6 +30,7 @@ module BSV
         private
 
         def decode_event(body)
+          BSV::Primitives::Hex.validate_dtxid_hex!(body[:txid], name: 'ARC callback txid') if body[:txid]
           {
             wtxid:         decode_hex(body[:txid])&.reverse,
             tx_status:     body[:txStatus],

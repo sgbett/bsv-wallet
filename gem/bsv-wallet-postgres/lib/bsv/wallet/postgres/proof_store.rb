@@ -13,6 +13,8 @@ module BSV
         end
 
         def save_proof(wtxid:, proof:)
+          BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'save_proof wtxid')
+          BSV.logger&.debug { "[ProofStore] save_proof: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{proof[:height]}" }
           existing = TxProof.first(wtxid: Sequel.blob(wtxid))
           if existing
             existing.update(proof_columns(proof))
@@ -23,6 +25,7 @@ module BSV
         end
 
         def find_proof(wtxid:)
+          BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'find_proof wtxid')
           record = TxProof.first(wtxid: Sequel.blob(wtxid))
           return unless record
 
@@ -30,10 +33,12 @@ module BSV
         end
 
         def proof_exists?(wtxid:)
+          BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'proof_exists? wtxid')
           TxProof.where(wtxid: Sequel.blob(wtxid)).any?
         end
 
         def request_proof(wtxid:, raw_tx: nil, input_beef: nil)
+          BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'request_proof wtxid')
           @db[:tx_reqs].insert_conflict(target: :wtxid).insert(
             wtxid:      Sequel.blob(wtxid),
             raw_tx:     raw_tx ? Sequel.blob(raw_tx) : nil,

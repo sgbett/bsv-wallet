@@ -23,6 +23,7 @@ module BSV
         end
 
         def submit(action_id:, raw_tx:, immediate: false)
+          BSV.logger&.debug { "[BroadcastQueue] submit: action_id=#{action_id} immediate=#{immediate}" }
           broadcast = Broadcast.create(action_id: action_id)
 
           if immediate && @arc_client
@@ -52,6 +53,8 @@ module BSV
         end
 
         def handle_event(event)
+          BSV::Primitives::Hex.validate_wtxid!(event[:wtxid], name: 'handle_event wtxid')
+          BSV.logger&.debug { "[BroadcastQueue] handle_event: dtxid=#{event[:wtxid].reverse.unpack1('H*')} status=#{event[:tx_status]}" }
           action = Action.first(wtxid: Sequel.blob(event[:wtxid]))
           return unless action
 
