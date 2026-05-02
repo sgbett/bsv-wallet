@@ -11,11 +11,11 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastCallback do
   let(:action) do
     BSV::Wallet::Postgres::Action.create(
       outgoing: true,
-      txid: SecureRandom.random_bytes(32)
+      wtxid: SecureRandom.random_bytes(32)
     )
   end
 
-  let(:txid_hex) { action.txid.unpack1('H*') }
+  let(:txid_hex) { action.dtxid }
 
   describe 'POST /' do
     it 'parses ARC TransactionStatus JSON and delegates to handle_event' do

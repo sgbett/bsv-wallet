@@ -5,7 +5,7 @@ RSpec.describe BSV::Wallet::Postgres::UTXOPool do
   subject(:pool) { described_class.new(store: store) }
 
   def create_funded_output(satoshis: 1000, vout: 0, basket: 'default')
-    source = BSV::Wallet::Postgres::Action.create(outgoing: false, txid: SecureRandom.random_bytes(32))
+    source = BSV::Wallet::Postgres::Action.create(outgoing: false, wtxid: SecureRandom.random_bytes(32))
     output = BSV::Wallet::Postgres::Output.create(
       action_id: source.id, satoshis: satoshis, vout: vout,
       locking_script: SecureRandom.random_bytes(25)

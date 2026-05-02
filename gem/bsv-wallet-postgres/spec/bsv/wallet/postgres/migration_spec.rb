@@ -30,11 +30,11 @@ RSpec.describe 'Schema migration' do
 
   describe 'bytea columns' do
     it 'stores and retrieves binary data on tx_proofs' do
-      txid = SecureRandom.random_bytes(32)
-      db[:tx_proofs].insert(txid: Sequel.blob(txid))
+      wtxid = SecureRandom.random_bytes(32)
+      db[:tx_proofs].insert(wtxid: Sequel.blob(wtxid))
       row = db[:tx_proofs].first
-      expect(row[:txid].encoding).to eq(Encoding::BINARY)
-      expect(row[:txid]).to eq(txid)
+      expect(row[:wtxid].encoding).to eq(Encoding::BINARY)
+      expect(row[:wtxid]).to eq(wtxid)
     end
 
     it 'stores and retrieves binary locking_script on outputs' do
@@ -48,11 +48,11 @@ RSpec.describe 'Schema migration' do
   end
 
   describe 'constraints' do
-    it 'enforces UNIQUE on tx_proofs.txid' do
-      txid = SecureRandom.random_bytes(32)
-      db[:tx_proofs].insert(txid: Sequel.blob(txid))
+    it 'enforces UNIQUE on tx_proofs.wtxid' do
+      wtxid = SecureRandom.random_bytes(32)
+      db[:tx_proofs].insert(wtxid: Sequel.blob(wtxid))
       expect {
-        db.transaction(savepoint: true) { db[:tx_proofs].insert(txid: Sequel.blob(txid)) }
+        db.transaction(savepoint: true) { db[:tx_proofs].insert(wtxid: Sequel.blob(wtxid)) }
       }.to raise_error(Sequel::UniqueConstraintViolation)
     end
 

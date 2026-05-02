@@ -579,6 +579,7 @@ module BSV
         return unless send_with
 
         send_with.filter_map do |sw_wtxid|
+          BSV::Primitives::Hex.validate_wtxid!(sw_wtxid, name: 'send_with entry')
           sw_action = @store.find_action(wtxid: sw_wtxid)
           next unless sw_action
 
