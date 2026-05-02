@@ -65,7 +65,7 @@ module BSV
                    inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
 
         # Phase 2: Build transaction (sign unless deferred)
-        txid, raw_tx, vout_mapping = build_transaction(
+        wtxid, raw_tx, vout_mapping = build_transaction(
           action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,
           sign: !deferred
         )
@@ -73,7 +73,7 @@ module BSV
           # Store unsigned raw_tx (empty unlocking scripts) and promote outputs now.
           # Outputs are fully known at createAction time — the deferral is about
           # inputs (waiting for caller-provided unlocking scripts), not outputs.
-          @store.sign_action(action_id: action_result[:id], txid: txid, raw_tx: raw_tx)
+          @store.sign_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           return {
             signable_transaction: {
@@ -83,7 +83,7 @@ module BSV
           }
         end
 
-        @store.sign_action(action_id: action_result[:id], txid: txid, raw_tx: raw_tx)
+        @store.sign_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
 
         # Build Atomic BEEF envelope for the :tx return value
         atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
@@ -92,7 +92,7 @@ module BSV
         if no_send
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           change = query_change_outpoints(action_result[:id])
-          result = { txid: txid, tx: atomic_beef, no_send_change: change }
+          result = { txid: wtxid, tx: atomic_beef, no_send_change: change }
           result[:send_with_results] = process_send_with(send_with) if send_with&.any?
           return result
         end
@@ -110,7 +110,7 @@ module BSV
           handle_proof_from_broadcast(action_result[:id], broadcast_result)
         end
 
-        result = { txid: txid, tx: return_txid_only ? nil : atomic_beef }
+        result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
         result[:send_with_results] = process_send_with(send_with) if send_with&.any?
         result
       end
@@ -123,9 +123,9 @@ module BSV
 
         # Outputs were already written during create_action — sign_action only
         # deserializes the unsigned tx, applies caller unlocking scripts, signs
-        # remaining P2PKH inputs, and updates the action with signed raw_tx + txid.
-        txid, raw_tx = apply_spends(action, spends)
-        @store.sign_action(action_id: action[:id], txid: txid, raw_tx: raw_tx)
+        # remaining P2PKH inputs, and updates the action with signed raw_tx + wtxid.
+        wtxid, raw_tx = apply_spends(action, spends)
+        @store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: raw_tx)
 
         # Build Atomic BEEF envelope for the :tx return value
         atomic_beef = build_atomic_beef(raw_tx, action[:id])
@@ -133,7 +133,7 @@ module BSV
         broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
 
         if no_send
-          result = { txid: txid, tx: atomic_beef }
+          result = { txid: wtxid, tx: atomic_beef }
           result[:send_with_results] = process_send_with(send_with) if send_with&.any?
           return result
         end
@@ -150,7 +150,7 @@ module BSV
           end
         end
 
-        result = { txid: txid, tx: return_txid_only ? nil : atomic_beef }
+        result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
         result[:send_with_results] = process_send_with(send_with) if send_with&.any?
         result
       end
@@ -191,7 +191,7 @@ module BSV
 
         # trustSelf: replace known ancestors with TXID-only entries before validation
         has_txid_only = trust_self == 'known' &&
-                        replace_known_ancestors!(beef, subject_tx.txid, known_txids)
+                        replace_known_ancestors!(beef, subject_tx.wtxid, known_txids)
 
         # SPV validation: structural integrity and optional merkle root verification
         validate_beef!(beef, allow_txid_only: has_txid_only)
@@ -204,17 +204,17 @@ module BSV
           action: { description: description, broadcast: :none, outgoing: false }
         )
 
-        # Store txid and raw_tx on the action
+        # Store wtxid and raw_tx on the action
         @store.sign_action(
           action_id: action_result[:id],
-          txid: subject_tx.txid,
+          wtxid: subject_tx.wtxid,
           raw_tx: subject_tx.to_binary
         )
 
         attach_labels(action_result[:id], labels)
 
         # Save ancestor proofs and link subject proof
-        save_beef_proofs(beef, subject_tx.txid, action_result[:id])
+        save_beef_proofs(beef, subject_tx.wtxid, action_result[:id])
 
         # Process outputs by protocol
         output_specs = outputs.map { |out| resolve_internalize_output(out) }
@@ -544,15 +544,15 @@ module BSV
       def handle_proof_from_broadcast(action_id, broadcast_result)
         return unless broadcast_result[:merkle_path]
 
-        txid = broadcast_result[:txid] || @store.find_action(id: action_id)&.dig(:txid)
-        merkle_path = normalize_merkle_path(broadcast_result[:merkle_path], txid)
+        wtxid = broadcast_result[:wtxid] || @store.find_action(id: action_id)&.dig(:wtxid)
+        merkle_path = normalize_merkle_path(broadcast_result[:merkle_path], wtxid)
 
         # Store raw_tx from the action so BEEF construction can use it
         raw_tx = broadcast_result[:raw_tx]
         raw_tx ||= @store.find_action(id: action_id)&.dig(:raw_tx)
 
         proof_id = @proof_store.save_proof(
-          txid: txid,
+          wtxid: wtxid,
           proof: {
             height: broadcast_result[:block_height],
             block_hash: broadcast_result[:block_hash],
@@ -566,8 +566,8 @@ module BSV
       def process_send_with(send_with)
         return unless send_with
 
-        send_with.filter_map do |sw_txid|
-          sw_action = @store.find_action(txid: sw_txid)
+        send_with.filter_map do |sw_wtxid|
+          sw_action = @store.find_action(wtxid: sw_wtxid)
           next unless sw_action
 
           br = @broadcast_queue.submit(
@@ -576,7 +576,7 @@ module BSV
             immediate: true
           )
           status = br[:tx_status]&.downcase&.tr('_', ' ')&.to_sym || :sending
-          { txid: sw_txid, status: status }
+          { txid: sw_wtxid, status: status }
         end
       end
 
@@ -594,10 +594,10 @@ module BSV
       # - TSC format hash — convert via MerklePath.from_tsc
       #
       # @param merkle_path [String, Hash] raw merkle_path from broadcast response
-      # @param txid [String] 32-byte binary txid (needed for TSC conversion)
+      # @param wtxid [String] 32-byte binary wtxid (wire order, needed for TSC conversion)
       # @return [String] BRC-74 binary merkle_path
-      def normalize_merkle_path(merkle_path, txid)
-        return normalize_tsc_merkle_path(merkle_path, txid) if merkle_path.is_a?(Hash)
+      def normalize_merkle_path(merkle_path, wtxid)
+        return normalize_tsc_merkle_path(merkle_path, wtxid) if merkle_path.is_a?(Hash)
         return merkle_path if merkle_path.encoding == Encoding::ASCII_8BIT
         return [merkle_path].pack('H*') if merkle_path.match?(/\A[0-9a-fA-F]+\z/)
 
@@ -605,8 +605,9 @@ module BSV
       end
 
       # Convert a TSC-format merkle proof hash to BRC-74 binary.
-      def normalize_tsc_merkle_path(tsc, txid)
-        txid_hex = txid.reverse.unpack1('H*')
+      # from_tsc expects display-order hex; wtxid is wire order, so reverse first.
+      def normalize_tsc_merkle_path(tsc, wtxid)
+        txid_hex = wtxid.reverse.unpack1('H*')
         BSV::Transaction::MerklePath.from_tsc(
           txid: tsc[:txOrId] || tsc[:tx_or_id] || txid_hex,
           index: tsc[:index],
@@ -629,8 +630,8 @@ module BSV
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
 
         resolved_inputs.filter_map do |resolved|
-          source_txid = resolved[:source_txid]
-          proof = @proof_store.find_proof(txid: source_txid)
+          source_wtxid = resolved[:source_wtxid]
+          proof = @proof_store.find_proof(wtxid: source_wtxid)
 
           next unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
 
@@ -662,8 +663,8 @@ module BSV
           input = tx.inputs[idx]
           next unless input
 
-          source_txid = resolved[:source_txid]
-          proof = @proof_store.find_proof(txid: source_txid)
+          source_wtxid = resolved[:source_wtxid]
+          proof = @proof_store.find_proof(wtxid: source_wtxid)
 
           next unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
 
@@ -678,7 +679,7 @@ module BSV
 
         beef = BSV::Transaction::Beef.new
         beef.merge_transaction(tx)
-        beef.to_atomic_binary(tx.txid)
+        beef.to_atomic_binary(tx.wtxid)
       end
 
       # Parse the tx: parameter as BEEF and extract the subject transaction.
@@ -691,9 +692,9 @@ module BSV
 
         raise BSV::Wallet::InvalidBeefError, 'BEEF contains no transactions' if beef.transactions.empty?
 
-        subject_txid = beef.subject_txid
-        subject_tx = if subject_txid
-                       beef.find_atomic_transaction(subject_txid)
+        subject_wtxid = beef.subject_wtxid
+        subject_tx = if subject_wtxid
+                       beef.find_atomic_transaction(subject_wtxid)
                      else
                        # Non-atomic BEEF: the last transaction is the subject
                        beef.transactions.last&.transaction
@@ -710,22 +711,22 @@ module BSV
       # Links the subject transaction's proof to the action when present.
       #
       # @param beef [BSV::Transaction::Beef] parsed BEEF bundle
-      # @param subject_txid [String] 32-byte txid of the subject transaction
+      # @param subject_wtxid [String] 32-byte wtxid of the subject transaction (wire order)
       # @param action_id [Integer] the action to link the subject proof to
-      def save_beef_proofs(beef, subject_txid, action_id)
+      def save_beef_proofs(beef, subject_wtxid, action_id)
         subject_proof_id = nil
 
         beef.transactions.each do |beef_tx|
           next unless beef_tx.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP
           next unless beef_tx.transaction
 
-          txid = beef_tx.transaction.txid
+          wtxid = beef_tx.transaction.wtxid
           merkle_path = beef_tx.transaction.merkle_path ||
                         (beef_tx.bump_index && beef.bumps[beef_tx.bump_index])
           next unless merkle_path
 
           proof_id = @proof_store.save_proof(
-            txid: txid,
+            wtxid: wtxid,
             proof: {
               height: merkle_path.block_height,
               merkle_path: merkle_path.to_binary,
@@ -733,7 +734,7 @@ module BSV
             }
           )
 
-          subject_proof_id = proof_id if txid == subject_txid
+          subject_proof_id = proof_id if wtxid == subject_wtxid
         end
 
         @store.link_proof(action_id: action_id, tx_proof_id: subject_proof_id) if subject_proof_id
@@ -764,21 +765,21 @@ module BSV
       # replaced.
       #
       # @param beef [BSV::Transaction::Beef] the BEEF bundle to modify
-      # @param subject_txid [String] 32-byte subject txid (never replaced)
+      # @param subject_wtxid [String] 32-byte subject wtxid (wire order, never replaced)
       # @param known_txids [Array<String>, nil] additional known txids (binary)
       # @return [Boolean] true if any entries were replaced
-      def replace_known_ancestors!(beef, subject_txid, known_txids)
+      def replace_known_ancestors!(beef, subject_wtxid, known_txids)
         known_set = Set.new(known_txids || [])
         replaced = false
 
         beef.transactions.each do |beef_tx|
-          txid = beef_tx.txid
-          next if txid == subject_txid
+          wtxid = beef_tx.wtxid
+          next if wtxid == subject_wtxid
           next if beef_tx.format == BSV::Transaction::Beef::FORMAT_TXID_ONLY
 
-          next unless known_set.include?(txid) || @proof_store.proof_exists?(txid: txid)
+          next unless known_set.include?(wtxid) || @proof_store.proof_exists?(wtxid: wtxid)
 
-          beef.make_txid_only(txid)
+          beef.make_txid_only(wtxid)
           replaced = true
         end
 
@@ -906,10 +907,10 @@ module BSV
         signing_keys = {}
 
         resolved_inputs.each_with_index do |resolved, idx|
-          # The wallet stores txids in display byte order (tx.txid); the SDK's
-          # TransactionInput expects wire byte order (reversed) for prev_tx_id.
+          # The wallet stores wtxids in wire byte order (tx.wtxid); the SDK's
+          # TransactionInput expects wire byte order for prev_tx_id — no reversal needed.
           input = BSV::Transaction::TransactionInput.new(
-            prev_tx_id: resolved[:source_txid].reverse,
+            prev_tx_id: resolved[:source_wtxid],
             prev_tx_out_index: resolved[:source_vout],
             sequence: resolved[:sequence] || 0xFFFFFFFF
           )
@@ -1018,7 +1019,7 @@ module BSV
       # @param version [Integer, nil] transaction version
       # @param randomize [Boolean] whether to shuffle output order
       # @param sign [Boolean] whether to sign P2PKH inputs (default: true)
-      # @return [Array(String, String, Hash)] txid (32-byte display order),
+      # @return [Array(String, String, Hash)] wtxid (32-byte wire order),
       #   raw_tx (binary), and vout_mapping (original index -> new vout)
       def build_transaction(action_id, inputs, outputs, lock_time, version, randomize, sign: true)
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
@@ -1037,9 +1038,9 @@ module BSV
         signing_keys.each { |idx, key| tx.sign(idx, key) } if sign
 
         raw_tx = tx.to_binary
-        txid = tx.txid
+        wtxid = tx.wtxid
 
-        [txid, raw_tx, vout_mapping]
+        [wtxid, raw_tx, vout_mapping]
       end
 
       # Apply caller-provided unlocking scripts and sign remaining inputs.
@@ -1047,11 +1048,11 @@ module BSV
       # Deserializes the unsigned transaction stored during deferred
       # create_action, applies unlocking scripts from the spends hash,
       # signs any remaining P2PKH inputs the wallet can sign, serializes,
-      # and returns [txid, raw_tx].
+      # and returns [wtxid, raw_tx].
       #
       # @param action [Hash] the action record from find_action
       # @param spends [Hash{Integer => Hash}] vin => { unlocking_script:, sequence_number: }
-      # @return [Array(String, String)] txid (32-byte display order), raw_tx (binary)
+      # @return [Array(String, String)] wtxid (32-byte wire order), raw_tx (binary)
       def apply_spends(action, spends)
         # Deserialize the unsigned transaction stored during create_action
         unsigned_raw = action[:raw_tx]
@@ -1110,9 +1111,9 @@ module BSV
         end
 
         raw_tx = tx.to_binary
-        txid = tx.txid
+        wtxid = tx.wtxid
 
-        [txid, raw_tx]
+        [wtxid, raw_tx]
       end
     end
   end
