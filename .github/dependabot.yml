@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: bundler
+    directory: /gem/bsv-wallet
+    schedule:
+      interval: weekly
+  - package-ecosystem: bundler
+    directory: /gem/bsv-wallet-postgres
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
