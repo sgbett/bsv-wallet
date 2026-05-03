@@ -31,3 +31,17 @@
 | 187 | 4 | `d3740e00` | locktime (947,411) |
 
 **191 bytes total.** Used in test suite as `DUMMY_RAW_TX` — parseable by `Transaction.from_binary` and satisfies the `tx_proofs.raw_tx >= 10` constraint.
+
+## DER signature size distribution
+
+The DER-encoded ECDSA signature uses two integers (r, s), each 32 bytes when fully populated. Leading zeros are stripped, and a sign byte is prepended when the high bit is set. The r and s values are effectively random mod n (~2^256), so shorter encodings require the value to fall below exponentially smaller thresholds.
+
+| Signature size | Probability | Frequency |
+|---------------:|------------:|-----------|
+| 70–72 bytes | ~99.8% | Standard |
+| 69 bytes | ~1 in 512 | Uncommon |
+| 68 bytes | ~1 in 131,072 | Rare |
+| 60 bytes | ~1 in 2^80 | Near impossible |
+| 8 bytes | ~1 in 2^496 | Practically impossible |
+
+Each byte below 70 requires the value to be ~256x smaller. A minimum signed P2PKH transaction (1-in/1-out) is 191 bytes with a typical 70-byte signature, 189 bytes with a 68-byte signature. The database constraint uses 10 bytes (structural minimum) because unsigned transactions during deferred signing are ~85 bytes.
