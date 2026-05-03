@@ -3,6 +3,10 @@
 RSpec.describe 'Schema migration' do
   let(:db) { BSV::Wallet::Postgres.db }
 
+  let(:valid_wtxid) { SecureRandom.random_bytes(32) }
+  let(:valid_raw_tx) { SecureRandom.random_bytes(191) }
+  let(:valid_locking_script) { SecureRandom.random_bytes(25) }
+
   describe 'tables' do
     let(:expected_tables) do
       %i[
@@ -19,69 +23,81 @@ RSpec.describe 'Schema migration' do
     end
   end
 
-  describe 'broadcast_intent enum' do
-    it 'has the correct values' do
+  describe 'enums' do
+    it 'broadcast_intent has the correct values' do
       values = db.from(Sequel.lit(
         "pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'broadcast_intent'"
       )).select_map(:enumlabel)
       expect(values).to eq(%w[delayed inline none])
     end
+
+    it 'output_type has the correct values' do
+      values = db.from(Sequel.lit(
+        "pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'output_type'"
+      )).select_map(:enumlabel)
+      expect(values).to eq(%w[root change])
+    end
   end
 
   describe 'bytea columns' do
     it 'stores and retrieves binary data on tx_proofs' do
-      wtxid = SecureRandom.random_bytes(32)
-      db[:tx_proofs].insert(wtxid: Sequel.blob(wtxid))
+      db[:tx_proofs].insert(wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx))
       row = db[:tx_proofs].first
       expect(row[:wtxid].encoding).to eq(Encoding::BINARY)
-      expect(row[:wtxid]).to eq(wtxid)
+      expect(row[:wtxid]).to eq(valid_wtxid)
     end
 
     it 'stores and retrieves binary locking_script on outputs' do
-      action_id = db[:actions].insert(outgoing: true)
-      script = SecureRandom.random_bytes(25)
-      db[:outputs].insert(action_id: action_id, satoshis: 1000, vout: 0, locking_script: Sequel.blob(script))
+      action_id = db[:actions].insert(description: 'bytea test 12345', outgoing: true)
+      db[:outputs].insert(
+        action_id: action_id, satoshis: 1000, vout: 0,
+        locking_script: Sequel.blob(valid_locking_script)
+      )
       row = db[:outputs].first
       expect(row[:locking_script].encoding).to eq(Encoding::BINARY)
-      expect(row[:locking_script]).to eq(script)
+      expect(row[:locking_script]).to eq(valid_locking_script)
     end
   end
 
-  describe 'constraints' do
+  describe 'structural constraints' do
     it 'enforces UNIQUE on tx_proofs.wtxid' do
-      wtxid = SecureRandom.random_bytes(32)
-      db[:tx_proofs].insert(wtxid: Sequel.blob(wtxid))
+      db[:tx_proofs].insert(wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx))
       expect {
-        db.transaction(savepoint: true) { db[:tx_proofs].insert(wtxid: Sequel.blob(wtxid)) }
+        db.transaction(savepoint: true) do
+          db[:tx_proofs].insert(wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx))
+        end
       }.to raise_error(Sequel::UniqueConstraintViolation)
     end
 
     it 'enforces UNIQUE on inputs.output_id (structural lock)' do
-      action_id = db[:actions].insert(outgoing: true)
-      action2_id = db[:actions].insert(outgoing: true)
-      output_id = db[:outputs].insert(action_id: action_id, satoshis: 1000, vout: 0)
+      action_id = db[:actions].insert(description: 'lock test source', outgoing: true)
+      output_id = db[:outputs].insert(
+        action_id: action_id, satoshis: 1000, vout: 0,
+        locking_script: Sequel.blob(valid_locking_script)
+      )
+      action2_id = db[:actions].insert(description: 'lock test consumer', outgoing: true)
       db[:inputs].insert(action_id: action_id, output_id: output_id, vin: 0)
       expect {
-        db.transaction(savepoint: true) { db[:inputs].insert(action_id: action2_id, output_id: output_id, vin: 0) }
+        db.transaction(savepoint: true) do
+          db[:inputs].insert(action_id: action2_id, output_id: output_id, vin: 0)
+        end
       }.to raise_error(Sequel::UniqueConstraintViolation)
     end
 
-    it 'enforces partial unique on baskets.name (soft delete)' do
-      db[:baskets].insert(name: 'test')
+    it 'enforces UNIQUE on baskets.name' do
+      db[:baskets].insert(name: 'test-basket')
       expect {
-        db.transaction(savepoint: true) { db[:baskets].insert(name: 'test') }
+        db.transaction(savepoint: true) { db[:baskets].insert(name: 'test-basket') }
       }.to raise_error(Sequel::UniqueConstraintViolation)
-
-      # Soft-delete and re-create should work
-      db[:baskets].where(name: 'test').update(deleted_at: Time.now)
-      expect { db[:baskets].insert(name: 'test') }.not_to raise_error
     end
 
     it 'CASCADE deletes inputs when action is deleted' do
-      action_id = db[:actions].insert(outgoing: true)
-      output_id = db[:outputs].insert(action_id: action_id, satoshis: 1000, vout: 0)
-      db[:spendable].insert(output_id: output_id)
-      lock_action_id = db[:actions].insert(outgoing: true)
+      action_id = db[:actions].insert(description: 'cascade test src', outgoing: true)
+      output_id = db[:outputs].insert(
+        action_id: action_id, satoshis: 1000, vout: 0,
+        locking_script: Sequel.blob(valid_locking_script)
+      )
+      lock_action_id = db[:actions].insert(description: 'cascade test lock', outgoing: true)
       db[:inputs].insert(action_id: lock_action_id, output_id: output_id, vin: 0)
 
       expect(db[:inputs].where(action_id: lock_action_id).count).to eq(1)
@@ -99,13 +115,13 @@ RSpec.describe 'Schema migration' do
     end
 
     it 'generates reference UUID by default on actions' do
-      action_id = db[:actions].insert(outgoing: true)
+      action_id = db[:actions].insert(description: 'uuid test 12345', outgoing: true)
       row = db[:actions].where(id: action_id).first
-      expect(row[:reference]).to match(/\A[0-9a-f]{8}-[0-9a-f]{4}-/)
+      expect(row[:reference].to_s).to match(/\A[0-9a-f]{8}-[0-9a-f]{4}-/)
     end
 
     it 'defaults broadcast to delayed' do
-      action_id = db[:actions].insert(outgoing: true)
+      action_id = db[:actions].insert(description: 'broadcast test 1', outgoing: true)
       row = db[:actions].where(id: action_id).first
       expect(row[:broadcast]).to eq('delayed')
     end
