@@ -76,6 +76,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     BSV::Transaction::Transaction.from_beef(beef_data)
   end
 
+  # Dummy raw_tx that satisfies the 189-byte minimum constraint.
+  DUMMY_RAW_TX = SecureRandom.random_bytes(226).freeze
+
   # Pre-fund the wallet with spendable outputs.
   #
   # Creates outputs with real P2PKH locking scripts derived from the
@@ -83,13 +86,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   # to random scripts when no key_deriver is available.
   def fund_wallet(satoshis: 1000, count: 1, basket: 'default',
                   prefix: 'wallet payment', suffix: 'suffix',
-                  sender_identity_key: nil)
+                  sender_identity_key: 'self')
     source_action = store.create_action(
       action: { description: 'funding source', broadcast: :none, outgoing: false }
     )
     # Source actions need a real wtxid for input resolution
     source_wtxid = SecureRandom.random_bytes(32)
-    store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: "\x00".b)
+    store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: DUMMY_RAW_TX)
 
     outputs = count.times.map do |i|
       out_suffix = count > 1 ? "#{suffix}#{i}" : suffix
@@ -134,14 +137,14 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
       hex_dtxid = 'a' * 64 # 64-char hex string, not 32-byte binary
       expect do
-        store.sign_action(action_id: action[:id], wtxid: hex_dtxid, raw_tx: "\x00".b)
+        store.sign_action(action_id: action[:id], wtxid: hex_dtxid, raw_tx: DUMMY_RAW_TX)
       end.to raise_error(ArgumentError, /sign_action wtxid/)
     end
 
     it 'ProofStore#save_proof rejects display-order hex as wtxid' do
       hex_dtxid = 'b' * 64
       expect do
-        proof_store.save_proof(wtxid: hex_dtxid, proof: { raw_tx: "\x00".b })
+        proof_store.save_proof(wtxid: hex_dtxid, proof: { raw_tx: DUMMY_RAW_TX })
       end.to raise_error(ArgumentError, /save_proof wtxid/)
     end
 
@@ -270,7 +273,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   describe '#sign_action' do
     it 'raises for invalid reference' do
       expect do
-        engine.sign_action(spends: {}, reference: 'nonexistent')
+        engine.sign_action(spends: {}, reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
 
@@ -332,7 +335,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     # Fund the wallet with a real P2PKH output that can be signed
     def fund_wallet_with_keys(satoshis: 1000, count: 1,
                               prefix: 'wallet payment', suffix: 'suffix1',
-                              sender_identity_key: nil)
+                              sender_identity_key: 'self')
       derived_key = key_deriver.derive_private_key(
         protocol_id: [2, prefix], key_id: suffix,
         counterparty: sender_identity_key || 'self'
@@ -345,7 +348,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
       # Set a real wtxid on the source action
       source_wtxid = SecureRandom.random_bytes(32)
-      store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: "\x00".b)
+      store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: DUMMY_RAW_TX)
 
       outputs = count.times.map do |i|
         {
@@ -609,7 +612,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
     it 'raises for invalid reference' do
       expect do
-        engine.abort_action(reference: 'nonexistent')
+        engine.abort_action(reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
   end

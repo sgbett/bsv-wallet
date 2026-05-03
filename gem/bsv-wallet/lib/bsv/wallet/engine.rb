@@ -51,8 +51,7 @@ module BSV
           action: {
             description: description, broadcast: broadcast,
             nlocktime: lock_time || 0, version: version,
-            input_beef: input_beef, outgoing: true,
-            satoshis: total_satoshis(outputs)
+            input_beef: input_beef, outgoing: true
           },
           inputs: input_specs
         )
@@ -218,8 +217,13 @@ module BSV
         # Save ancestor proofs and link subject proof
         save_beef_proofs(beef, subject_tx.wtxid, action_result[:id])
 
-        # Process outputs by protocol
-        output_specs = outputs.map { |out| resolve_internalize_output(out) }
+        output_specs = outputs.map do |out|
+          spec = resolve_internalize_output(out)
+          tx_out = subject_tx.outputs[spec[:vout]]
+          spec[:locking_script] = tx_out.locking_script.to_binary if tx_out
+          spec[:satoshis] = tx_out.satoshis if tx_out && (spec[:satoshis].nil? || spec[:satoshis].zero?)
+          spec
+        end
         @store.promote_action(action_id: action_result[:id], outputs: output_specs)
 
         { accepted: true }
@@ -497,12 +501,6 @@ module BSV
         end
       end
 
-      def total_satoshis(outputs)
-        return 0 unless outputs
-
-        outputs.sum { |o| o[:satoshis] || 0 }
-      end
-
       def attach_labels(action_id, labels)
         return unless labels&.any?
 
@@ -520,6 +518,13 @@ module BSV
                    out[:vout] || idx
                  end
 
+          # Infer output_type when not explicit: wallet-owned outputs without
+          # derivation fields are 'change' (self-payment, no BRC-42 derivation).
+          inferred_type = out[:output_type]
+          if inferred_type.nil? && out[:derivation_prefix].nil? && out[:basket]
+            inferred_type = 'change'
+          end
+
           {
             satoshis: out[:satoshis],
             vout: vout,
@@ -528,7 +533,7 @@ module BSV
             tags: out[:tags],
             description: out[:output_description],
             custom_instructions: out[:custom_instructions],
-            change: out[:change],
+            output_type: inferred_type,
             derivation_prefix: out[:derivation_prefix],
             derivation_suffix: out[:derivation_suffix],
             sender_identity_key: out[:sender_identity_key]
@@ -846,6 +851,8 @@ module BSV
           spec[:basket]              = rem[:basket]
           spec[:custom_instructions] = rem[:custom_instructions]
           spec[:tags]                = rem[:tags]
+          # Basket insertion without derivation fields is a root-key payment
+          spec[:output_type] = 'root' unless rem[:derivation_prefix]
         end
 
         spec

@@ -29,7 +29,7 @@
 | height | integer, nullable | ❌ | CHECK `merkle_path IS NULL OR height IS NOT NULL` |
 | block_index | integer, nullable | ✅ | |
 | merkle_path | bytea, nullable | ✅ | |
-| raw_tx | bytea, nullable | ❌ | NOT NULL, CHECK `length(raw_tx) >= 189` |
+| raw_tx | bytea, nullable | ❌ | NOT NULL, CHECK `length(raw_tx) >= 10` |
 | block_hash | bytea, nullable | ❌ | CHECK `block_hash IS NULL OR length(block_hash) = 32` |
 | merkle_root | bytea, nullable | ❌ | CHECK `merkle_root IS NULL OR length(merkle_root) = 32` |
 | created_at | timestamptz NOT NULL | ✅ | |
@@ -37,7 +37,7 @@
 
 **merkle_path → height:** A merkle path without a block height is structurally nonsensical. The CHECK enforces: if you have a proof, you must know what block it's in. The reverse is allowed — ARC can report a block height (MINED status) before the merkle path is available.
 
-**raw_tx NOT NULL, >= 189 bytes:** Every tx_proof must have the raw transaction. The `"\x00".b` placeholder in engine code is dead code — remove it. 189 bytes is the minimum 1-in/1-out P2PKH transaction: 25-byte locking script + 68-byte minimum DER signature + 33-byte compressed pubkey + 36-byte outpoint + 27-byte overhead.
+**raw_tx NOT NULL, >= 10 bytes:** Every tx_proof must have the raw transaction. The `"\x00".b` placeholder in engine code is dead code — remove it. The database minimum is 10 bytes (the structural minimum: version 4 + input count 1 + output count 1 + locktime 4). This accommodates unsigned transactions stored during deferred signing. The 189-byte signed minimum is an application-level concern (engine validation before broadcast), not a schema concern.
 
 ---
 

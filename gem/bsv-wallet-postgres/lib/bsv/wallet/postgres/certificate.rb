@@ -7,12 +7,6 @@ module BSV
         plugin :timestamps, update_on_create: true
 
         one_to_many :certificate_fields, class: 'BSV::Wallet::Postgres::CertificateField'
-
-        dataset_module do
-          def active
-            where(deleted_at: nil)
-          end
-        end
       end
     end
   end

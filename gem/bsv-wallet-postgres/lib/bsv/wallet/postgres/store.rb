@@ -27,7 +27,6 @@ module BSV
               nlocktime:   action[:nlocktime] || 0,
               version:     action[:version],
               outgoing:    action.fetch(:outgoing, true),
-              satoshis:    action[:satoshis],
               input_beef:  action[:input_beef]
             )
 
@@ -73,26 +72,35 @@ module BSV
                 action_id:          action_id,
                 satoshis:           out[:satoshis],
                 vout:               out[:vout],
-                locking_script:     out[:locking_script],
-                derivation_prefix:  out[:derivation_prefix],
-                derivation_suffix:  out[:derivation_suffix],
-                sender_identity_key: out[:sender_identity_key]
+                locking_script:     out[:locking_script]
               )
 
-              Spendable.create(output_id: output.id, action_id: action_id)
+              # Only wallet-owned outputs get a spendable row.
+              # An output is wallet-owned if it has derivation fields, an
+              # output_type (root/change), or a basket assignment.
+              wallet_owned = out[:derivation_prefix] || out[:output_type] || out[:basket]
+              if wallet_owned
+                Spendable.create(
+                  output_id:           output.id,
+                  action_id:           action_id,
+                  output_type:         out[:output_type],
+                  derivation_prefix:   out[:derivation_prefix],
+                  derivation_suffix:   out[:derivation_suffix],
+                  sender_identity_key: out[:sender_identity_key]
+                )
+              end
 
-              if out[:basket]
+              if out[:basket] && out[:basket] != 'default'
                 basket_id = find_or_create_basket(name: out[:basket])
                 OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: action_id)
               end
 
-              if out[:description] || out[:custom_instructions] || out.key?(:change)
+              if out[:description] || out[:custom_instructions]
                 OutputDetail.create(
                   output_id:          output.id,
                   action_id:          action_id,
                   description:        out[:description],
-                  custom_instructions: out[:custom_instructions],
-                  change:             out[:change] || false
+                  custom_instructions: out[:custom_instructions]
                 )
               end
 
@@ -138,13 +146,12 @@ module BSV
                           include_input_locking_scripts: false,
                           include_input_unlocking_scripts: false,
                           include_outputs: false, include_output_locking_scripts: false)
-          label_ids = Label.active.where(label: labels).select_map(:id)
+          label_ids = Label.where(label: labels).select_map(:id)
           return { total: 0, actions: [] } if label_ids.empty?
 
           base = Action
             .join(:action_labels, action_id: :id)
             .where(Sequel[:action_labels][:label_id] => label_ids)
-            .where(Sequel[:action_labels][:deleted_at] => nil)
             .select_all(:actions)
 
           if label_query_mode == :all
@@ -182,9 +189,9 @@ module BSV
           base = Output.spendable.in_basket(basket)
 
           if tags&.any?
-            tag_ids = Tag.active.where(tag: tags).select_map(:id)
+            tag_ids = Tag.where(tag: tags).select_map(:id)
             unless tag_ids.empty?
-              tag_ds = OutputTag.dataset.active
+              tag_ds = OutputTag.dataset
                 .where(tag_id: tag_ids)
                 .where(Sequel[:output_tags][:output_id] => Sequel[:outputs][:id])
                 .select(1)
@@ -231,7 +238,7 @@ module BSV
 
         def find_or_create_labels(names:)
           names.map do |name|
-            label = Label.active.first(label: name)
+            label = Label.first(label: name)
             label ||= Label.create(label: name)
             label.id
           end
@@ -239,14 +246,14 @@ module BSV
 
         def find_or_create_tags(names:)
           names.map do |name|
-            tag = Tag.active.first(tag: name)
+            tag = Tag.first(tag: name)
             tag ||= Tag.create(tag: name)
             tag.id
           end
         end
 
         def find_or_create_basket(name:)
-          basket = Basket.active.first(name: name)
+          basket = Basket.first(name: name)
           basket ||= Basket.create(name: name)
           basket.id
         end
@@ -286,7 +293,7 @@ module BSV
         end
 
         def query_certificates(certifiers:, types:, limit: 10, offset: 0)
-          base = Certificate.active
+          base = Certificate
             .where(certifier: certifiers, type: types)
 
           total = base.count
@@ -301,9 +308,9 @@ module BSV
         end
 
         def delete_certificate(type:, serial_number:, certifier:)
-          Certificate.active
+          Certificate
             .where(type: type, serial_number: serial_number, certifier: certifier)
-            .update(deleted_at: Sequel.function(:now))
+            .delete
         end
 
         # --- Settings ---
@@ -322,6 +329,7 @@ module BSV
           rows = @db[:inputs]
             .join(:outputs, id: :output_id)
             .join(Sequel[:actions].as(:source_actions), id: Sequel[:outputs][:action_id])
+            .left_join(:spendable, output_id: Sequel[:outputs][:id])
             .where(Sequel[:inputs][:action_id] => action_id)
             .order(Sequel[:inputs][:vin])
             .select(
@@ -331,9 +339,9 @@ module BSV
               Sequel[:outputs][:vout].as(:source_vout),
               Sequel[:outputs][:satoshis].as(:source_satoshis),
               Sequel[:outputs][:locking_script].as(:source_locking_script),
-              Sequel[:outputs][:derivation_prefix],
-              Sequel[:outputs][:derivation_suffix],
-              Sequel[:outputs][:sender_identity_key]
+              Sequel[:spendable][:derivation_prefix],
+              Sequel[:spendable][:derivation_suffix],
+              Sequel[:spendable][:sender_identity_key]
             )
             .all
 
@@ -377,15 +385,16 @@ module BSV
           candidates = []
           total = 0
           ds.each do |output|
+            spendable = output.spendable_entry
             candidates << {
               id:                  output.id,
               satoshis:            output.satoshis,
               vout:                output.vout,
               action_id:           output.action_id,
               locking_script:      output.locking_script,
-              derivation_prefix:   output.derivation_prefix,
-              derivation_suffix:   output.derivation_suffix,
-              sender_identity_key: output.sender_identity_key
+              derivation_prefix:   spendable&.derivation_prefix,
+              derivation_suffix:   spendable&.derivation_suffix,
+              sender_identity_key: spendable&.sender_identity_key
             }
             total += output.satoshis
             break if total >= satoshis
@@ -417,7 +426,6 @@ module BSV
             wtxid:       record.wtxid,
             raw_tx:      record.raw_tx,
             reference:   record.reference,
-            satoshis:    record.satoshis,
             status:      record.derived_status,
             outgoing:    record.outgoing,
             description: record.description,

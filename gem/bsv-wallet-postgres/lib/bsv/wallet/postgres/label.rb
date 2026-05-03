@@ -9,12 +9,6 @@ module BSV
         many_to_many :actions, class: 'BSV::Wallet::Postgres::Action',
                                join_table: :action_labels,
                                left_key: :label_id, right_key: :action_id
-
-        dataset_module do
-          def active
-            where(deleted_at: nil)
-          end
-        end
       end
     end
   end

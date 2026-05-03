@@ -8,12 +8,6 @@ module BSV
 
         many_to_one :action, class: 'BSV::Wallet::Postgres::Action'
         many_to_one :label, class: 'BSV::Wallet::Postgres::Label'
-
-        dataset_module do
-          def active
-            where(deleted_at: nil)
-          end
-        end
       end
     end
   end
