@@ -11,7 +11,7 @@ Sequel.migration do
     alter_table(:tx_proofs) do
       set_column_not_null :raw_tx
       add_constraint(:wtxid_length)       { length(wtxid) =~ 32 }
-      add_constraint(:raw_tx_min_length)  { length(raw_tx) >= 10 }
+      add_constraint(:raw_tx_min_length)  { length(raw_tx) >= 20 }
       add_constraint(:merkle_path_needs_height, 'merkle_path IS NULL OR height IS NOT NULL')
       add_constraint(:block_hash_length,  'block_hash IS NULL OR length(block_hash) = 32')
       add_constraint(:merkle_root_length, 'merkle_root IS NULL OR length(merkle_root) = 32')

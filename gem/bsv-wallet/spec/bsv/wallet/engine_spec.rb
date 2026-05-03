@@ -622,15 +622,15 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     before do
       engine.create_action(
         description: 'payment action', no_send: true, labels: ['payment'],
-        outputs: [{ satoshis: 100, output_description: 'output', locking_script: "\x00".b }]
+        outputs: [{ satoshis: 100, output_description: 'output', locking_script: "\x01".b }]
       )
       engine.create_action(
         description: 'transfer action', no_send: true, labels: ['transfer'],
-        outputs: [{ satoshis: 200, output_description: 'output', locking_script: "\x00".b }]
+        outputs: [{ satoshis: 200, output_description: 'output', locking_script: "\x01".b }]
       )
       engine.create_action(
         description: 'both labels', no_send: true, labels: %w[payment transfer],
-        outputs: [{ satoshis: 300, output_description: 'output', locking_script: "\x00".b }]
+        outputs: [{ satoshis: 300, output_description: 'output', locking_script: "\x01".b }]
       )
     end
 

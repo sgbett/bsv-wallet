@@ -29,7 +29,7 @@
 | height | integer, nullable | ❌ | CHECK `merkle_path IS NULL OR height IS NOT NULL` |
 | block_index | integer, nullable | ✅ | |
 | merkle_path | bytea, nullable | ✅ | |
-| raw_tx | bytea, nullable | ❌ | NOT NULL, CHECK `length(raw_tx) >= 10` |
+| raw_tx | bytea, nullable | ❌ | NOT NULL, CHECK `length(raw_tx) >= 20` |
 | block_hash | bytea, nullable | ❌ | CHECK `block_hash IS NULL OR length(block_hash) = 32` |
 | merkle_root | bytea, nullable | ❌ | CHECK `merkle_root IS NULL OR length(merkle_root) = 32` |
 | created_at | timestamptz NOT NULL | ✅ | |
@@ -37,7 +37,7 @@
 
 **merkle_path → height:** A merkle path without a block height is structurally nonsensical. The CHECK enforces: if you have a proof, you must know what block it's in. The reverse is allowed — ARC can report a block height (MINED status) before the merkle path is available.
 
-**raw_tx NOT NULL, >= 10 bytes:** Every tx_proof must have the raw transaction. The `"\x00".b` placeholder in engine code is dead code — remove it. The database minimum is 10 bytes (the structural minimum: version 4 + input count 1 + output count 1 + locktime 4). This accommodates unsigned transactions stored during deferred signing. The 189-byte signed minimum is an application-level concern (engine validation before broadcast), not a schema concern.
+**raw_tx NOT NULL, >= 20 bytes:** Every tx_proof must have the raw transaction. 20 bytes is the minimum valid transaction with one output: version(4) + input_count(1) + output_count(1) + amount(8) + script_len(1) + script(1) + locktime(4). The 1-byte locking script floor comes from `OP_1` (anyone-can-spend) being the smallest valid script. Practical transactions are larger — unsigned 1-in/1-out is 85 bytes, signed P2PKH is 191 bytes (see `reference/raw-tx.md`).
 
 ---
 
@@ -321,7 +321,7 @@ To omit derivation data you must explicitly declare the output as `'root'` or `'
 
 1. **actions.satoshis → DROP COLUMN.** Derivable via `SUM(outputs.satoshis)` for the action_id. Not returned by any BRC-100 method at the action level. Denormalized with no query justification — remove it entirely.
 
-2. **Minimum raw_tx length: 10 bytes (structural).** The database constraint uses the structural minimum (version + counts + locktime) because `tx_proofs` stores unsigned transactions during deferred signing (~85 bytes). A signed 1-in/1-out P2PKH is 191 bytes (see `reference/raw-tx.md`). The 189-byte theoretical minimum from our earlier analysis was close — the 2-byte difference is in the DER signature encoding (variable length, 70–72 bytes).
+2. **Minimum raw_tx length: 20 bytes.** The smallest valid transaction with one output: version(4) + input_count(1) + output_count(1) + amount(8) + script_len(1) + 1-byte script + locktime(4). The engine requires at least one output, and `outputs.locking_script` has a `length >= 1` constraint, so 20 is the true floor.
 
 3. **One migration (004).** All additive constraints, no shape changes. Database can be rebuilt — no production data to protect.
 
