@@ -321,7 +321,7 @@ To omit derivation data you must explicitly declare the output as `'root'` or `'
 
 1. **actions.satoshis → DROP COLUMN.** Derivable via `SUM(outputs.satoshis)` for the action_id. Not returned by any BRC-100 method at the action level. Denormalized with no query justification — remove it entirely.
 
-2. **Minimum raw_tx length: 189 bytes.** The smallest valid Bitcoin transaction is a single-input, single-output P2PKH: 25-byte P2PKH script + 68-byte minimum DER signature + 33-byte compressed pubkey + 36-byte outpoint + 27-byte overhead = 189 bytes. Anything smaller is not a real transaction.
+2. **Minimum raw_tx length: 10 bytes (structural).** The database constraint uses the structural minimum (version + counts + locktime) because `tx_proofs` stores unsigned transactions during deferred signing (~85 bytes). A signed 1-in/1-out P2PKH is 191 bytes (see `reference/raw-tx.md`). The 189-byte theoretical minimum from our earlier analysis was close — the 2-byte difference is in the DER signature encoding (variable length, 70–72 bytes).
 
 3. **One migration (004).** All additive constraints, no shape changes. Database can be rebuilt — no production data to protect.
 
