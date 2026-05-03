@@ -166,9 +166,9 @@ Sequel.migration do
     end
 
     # --- 12. tags ---
-    drop_constraint :tags, :tag_length
-    run 'DROP INDEX IF EXISTS tags_tag_unique'
     alter_table(:tags) do
+      drop_constraint :tag_length
+      drop_constraint :tags_tag_unique, type: :unique
       add_column :deleted_at, :timestamptz
     end
     run "CREATE UNIQUE INDEX tags_tag_index ON tags (tag) WHERE deleted_at IS NULL"
@@ -183,9 +183,7 @@ Sequel.migration do
     # --- 10. labels ---
     alter_table(:labels) do
       drop_constraint :label_length
-    end
-    run 'DROP INDEX IF EXISTS labels_label_unique'
-    alter_table(:labels) do
+      drop_constraint :labels_label_unique, type: :unique
       add_column :deleted_at, :timestamptz
     end
     run "CREATE UNIQUE INDEX labels_label_index ON labels (label) WHERE deleted_at IS NULL"
@@ -234,12 +232,12 @@ Sequel.migration do
     end
 
     # --- 4. baskets ---
-    run 'DROP INDEX IF EXISTS baskets_name_unique'
     alter_table(:baskets) do
       drop_constraint :name_length
       drop_constraint :name_not_default
       drop_constraint :target_count_range
       drop_constraint :target_value_range
+      drop_constraint :baskets_name_unique, type: :unique
       add_column :deleted_at, :timestamptz
     end
     run "CREATE UNIQUE INDEX baskets_name_index ON baskets (name) WHERE deleted_at IS NULL"

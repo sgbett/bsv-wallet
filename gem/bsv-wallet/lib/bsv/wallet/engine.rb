@@ -220,8 +220,10 @@ module BSV
         output_specs = outputs.map do |out|
           spec = resolve_internalize_output(out)
           tx_out = subject_tx.outputs[spec[:vout]]
-          spec[:locking_script] = tx_out.locking_script.to_binary if tx_out
-          spec[:satoshis] = tx_out.satoshis if tx_out && (spec[:satoshis].nil? || spec[:satoshis].zero?)
+          raise BSV::Wallet::InvalidParameterError.new('output_index',
+            "vout #{spec[:vout]} does not exist in subject transaction (#{subject_tx.outputs.length} outputs)") unless tx_out
+          spec[:locking_script] = tx_out.locking_script.to_binary
+          spec[:satoshis] = tx_out.satoshis if spec[:satoshis].nil? || spec[:satoshis].zero?
           spec
         end
         @store.promote_action(action_id: action_result[:id], outputs: output_specs)

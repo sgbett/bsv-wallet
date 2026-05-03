@@ -91,7 +91,7 @@ The stack now contains TRUE (0x01) therefore the TX is valid.
 | 186 | 1 | `ac` | . OP_CHECKSIG |
 | 187 | 4 | `d3740e00` | locktime (947,411) |
 
-**191 bytes total.** Used in test suite as `DUMMY_RAW_TX` — parseable by `Transaction.from_binary` and satisfies the `tx_proofs.raw_tx >= 10` constraint.
+**191 bytes total.** Used in test suite as `DUMMY_RAW_TX` — parseable by `Transaction.from_binary` and satisfies the `tx_proofs.raw_tx >= 20` constraint.
 
 ## DER signature size distribution
 
@@ -105,7 +105,7 @@ The DER-encoded ECDSA signature uses two integers (r, s), each 32 bytes when ful
 | 60 bytes | ≈1 in 2^80 | Near impossible |
 | 8 bytes | ≈1 in 2^496 | Practically impossible |
 
-Each byte below 70 requires the value to be ≈256x smaller. A minimum signed P2PKH transaction (1-in/1-out) is 191 bytes with a typical 70-byte signature, 189 bytes with a 68-byte signature. The database constraint uses 10 bytes (structural minimum) because unsigned transactions during deferred signing are ~85 bytes.
+Each byte below 70 requires the value to be ≈256x smaller. A minimum signed P2PKH transaction (1-in/1-out) is 191 bytes with a typical 70-byte signature, 189 bytes with a 68-byte signature. The database constraint uses 20 bytes (minimum 1-output tx with 1-byte script) because unsigned transactions during deferred signing are ~85 bytes.
 
 ## pubkey
 
@@ -123,7 +123,7 @@ However y^2 = b has two solutions for b, positive and negative, so the first byt
 
 Hashing the pubkey affords privacy to unspent outputs until such time as they need to be spent. The pubkey is hashed using:
 
-```psudeocode
+```pseudocode
 ripemd160(sha256(pubkey))
 ```
 

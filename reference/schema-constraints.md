@@ -111,6 +111,8 @@
 
 ### 5. outputs
 
+Outputs is the immutable log — all outputs the wallet participated in, including payments to others. Derivation data lives on `spendable`, not here.
+
 | Column | Type | Status | Needed |
 |--------|------|--------|--------|
 | id | bigint PK | ✅ | |
@@ -119,14 +121,29 @@
 | created_at | timestamptz NOT NULL | ✅ | |
 | locking_script | bytea, nullable | ❌ | NOT NULL, CHECK `length(locking_script) >= 1` |
 | vout | integer NOT NULL | ❌ | CHECK `vout >= 0` |
-| output_type | (does not exist) | ❌ | ADD enum column `output_type` (values: `'root'`, `'change'`), nullable, DEFAULT NULL |
-| sender_identity_key | text, nullable | ❌ | CHECK: see cross-column constraints below |
-| derivation_prefix | text, nullable | ❌ | CHECK: see cross-column constraints below |
-| derivation_suffix | text, nullable | ❌ | CHECK: see cross-column constraints below |
+| sender_identity_key | text | ❌ | DROP — moved to spendable |
+| derivation_prefix | text | ❌ | DROP — moved to spendable |
+| derivation_suffix | text | ❌ | DROP — moved to spendable |
 
 **locking_script NOT NULL:** Every output has a locking script. The engine always provides one. No valid state exists without one.
 
-**output_type enum:** NULL = normal derived output. `'root'` = funded directly to identity key (import_utxo, legacy P2PKH). `'change'` = wallet's own change output. Replaces the `change` boolean on `output_details`.
+---
+
+### 6. spendable
+
+The UTXO set — only outputs the wallet can spend. Derivation data and `output_type` live here because they're needed for signing, not for the immutable log.
+
+| Column | Type | Status | Needed |
+|--------|------|--------|--------|
+| id | bigint PK | ✅ | |
+| output_id | bigint NOT NULL UNIQUE FK | ✅ | |
+| action_id | bigint FK CASCADE, nullable | ❌ | NOT NULL |
+| output_type | (does not exist) | ❌ | ADD enum column (values: `'root'`, `'change'`), nullable, DEFAULT NULL |
+| derivation_prefix | (does not exist) | ❌ | ADD text, nullable |
+| derivation_suffix | (does not exist) | ❌ | ADD text, nullable |
+| sender_identity_key | (does not exist) | ❌ | ADD text, nullable |
+
+**output_type enum:** NULL = normal derived output. `'root'` = funded directly to identity key. `'change'` = wallet's own change output. Replaces `output_details.change`.
 
 **Cross-column constraints:**
 ```sql
@@ -145,16 +162,6 @@ To omit derivation data you must explicitly declare the output as `'root'` or `'
 
 ---
 
-### 6. spendable
-
-| Column | Type | Status | Needed |
-|--------|------|--------|--------|
-| id | bigint PK | ✅ | |
-| output_id | bigint NOT NULL UNIQUE FK | ✅ | |
-| action_id | bigint FK CASCADE, nullable | ❌ | NOT NULL |
-
----
-
 ### 7. output_details
 
 | Column | Type | Status | Needed |
@@ -162,7 +169,7 @@ To omit derivation data you must explicitly declare the output as `'root'` or `'
 | id | bigint PK | ✅ | |
 | output_id | bigint NOT NULL UNIQUE FK | ✅ | |
 | action_id | bigint FK CASCADE, nullable | ❌ | NOT NULL |
-| change | boolean NOT NULL | ❌ | DROP COLUMN — replaced by `outputs.output_type = 'change'` |
+| change | boolean NOT NULL | ❌ | DROP COLUMN — replaced by `spendable.output_type = 'change'` |
 | type | text, nullable | ✅ | |
 | purpose | text, nullable | ✅ | |
 | provided_by | text, nullable | ✅ | |
