@@ -76,8 +76,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     BSV::Transaction::Transaction.from_beef(beef_data)
   end
 
-  # Dummy raw_tx that satisfies the 189-byte minimum constraint.
-  DUMMY_RAW_TX = SecureRandom.random_bytes(226).freeze
+  # Real signed P2PKH transaction (226 bytes) for test proofs.
+  # Must be parseable by Transaction.from_binary for BEEF construction.
+  DUMMY_RAW_TX = ['01000000016ce7229f014164e254aad172b1f8b40d496942ad7e323b47e0424c2b2e2e3772010000006a4730440220463fcf8f57a61c4f8ede208773db8732bf3a0757d929a8cbbe29bf4905fe5ef6022005d74398faf5b24912821836171af44f55f89858f3edf92863cde4823da11d4641210362f5fb9274834bb0cd0376a8d5d02bdbf459a37a62c5baef3fb06d1159b55597ffffffff01f0991600000000001976a9141f36a49fcf6ada1f74f82377b33b17b68f7a016188acd3740e00'].pack('H*').freeze
 
   # Pre-fund the wallet with spendable outputs.
   #
@@ -1129,7 +1130,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
             .each do |bt|
           proof_store.save_proof(
             wtxid: bt.wtxid,
-            proof: { height: 800_000, merkle_path: "\x00".b }
+            proof: { height: 800_000, merkle_path: "\x00".b, raw_tx: bt.transaction.to_binary }
           )
         end
 
@@ -1151,13 +1152,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
         # Only populate ProofStore for the first ancestor
         beef = BSV::Transaction::Beef.from_binary(beef_data)
-        proven_txids = beef.transactions
-                           .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
-                           .map(&:wtxid)
+        first_ancestor = beef.transactions
+                             .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                             .first
 
         proof_store.save_proof(
-          wtxid: proven_txids.first,
-          proof: { height: 800_000, merkle_path: "\x00".b }
+          wtxid: first_ancestor.wtxid,
+          proof: { height: 800_000, merkle_path: "\x00".b, raw_tx: first_ancestor.transaction.to_binary }
         )
 
         result = engine.internalize_action(
@@ -1239,7 +1240,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
             .each do |bt|
           proof_store.save_proof(
             wtxid: bt.wtxid,
-            proof: { height: 800_000, merkle_path: "\x00".b }
+            proof: { height: 800_000, merkle_path: "\x00".b, raw_tx: bt.transaction.to_binary }
           )
         end
 
@@ -2686,7 +2687,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
     end
 
-    it 'returns empty for action with no proven ancestors' do
+    it 'returns unproven ancestors without merkle_path' do
       fund_wallet(satoshis: 1000)
       listed = engine_with_keys.list_outputs(basket: 'default')
       output_id = listed[:outputs].first[:id]
@@ -2700,7 +2701,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       action = store.find_action(wtxid: result[:txid])
       ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
-      expect(ancestry).to eq([])
+      expect(ancestry.length).to eq(1)
+      expect(ancestry.first.merkle_path).to be_nil
     end
 
     it 'returns ancestor transactions with merkle_path for proven inputs' do
@@ -2797,10 +2799,15 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       end
 
       ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
-      expect(ancestry.length).to eq(proven_count)
+      expect(ancestry.length).to eq(3)
 
-      block_heights = ancestry.map { |tx| tx.merkle_path.block_height }
+      proven = ancestry.select(&:merkle_path)
+      expect(proven.length).to eq(proven_count)
+      block_heights = proven.map { |tx| tx.merkle_path.block_height }
       expect(block_heights).to contain_exactly(800_000, 800_001)
+
+      unproven = ancestry.reject(&:merkle_path)
+      expect(unproven.length).to eq(1)
     end
   end
 end
