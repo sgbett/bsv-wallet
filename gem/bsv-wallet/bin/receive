@@ -1,64 +1,63 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Receive a root-key P2PKH payment from BEEF (porcelain).
+# Receive a BRC-100 payment (porcelain).
 #
-# Scans the BEEF subject transaction for outputs matching the wallet's
-# identity key and imports them via Engine#import_utxo. This is the
-# correct path for root-key payments — the wallet can sign with the
-# root key directly, no BRC-42 derivation needed.
-#
-# For BRC-42 derived payments, use bin/internalize with explicit
-# derivation parameters via the wallet_payment protocol.
+# Reads a JSON envelope from stdin (as produced by bin/send) containing
+# BEEF and derivation metadata, then internalizes the payment outputs
+# via Engine#internalize_action with proper BRC-42 derivation parameters.
 #
 # Usage:
+#   bin/send alice --to <bob_key> --sats 500 | bin/receive bob
 #   bin/receive [wallet] [--basket <name>]
-#   bin/send alice --to <key> --sats 500 | bin/receive bob
 
 require_relative '../lib/bsv/wallet/cli'
 require 'optparse'
+require 'json'
 
 wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
 
-options = {}
+options = { basket: 'default' }
 OptionParser.new do |opts|
-  opts.banner = 'Usage: bin/receive [wallet]'
+  opts.banner = 'Usage: bin/receive [wallet] [--basket <name>]'
+  opts.on('--basket NAME', 'Basket for received outputs (default: default)') { |v| options[:basket] = v }
 end.parse!(args)
+
+# Read JSON envelope from stdin
+abort 'No data on stdin' if $stdin.tty?
+raw = $stdin.read
+abort 'Empty stdin' if raw.nil? || raw.empty?
+
+envelope = JSON.parse(raw, symbolize_names: true)
+beef_hex = envelope[:beef] || abort('Missing "beef" in envelope')
+sender = envelope[:sender_identity_key] || abort('Missing "sender_identity_key" in envelope')
+pay_outputs = envelope[:outputs] || abort('Missing "outputs" in envelope')
+
+beef_data = [beef_hex].pack('H*')
 
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 engine = ctx[:engine]
 
-# Read BEEF from stdin
-$stdin.binmode
-beef_data = $stdin.read
-abort 'No BEEF data on stdin' if beef_data.nil? || beef_data.empty?
-
-# Parse BEEF to find the subject transaction
-beef = BSV::Transaction::Beef.from_binary(beef_data)
-subject_wtxid = beef.subject_wtxid
-subject_tx = subject_wtxid ? beef.find_atomic_transaction(subject_wtxid) : beef.transactions.last&.transaction
-abort 'No subject transaction in BEEF' unless subject_tx
-
-my_pubkey_hash = BSV::Primitives::Digest.hash160([ctx[:identity_key]].pack('H*'))
-
-matching = subject_tx.outputs.each_with_index.select do |out, _idx|
-  chunks = out.locking_script.chunks
-  chunks.length == 5 && chunks[2].data == my_pubkey_hash
+# Build internalize output specs from the envelope metadata
+output_specs = pay_outputs.map do |out|
+  {
+    output_index: out[:vout],
+    protocol: 'wallet payment',
+    payment_remittance: {
+      derivation_prefix: out[:derivation_prefix],
+      derivation_suffix: out[:derivation_suffix],
+      sender_identity_key: sender
+    }
+  }
 end
 
-abort 'No outputs payable to this wallet' if matching.empty?
+engine.internalize_action(
+  tx: beef_data,
+  outputs: output_specs,
+  description: 'received payment',
+  labels: ['cli-receive']
+)
 
-# Import each matching output as a root-key UTXO
-raw_tx = subject_tx.to_binary
-wtxid = subject_tx.wtxid
-
-matching.each do |out, idx|
-  engine.import_utxo(
-    wtxid: wtxid,
-    vout: idx,
-    satoshis: out.satoshis,
-    locking_script: out.locking_script.to_binary,
-    raw_tx: raw_tx
-  )
-  $stderr.puts "received: #{out.satoshis} sats (vout #{idx})"
+pay_outputs.each do |out|
+  $stderr.puts "received: #{out[:satoshis]} sats (vout #{out[:vout]})"
 end

@@ -1,31 +1,32 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Send a P2PKH payment (porcelain).
+# Send a BRC-100 payment with BRC-42 derived keys (porcelain).
 #
-# Composes UTXO selection, script construction, and create_action
-# into a single command. Outputs BEEF to stdout for piping to
-# bin/receive or bin/internalize.
+# Generates derivation parameters for both the payment and change outputs,
+# derives P2PKH locking scripts via BRC-42, calls create_action, and
+# outputs a JSON envelope containing BEEF + derivation metadata for the
+# recipient to internalize.
 #
 # Usage:
-#   bin/send [wallet] --to <identity_key_hex> --sats <amount> [--fee <rate>]
+#   bin/send [wallet] --to <identity_key_hex> --sats <amount> [--fee <sats>]
 #
-# Writes binary BEEF to stdout (pipe to bin/receive or bin/internalize).
-# Writes transaction summary to stderr.
+# Stdout: JSON envelope { beef: <hex>, outputs: [...] }
+# Stderr: human-readable summary
 
 require_relative '../lib/bsv/wallet/cli'
 require 'optparse'
+require 'securerandom'
+require 'json'
 
 wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
 
 options = {}
 OptionParser.new do |opts|
-  opts.banner = 'Usage: bin/send [wallet] --to <identity_key> --sats <amount> [--fee <rate>]'
+  opts.banner = 'Usage: bin/send [wallet] --to <identity_key> --sats <amount> [--fee <sats>]'
   opts.on('--to KEY', 'Recipient identity key (66-char compressed hex)') { |v| options[:to] = v }
   opts.on('--sats N', Integer, 'Amount to send in satoshis') { |v| options[:sats] = v }
-  opts.on('--fee N', Integer, 'Fee rate in sats/byte (default: 1)') { |v| options[:fee_rate] = v }
-  opts.on('-b', 'Force binary output to TTY') { options[:binary] = true }
-  opts.on('-o FILE', 'Write BEEF to file') { |v| options[:output_file] = v }
+  opts.on('--fee N', Integer, 'Fee in satoshis (default: 1)') { |v| options[:fee] = v }
 end.parse!(args)
 
 unless options[:to]&.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
@@ -35,40 +36,46 @@ abort 'Missing --sats' unless options[:sats]&.positive?
 
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 engine = ctx[:engine]
+key_deriver = ctx[:key_deriver]
 payment = options[:sats]
-fee_rate = options[:fee_rate] || 1
+fee = options[:fee] || 1
 
 # UTXO selection
-candidates = ctx[:utxo_pool].select(satoshis: payment)
+candidates = ctx[:utxo_pool].select(satoshis: payment + fee)
 input_sats = candidates.sum { |c| c[:satoshis] }
 
-# Fee estimation: inputs * 148 + outputs * 34 + 10 (standard P2PKH sizes)
-num_inputs = candidates.length
-num_outputs = 2 # payment + change
-estimated_size = num_inputs * 148 + num_outputs * 34 + 10
-fee = estimated_size * fee_rate
-
 change = input_sats - payment - fee
-if change.negative?
-  abort "Insufficient funds: have #{input_sats}, need #{payment + fee} (#{payment} + #{fee} fee)"
-end
+abort "Insufficient funds: have #{input_sats}, need #{payment + fee}" if change.negative?
 
-# Build locking scripts
-recipient_hash = BSV::Primitives::Digest.hash160([options[:to]].pack('H*'))
-recipient_script = BSV::Script::Script.p2pkh_lock(recipient_hash).to_binary
+# Payment output: BRC-42 derived key for recipient
+pay_prefix = SecureRandom.uuid
+pay_suffix = '1'
+pay_derived_pub = key_deriver.derive_public_key(
+  protocol_id: [2, pay_prefix], key_id: pay_suffix,
+  counterparty: options[:to], for_self: true
+)
+pay_script = BSV::Script::Script.p2pkh_lock(
+  BSV::Primitives::Digest.hash160(pay_derived_pub)
+).to_binary
 
-self_hash = BSV::Primitives::Digest.hash160([ctx[:identity_key]].pack('H*'))
-self_script = BSV::Script::Script.p2pkh_lock(self_hash).to_binary
+# Change output: BRC-42 derived key for self
+chg_prefix = SecureRandom.uuid
+chg_suffix = '1'
+chg_derived_pub = key_deriver.derive_public_key(
+  protocol_id: [2, chg_prefix], key_id: chg_suffix,
+  counterparty: 'self'
+)
+chg_script = BSV::Script::Script.p2pkh_lock(
+  BSV::Primitives::Digest.hash160(chg_derived_pub)
+).to_binary
 
-# Build inputs from selected UTXOs
+# Build inputs/outputs
 inputs = candidates.each_with_index.map { |c, i| { output_id: c[:id], vin: i } }
-
-# Build outputs — payment has no output_type (not ours), change is explicit
 outputs = [
-  { satoshis: payment, locking_script: recipient_script,
-    output_description: 'payment' },
-  { satoshis: change, locking_script: self_script,
-    output_description: 'change', output_type: 'change' }
+  { satoshis: payment, locking_script: pay_script },
+  { satoshis: change, locking_script: chg_script,
+    derivation_prefix: chg_prefix, derivation_suffix: chg_suffix,
+    sender_identity_key: ctx[:identity_key] }
 ]
 
 result = engine.create_action(
@@ -80,12 +87,20 @@ result = engine.create_action(
   randomize_outputs: false
 )
 
-BSV::Wallet::CLI::Output.write_binary(result[:tx],
-  output_file: options[:output_file],
-  binary: options[:binary])
+# Output JSON envelope with BEEF + derivation metadata for recipient
+envelope = {
+  beef: result[:tx].unpack1('H*'),
+  sender_identity_key: ctx[:identity_key],
+  outputs: [
+    { vout: 0, satoshis: payment,
+      derivation_prefix: pay_prefix, derivation_suffix: pay_suffix }
+  ]
+}
+
+BSV::Wallet::CLI::Output.write_json(envelope)
 
 dtxid = result[:txid].reverse.unpack1('H*')
 $stderr.puts "dtxid:  #{dtxid}"
-$stderr.puts "sent:   #{payment} sats to #{options[:to][0..7]}..."
-$stderr.puts "change: #{change} sats (#{num_inputs} input(s), #{estimated_size} bytes)"
-$stderr.puts "fee:    #{fee} sats (#{fee_rate} sat/byte)"
+$stderr.puts "sent:   #{payment} sats to #{options[:to][0..15]}..."
+$stderr.puts "change: #{change} sats"
+$stderr.puts "fee:    #{fee} sats"

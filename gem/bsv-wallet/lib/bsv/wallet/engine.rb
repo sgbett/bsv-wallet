@@ -864,24 +864,15 @@ module BSV
         tx = BSV::Transaction::Transaction.from_binary(raw_tx)
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
 
-        # Wire source_transaction and merkle_path on each input
+        # Wire source_transaction and merkle_path on each input.
+        # For unconfirmed ancestors, recursively wire their ancestry
+        # so the BEEF contains the full chain back to mined transactions.
         resolved_inputs.each_with_index do |resolved, idx|
           input = tx.inputs[idx]
           next unless input
 
-          source_wtxid = resolved[:source_wtxid]
-          proof = @proof_store.find_proof(wtxid: source_wtxid)
-
-          unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
-            BSV.logger&.debug { "[Engine] build_atomic_beef: ancestor #{source_wtxid.reverse.unpack1('H*')} proof=missing" }
-            next
-          end
-
-          source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
-
-          has_bump = !proof[:merkle_path].nil?
-          source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first if has_bump
-          BSV.logger&.debug { "[Engine] build_atomic_beef: ancestor #{source_wtxid.reverse.unpack1('H*')} proof=#{has_bump ? 'bump' : 'raw_tx'}" }
+          source_tx = resolve_ancestor(resolved[:source_wtxid])
+          next unless source_tx
 
           input.source_transaction = source_tx
         end
@@ -889,6 +880,52 @@ module BSV
         beef = BSV::Transaction::Beef.new
         beef.merge_transaction(tx)
         beef.to_atomic_binary(tx.wtxid)
+      end
+
+      # Recursively resolve an ancestor transaction with its full proof chain.
+      #
+      # If the ancestor is mined (has merkle_path), wires the BUMP and returns.
+      # If unconfirmed, finds the ancestor's own action, resolves ITS inputs
+      # recursively, and wires them as source_transactions so the SDK includes
+      # the full chain in the BEEF.
+      #
+      # @param wtxid [String] 32-byte wire-order wtxid
+      # @param visited [Set] prevents infinite loops on circular references
+      # @return [BSV::Transaction::Transaction, nil]
+      def resolve_ancestor(wtxid, visited: Set.new)
+        return if visited.include?(wtxid)
+
+        visited.add(wtxid)
+
+        proof = @proof_store.find_proof(wtxid: wtxid)
+        unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
+          BSV.logger&.debug { "[Engine] resolve_ancestor: #{wtxid.reverse.unpack1('H*')} proof=missing" }
+          return
+        end
+
+        source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
+
+        if proof[:merkle_path]
+          source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
+          BSV.logger&.debug { "[Engine] resolve_ancestor: #{wtxid.reverse.unpack1('H*')} proof=bump" }
+          return source_tx
+        end
+
+        # Unconfirmed: find the action that created this tx and resolve its inputs
+        action = @store.find_action(wtxid: wtxid)
+        if action
+          parent_inputs = @store.resolve_inputs_for_signing(action_id: action[:id])
+          parent_inputs.each_with_index do |parent_resolved, idx|
+            parent_input = source_tx.inputs[idx]
+            next unless parent_input
+
+            grandparent = resolve_ancestor(parent_resolved[:source_wtxid], visited: visited)
+            parent_input.source_transaction = grandparent if grandparent
+          end
+        end
+
+        BSV.logger&.debug { "[Engine] resolve_ancestor: #{wtxid.reverse.unpack1('H*')} proof=raw_tx (recursive)" }
+        source_tx
       end
 
       # Parse the tx: parameter as BEEF and extract the subject transaction.
