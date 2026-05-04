@@ -911,16 +911,25 @@ module BSV
           return source_tx
         end
 
-        # Unconfirmed: find the action that created this tx and resolve its inputs
+        # Unconfirmed: resolve each input's ancestor recursively.
+        # For outgoing actions with inputs, use the action's input rows.
+        # Otherwise (internalized actions or bare proofs from BEEF), parse
+        # the raw_tx and resolve each input's prev_wtxid from ProofStore.
         action = @store.find_action(wtxid: wtxid)
-        if action
-          parent_inputs = @store.resolve_inputs_for_signing(action_id: action[:id])
+        parent_inputs = action ? @store.resolve_inputs_for_signing(action_id: action[:id]) : []
+
+        if parent_inputs.any?
           parent_inputs.each_with_index do |parent_resolved, idx|
             parent_input = source_tx.inputs[idx]
             next unless parent_input
 
             grandparent = resolve_ancestor(parent_resolved[:source_wtxid], visited: visited)
             parent_input.source_transaction = grandparent if grandparent
+          end
+        else
+          source_tx.inputs.each do |input|
+            grandparent = resolve_ancestor(input.prev_wtxid, visited: visited)
+            input.source_transaction = grandparent if grandparent
           end
         end
 
@@ -964,23 +973,19 @@ module BSV
         subject_proof_id = nil
 
         beef.transactions.each do |beef_tx|
-          next unless beef_tx.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP
           next unless beef_tx.transaction
 
           wtxid = beef_tx.transaction.wtxid
           merkle_path = beef_tx.transaction.merkle_path ||
                         (beef_tx.bump_index && beef.bumps[beef_tx.bump_index])
-          next unless merkle_path
 
-          proof_id = @proof_store.save_proof(
-            wtxid: wtxid,
-            proof: {
-              height: merkle_path.block_height,
-              merkle_path: merkle_path.to_binary,
-              raw_tx: beef_tx.transaction.to_binary
-            }
-          )
+          proof = { raw_tx: beef_tx.transaction.to_binary }
+          if merkle_path
+            proof[:height] = merkle_path.block_height
+            proof[:merkle_path] = merkle_path.to_binary
+          end
 
+          proof_id = @proof_store.save_proof(wtxid: wtxid, proof: proof)
           subject_proof_id = proof_id if wtxid == subject_wtxid
         end
 
