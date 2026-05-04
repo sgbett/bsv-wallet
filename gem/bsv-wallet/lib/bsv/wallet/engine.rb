@@ -376,7 +376,7 @@ module BSV
           BSV::Primitives::Digest.hash160(derived_pub)
         ).to_binary
 
-        fee = 192 # 1-in-1-out P2PKH: 148 + 34 + 10 bytes at 1 sat/byte
+        fee = 1 # token fee for no_send self-payment (BRC-67: inputs > outputs)
         self_payment_sats = satoshis - fee
         raise BSV::Wallet::Error, "insufficient sats for self-payment (#{satoshis} - #{fee} fee)" if self_payment_sats <= 0
 
