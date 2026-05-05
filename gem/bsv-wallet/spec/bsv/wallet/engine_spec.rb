@@ -1469,12 +1469,15 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       engine.create_action(
         description: 'create outputs', inputs: [], no_send: true,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'first', basket: 'wallet', tags: ['payment'], derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
-          { satoshis: 300, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'second', basket: 'wallet', tags: ['change'], derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
-          { satoshis: 100, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'third', basket: 'other', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          { satoshis: 500, locking_script: "\x51",
+            output_description: 'first', basket: 'wallet', tags: ['payment'],
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
+          { satoshis: 300, locking_script: "\x51",
+            output_description: 'second', basket: 'wallet', tags: ['change'],
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
+          { satoshis: 100, locking_script: "\x51",
+            output_description: 'third', basket: 'other',
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
     end
@@ -1501,8 +1504,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       engine.create_action(
         description: 'with output', inputs: [], no_send: true,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'to relinquish', basket: 'wallet', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          { satoshis: 500, locking_script: "\x51",
+            output_description: 'to relinquish', basket: 'wallet',
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
 

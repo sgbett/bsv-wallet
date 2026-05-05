@@ -631,22 +631,20 @@ module BSV
       # Validate output_type declarations against locking scripts.
       #
       # If output_type is set, the locking script must be P2PKH.
-      # If output_type is 'root', the script must pay to the identity key.
+      # If output_type is 'root', the script must be P2PKH to the identity key.
       def validate_output_ownership!(outputs)
         return unless outputs && @key_deriver
 
         outputs.each_with_index do |out, idx|
-          next unless out[:output_type]
+          next unless out[:output_type] == 'root'
 
           script = resolve_locking_script(out[:locking_script])
           unless script.p2pkh?
             raise BSV::Wallet::InvalidParameterError.new(
               "outputs[#{idx}].output_type",
-              "only valid for P2PKH scripts"
+              "'root' requires a P2PKH script"
             )
           end
-
-          next unless out[:output_type] == 'root'
 
           root_hash = BSV::Primitives::Digest.hash160(
             [@key_deriver.identity_key].pack('H*')
