@@ -1203,9 +1203,10 @@ module BSV
       # fee via the SDK, and signs.
       #
       # Ordering constraint:
-      #   build → attach templates → tx.fee → sign
+      #   build → attach templates → tx.fee → shuffle → sign
       #   Templates before fee (estimated_size needs them).
-      #   Fee before sign (sighash commits to final output values).
+      #   Fee before shuffle (Benford remainder targets @outputs.last).
+      #   Shuffle before sign (sighash commits to final output positions).
       #
       # @return [Array(String, String, Hash, Array<Hash>)]
       #   wtxid, raw_tx, vout_mapping (caller only), change_output_specs
@@ -1236,39 +1237,45 @@ module BSV
           satoshis: 0, locking_script: change_script, change: true
         )
 
-        all_outputs = caller_tx_outputs + [change_tx_output]
-        all_outputs.shuffle! if randomize && all_outputs.length > 1
-
-        # D. Assemble transaction
+        # C2. Assemble transaction — change output last so Benford's
+        # remainder assignment targets it (SDK uses @outputs.last).
         tx = BSV::Transaction::Transaction.new(
           version: version || 1, lock_time: lock_time || 0
         )
         tx_inputs.each { |inp| tx.add_input(inp) }
-        all_outputs.each { |out| tx.add_output(out) }
+        caller_tx_outputs.each { |out| tx.add_output(out) }
+        tx.add_output(change_tx_output)
 
-        # E. Attach P2PKH templates for fee estimation
+        # D. Attach P2PKH templates for fee estimation
         signing_keys.each do |idx, key|
           tx.inputs[idx].unlocking_script_template = BSV::Transaction::P2PKH.new(key)
         end
 
-        # F. Compute fee + distribute change
-        # Use :equal for single change output — Benford's remainder assignment
-        # targets @outputs.last which may not be the change output after shuffle.
-        # Switch to :random when supporting multiple change outputs.
+        # E. Compute fee + distribute change (Benford for privacy)
         fee_model = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
-        tx.fee(fee_model, change_distribution: :equal)
+        tx.fee(fee_model, change_distribution: :random)
 
-        # G. Detect change survival, compute final vout positions
+        # F. Detect change survival
         change_survived = tx.outputs.include?(change_tx_output)
+
+        # G. Shuffle outputs AFTER fee — fee computation doesn't depend on
+        # order, but Benford's remainder targets @outputs.last so change
+        # must be last during tx.fee. Shuffle now for privacy before signing.
+        if randomize && tx.outputs.length > 1
+          shuffled = tx.outputs.shuffle
+          tx.outputs.replace(shuffled)
+        end
+
+        # H. Compute final vout positions (post-shuffle)
         vout_mapping = {}
         caller_tx_outputs.each_with_index do |co, orig_idx|
           vout_mapping[orig_idx] = tx.outputs.index(co)
         end
 
-        # H. Sign (AFTER fee — sighash commits to final output values)
+        # I. Sign (AFTER fee and shuffle — sighash commits to final output values+positions)
         signing_keys.each { |idx, key| tx.sign(idx, key) }
 
-        # I. Build change_outputs spec for atomic store write
+        # J. Build change_outputs spec for atomic store write
         change_output_specs = []
         if change_survived
           change_output_specs << {
