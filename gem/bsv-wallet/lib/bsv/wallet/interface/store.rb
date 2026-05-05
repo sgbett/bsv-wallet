@@ -31,10 +31,18 @@ module BSV
 
         # Phase 2: Attach wtxid and signed raw transaction to an action.
         #
+        # When +change_outputs+ is present, writes change output rows
+        # (outputs, spendable, output_details) atomically within the same
+        # database transaction. This ensures signing failure produces zero
+        # orphan output rows.
+        #
         # @param action_id [Integer]
         # @param wtxid [String] 32-byte binary wtxid (wire byte order)
         # @param raw_tx [String] binary-encoded signed transaction
-        def sign_action(action_id:, wtxid:, raw_tx:)
+        # @param change_outputs [Array<Hash>] optional change outputs to write
+        #   atomically. Each: :satoshis, :vout, :locking_script,
+        #   :derivation_prefix, :derivation_suffix, :sender_identity_key
+        def sign_action(action_id:, wtxid:, raw_tx:, change_outputs: [])
           raise NotImplementedError
         end
 
@@ -179,6 +187,19 @@ module BSV
         #   :derivation_prefix, :derivation_suffix, :sender_identity_key
         # @raise [RuntimeError] if any source action has a nil wtxid
         def resolve_inputs_for_signing(action_id:)
+          raise NotImplementedError
+        end
+
+        # --- Change Output Queries ---
+
+        # Return vout positions of change outputs for an action.
+        #
+        # Queries outputs joined to output_details where change is true.
+        # Used by Engine#query_change_outpoints for the no_send_change response.
+        #
+        # @param action_id [Integer]
+        # @return [Array<Integer>] vout positions
+        def query_change_output_vouts(action_id:)
           raise NotImplementedError
         end
 

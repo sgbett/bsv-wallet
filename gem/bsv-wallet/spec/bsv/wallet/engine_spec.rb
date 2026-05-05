@@ -167,6 +167,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     it 'creates an action with outputs' do
       result = engine.create_action(
         description: 'test payment',
+        inputs: [],
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
             output_description: 'payment', basket: 'payments' }
@@ -181,6 +182,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     it 'creates a deferred signing action with outputs promoted immediately' do
       result = engine.create_action(
         description: 'deferred action',
+        inputs: [],
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
@@ -203,6 +205,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     it 'creates a no-send action' do
       result = engine.create_action(
         description: 'no-send action',
+        inputs: [],
         no_send: true,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
@@ -216,6 +219,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     it 'attaches labels' do
       engine.create_action(
         description: 'labeled action',
+        inputs: [],
         no_send: true,
         labels: %w[payment urgent],
         outputs: [
@@ -231,7 +235,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
     it 'validates description length' do
       expect do
-        engine.create_action(description: 'hi', outputs: [{ satoshis: 1, output_description: 'x' }])
+        engine.create_action(description: 'hi', inputs: [], outputs: [{ satoshis: 1, output_description: 'x' }])
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
 
@@ -254,6 +258,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       it 'broadcasts inline and promotes on acceptance' do
         result = engine.create_action(
           description: 'inline broadcast',
+          inputs: [],
           accept_delayed_broadcast: false,
           outputs: [
             { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
@@ -289,6 +294,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       locking_script = SecureRandom.random_bytes(25)
       create_result = engine.create_action(
         description: 'deferred outputs',
+        inputs: [],
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: locking_script,
@@ -488,6 +494,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       it 'raises for non-existent vin in spends' do
         create_result = engine.create_action(
           description: 'deferred invalid',
+          inputs: [],
           sign_and_process: false,
           outputs: [{ satoshis: 500, locking_script: SecureRandom.random_bytes(25) }]
         )
@@ -509,6 +516,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
         engine.create_action(
           description: 'deferred promo',
+          inputs: [],
           sign_and_process: false,
           outputs: [
             { satoshis: 500, locking_script: binary_script,
@@ -525,6 +533,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       it 'stores unsigned raw_tx on the action' do
         create_result = engine.create_action(
           description: 'deferred rawtx',
+          inputs: [],
           sign_and_process: false,
           outputs: [{ satoshis: 500, locking_script: SecureRandom.random_bytes(25) }]
         )
@@ -543,6 +552,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       it 'deleting an action cascades to spendable entries' do
         create_result = engine.create_action(
           description: 'cascade test action',
+          inputs: [],
           sign_and_process: false,
           outputs: [
             { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
@@ -600,6 +610,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     it 'aborts an unsigned action' do
       create_result = engine.create_action(
         description: 'to be aborted',
+        inputs: [],
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
@@ -633,15 +644,15 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   describe '#list_actions' do
     before do
       engine.create_action(
-        description: 'payment action', no_send: true, labels: ['payment'],
+        description: 'payment action', inputs: [], no_send: true, labels: ['payment'],
         outputs: [{ satoshis: 100, output_description: 'output', locking_script: "\x01".b }]
       )
       engine.create_action(
-        description: 'transfer action', no_send: true, labels: ['transfer'],
+        description: 'transfer action', inputs: [], no_send: true, labels: ['transfer'],
         outputs: [{ satoshis: 200, output_description: 'output', locking_script: "\x01".b }]
       )
       engine.create_action(
-        description: 'both labels', no_send: true, labels: %w[payment transfer],
+        description: 'both labels', inputs: [], no_send: true, labels: %w[payment transfer],
         outputs: [{ satoshis: 300, output_description: 'output', locking_script: "\x01".b }]
       )
     end
@@ -1418,6 +1429,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         locking_script = SecureRandom.random_bytes(25)
         result = engine.create_action(
           description: 'broadcast raw_tx',
+          inputs: [],
           no_send: true,
           outputs: [{ satoshis: 500, locking_script: locking_script,
                       basket: 'proof_raw_tx' }]
@@ -1454,7 +1466,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   describe '#list_outputs' do
     before do
       engine.create_action(
-        description: 'create outputs', no_send: true,
+        description: 'create outputs', inputs: [], no_send: true,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
             output_description: 'first', basket: 'wallet', tags: ['payment'], derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
@@ -1486,7 +1498,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   describe '#relinquish_output' do
     it 'removes output from tracking' do
       engine.create_action(
-        description: 'with output', no_send: true,
+        description: 'with output', inputs: [], no_send: true,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
             output_description: 'to relinquish', basket: 'wallet', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
@@ -2820,6 +2832,203 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       unproven = ancestry.reject(&:merkle_path)
       expect(unproven.length).to eq(1)
+    end
+  end
+
+  # --- Auto-fund createAction (#61) ---
+
+  describe 'auto-fund createAction' do
+    # Reuse fund_wallet_with_keys from deferred signing context
+    def p2pkh_locking_script_for(private_key)
+      pubkey_hash = BSV::Primitives::Digest.hash160(private_key.public_key.compressed)
+      BSV::Script::Script.p2pkh_lock(pubkey_hash)
+    end
+
+    def fund_wallet_for_auto(satoshis: 10_000, count: 1,
+                             prefix: 'wallet payment', suffix: 'autofund')
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
+      )
+      script = p2pkh_locking_script_for(derived_key)
+
+      source_action = store.create_action(
+        action: { description: 'funding source', broadcast: :none, outgoing: false }
+      )
+      source_wtxid = SecureRandom.random_bytes(32)
+      store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: DUMMY_RAW_TX)
+
+      outputs = count.times.map do |i|
+        {
+          satoshis: satoshis, vout: i,
+          locking_script: script.to_binary,
+          basket: 'default',
+          derivation_prefix: prefix,
+          derivation_suffix: count > 1 ? "#{suffix}#{i}" : suffix,
+          sender_identity_key: 'self'
+        }
+      end
+      store.promote_action(action_id: source_action[:id], outputs: outputs)
+    end
+
+    context 'happy path' do
+      it 'auto-selects UTXOs, computes fee, generates change, and signs' do
+        fund_wallet_for_auto(satoshis: 10_000)
+
+        payment_script = SecureRandom.random_bytes(25)
+        result = engine_with_keys.create_action(
+          description: 'auto-fund test',
+          outputs: [{ satoshis: 1000, locking_script: payment_script }],
+          no_send: true
+        )
+
+        expect(result[:txid]).to be_a(String)
+        expect(result[:txid].bytesize).to eq(32)
+        expect(result[:tx]).to be_a(String)
+
+        # Parse the transaction — should have 1 input, 2 outputs (payment + change)
+        parsed = parse_beef_tx(result[:tx])
+        expect(parsed.inputs.length).to eq(1)
+        expect(parsed.outputs.length).to eq(2)
+
+        # One output is the payment (1000 sats)
+        output_sats = parsed.outputs.map(&:satoshis).sort
+        expect(output_sats).to include(1000)
+
+        # Total outputs + implicit fee = total inputs (10000)
+        total_output = parsed.outputs.sum(&:satoshis)
+        fee = 10_000 - total_output
+        expect(fee).to be > 0
+        expect(fee).to be < 100 # reasonable fee at 100 sat/kB
+      end
+
+      it 'returns change outpoints in no_send_change' do
+        fund_wallet_for_auto(satoshis: 10_000)
+
+        result = engine_with_keys.create_action(
+          description: 'auto-fund nosend',
+          outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }],
+          no_send: true
+        )
+
+        expect(result[:no_send_change]).to be_an(Array)
+        expect(result[:no_send_change].length).to eq(1)
+        expect(result[:no_send_change].first).to match(/\A[0-9a-f]{64}\.\d+\z/)
+      end
+
+      it 'change output is immediately spendable' do
+        fund_wallet_for_auto(satoshis: 10_000)
+
+        result = engine_with_keys.create_action(
+          description: 'auto-fund spend',
+          outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }],
+          no_send: true
+        )
+
+        # The change output should now be in the UTXO pool
+        balance = utxo_pool.balance
+        change_sats = 10_000 - 1000
+        # Balance should be roughly the change amount (minus fee)
+        expect(balance).to be > 0
+        expect(balance).to be_within(100).of(change_sats)
+      end
+    end
+
+    context 'dust change removal' do
+      it 'produces no change output when outputs consume nearly all input' do
+        # Fee at 100 sat/kB for 226-byte tx (1 in, 2 out) = ceil(22.6) = 23 sats.
+        # Fund 5000, spend 4977. Selection: 4977+23=5000 ≤ 5000 ✓
+        # Available change: 5000-4977-23 = 0 → SDK removes change output.
+        fund_wallet_for_auto(satoshis: 5000)
+
+        result = engine_with_keys.create_action(
+          description: 'auto-fund dust',
+          outputs: [{ satoshis: 4977, locking_script: SecureRandom.random_bytes(25) }],
+          no_send: true
+        )
+
+        parsed = parse_beef_tx(result[:tx])
+        # SDK removes change output when available <= 0
+        expect(parsed.outputs.length).to eq(1)
+        expect(parsed.outputs[0].satoshis).to eq(4977)
+
+        # No change outpoints
+        expect(result[:no_send_change]).to be_empty
+      end
+    end
+
+    context 'insufficient funds' do
+      it 'raises PoolDepletedError when pool cannot cover outputs' do
+        fund_wallet_for_auto(satoshis: 100)
+
+        expect do
+          engine_with_keys.create_action(
+            description: 'auto-fund broke',
+            outputs: [{ satoshis: 50_000, locking_script: SecureRandom.random_bytes(25) }],
+            no_send: true
+          )
+        end.to raise_error(BSV::Wallet::PoolDepletedError)
+      end
+    end
+
+    context 'deferred signing rejection' do
+      it 'raises InvalidParameterError when sign_and_process is false' do
+        expect do
+          engine_with_keys.create_action(
+            description: 'auto-fund defer',
+            sign_and_process: false,
+            outputs: [{ satoshis: 100, locking_script: SecureRandom.random_bytes(25) }]
+          )
+        end.to raise_error(BSV::Wallet::InvalidParameterError, /sign_and_process/)
+      end
+    end
+
+    context 'without key_deriver' do
+      it 'raises when wallet is not authenticated' do
+        expect do
+          engine.create_action(
+            description: 'auto-fund nokey',
+            outputs: [{ satoshis: 100, locking_script: SecureRandom.random_bytes(25) }]
+          )
+        end.to raise_error(BSV::Wallet::Error, /key deriver/)
+      end
+    end
+
+    context 'backward compatibility' do
+      it 'caller-provided inputs still work unchanged' do
+        fund_wallet_for_auto(satoshis: 5000)
+
+        listed = engine_with_keys.list_outputs(basket: 'default')
+        output_id = listed[:outputs].first[:id]
+
+        # Use derivation metadata instead of output_type (which requires P2PKH)
+        result = engine_with_keys.create_action(
+          description: 'raw mode test',
+          inputs: [{ output_id: output_id }],
+          outputs: [{ satoshis: 4000, locking_script: SecureRandom.random_bytes(25),
+                      derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                      sender_identity_key: key_deriver.identity_key }],
+          no_send: true
+        )
+
+        expect(result[:txid]).to be_a(String)
+        expect(result[:txid].bytesize).to eq(32)
+
+        parsed = parse_beef_tx(result[:tx])
+        expect(parsed.inputs.length).to eq(1)
+        expect(parsed.outputs.length).to eq(1)
+        expect(parsed.outputs[0].satoshis).to eq(4000)
+      end
+
+      it 'explicit empty inputs (OP_RETURN) still work' do
+        result = engine.create_action(
+          description: 'opret test12345',
+          inputs: [],
+          outputs: [{ satoshis: 0, locking_script: "\x00\x6a\x04test".b,
+                      output_type: 'data' }]
+        )
+
+        expect(result[:txid]).to be_a(String)
+      end
     end
   end
 end
