@@ -2,19 +2,19 @@
 
 source 'https://rubygems.org'
 
-gemspec
+gemspec path: 'gem/bsv-wallet'
+gemspec path: 'gem/bsv-wallet-postgres'
 
 group :development, :test do
   gem 'rake'
   gem 'rspec', '~> 3.13'
   gem 'rubocop', '~> 1.75', require: false
+  gem 'rubocop-rspec', '~> 3.9', require: false
   gem 'simplecov', require: false
   gem 'simplecov-cobertura', require: false
   gem 'yard'
   gem 'yard-markdown'
 
-  # Integration testing — engine specs need a real Store
-  gem 'bsv-wallet-postgres', path: '../bsv-wallet-postgres'
-  gem 'sequel', '~> 5.0'
-  gem 'pg'
+  # Postgres adapter test dependencies
+  gem 'rack-test', '~> 2.1'
 end

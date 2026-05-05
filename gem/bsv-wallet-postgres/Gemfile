@@ -4,12 +4,12 @@ source 'https://rubygems.org'
 
 gemspec
 
-# Local gems — remove once published to rubygems
-gem 'bsv-wallet', path: '../bsv-wallet'
-gem 'bsv-sdk', path: '/opt/ruby/bsv-ruby-sdk/gem/bsv-sdk'
-
 group :development, :test do
+  # Local path override for development — uncomment when working against unreleased bsv-wallet
+  # gem 'bsv-wallet', path: '../bsv-wallet'
   gem 'rspec', '~> 3.13'
   gem 'rack-test', '~> 2.1'
   gem 'rubocop', '~> 1.75', require: false
+  gem 'simplecov', require: false
+  gem 'simplecov-cobertura', require: false
 end

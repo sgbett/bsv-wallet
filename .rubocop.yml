@@ -1,0 +1,121 @@
+plugins:
+  - rubocop-rspec
+
+AllCops:
+  TargetRubyVersion: 2.7
+  NewCops: enable
+  SuggestExtensions: false
+
+Style/Documentation:
+  Enabled: false
+
+# `be > 0` is idiomatic RSpec for numeric comparisons; `be.positive?` is broken syntax.
+Style/NumericPredicate:
+  Exclude:
+    - 'gem/*/spec/**/*'
+
+Metrics/BlockLength:
+  Exclude:
+    - 'gem/*/spec/**/*'
+
+Naming/FileName:
+  Exclude:
+    - 'gem/bsv-wallet/lib/bsv-wallet.rb'
+    - 'gem/bsv-wallet-postgres/lib/bsv-wallet-postgres.rb'
+
+# a/b are used in secure_compare for constant-time comparison.
+# db is used throughout for Sequel database references.
+Naming/MethodParameterName:
+  AllowedNames:
+    - a
+    - b
+    - db
+    - ds
+    - tx
+
+# BRC-100 Engine implements the interface but intentionally ignores
+# originator: on all methods (policy enforcement is a future concern).
+Lint/UnusedMethodArgument:
+  Exclude:
+    - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
+
+# Wallet orchestration and store operations are inherently complex;
+# splitting into tiny methods would harm readability and auditability.
+Metrics/AbcSize:
+  Exclude:
+    - 'gem/*/lib/**/*'
+    - 'gem/*/spec/**/*'
+
+Metrics/MethodLength:
+  Exclude:
+    - 'gem/*/lib/**/*'
+    - 'gem/*/spec/**/*'
+
+Metrics/CyclomaticComplexity:
+  Exclude:
+    - 'gem/*/lib/**/*'
+    - 'gem/*/spec/**/*'
+
+Metrics/PerceivedComplexity:
+  Exclude:
+    - 'gem/*/lib/**/*'
+    - 'gem/*/spec/**/*'
+
+Metrics/ModuleLength:
+  Exclude:
+    - 'gem/*/spec/**/*'
+
+Metrics/ClassLength:
+  Exclude:
+    - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
+    - 'gem/bsv-wallet-postgres/lib/bsv/wallet/postgres/store.rb'
+
+Metrics/ParameterLists:
+  Exclude:
+    - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
+    - 'gem/bsv-wallet-postgres/lib/bsv/wallet/postgres/store.rb'
+
+Layout/LineLength:
+  Max: 150
+  Exclude:
+    - 'gem/*/spec/**/*'
+
+RSpec/ContextWording:
+  Enabled: false
+
+# Integration specs legitimately need multiple assertions per example
+# and longer examples for thorough lifecycle coverage.
+RSpec/MultipleExpectations:
+  Exclude:
+    - 'gem/*/spec/**/*'
+
+RSpec/MultipleMemoizedHelpers:
+  Exclude:
+    - 'gem/*/spec/**/*'
+
+RSpec/ExampleLength:
+  Exclude:
+    - 'gem/*/spec/**/*'
+
+Naming/VariableNumber:
+  Exclude:
+    - 'gem/*/spec/**/*'
+
+# Engine spec and migration spec use string descriptions for integration suites.
+RSpec/DescribeClass:
+  Exclude:
+    - 'gem/bsv-wallet-postgres/spec/bsv/wallet/postgres/migration_spec.rb'
+
+# Engine spec defines TEST_DB_URL and ENGINE_DB at spec scope for shared infrastructure.
+Lint/ConstantDefinitionInBlock:
+  Exclude:
+    - 'gem/bsv-wallet/spec/bsv/wallet/engine_spec.rb'
+
+RSpec/LeakyConstantDeclaration:
+  Exclude:
+    - 'gem/bsv-wallet/spec/bsv/wallet/engine_spec.rb'
+
+# Empty blocks in spec setup are used for broadcast_queue mocks.
+Lint/EmptyBlock:
+  Exclude:
+    - 'gem/*/spec/**/*'

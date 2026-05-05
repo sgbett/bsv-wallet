@@ -9,6 +9,7 @@
 /test/tmp/
 /test/version_tmp/
 /tmp/
+**/tmp/
 
 # Bundler
 /.bundle/
@@ -31,5 +32,9 @@ Gemfile.lock
 # MkDocs build output
 /site/
 
+# Environment (contains WIF keys)
+.env
+
 # Claude
 .claude/settings.local.json
+coverage/
