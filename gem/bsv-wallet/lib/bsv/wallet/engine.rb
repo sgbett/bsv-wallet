@@ -220,8 +220,12 @@ module BSV
         output_specs = outputs.map do |out|
           spec = resolve_internalize_output(out)
           tx_out = subject_tx.outputs[spec[:vout]]
-          raise BSV::Wallet::InvalidParameterError.new('output_index',
-            "vout #{spec[:vout]} does not exist in subject transaction (#{subject_tx.outputs.length} outputs)") unless tx_out
+          unless tx_out
+            raise BSV::Wallet::InvalidParameterError.new(
+              'output_index',
+              "vout #{spec[:vout]} does not exist in subject transaction (#{subject_tx.outputs.length} outputs)"
+            )
+          end
           spec[:locking_script] = tx_out.locking_script.to_binary
           spec[:satoshis] = tx_out.satoshis if spec[:satoshis].nil? || spec[:satoshis].zero?
           spec
@@ -523,9 +527,7 @@ module BSV
           # Infer output_type when not explicit: wallet-owned outputs without
           # derivation fields are 'change' (self-payment, no BRC-42 derivation).
           inferred_type = out[:output_type]
-          if inferred_type.nil? && out[:derivation_prefix].nil? && out[:basket]
-            inferred_type = 'change'
-          end
+          inferred_type = 'change' if inferred_type.nil? && out[:derivation_prefix].nil? && out[:basket]
 
           {
             satoshis: out[:satoshis],
