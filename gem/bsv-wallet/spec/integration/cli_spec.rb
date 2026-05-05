@@ -85,7 +85,7 @@ RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do
     stdout, _stderr, status = run_cli('balance', 'alice')
     expect(status).to be_success
     new_alice_balance = stdout.strip.to_i
-    expect(new_alice_balance).to eq(alice_balance - 500 - 226)
+    expect(new_alice_balance).to eq(alice_balance - 500 - 1) # bin/send defaults to 1-sat fee
     puts "  Alice remaining: #{new_alice_balance} sats"
   end
 end

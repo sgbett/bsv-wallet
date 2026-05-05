@@ -143,9 +143,9 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
       inputs: [{ output_id: output_id }],
       outputs: [
         { satoshis: payment_amount, locking_script: bob_script,
-          output_description: 'payment to Bob', basket: 'payments', output_type: 'root' },
+          output_description: 'payment to Bob', basket: 'payments' },
         { satoshis: change_amount, locking_script: alice_change_script,
-          output_description: 'change to self', basket: 'default', output_type: 'change' }
+          output_description: 'change to self', output_type: 'root' }
       ],
       labels: ['integration-test'],
       no_send: true

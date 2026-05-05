@@ -10,7 +10,7 @@ RSpec.describe BSV::Wallet::Postgres::Action do
       expect(action.id).to be_a(Integer)
       expect(action.reference).to be_a(String)
       expect(action.values[:broadcast]).to eq('delayed')
-      expect(action.nlocktime).to eq(0)
+      expect(action.nlocktime).to be_nil
     end
 
     it 'preserves binary wtxid' do
