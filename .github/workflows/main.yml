@@ -37,22 +37,21 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
-          bundler-cache: true
-          working-directory: gem/bsv-wallet
+
+      - name: Bundle install (wallet)
+        run: bundle install
+        working-directory: gem/bsv-wallet
 
       - name: Run wallet specs
-        run: bundle exec rspec
+        run: bundle exec rspec --tag ~on_chain
         working-directory: gem/bsv-wallet
         env:
           COVERAGE: ${{ matrix.ruby == '3.4' && 'true' || '' }}
           DATABASE_URL: postgres://postgres:postgres@localhost:5433/bsv_wallet_test
 
-      - name: Set up Ruby (postgres gem)
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: ${{ matrix.ruby }}
-          bundler-cache: true
-          working-directory: gem/bsv-wallet-postgres
+      - name: Bundle install (postgres)
+        run: bundle install
+        working-directory: gem/bsv-wallet-postgres
 
       - name: Run postgres specs
         run: bundle exec rspec
@@ -73,3 +72,55 @@ jobs:
         if: matrix.ruby == '3.4'
         run: bundle exec rubocop
         working-directory: gem/bsv-wallet
+
+  integration:
+    runs-on: ubuntu-latest
+    name: Integration (on-chain, no_send)
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bsv_wallet_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create integration databases
+        run: |
+          psql -c "CREATE DATABASE bsv_wallet_alice;"
+          psql -c "CREATE DATABASE bsv_wallet_bob;"
+        env:
+          PGHOST: localhost
+          PGPORT: '5433'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+
+      - name: Bundle install
+        run: bundle install
+        working-directory: gem/bsv-wallet
+
+      - name: Run integration specs
+        run: bundle exec rspec --tag on_chain
+        working-directory: gem/bsv-wallet
+        env:
+          WIF_ALICE: ${{ secrets.WIF_ALICE }}
+          WIF_BOB: ${{ secrets.WIF_BOB }}
+          FUNDING_TXID: ${{ secrets.FUNDING_TXID }}
+          DATABASE_URL_ALICE: postgres://postgres:postgres@localhost:5433/bsv_wallet_alice
+          DATABASE_URL_BOB: postgres://postgres:postgres@localhost:5433/bsv_wallet_bob

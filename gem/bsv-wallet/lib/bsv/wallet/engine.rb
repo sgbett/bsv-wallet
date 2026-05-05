@@ -56,7 +56,7 @@ module BSV
           },
           inputs: input_specs
         )
-        raise BSV::Wallet::InsufficientFundsError.new if action_result.nil?
+        raise BSV::Wallet::InsufficientFundsError if action_result.nil?
 
         attach_labels(action_result[:id], labels)
 
@@ -120,7 +120,7 @@ module BSV
                       return_txid_only: false, no_send: false, send_with: nil,
                       originator: nil)
         action = @store.find_action(reference: reference)
-        raise BSV::Wallet::InvalidParameterError.new('reference') unless action
+        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
         # Outputs were already written during create_action — sign_action only
         # deserializes the unsigned tx, applies caller unlocking scripts, signs
@@ -146,9 +146,7 @@ module BSV
             immediate: broadcast == :inline
           )
 
-          if broadcast == :inline && accepted?(broadcast_result)
-            handle_proof_from_broadcast(action[:id], broadcast_result)
-          end
+          handle_proof_from_broadcast(action[:id], broadcast_result) if broadcast == :inline && accepted?(broadcast_result)
         end
 
         result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
@@ -158,7 +156,7 @@ module BSV
 
       def abort_action(reference:, originator: nil)
         action = @store.find_action(reference: reference)
-        raise BSV::Wallet::InvalidParameterError.new('reference') unless action
+        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
         @store.abort_action(action_id: action[:id])
         @utxo_pool.release(outputs: [])
@@ -612,18 +610,18 @@ module BSV
       # @return [String] BRC-74 binary merkle_path
       def normalize_merkle_path(merkle_path, wtxid)
         if merkle_path.is_a?(Hash)
-          BSV.logger&.debug { "[Engine] normalize_merkle_path: format=TSC" }
+          BSV.logger&.debug { '[Engine] normalize_merkle_path: format=TSC' }
           return normalize_tsc_merkle_path(merkle_path, wtxid)
         end
         if merkle_path.encoding == Encoding::ASCII_8BIT
-          BSV.logger&.debug { "[Engine] normalize_merkle_path: format=binary (passthrough)" }
+          BSV.logger&.debug { '[Engine] normalize_merkle_path: format=binary (passthrough)' }
           return merkle_path
         end
         if merkle_path.match?(/\A[0-9a-fA-F]+\z/)
           BSV.logger&.debug { "[Engine] normalize_merkle_path: format=hex (#{merkle_path.length} chars)" }
           return [merkle_path].pack('H*')
         end
-        BSV.logger&.debug { "[Engine] normalize_merkle_path: format=unknown (force binary)" }
+        BSV.logger&.debug { '[Engine] normalize_merkle_path: format=unknown (force binary)' }
         merkle_path.b
       end
 
@@ -661,9 +659,7 @@ module BSV
 
           source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
 
-          if proof[:merkle_path]
-            source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
-          end
+          source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first if proof[:merkle_path]
 
           source_tx
         end
@@ -697,10 +693,8 @@ module BSV
 
           source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
 
-          has_bump = !!proof[:merkle_path]
-          if has_bump
-            source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
-          end
+          has_bump = !proof[:merkle_path].nil?
+          source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first if has_bump
           BSV.logger&.debug { "[Engine] build_atomic_beef: ancestor #{source_wtxid.reverse.unpack1('H*')} proof=#{has_bump ? 'bump' : 'raw_tx'}" }
 
           input.source_transaction = source_tx
@@ -777,9 +771,7 @@ module BSV
       # @param allow_txid_only [Boolean] accept TXID-only entries (trustSelf)
       # @raise [InvalidBeefError] if validation fails
       def validate_beef!(beef, allow_txid_only: false)
-        unless beef.valid?(allow_txid_only: allow_txid_only)
-          raise BSV::Wallet::InvalidBeefError, 'BEEF failed structural validation'
-        end
+        raise BSV::Wallet::InvalidBeefError, 'BEEF failed structural validation' unless beef.valid?(allow_txid_only: allow_txid_only)
 
         return unless @chain_tracker
 
@@ -815,7 +807,7 @@ module BSV
         end
 
         BSV.logger&.debug { "[Engine] replace_known_ancestors!: replaced_count=#{replaced_count}" }
-        replaced_count > 0
+        replaced_count.positive?
       end
 
       # Check that the subject transaction's input satoshis exceed output satoshis (BRC-67).
@@ -1118,10 +1110,8 @@ module BSV
             require_key_deriver!
             signing_keys[idx] = derive_signing_key(resolved)
           end
-        end
 
-        # Validate: check for unresolvable inputs (no spend + no P2PKH)
-        resolved_inputs.each_with_index do |resolved, idx|
+          # Validate: check for unresolvable inputs (no spend + no P2PKH)
           spend = spends[resolved[:vin]] || spends[idx]
           next if spend&.dig(:unlocking_script)
           next if signing_keys.key?(idx)

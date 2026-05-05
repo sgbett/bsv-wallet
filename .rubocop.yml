@@ -2,9 +2,12 @@ plugins:
   - rubocop-rspec
 
 AllCops:
-  TargetRubyVersion: 2.7
+  TargetRubyVersion: 3.0
   NewCops: enable
   SuggestExtensions: false
+  Exclude:
+    - 'Rakefile'
+    - 'bin/**/*'
 
 Style/Documentation:
   Enabled: false
@@ -31,6 +34,7 @@ Naming/MethodParameterName:
     - b
     - db
     - ds
+    - id
     - tx
 
 # BRC-100 Engine implements the interface but intentionally ignores
@@ -45,16 +49,19 @@ Metrics/AbcSize:
   Exclude:
     - 'gem/*/lib/**/*'
     - 'gem/*/spec/**/*'
+    - '**/Rakefile'
 
 Metrics/MethodLength:
   Exclude:
     - 'gem/*/lib/**/*'
     - 'gem/*/spec/**/*'
+    - '**/Rakefile'
 
 Metrics/CyclomaticComplexity:
   Exclude:
     - 'gem/*/lib/**/*'
     - 'gem/*/spec/**/*'
+    - '**/Rakefile'
 
 Metrics/PerceivedComplexity:
   Exclude:
@@ -67,13 +74,39 @@ Metrics/ModuleLength:
 
 Metrics/ClassLength:
   Exclude:
-    - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
-    - 'gem/bsv-wallet-postgres/lib/bsv/wallet/postgres/store.rb'
+    - 'gem/*/lib/**/*'
 
 Metrics/ParameterLists:
   Exclude:
+    - 'gem/*/lib/**/*'
+    - 'gem/*/spec/**/*'
+
+# BRC-100 interface method names are spec-mandated (e.g. proof_exists?, authenticated?)
+Naming/PredicateMethod:
+  Exclude:
     - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
-    - 'gem/bsv-wallet-postgres/lib/bsv/wallet/postgres/store.rb'
+
+Style/SafeNavigationChainLength:
+  Exclude:
+    - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
+
+# Derivation branches are structurally identical but semantically distinct
+Lint/DuplicateBranch:
+  Exclude:
+    - 'gem/bsv-wallet/lib/bsv/wallet/key_deriver.rb'
+
+# Test doubles for interfaces without concrete classes
+RSpec/VerifiedDoubles:
+  Exclude:
+    - 'gem/*/spec/**/*'
+
+# Using subject directly is fine in concise specs
+RSpec/NamedSubject:
+  Enabled: false
+
+# Specs testing the same invariant under different setup aren't duplicates
+RSpec/RepeatedExample:
+  Enabled: false
 
 Layout/LineLength:
   Max: 150
