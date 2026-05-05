@@ -97,6 +97,8 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
     postgres_gem = Gem::Specification.find_by_name('bsv-wallet-postgres').gem_dir
     migrations_path = File.join(postgres_gem, 'db', 'migrations')
     Sequel::Migrator.run(db, migrations_path)
+    # Clean slate — other specs may have used this database
+    db.tables.each { |t| db[t].truncate(cascade: true) unless t == :schema_info }
   end
 
   def p2pkh_script(public_key_compressed)

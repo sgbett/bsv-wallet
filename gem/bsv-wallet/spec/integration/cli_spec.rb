@@ -14,9 +14,20 @@
 #   cd gem/bsv-wallet && bundle exec rspec --tag on_chain spec/integration/cli_spec.rb
 
 require 'open3'
+require 'sequel'
 
 RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do
   let(:bin_dir) { File.expand_path('../../bin', __dir__) }
+
+  before do
+    # Clean slate — other specs may have used these databases
+    %w[DATABASE_URL_ALICE DATABASE_URL_BOB].each do |env_key|
+      url = ENV.fetch(env_key, "postgres://postgres:postgres@localhost:5433/bsv_wallet_#{env_key.split('_').last.downcase}")
+      db = Sequel.connect(url)
+      db.tables.each { |t| db[t].truncate(cascade: true) unless t == :schema_info }
+      db.disconnect
+    end
+  end
 
   # Derive Bob's identity key from WIF without a database connection
   let(:bob_identity_key) do
@@ -58,8 +69,8 @@ RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do
     expect(beef_stdout.bytesize).to be > 0
     puts "  Send: #{stderr.strip.gsub("\n", "\n  ")}"
 
-    # 3. Bob receives the BEEF
-    _stdout, stderr, status = run_cli('receive', 'bob', stdin_data: beef_stdout)
+    # 3. Bob receives the BEEF into 'received' basket
+    _stdout, stderr, status = run_cli('receive', 'bob', '--basket', 'received', stdin_data: beef_stdout)
     expect(status).to be_success
     puts "  Receive: #{stderr.strip}"
 

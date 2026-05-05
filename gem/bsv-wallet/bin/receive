@@ -38,12 +38,15 @@ beef_data = [beef_hex].pack('H*')
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 engine = ctx[:engine]
 
-# Build internalize output specs from the envelope metadata
+# Build internalize output specs from the envelope metadata.
+# Use basket insertion protocol with derivation fields so outputs are
+# both spendable (via BRC-42 key derivation) and discoverable in a basket.
 output_specs = pay_outputs.map do |out|
   {
     output_index: out[:vout],
-    protocol: 'wallet payment',
-    payment_remittance: {
+    protocol: 'basket insertion',
+    insertion_remittance: {
+      basket: options[:basket],
       derivation_prefix: out[:derivation_prefix],
       derivation_suffix: out[:derivation_suffix],
       sender_identity_key: sender
