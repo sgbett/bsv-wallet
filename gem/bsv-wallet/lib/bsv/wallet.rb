@@ -17,6 +17,9 @@ module BSV
     # Interfaces (abstract contracts)
     autoload :Interface,        'bsv/wallet/interface'
 
+    # Engine (Layer 3 — orchestration)
+    autoload :Engine,           'bsv/wallet/engine'
+
     # Errors — single file, all classes flat under BSV::Wallet
     require_relative 'wallet/error'
 

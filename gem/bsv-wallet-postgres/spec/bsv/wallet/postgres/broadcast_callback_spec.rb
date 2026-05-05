@@ -1,0 +1,82 @@
+# frozen_string_literal: true
+
+require 'rack/test'
+
+RSpec.describe BSV::Wallet::Postgres::BroadcastCallback do
+  include Rack::Test::Methods
+
+  let(:broadcast_queue) { BSV::Wallet::Postgres::BroadcastQueue.new }
+  let(:app) { described_class.new(broadcast_queue: broadcast_queue) }
+
+  let(:action) do
+    BSV::Wallet::Postgres::Action.create(
+      outgoing: true,
+      txid: SecureRandom.random_bytes(32)
+    )
+  end
+
+  let(:txid_hex) { action.txid.unpack1('H*') }
+
+  describe 'POST /' do
+    it 'parses ARC TransactionStatus JSON and delegates to handle_event' do
+      BSV::Wallet::Postgres::Broadcast.create(action_id: action.id)
+
+      payload = {
+        txid: txid_hex,
+        txStatus: 'SEEN_ON_NETWORK',
+        status: 200,
+        blockHash: nil,
+        blockHeight: nil,
+        merklePath: nil,
+        extraInfo: nil,
+        competingTxs: nil
+      }.to_json
+
+      post '/', payload, 'CONTENT_TYPE' => 'application/json'
+      expect(last_response.status).to eq(200)
+
+      broadcast = BSV::Wallet::Postgres::Broadcast.first(action_id: action.id)
+      expect(broadcast.tx_status).to eq('SEEN_ON_NETWORK')
+    end
+
+    it 'hex-decodes binary fields' do
+      BSV::Wallet::Postgres::Broadcast.create(action_id: action.id)
+      block_hash = SecureRandom.random_bytes(32)
+
+      payload = {
+        txid: txid_hex,
+        txStatus: 'MINED',
+        status: 200,
+        blockHash: block_hash.unpack1('H*'),
+        blockHeight: 800_000,
+        merklePath: nil,
+        extraInfo: nil,
+        competingTxs: nil
+      }.to_json
+
+      post '/', payload, 'CONTENT_TYPE' => 'application/json'
+      expect(last_response.status).to eq(200)
+
+      broadcast = BSV::Wallet::Postgres::Broadcast.first(action_id: action.id)
+      expect(broadcast.block_hash).to eq(block_hash)
+      expect(broadcast.block_hash.encoding).to eq(Encoding::BINARY)
+    end
+
+    it 'returns 400 for invalid JSON' do
+      post '/', 'not json', 'CONTENT_TYPE' => 'application/json'
+      expect(last_response.status).to eq(400)
+    end
+
+    it 'returns 200 for unknown txid (graceful ignore)' do
+      payload = {
+        txid: SecureRandom.random_bytes(32).unpack1('H*'),
+        txStatus: 'MINED', status: 200,
+        blockHash: nil, blockHeight: nil,
+        merklePath: nil, extraInfo: nil, competingTxs: nil
+      }.to_json
+
+      post '/', payload, 'CONTENT_TYPE' => 'application/json'
+      expect(last_response.status).to eq(200)
+    end
+  end
+end

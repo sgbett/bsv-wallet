@@ -45,6 +45,22 @@ module BSV
           raise NotImplementedError
         end
 
+        # Process an incoming ARC status update.
+        #
+        # Called by the callback endpoint (Rack app) or SSE listener
+        # when ARC delivers a TransactionStatus event. Updates the
+        # broadcast record and returns the result so the engine
+        # can decide whether to promote.
+        #
+        # @param event [Hash] parsed TransactionStatus:
+        #   :txid (binary), :tx_status, :status, :block_hash (binary),
+        #   :block_height, :merkle_path (binary), :extra_info, :competing_txs
+        # @return [Hash, nil] :action_id, :tx_status, and proof data,
+        #   or nil if the event doesn't match a known broadcast
+        def handle_event(event)
+          raise NotImplementedError
+        end
+
         # Query broadcast status for an action.
         #
         # @param action_id [Integer]

@@ -107,7 +107,7 @@ RSpec.describe BSV::Wallet do
     subject { klass.new }
 
     it 'defines broadcast lifecycle methods' do
-      %i[submit process_pending status].each do |method|
+      %i[submit process_pending handle_event status].each do |method|
         expect(subject).to respond_to(method),
           "expected broadcast queue to respond to ##{method}"
       end

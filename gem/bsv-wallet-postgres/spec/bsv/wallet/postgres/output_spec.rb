@@ -1,0 +1,135 @@
+# frozen_string_literal: true
+
+RSpec.describe BSV::Wallet::Postgres::Output do
+  let(:action) { BSV::Wallet::Postgres::Action.create(outgoing: true, txid: SecureRandom.random_bytes(32)) }
+
+  def create_spendable_output(action_id: action.id, satoshis: 1000, vout: 0, **attrs)
+    output = described_class.create(action_id: action_id, satoshis: satoshis, vout: vout, **attrs)
+    BSV::Wallet::Postgres::Spendable.create(output_id: output.id)
+    output
+  end
+
+  describe 'creation' do
+    it 'creates an immutable output record' do
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0)
+      expect(output.id).to be_a(Integer)
+      expect(output.satoshis).to eq(1000)
+      expect(output.created_at).to be_a(Time)
+    end
+
+    it 'preserves binary locking_script' do
+      script = SecureRandom.random_bytes(25)
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: script)
+      expect(output.reload.locking_script.encoding).to eq(Encoding::BINARY)
+      expect(output.locking_script).to eq(script)
+    end
+
+    it 'enforces UNIQUE on action_id + vout' do
+      described_class.create(action_id: action.id, satoshis: 1000, vout: 0)
+      expect { described_class.create(action_id: action.id, satoshis: 500, vout: 0) }
+        .to raise_error(Sequel::UniqueConstraintViolation)
+    end
+  end
+
+  describe 'associations' do
+    it 'belongs to action' do
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0)
+      expect(output.action).to eq(action)
+    end
+
+    it 'has one spendable_entry' do
+      output = create_spendable_output
+      expect(output.reload.spendable_entry).to be_a(BSV::Wallet::Postgres::Spendable)
+    end
+
+    it 'has one detail' do
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0)
+      BSV::Wallet::Postgres::OutputDetail.create(output_id: output.id, description: 'test output')
+      expect(output.reload.detail.description).to eq('test output')
+    end
+
+    it 'has one input (when claimed)' do
+      output = create_spendable_output
+      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true)
+      BSV::Wallet::Postgres::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
+      expect(output.reload.input).to be_a(BSV::Wallet::Postgres::Input)
+    end
+
+    it 'has many tags' do
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0)
+      tag = BSV::Wallet::Postgres::Tag.create(tag: 'payment')
+      BSV::Wallet::Postgres::OutputTag.create(output_id: output.id, tag_id: tag.id)
+      expect(output.reload.tags.map(&:tag)).to eq(['payment'])
+    end
+  end
+
+  describe '#spendable?' do
+    it 'returns true when spendable and not claimed' do
+      output = create_spendable_output
+      expect(output.reload.spendable?).to be true
+    end
+
+    it 'returns false when claimed by an input' do
+      output = create_spendable_output
+      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true)
+      BSV::Wallet::Postgres::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
+      expect(output.reload.spendable?).to be false
+    end
+
+    it 'returns false when not in spendable set' do
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0)
+      expect(output.spendable?).to be false
+    end
+  end
+
+  describe '.spendable' do
+    it 'returns outputs that are spendable and not claimed' do
+      create_spendable_output(vout: 0)
+      create_spendable_output(vout: 1)
+      described_class.create(action_id: action.id, satoshis: 300, vout: 2) # not in spendable
+
+      expect(described_class.spendable.count).to eq(2)
+    end
+
+    it 'excludes outputs claimed by inputs' do
+      output = create_spendable_output(vout: 0)
+      create_spendable_output(vout: 1)
+
+      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true)
+      BSV::Wallet::Postgres::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
+
+      expect(described_class.spendable.count).to eq(1)
+    end
+  end
+
+  describe '.in_basket' do
+    it 'filters outputs by basket name' do
+      basket = BSV::Wallet::Postgres::Basket.create(name: 'payments')
+      output = create_spendable_output(vout: 0)
+      create_spendable_output(vout: 1) # not in any basket
+
+      BSV::Wallet::Postgres::OutputBasket.create(output_id: output.id, basket_id: basket.id)
+
+      expect(described_class.in_basket('payments').count).to eq(1)
+      expect(described_class.in_basket('other').count).to eq(0)
+    end
+
+    it 'excludes soft-deleted baskets' do
+      basket = BSV::Wallet::Postgres::Basket.create(name: 'old', deleted_at: Time.now)
+      output = create_spendable_output(vout: 0)
+      BSV::Wallet::Postgres::OutputBasket.create(output_id: output.id, basket_id: basket.id)
+
+      expect(described_class.in_basket('old').count).to eq(0)
+    end
+  end
+
+  describe '.min_satoshis' do
+    it 'filters outputs by minimum value' do
+      create_spendable_output(satoshis: 100, vout: 0)
+      create_spendable_output(satoshis: 500, vout: 1)
+      create_spendable_output(satoshis: 1000, vout: 2)
+
+      expect(described_class.min_satoshis(500).count).to eq(2)
+    end
+  end
+end

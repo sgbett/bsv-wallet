@@ -1,30 +1,28 @@
 # BSV Wallet — Ruby Implementation Design
 
 **Status:** In progress
-**Source spec:** [BRC-100](BRC100.md)
-**Gem:** `bsv-wallet` (under `gem/bsv-wallet/`)
+**Source spec:** [BRC-100](reference/BRC100.md)
+**Gems:** `bsv-wallet` (core) + `bsv-wallet-postgres` (adapter) — see [Gem Structure](#gem-structure)
 
 ---
 
-## Philosophy
+## 1. Philosophy
 
 This is a Ruby wallet, not a Ruby port of a TypeScript wallet. The BRC-100 specification defines the external contract; this document captures how we implement it idiomatically in Ruby.
 
-### Why Ruby Doesn't Need BRC-100's Types
+### How Ruby Expresses BRC-100's Types
 
-BRC-100 defines ~25 type aliases (`BooleanDefaultTrue`, `SatoshiValue`, `TXIDHexString`, etc.) that are all just `boolean`, `number`, or `string` underneath. TypeScript can't enforce any of their constraints at compile time — every one says *"validate at runtime."*
+BRC-100 defines ~25 type aliases (`BooleanDefaultTrue`, `SatoshiValue`, `TXIDHexString`, etc.). Ruby has native mechanisms for the jobs these types serve:
 
-Ruby doesn't bolt types onto these values because it has separate, purpose-built mechanisms for the three jobs types do simultaneously:
+| Job | Ruby mechanism |
+|-----|---------------|
+| Documentation | Keyword args + YARD |
+| Contract enforcement | Module + shared RSpec examples |
+| Defaults | `param: true` in method signature |
+| Enumerations | `:mainnet` / `:testnet` (symbols) |
+| Validation | Runtime validation |
 
-| Job | TypeScript | Ruby |
-|-----|-----------|------|
-| Documentation | Type annotations | Keyword args + YARD |
-| Contract enforcement | `interface Wallet` | Module + shared RSpec examples |
-| Defaults | `BooleanDefaultTrue` type alias | `param: true` in method signature |
-| Enumerations | `'mainnet' \| 'testnet'` | `:mainnet` / `:testnet` (symbols) |
-| Validation | "Validate at runtime" | Validate at runtime (same) |
-
-The entire `BooleanDefaultTrue` / `BooleanDefaultFalse` / `PositiveIntegerDefault10Max10000` family of types were workarounds for a limitation Ruby doesn't have — Ruby encodes defaults directly in method signatures.
+For example, `BooleanDefaultTrue` becomes `param: true` in the method signature — the default is expressed directly where the parameter is declared.
 
 ### Binary Data — Binary Internally, Hex Only at Boundaries
 
@@ -32,78 +30,136 @@ All binary data stays binary throughout the wallet internals. Ruby has a native 
 
 This applies to everything: TXIDs (32 bytes, not 64 hex chars), public keys (33 bytes), scripts, signatures, BEEF data, ciphertext, HMACs. The database stores these as `bytea` columns and queries expect binary parameters: `WHERE txid = ?` with a 32-byte value.
 
-Hex conversion happens **only** where a specification explicitly requires it — at the external API boundary. Even then, double-check: just because the TypeScript interface uses `HexString` doesn't mean hex is mandated. The BRC-100 ABI section uses raw byte arrays for TXIDs (32 bytes), public keys (33 bytes), and scripts. The `HexString` type alias exists in the TypeScript interface because JavaScript has no native binary type — that's a JS limitation, not a protocol requirement.
+Hex conversion happens **only** where a specification explicitly requires it — at the external API boundary. The BRC-100 ABI section uses raw byte arrays for TXIDs (32 bytes), public keys (33 bytes), and scripts. Where the spec says hex, use hex. Where it doesn't, stay binary.
 
 **Rule:** if a consumer can handle binary, give them binary. If they want hex, that's their conversion to make.
 
-This is a significant departure from the TypeScript implementation, which hex-encodes everything. It eliminates double-memory overhead, removes encode/decode cycles on every operation, and keeps database queries clean.
+This eliminates double-memory overhead, removes encode/decode cycles on every operation, and keeps database queries clean.
 
 ### Async Separation
 
-All interface methods are synchronous and return hashes. Async behaviour (background broadcast, queued processing) is an infrastructure concern handled by a thin service layer wrapping the wallet — Sidekiq workers, Falcon fibres, or similar. The wallet itself doesn't solve async in its method implementations.
+All interface methods are synchronous and return hashes. Async behavior (background broadcast, queued processing) is an infrastructure concern handled by a thin service layer wrapping the wallet — Sidekiq workers, Falcon fibres, or similar. The wallet itself doesn't solve async in its method implementations.
 
 ### Naming Conventions
 
-- British English throughout: `internalise_action`, `randomise_outputs`
+- American English throughout (matching BRC-100 spec): `internalize_action`, `randomize_outputs`
 - Ruby conventions: `authenticated?` (predicate), `public_key` (drop `get` prefix), `height`/`network`/`version` (drop `get`)
 - String literal unions become symbols: `:mainnet`, `:any`, `:direct`, `:wallet_payment`
-- The `options` nesting from TypeScript is flattened into keyword args — `args.options.noSend` becomes `no_send: false`
+- Nested option hashes are flattened into keyword args — `no_send: false` rather than `options: { no_send: false }`
 
 ---
 
-## Architecture
+## 2. Architecture
 
-### Component Model
-
-The wallet is composed of pluggable machinery behind the BRC-100 facade:
+### Four-Layer SOA
 
 ```
-Application
-    │
-    ▼
-┌─────────────────────┐
-│  Interface::BRC100  │  ← 28 public methods (the contract)
-└─────────┬───────────┘
-          │ delegates to
-          ▼
-┌─────────────────────┐
-│   Wallet (concrete) │  ← orchestrates the machinery
-├──────────┬──────────┤
-│  Store   │ UTXOPool │
-│  Proof   │ Broadcast│
-│  Store   │ Queue    │
-└──────────┴──────────┘
-          │
-          ▼
-     PostgreSQL
+┌─────────────────────────────────────────────────────────┐
+│  Layer 4: Consumer / Presentation                       │
+│  (out of scope — hex conversion, API formatting)        │
+├─────────────────────────────────────────────────────────┤
+│  Layer 3: Business Process (BRC-100)                    │
+│  28 spec-mandated methods, orchestration, views         │
+├─────────────────────────────────────────────────────────┤
+│  Layer 2: Services                                      │
+│  ┌────────────────────┬────────────────────────────┐    │
+│  │  2a: Component     │  2b: Atomic                │    │
+│  │  Store             │  Action model              │    │
+│  │  BroadcastQueue    │  Output model              │    │
+│  │  ProofStore        │  Spendable model           │    │
+│  │  UTXOPool          │  Input model               │    │
+│  │                    │  Broadcast model            │    │
+│  │                    │  TxProof model              │    │
+│  │                    │  Basket, Label, Tag...      │    │
+│  └────────────────────┴────────────────────────────┘    │
+├─────────────────────────────────────────────────────────┤
+│  Layer 1: Operational Systems                           │
+│  PostgreSQL, workers, callback endpoint, SSE daemon     │
+└─────────────────────────────────────────────────────────┘
 ```
 
-A concrete wallet receives components at construction time:
+**Layer 1 (Operational)** — things you deploy. The 17-table PostgreSQL schema, background workers (BroadcastQueueWorker, ProofHarvester, Reaper), the ARC callback Rack endpoint.
+
+**Layer 2b (Atomic Services)** — Sequel::Model classes. Declarative — they describe what things ARE. Each model knows its table, associations, derived attributes. A model method that coordinates across multiple tables belongs in 2a, not here.
+
+**Layer 2a (Component Services)** — our interface modules. Imperative — they orchestrate workflows. Each component owns a concern (Store → action lifecycle, BroadcastQueue → network I/O, ProofStore → proof management, UTXOPool → selection strategy). Components don't cross-call each other — they're composed by Layer 3.
+
+**Layer 3 (Business Process)** — the 28 BRC-100 methods. Pure orchestration. No SQL, no ARC calls, no thread management, no hex conversion. If you replaced PostgreSQL with SQLite or ARC with another broadcast service, only Layers 1 and 2 change.
+
+**Layer 4 (Consumer)** — out of scope for the gem. This is where binary becomes hex, where responses become JSON, where user authentication is enforced.
+
+Binary data flows through layers 1–3 without conversion. Hex encoding is a Layer 4 concern.
+
+A concrete wallet receives Layer 2a components at construction time:
 
 ```ruby
 wallet = BSV::Wallet::Engine.new(
   store:           PostgresStore.new(db),
   utxo_pool:       SimplePool.new(store),
-  broadcast_queue: SyncBroadcast.new(node_client),
+  broadcast_queue: ArcBroadcast.new(arc_client),
   proof_store:     PostgresProofStore.new(db)
 )
 ```
 
-Default implementations get a working wallet. Swap any component to customise behaviour.
+### Gem Structure
+
+The wallet ships as two gems in a single repository. The split follows the dependency inversion: the core gem defines what a wallet does, the adapter gem provides the PostgreSQL implementation.
+
+```
+gem/
+  bsv-wallet/              ← core gem
+  bsv-wallet-postgres/     ← adapter gem
+```
+
+**`bsv-wallet`** (core) — zero database dependencies:
+- All interface modules (`BRC100`, `Store`, `UTXOPool`, `BroadcastQueue`, `ProofStore`)
+- The Layer 3 engine (orchestration, BRC-100 parameter validation)
+- Error classes
+- UTXOPool tier 1 default (delegates to `Store#find_spendable`)
+- In-memory store for testing (implements `Interface::Store` with hashes and arrays — test the engine without PostgreSQL)
+
+**`bsv-wallet-postgres`** (adapter) — concrete PostgreSQL implementation:
+- All Sequel models (Layer 2b — Action, Output, Input, Spendable, Broadcast, TxProof, Basket, Label, Tag, etc.)
+- Concrete `Store`, `ProofStore`, `BroadcastQueue` implementations (Layer 2a)
+- Migrations (the 17-table schema)
+- Dependencies: `sequel`, `pg`
+
+Someone building against the interfaces — say, a SQLite embedded wallet or a testing harness — only needs the core. Everyone in production uses `bsv-wallet-postgres` alongside it.
+
+This structure also leaves room for future companion gems. A `bsv-wallet-redis` adapter is plausible for a tier-3 TxCache (in-memory UTXO pool backed by Redis), though not as a full Store replacement — the structural integrity guarantees (UNIQUE constraints, CASCADE, derived status from row presence) are deeply relational and would be fragile to reimplement in application code.
+
+Both gems evolve together in the same repo — schema changes affect both, and coordinated releases are the norm. Same CI, same issue tracker.
 
 ### Interface Modules
 
-Each component is defined as an abstract module under `BSV::Wallet::Interface`:
+Each component service (Layer 2a) is defined as an abstract module under `BSV::Wallet::Interface`:
 
 | Interface | Purpose | Key methods |
 |-----------|---------|-------------|
 | `BRC100` | External API — the 28 BRC-100 methods | `create_action`, `sign_action`, `list_actions`, etc. |
 | `Store` | Persistence — mirrors the schema's phase model | `create_action` (lock), `sign_action`, `promote_action`, `query_*` |
 | `UTXOPool` | UTXO selection strategy | `select`, `release`, `balance` |
-| `BroadcastQueue` | Broadcast lifecycle — wallet owns this, SDK owns protocol | `submit`, `process_pending`, `status` |
+| `BroadcastQueue` | Broadcast lifecycle — wallet owns this, SDK owns protocol | `submit`, `process_pending`, `handle_event`, `status` |
 | `ProofStore` | Merkle proofs + proof-harvesting work queue | `save_proof`, `find_proof`, `request_proof`, `process_pending` |
 
-See [interface-derivation.md](interface-derivation.md) for how each component traces back to BRC-100.
+### Interface Derivation from BRC-100
+
+The BRC-100 spec defines the external contract (28 methods). It says nothing about wallet internals. The four machinery interfaces are architectural decompositions inferred from what the external contract requires.
+
+**BroadcastQueue — direct derivation.** The `acceptDelayedBroadcast` parameter describes two execution models (synchronous vs queued). `sendWith` adds batching. `sendWithResults` carries broadcast lifecycle states (`:unproven`, `:sending`, `:failed`). The spec is describing a queue without using the word.
+
+**UTXOPool — strong derivation.** The `noSend`/`noSendChange`/`sendWith` chaining mechanism implies UTXO reservation — change outputs from one unsent transaction become inputs to the next. `abortAction` reinforces this: cancellation requires releasing reserved outputs. The pool pattern is an architectural choice for expressing the reservation semantics the spec implies.
+
+**Store — obvious but unspecified.** Every `list*` method requires persistent state. `internalizeAction` explicitly stores incoming transactions. Labels, tags, baskets, certificates — all must survive between calls. Any wallet needs a store; the spec informed the shape, not the decision.
+
+**ProofStore — inferential.** BRC-67/62 require SPV validation. `trustSelf` implies a proof cache (*"TXIDs known to this wallet"*). `getHeaderForHeight` serves block headers. Separating proofs from the main Store is an architectural bet on different access patterns (write-once, read-many, prunable), not a spec requirement.
+
+| Component | BRC-100 source | Derivation |
+|-----------|---------------|------------|
+| BroadcastQueue | `acceptDelayedBroadcast`, `noSend`, `sendWith`, `sendWithResults` | Direct |
+| UTXOPool | `noSend`/`noSendChange` chaining, `abortAction`, spendable outputs | Strong |
+| Store | Every `list*`/`query` method, `internalizeAction`, baskets/labels/tags | Obvious |
+| ProofStore | BRC-67/62 sections, `trustSelf`, `getHeaderForHeight` | Inferential |
 
 ### Error Handling
 
@@ -121,11 +177,11 @@ All errors inherit from `BSV::Wallet::Error < StandardError` and carry a numeric
 
 ---
 
-## Functional Areas
+## 3. Functional Areas
 
-### 1. Transaction Operations (BRC-100 codes 1–7)
+### 3.1 Transaction Operations (BRC-100 codes 1–7)
 
-**Methods:** `create_action`, `sign_action`, `abort_action`, `list_actions`, `internalise_action`, `list_outputs`, `relinquish_output`
+**Methods:** `create_action`, `sign_action`, `abort_action`, `list_actions`, `internalize_action`, `list_outputs`, `relinquish_output`
 
 This is the core of the wallet — creating, signing, broadcasting, and querying Bitcoin transactions.
 
@@ -143,7 +199,7 @@ The most complex method. Follows the schema's four-phase lifecycle. No database 
 **Phase 2 — Sign** (in memory + atomic commit):
 
 5. **Build transaction** — construct the transaction using the SDK, apply `lock_time`, `version`
-6. **Output randomisation** — shuffle output order unless `randomise_outputs: false`
+6. **Output randomization** — shuffle output order unless `randomize_outputs: false`
 7. **Sign** (if `sign_and_process: true` and all unlocking scripts provided)
 8. **Persist** — `Store#sign_action(action_id:, txid:, raw_tx:)` attaches the txid and signed transaction
 
@@ -191,7 +247,7 @@ No status column to update — the action row is gone. Clean.
 
 Query methods. Delegate directly to `Store#query_actions` / `Store#query_outputs` with the filter parameters. The `include_*` booleans control which associated data is loaded — implementations should avoid loading what isn't requested. Action status is derived from structural state by the Store, not stored.
 
-#### internalise_action
+#### internalize_action
 
 Accepts an incoming transaction (in Atomic BEEF format). Born completed — no lifecycle phases:
 
@@ -209,7 +265,7 @@ Accepts an incoming transaction (in Atomic BEEF format). Born completed — no l
 
 ---
 
-### 2. Public Key Management (BRC-100 codes 8–10)
+### 3.2 Public Key Management (BRC-100 codes 8–10)
 
 **Methods:** `public_key`, `reveal_counterparty_key_linkage`, `reveal_specific_key_linkage`
 
@@ -232,7 +288,7 @@ Both encrypt the linkage data for the verifier using BRC-72 (AES-256-GCM with a 
 
 ---
 
-### 3. Cryptography Operations (BRC-100 codes 11–16)
+### 3.3 Cryptography Operations (BRC-100 codes 11–16)
 
 **Methods:** `encrypt`, `decrypt`, `create_hmac`, `verify_hmac`, `create_signature`, `verify_signature`
 
@@ -256,7 +312,7 @@ These methods delegate entirely to `bsv-sdk` for the cryptographic primitives.
 
 ---
 
-### 4. Identity and Certificate Management (BRC-100 codes 17–22)
+### 3.4 Identity and Certificate Management (BRC-100 codes 17–22)
 
 **Methods:** `acquire_certificate`, `list_certificates`, `prove_certificate`, `relinquish_certificate`, `discover_by_identity_key`, `discover_by_attributes`
 
@@ -289,7 +345,7 @@ Discovery methods for finding certificates issued to other users. These may invo
 
 ---
 
-### 5. Authentication (BRC-100 codes 23–24)
+### 3.5 Authentication (BRC-100 codes 23–24)
 
 **Methods:** `authenticated?`, `wait_for_authentication`
 
@@ -299,7 +355,7 @@ Implementation-dependent — may check for the presence of a master key, a valid
 
 ---
 
-### 6. Blockchain and Network Data (BRC-100 codes 25–28)
+### 3.6 Blockchain and Network Data (BRC-100 codes 25–28)
 
 **Methods:** `height`, `header_for_height`, `network`, `version`
 
@@ -311,11 +367,11 @@ Read-only queries:
 
 ---
 
-## Data Layer
+## 4. Data Layer
 
 ### Schema
 
-See [schema-WIP.md](../reference/) for the full schema. Key design principles:
+Key design principles:
 
 1. **Outputs are the primary entity** — the immutable log. Never updated, never deleted.
 2. **State is derived, not stored** — no status column on actions. Status comes from structural state: `txid IS NULL` = unsigned, `tx_proof_id IS NOT NULL` = completed, etc.
@@ -331,10 +387,10 @@ See [schema-WIP.md](../reference/) for the full schema. Key design principles:
 | actions | Mutable lifecycle | createAction | txid (sign), tx_proof_id (proof) | abort, reaper |
 | broadcasts | Broadcast lifecycle | Phase 3 | ARC response updates | CASCADE |
 | baskets | Reference data | on demand | never | soft delete |
-| outputs | **Immutable log** | Phase 4 / internalise | **never** | **never** |
-| spendable | The wallet | Phase 4 / internalise | never | spend / relinquish |
-| output_baskets | Mutable membership | Phase 4 / internalise | basket move | relinquish |
-| output_details | Immutable metadata | Phase 4 / internalise | never | never |
+| outputs | **Immutable log** | Phase 4 / internalize | **never** | **never** |
+| spendable | The wallet | Phase 4 / internalize | never | spend / relinquish |
+| output_baskets | Mutable membership | Phase 4 / internalize | basket move | relinquish |
+| output_details | Immutable metadata | Phase 4 / internalize | never | never |
 | inputs | Lock mechanism | Phase 1 | never | CASCADE from action |
 | labels / action_labels | Action categorisation | on demand | never | soft delete |
 | tags / output_tags | Output categorisation | on demand | never | soft delete |
@@ -356,11 +412,23 @@ The Store mirrors the schema's phase model:
 - `link_proof` → attach a tx_proof to an action
 - `abort_action` → DELETE action (CASCADE frees inputs)
 
-The Store is a data access layer, not a business logic layer. It persists and queries — it doesn't validate BRC-100 rules or orchestrate multi-step flows. That's the wallet engine's job.
+The Store is a data access layer, not a business logic layer. It persists and queries — it doesn't validate BRC-100 rules or orchestrate multi-step flows. That's the wallet engine's job (Layer 3).
 
-### Broadcast Ownership
+### Broadcast Implementation
 
-The wallet owns broadcast — the SDK provides the ARC protocol (message formatting, status parsing), but the wallet's BroadcastQueue decides when and how to broadcast. The broadcasts table tracks the lifecycle. When ARC reports MINED with a merklePath, the proof arrives for free — the broadcast handler creates a tx_proof and links it to the action.
+The wallet owns broadcast — the SDK provides the ARC protocol (message formatting, status parsing), but the wallet's BroadcastQueue decides when and how to broadcast.
+
+ARC supports three delivery mechanisms, implemented in phases:
+
+1. **Synchronous** (Phase 1) — `POST /tx`, block for response. `BroadcastQueue#submit(immediate: true)`.
+2. **Callback URL** (Phase 2) — `POST /tx` with `X-CallbackUrl`, ARC POSTs `TransactionStatus` to a Rack endpoint. `BroadcastQueue#handle_event` processes incoming updates.
+3. **SSE** (Phase 3, future) — persistent connection to `GET /events?callbackToken=...`. Higher throughput, no public endpoint required.
+
+All three deliver the same `TransactionStatus` payload to the same `broadcasts` table. Switching between them is configuration, not code change.
+
+**Proof extraction from broadcast:** when ARC reports MINED, the response includes `merklePath`, `blockHash`, and `blockHeight` — a proof for free. The broadcast handler creates a `tx_proof` directly, eliminating a separate proof-fetching round-trip for most transactions.
+
+**Recovery:** if a callback is missed or a process crashes, the BroadcastQueueWorker polls ARC's `GET /tx/{txid}` for stale broadcasts and completes the lifecycle.
 
 ### ProofStore Separation
 
@@ -373,7 +441,7 @@ The schema also has a tx_reqs table — a work queue for proof harvesting. The P
 
 ---
 
-## UTXOPool Design
+## 5. UTXOPool Design
 
 The interface (`select`/`release`/`balance`) is deliberately thin. It recommends which outputs to spend — the actual locking happens in `Store#create_action` via the input row INSERT. This accommodates three tiers:
 
@@ -393,17 +461,70 @@ The schema's spendable table (~28 bytes/row, fits in buffer cache) gives tier 1 
 
 ---
 
-## Dependencies
+## 6. Cross-Cutting Concerns
+
+### Binary-First Data Flow
+
+```
+Layer 1: PostgreSQL bytea columns → pg gem binary strings
+Layer 2: Sequel models return binary → components pass binary
+Layer 3: BRC-100 methods work with binary internally
+Layer 4: Consumer converts to hex if needed
+```
+
+No hex encoding anywhere in layers 1–3.
+
+### Error Translation Across Layers
+
+```
+Layer 1: PostgreSQL constraint violations (UNIQUE, FK, CHECK)
+Layer 2: Wallet::Error subclasses (InsufficientFundsError, PoolDepletedError, etc.)
+Layer 3: BRC-100 error codes and messages
+Layer 4: HTTP status codes and JSON error responses (if applicable)
+```
+
+A UNIQUE constraint violation in Layer 1 becomes an `InsufficientFundsError` in Layer 2 (contention failure on inputs) which becomes a BRC-100 error code in Layer 3.
+
+### State Derivation
+
+Status is never stored. It's derived at query time from structural state:
+
+| Structural state | Derived status |
+|---|---|
+| `txid IS NULL` | unsigned |
+| `txid IS NOT NULL`, no broadcast, no outputs | unprocessed |
+| broadcast row exists, no outputs | sending |
+| `broadcast = 'none'`, no proof | nosend |
+| outputs exist, no proof | unproven |
+| `tx_proof_id IS NOT NULL` | completed |
+| broadcast `tx_status = 'REJECTED'` | failed |
+
+### Concurrency
+
+The database handles concurrency, not the application. Two concurrent `create_action` calls competing for the same outputs are resolved by PostgreSQL's UNIQUE constraint on `inputs.output_id`. No application-level mutexes, locks, or coordination — delegated to the database.
+
+---
+
+## 7. Dependencies
+
+**`bsv-wallet` (core):**
 
 | Gem | Purpose |
 |-----|---------|
 | `bsv-sdk` | Low-level BSV primitives — keys, scripts, transactions, crypto, ARC protocol |
-| `sequel` | PostgreSQL access (added when Store implementation begins) |
-| `pg` | PostgreSQL driver (added with Sequel) |
+
+**`bsv-wallet-postgres` (adapter):**
+
+| Gem | Purpose |
+|-----|---------|
+| `bsv-wallet` | Core interfaces, engine, errors |
+| `bsv-sdk` | Via `bsv-wallet` dependency |
+| `sequel` | PostgreSQL access — models, migrations, query building |
+| `pg` | PostgreSQL driver |
 
 ---
 
-## Open Questions
+## 8. Open Questions
 
 1. **ProofStore separation** — keep as a separate interface or merge into Store? Both backed by the same PostgreSQL instance currently, but the interface separation preserves optionality.
 2. **Block headers** — `header_for_height` needs 80-byte headers. The schema stores block_hash and merkle_root in tx_proofs but not full headers. Needs a header source (network lookup, separate cache, or header table).

@@ -28,5 +28,8 @@ Gemfile.lock
 # Ruby LSP
 .ruby-lsp/
 
+# MkDocs build output
+/site/
+
 # Claude
 .claude/settings.local.json
