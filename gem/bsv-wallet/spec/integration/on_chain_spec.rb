@@ -2,26 +2,31 @@
 
 # On-chain integration tests: Alice sends BSV to Bob.
 #
-# Prerequisites:
-#   1. Copy .env.example to .env and fill in WIF_ALICE, WIF_BOB
-#   2. Create databases: bsv_wallet_alice and bsv_wallet_bob
-#   3. Fund Alice via: bin/import_utxo <txid> [vout]
+# Environment variables (set in shell profile or CI):
+#   WIF_ALICE, WIF_BOB       — wallet private keys
+#   FUNDING_TXID              — dtxid hex of Alice's mined P2PKH UTXO
+#   DATABASE_URL_ALICE/BOB    — optional, defaults to localhost:5433
 #
 # Run:
 #   cd gem/bsv-wallet && bundle exec rspec --tag on_chain spec/integration/
 
-require 'dotenv/load'
 require 'sequel'
 require 'bsv-wallet'
 require 'bsv-wallet-postgres'
 
 RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
+  # --- Funding UTXO (mined, never moves) ---
+
+  FUNDING_VOUT     = 0
+  FUNDING_SATOSHIS = 2000
+
   # --- Environment ---
 
-  let(:wif_alice)    { ENV.fetch('WIF_ALICE') }
-  let(:wif_bob)      { ENV.fetch('WIF_BOB') }
-  let(:db_url_alice) { ENV.fetch('DATABASE_URL_ALICE', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_alice') }
-  let(:db_url_bob)   { ENV.fetch('DATABASE_URL_BOB', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_bob') }
+  let(:funding_dtxid) { ENV.fetch('FUNDING_TXID') }
+  let(:wif_alice)     { ENV.fetch('WIF_ALICE') }
+  let(:wif_bob)       { ENV.fetch('WIF_BOB') }
+  let(:db_url_alice)  { ENV.fetch('DATABASE_URL_ALICE', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_alice') }
+  let(:db_url_bob)    { ENV.fetch('DATABASE_URL_BOB', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_bob') }
 
   # --- Database connections ---
 
@@ -41,10 +46,11 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
     db
   end
 
-  # --- ARC provider ---
+  # --- Network ---
 
-  let(:arc_provider) { BSV::Network::Providers::GorillaPool.mainnet }
-  let(:arc_adapter)  { BSV::Wallet::Postgres::ArcAdapter.new(arc_provider) }
+  let(:arc_provider)     { BSV::Network::Providers::GorillaPool.mainnet }
+  let(:arc_adapter)      { BSV::Wallet::Postgres::ArcAdapter.new(arc_provider) }
+  let(:network_provider) { BSV::Network::Providers::WhatsOnChain.mainnet }
 
   # --- Key derivers ---
 
@@ -64,6 +70,7 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
       broadcast_queue: BSV::Wallet::Postgres::BroadcastQueue.new(db: db_alice, arc_client: arc_adapter),
       proof_store: BSV::Wallet::Postgres::ProofStore.new(db: db_alice),
       key_deriver: alice_key_deriver,
+      network_provider: network_provider,
       network: :mainnet
     )
   end
@@ -77,6 +84,7 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
       broadcast_queue: BSV::Wallet::Postgres::BroadcastQueue.new(db: db_bob, arc_client: arc_adapter),
       proof_store: BSV::Wallet::Postgres::ProofStore.new(db: db_bob),
       key_deriver: bob_key_deriver,
+      network_provider: network_provider,
       network: :mainnet
     )
   end
@@ -104,14 +112,16 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
   # --- Tests ---
 
   it 'Alice pays Bob via create_action with no_send' do
-    # Verify Alice has funds
+    # Import the funding UTXO (fetches tx from network, self-payment to derived address)
+    import = alice_engine.import_utxo(dtxid: funding_dtxid, vout: FUNDING_VOUT)
+    expect(import[:imported]).to be true
+    input_satoshis = import[:satoshis] # FUNDING_SATOSHIS minus 1-sat self-payment fee
+    puts "\n  Imported #{input_satoshis} sats from funding UTXO"
+
     listed = alice_engine.list_outputs(basket: 'default')
-    expect(listed[:total_outputs]).to be >= 1
+    expect(listed[:total_outputs]).to eq(1)
     output = listed[:outputs].first
     output_id = output[:id]
-    input_satoshis = output[:satoshis]
-
-    puts "\n  Alice has #{input_satoshis} sats in output #{output_id}"
 
     # Payment params
     payment_amount = 500
@@ -131,9 +141,9 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
       inputs: [{ output_id: output_id }],
       outputs: [
         { satoshis: payment_amount, locking_script: bob_script,
-          output_description: 'payment to Bob', basket: 'payments' },
+          output_description: 'payment to Bob', basket: 'payments', output_type: 'root' },
         { satoshis: change_amount, locking_script: alice_change_script,
-          output_description: 'change to self', basket: 'default' }
+          output_description: 'change to self', basket: 'default', output_type: 'change' }
       ],
       labels: ['integration-test'],
       no_send: true

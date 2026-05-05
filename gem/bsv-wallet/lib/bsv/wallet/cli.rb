@@ -23,7 +23,11 @@ module BSV
       # @param network [Symbol] :mainnet or :testnet
       # @return [Hash] { engine:, key_deriver:, proof_store:, db:, identity_key:, private_key: }
       def boot(wallet_name: nil, network: :mainnet)
-        require 'dotenv/load'
+        begin
+          require 'dotenv/load'
+        rescue LoadError
+          # dotenv is optional — env vars can come from shell profile or CI
+        end
         require 'sequel'
         require 'logger'
         require 'bsv-wallet'
@@ -106,9 +110,9 @@ module BSV
       def env_fetch(base_name, wallet_name)
         if wallet_name
           suffixed = "#{base_name}_#{wallet_name.upcase}"
-          ENV.fetch(suffixed) { ENV.fetch(base_name) { abort "Set #{suffixed} or #{base_name} in .env" } }
+          ENV.fetch(suffixed) { ENV.fetch(base_name) { abort "Set #{suffixed} or #{base_name}" } }
         else
-          ENV.fetch(base_name) { abort "Set #{base_name} in .env" }
+          ENV.fetch(base_name) { abort "Set #{base_name}" }
         end
       end
 

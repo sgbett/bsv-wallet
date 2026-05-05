@@ -5,16 +5,15 @@
 # Each CLI tool runs in its own OS process, so the global Sequel::Model.db
 # is scoped per-wallet — no multi-tenant issues.
 #
-# Prerequisites:
-#   1. Copy .env.example to .env and fill in WIF_ALICE, WIF_BOB
-#   2. Create databases: bsv_wallet_alice and bsv_wallet_bob
-#   3. Fund Alice via: bin/import_utxo alice <dtxid_hex> [vout]
+# Environment variables (set in shell profile or CI):
+#   WIF_ALICE, WIF_BOB       — wallet private keys
+#   FUNDING_TXID              — dtxid hex of Alice's mined P2PKH UTXO
+#   DATABASE_URL_ALICE/BOB    — optional, defaults to localhost:5433
 #
 # Run:
 #   cd gem/bsv-wallet && bundle exec rspec --tag on_chain spec/integration/cli_spec.rb
 
 require 'open3'
-require 'dotenv/load'
 
 RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do
   let(:bin_dir) { File.expand_path('../../bin', __dir__) }
@@ -28,7 +27,7 @@ RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do
 
   def run_cli(tool, *args, stdin_data: nil)
     cmd = [File.join(bin_dir, tool)] + args
-    env = {} # inherits parent env (which has .env loaded)
+    env = {} # inherits parent env
     stdout, stderr, status = Open3.capture3(env, *cmd, stdin_data: stdin_data, binmode: true)
     unless status.success?
       $stderr.puts "  [#{tool}] failed (exit #{status.exitstatus}):"
@@ -38,12 +37,18 @@ RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do
   end
 
   it 'Alice pays Bob via CLI pipeline' do
+    # 0. Import the funding UTXO
+    funding_dtxid = ENV.fetch('FUNDING_TXID')
+    _stdout, stderr, status = run_cli('import_root_utxo', 'alice', funding_dtxid, '0')
+    expect(status).to be_success
+    puts "\n  Import: #{stderr.strip}"
+
     # 1. Verify Alice has funds
     stdout, _stderr, status = run_cli('balance', 'alice')
     expect(status).to be_success
     alice_balance = stdout.strip.to_i
     expect(alice_balance).to be > 0
-    puts "\n  Alice balance: #{alice_balance} sats"
+    puts "  Alice balance: #{alice_balance} sats"
 
     # 2. Alice sends 500 sats to Bob (no_send — outputs BEEF to stdout)
     beef_stdout, stderr, status = run_cli(
