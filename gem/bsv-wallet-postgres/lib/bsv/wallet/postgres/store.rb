@@ -54,6 +54,7 @@ module BSV
         end
 
         def sign_action(action_id:, wtxid:, raw_tx:)
+          BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'sign_action wtxid')
           @db.transaction do
             Action.where(id: action_id).update(
               wtxid:  Sequel.blob(wtxid),
@@ -121,6 +122,7 @@ module BSV
         # --- Queries ---
 
         def find_action(id: nil, wtxid: nil, reference: nil)
+          BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'find_action wtxid') if wtxid
           record = if id then Action[id]
                    elsif wtxid then Action.first(wtxid: Sequel.blob(wtxid))
                    elsif reference then Action.first(reference: reference)

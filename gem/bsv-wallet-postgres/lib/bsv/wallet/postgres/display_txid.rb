@@ -17,6 +17,7 @@ module BSV
 
           wtxid.reverse.unpack1('H*')
         end
+        alias dtxid_hex dtxid
       end
     end
   end

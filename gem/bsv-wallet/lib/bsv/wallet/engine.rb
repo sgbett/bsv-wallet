@@ -84,6 +84,7 @@ module BSV
         end
 
         @store.sign_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
+        BSV.logger&.debug { "[Engine] create_action: dtxid=#{wtxid.reverse.unpack1('H*')} outputs=#{outputs&.length || 0}" }
 
         # Build Atomic BEEF envelope for the :tx return value
         atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
@@ -185,12 +186,13 @@ module BSV
                              trust_self: nil, known_txids: nil,
                              seek_permission: true, originator: nil)
         validate_description!(description)
+        # known_txids is the BRC-100 spec param name; values are wire-order wtxids
+        known_txids&.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'known_txids entry') }
 
         # Parse tx: as Atomic BEEF (BRC-95)
         beef, subject_tx = parse_beef(tx)
 
         # trustSelf: replace known ancestors with TXID-only entries before validation
-        # known_txids is the BRC-100 spec param name; values are wire-order wtxids
         has_txid_only = trust_self == 'known' &&
                         replace_known_ancestors!(beef, subject_tx.wtxid, known_txids)
 
@@ -211,6 +213,7 @@ module BSV
           wtxid: subject_tx.wtxid,
           raw_tx: subject_tx.to_binary
         )
+        BSV.logger&.debug { "[Engine] internalize_action: subject=#{subject_tx.dtxid}" }
 
         attach_labels(action_result[:id], labels)
 
@@ -546,6 +549,9 @@ module BSV
         return unless broadcast_result[:merkle_path]
 
         wtxid = broadcast_result[:wtxid] || @store.find_action(id: action_id)&.dig(:wtxid)
+        return unless wtxid
+
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'handle_proof_from_broadcast wtxid')
         merkle_path = normalize_merkle_path(broadcast_result[:merkle_path], wtxid)
 
         # Store raw_tx from the action so BEEF construction can use it
@@ -562,6 +568,7 @@ module BSV
           }
         )
         @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
+        BSV.logger&.debug { "[Engine] proof_from_broadcast: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{broadcast_result[:block_height]}" }
       end
 
       # Broadcast companion transactions listed in send_with.
@@ -612,6 +619,7 @@ module BSV
       # Convert a TSC-format merkle proof hash to BRC-74 binary.
       # from_tsc expects display-order hex; wtxid is wire order, so reverse for display.
       def normalize_tsc_merkle_path(tsc, wtxid)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'normalize_tsc wtxid')
         dtxid = wtxid.reverse.unpack1('H*')
         BSV::Transaction::MerklePath.from_tsc(
           txid: tsc[:txOrId] || tsc[:tx_or_id] || dtxid,
@@ -671,13 +679,18 @@ module BSV
           source_wtxid = resolved[:source_wtxid]
           proof = @proof_store.find_proof(wtxid: source_wtxid)
 
-          next unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
+          unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
+            BSV.logger&.debug { "[Engine] build_atomic_beef: ancestor #{source_wtxid.reverse.unpack1('H*')} proof=missing" }
+            next
+          end
 
           source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
 
-          if proof[:merkle_path]
+          has_bump = !!proof[:merkle_path]
+          if has_bump
             source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
           end
+          BSV.logger&.debug { "[Engine] build_atomic_beef: ancestor #{source_wtxid.reverse.unpack1('H*')} proof=#{has_bump ? 'bump' : 'raw_tx'}" }
 
           input.source_transaction = source_tx
         end
@@ -719,6 +732,7 @@ module BSV
       # @param subject_wtxid [String] 32-byte wtxid of the subject transaction (wire order)
       # @param action_id [Integer] the action to link the subject proof to
       def save_beef_proofs(beef, subject_wtxid, action_id)
+        BSV::Primitives::Hex.validate_wtxid!(subject_wtxid, name: 'save_beef_proofs subject_wtxid')
         subject_proof_id = nil
 
         beef.transactions.each do |beef_tx|
@@ -995,8 +1009,12 @@ module BSV
       # @param resolved [Hash] a single resolved input hash
       # @return [BSV::Primitives::PrivateKey]
       def derive_signing_key(resolved)
-        return @key_deriver.root_private_key if resolved[:derivation_prefix].nil?
+        if resolved[:derivation_prefix].nil?
+          BSV.logger&.debug { '[Engine] derive_signing_key: root key (no derivation)' }
+          return @key_deriver.root_private_key
+        end
 
+        BSV.logger&.debug { "[Engine] derive_signing_key: derived prefix=#{resolved[:derivation_prefix]}" }
         counterparty = resolved[:sender_identity_key] || 'self'
 
         @key_deriver.derive_private_key(

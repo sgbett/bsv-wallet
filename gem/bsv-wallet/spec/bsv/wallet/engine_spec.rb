@@ -102,6 +102,38 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
   end
 
+  describe 'wtxid validation' do
+    it 'Store#sign_action rejects display-order hex as wtxid' do
+      action = store.create_action(
+        action: { description: 'validation test', broadcast: :none, outgoing: false }
+      )
+      hex_dtxid = 'a' * 64 # 64-char hex string, not 32-byte binary
+      expect do
+        store.sign_action(action_id: action[:id], wtxid: hex_dtxid, raw_tx: "\x00".b)
+      end.to raise_error(ArgumentError, /sign_action wtxid/)
+    end
+
+    it 'ProofStore#save_proof rejects display-order hex as wtxid' do
+      hex_dtxid = 'b' * 64
+      expect do
+        proof_store.save_proof(wtxid: hex_dtxid, proof: { raw_tx: "\x00".b })
+      end.to raise_error(ArgumentError, /save_proof wtxid/)
+    end
+
+    it 'internalize_action rejects hex entries in known_txids' do
+      hex_dtxid = 'c' * 64
+      expect do
+        engine.internalize_action(
+          tx: "\x00".b, # will fail later, but validation fires first
+          description: 'validation test',
+          trust_self: 'known',
+          known_txids: [hex_dtxid],
+          outputs: []
+        )
+      end.to raise_error(ArgumentError, /known_txids entry/)
+    end
+  end
+
   describe '#create_action' do
     it 'creates an action with outputs' do
       result = engine.create_action(
