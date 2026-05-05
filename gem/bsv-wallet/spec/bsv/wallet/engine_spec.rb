@@ -106,7 +106,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                  pubkey_hash = BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
                  BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
                else
-                 SecureRandom.random_bytes(25)
+                 "\x51"
                end
 
       {
@@ -169,7 +169,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'test payment',
         inputs: [],
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+          { satoshis: 500, locking_script: "\x51",
             output_description: 'payment', basket: 'payments', output_type: 'change' }
         ]
       )
@@ -185,7 +185,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+          { satoshis: 500, locking_script: "\x51",
             output_description: 'output', basket: 'deferred', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
@@ -208,7 +208,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         inputs: [],
         no_send: true,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+          { satoshis: 500, locking_script: "\x51",
             output_description: 'output', basket: 'pending', output_type: 'change' }
         ]
       )
@@ -223,7 +223,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         no_send: true,
         labels: %w[payment urgent],
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+          { satoshis: 500, locking_script: "\x51",
             output_description: 'output' }
         ]
       )
@@ -261,7 +261,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           inputs: [],
           accept_delayed_broadcast: false,
           outputs: [
-            { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+            { satoshis: 500, locking_script: "\x51",
               output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -291,7 +291,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
     it 'completes a deferred signing flow with outputs only' do
       # Deferred action with outputs but no inputs
-      locking_script = SecureRandom.random_bytes(25)
+      locking_script = "\x51"
       create_result = engine.create_action(
         description: 'deferred outputs',
         inputs: [],
@@ -420,7 +420,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     context 'caller provides unlocking scripts for all inputs' do
       it 'applies caller scripts without wallet signing' do
         fund_wallet_with_keys(satoshis: 1000)
-        output_script = SecureRandom.random_bytes(25)
+        output_script = "\x51"
 
         listed = engine_with_keys.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
@@ -456,7 +456,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       it 'applies caller scripts for some inputs, wallet signs the rest' do
         # Fund with two outputs
         fund_wallet_with_keys(satoshis: 1000, count: 2)
-        output_script = SecureRandom.random_bytes(25)
+        output_script = "\x51"
 
         listed = engine_with_keys.list_outputs(basket: 'default')
         output_ids = listed[:outputs].map { |o| o[:id] }
@@ -496,7 +496,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'deferred invalid',
           inputs: [],
           sign_and_process: false,
-          outputs: [{ satoshis: 500, locking_script: SecureRandom.random_bytes(25) }]
+          outputs: [{ satoshis: 500, locking_script: "\x51" }]
         )
 
         reference = create_result[:signable_transaction][:reference]
@@ -535,7 +535,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'deferred rawtx',
           inputs: [],
           sign_and_process: false,
-          outputs: [{ satoshis: 500, locking_script: SecureRandom.random_bytes(25) }]
+          outputs: [{ satoshis: 500, locking_script: "\x51" }]
         )
 
         action = store.find_action(reference: create_result[:signable_transaction][:reference])
@@ -555,7 +555,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           inputs: [],
           sign_and_process: false,
           outputs: [
-            { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+            { satoshis: 500, locking_script: "\x51",
               basket: 'cascade_test', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -580,7 +580,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     context 'sequence number override' do
       it 'applies sequence number from spends' do
         fund_wallet_with_keys(satoshis: 1000)
-        output_script = SecureRandom.random_bytes(25)
+        output_script = "\x51"
 
         listed = engine_with_keys.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
@@ -613,7 +613,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+          { satoshis: 500, locking_script: "\x51",
             output_description: 'output' }
         ]
       )
@@ -688,7 +688,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
       subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
                               satoshis: satoshis,
-                              locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                              locking_script: BSV::Script::Script.from_binary("\x51")
                             ))
 
       beef = BSV::Transaction::Beef.new
@@ -698,7 +698,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                  satoshis: 1000 + i,
-                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                 locking_script: BSV::Script::Script.from_binary("\x51")
                                ))
 
         # Create a merkle path for the ancestor
@@ -973,7 +973,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                  satoshis: 1000,
-                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                 locking_script: BSV::Script::Script.from_binary("\x51")
                                ))
 
         subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
@@ -985,7 +985,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                              ))
         subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                 satoshis: 900,
-                                locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                locking_script: BSV::Script::Script.from_binary("\x51")
                               ))
 
         beef = BSV::Transaction::Beef.new
@@ -1068,7 +1068,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                  satoshis: input_satoshis,
-                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                 locking_script: BSV::Script::Script.from_binary("\x51")
                                ))
 
         wtxid_internal = ancestor_tx.wtxid
@@ -1092,7 +1092,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         subject_tx.inputs[0].source_transaction = ancestor_tx
         subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                 satoshis: output_satoshis,
-                                locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                locking_script: BSV::Script::Script.from_binary("\x51")
                               ))
 
         beef = BSV::Transaction::Beef.new
@@ -1203,7 +1203,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                  satoshis: 1000,
-                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                 locking_script: BSV::Script::Script.from_binary("\x51")
                                ))
 
         subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
@@ -1214,7 +1214,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                              ))
         subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                 satoshis: 900,
-                                locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                locking_script: BSV::Script::Script.from_binary("\x51")
                               ))
 
         beef = BSV::Transaction::Beef.new
@@ -1427,7 +1427,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       it 'stores raw_tx from the action for BEEF construction' do
         # Create an outgoing action so it has raw_tx set
-        locking_script = SecureRandom.random_bytes(25)
+        locking_script = "\x51"
         result = engine.create_action(
           description: 'broadcast raw_tx',
           inputs: [],
@@ -1965,7 +1965,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     context 'with randomization enabled' do
       it 'shuffles output order (statistical)' do
         outputs = 10.times.map do |i|
-          { satoshis: (i + 1) * 100, locking_script: SecureRandom.random_bytes(25) }
+          { satoshis: (i + 1) * 100, locking_script: "\x51" }
         end
 
         original_order = outputs.map { |o| o[:satoshis] }
@@ -1985,7 +1985,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       it 'preserves all outputs (no data loss)' do
         outputs = 5.times.map do |i|
-          { satoshis: (i + 1) * 100, locking_script: SecureRandom.random_bytes(25) }
+          { satoshis: (i + 1) * 100, locking_script: "\x51" }
         end
 
         tx_outputs, _vout_mapping = build_outputs(outputs, true)
@@ -1995,7 +1995,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       it 'produces correct vout mapping' do
         outputs = 5.times.map do |i|
-          { satoshis: (i + 1) * 100, locking_script: SecureRandom.random_bytes(25) }
+          { satoshis: (i + 1) * 100, locking_script: "\x51" }
         end
 
         tx_outputs, vout_mapping = build_outputs(outputs, true)
@@ -2013,7 +2013,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       end
 
       it 'is a no-op for a single output' do
-        outputs = [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }]
+        outputs = [{ satoshis: 1000, locking_script: "\x51" }]
 
         tx_outputs, vout_mapping = build_outputs(outputs, true)
 
@@ -2048,7 +2048,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                elsif private_key
                  p2pkh_locking_script_for(private_key).to_binary
                else
-                 SecureRandom.random_bytes(25)
+                 "\x51"
                end
 
       {
@@ -2725,7 +2725,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'no ancestors test',
         no_send: true,
         inputs: [{ output_id: output_id }],
-        outputs: [{ satoshis: 900, locking_script: SecureRandom.random_bytes(25) }]
+        outputs: [{ satoshis: 900, locking_script: "\x51" }]
       )
 
       action = store.find_action(wtxid: result[:txid])
@@ -2743,7 +2743,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'proven ancestry test',
         no_send: true,
         inputs: [{ output_id: output_id }],
-        outputs: [{ satoshis: 900, locking_script: SecureRandom.random_bytes(25) }]
+        outputs: [{ satoshis: 900, locking_script: "\x51" }]
       )
 
       # Simulate a proof arriving for the source transaction
@@ -2755,7 +2755,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
       fake_tx.add_output(BSV::Transaction::TransactionOutput.new(
                            satoshis: 1000,
-                           locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                           locking_script: BSV::Script::Script.from_binary("\x51")
                          ))
       fake_raw_tx = fake_tx.to_binary
 
@@ -2793,7 +2793,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'multi anc test 33',
         no_send: true,
         inputs: output_ids.each_with_index.map { |id, i| { output_id: id, vin: i } },
-        outputs: [{ satoshis: 1400, locking_script: SecureRandom.random_bytes(25) }]
+        outputs: [{ satoshis: 1400, locking_script: "\x51" }]
       )
 
       action = store.find_action(wtxid: result[:txid])
@@ -2807,7 +2807,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         fake_tx.add_output(BSV::Transaction::TransactionOutput.new(
                              satoshis: 500,
-                             locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                             locking_script: BSV::Script::Script.from_binary("\x51")
                            ))
 
         # wtxid is already wire order — use directly as merkle path hash
