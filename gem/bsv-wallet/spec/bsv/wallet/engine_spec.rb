@@ -45,6 +45,12 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
   end
 
+  # Parse Atomic BEEF and extract the subject transaction.
+  # create_action and sign_action return Atomic BEEF in :tx.
+  def parse_beef_tx(beef_data)
+    BSV::Transaction::Transaction.from_beef(beef_data)
+  end
+
   # Pre-fund the wallet with spendable outputs.
   #
   # Creates outputs with real P2PKH locking scripts derived from the
@@ -241,7 +247,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       expect(result[:tx]).to be_a(String)
 
       # Verify the transaction can be deserialized
-      parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+      parsed = parse_beef_tx(result[:tx])
       expect(parsed.outputs.length).to eq(1)
       expect(parsed.outputs[0].satoshis).to eq(500)
 
@@ -327,13 +333,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(result[:txid].bytesize).to eq(32)
 
         # Verify the transaction is valid
-        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(1)
         expect(parsed.outputs.length).to eq(1)
         expect(parsed.outputs[0].satoshis).to eq(900)
 
         # Verify the txid matches
-        expected_txid = BSV::Primitives::Digest.sha256d(result[:tx]).reverse
+        expected_txid = parse_beef_tx(result[:tx]).txid
         expect(result[:txid]).to eq(expected_txid)
       end
     end
@@ -368,7 +374,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(result[:txid]).to be_a(String)
         expect(result[:txid].bytesize).to eq(32)
 
-        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs[0].unlocking_script.to_binary).to eq(custom_unlock)
       end
     end
@@ -402,7 +408,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(result[:txid]).to be_a(String)
         expect(result[:txid].bytesize).to eq(32)
 
-        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(2)
         # Input 0: caller-provided
         expect(parsed.inputs[0].unlocking_script.to_binary).to eq(custom_unlock)
@@ -434,7 +440,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     context 'output promotion at create time' do
       it 'writes outputs to the database during deferred create_action' do
         binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
-        create_result = engine.create_action(
+        engine.create_action(
           description: 'deferred promo',
           sign_and_process: false,
           outputs: [
@@ -517,7 +523,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           no_send: true
         )
 
-        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs[0].sequence).to eq(42)
       end
     end
@@ -591,9 +597,63 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   end
 
   describe '#internalize_action' do
+    # Build a minimal valid BEEF (V1) containing one transaction.
+    # Optionally includes a merkle proof for the subject transaction.
+    def build_test_beef(satoshis: 500, with_proof: false, ancestor_count: 0)
+      # Build a subject transaction
+      subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                              satoshis: satoshis,
+                              locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                            ))
+
+      beef = BSV::Transaction::Beef.new
+
+      # Add proven ancestors if requested
+      ancestor_count.times do |i|
+        ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                 satoshis: 1000 + i,
+                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                               ))
+
+        # Create a merkle path for the ancestor
+        txid_internal = ancestor_tx.txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        merkle_path = BSV::Transaction::MerklePath.new(
+          block_height: 800_000 + i,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+        ancestor_tx.merkle_path = merkle_path
+        beef.merge_transaction(ancestor_tx)
+      end
+
+      if with_proof
+        # Create a merkle path for the subject
+        txid_internal = subject_tx.txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        merkle_path = BSV::Transaction::MerklePath.new(
+          block_height: 900_000,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+        subject_tx.merkle_path = merkle_path
+      end
+
+      beef.merge_transaction(subject_tx)
+      beef.to_atomic_binary(subject_tx.txid)
+    end
+
     it 'creates a completed incoming action with basket insertion' do
+      beef_data = build_test_beef(satoshis: 500)
+
       result = engine.internalize_action(
-        tx: SecureRandom.random_bytes(200),
+        tx: beef_data,
         description: 'incoming payment',
         labels: ['incoming'],
         outputs: [
@@ -619,8 +679,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
 
     it 'creates a completed incoming action with wallet payment' do
+      beef_data = build_test_beef(satoshis: 1000)
+
       result = engine.internalize_action(
-        tx: SecureRandom.random_bytes(200),
+        tx: beef_data,
         description: 'incoming payment',
         outputs: [
           {
@@ -639,10 +701,680 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       expect(result).to eq({ accepted: true })
     end
 
+    it 'stores txid and raw_tx on the action' do
+      beef_data = build_test_beef(satoshis: 500)
+
+      # Parse the BEEF to get expected txid
+      beef = BSV::Transaction::Beef.from_binary(beef_data)
+      expected_txid = beef.subject_txid
+
+      engine.internalize_action(
+        tx: beef_data,
+        description: 'txid storage test',
+        labels: ['test'],
+        outputs: [
+          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'txid_test' } }
+        ]
+      )
+
+      listed = engine.list_actions(labels: ['test'])
+      action = listed[:actions].first
+      expect(action[:txid]).to eq(expected_txid)
+    end
+
+    it 'saves ancestor proofs to ProofStore' do
+      beef_data = build_test_beef(satoshis: 500, ancestor_count: 2)
+
+      # Parse to get ancestor txids
+      beef = BSV::Transaction::Beef.from_binary(beef_data)
+      ancestor_txids = beef.transactions
+                           .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                           .map(&:txid)
+
+      engine.internalize_action(
+        tx: beef_data,
+        description: 'ancestor proof test',
+        outputs: [
+          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'ancestor_test' } }
+        ]
+      )
+
+      ancestor_txids.each do |txid|
+        proof = proof_store.find_proof(txid: txid)
+        expect(proof).not_to be_nil
+        expect(proof[:height]).to be_a(Integer)
+        expect(proof[:merkle_path]).to be_a(String)
+      end
+    end
+
+    it 'links the subject proof to the action when subject is mined' do
+      beef_data = build_test_beef(satoshis: 500, with_proof: true)
+
+      beef = BSV::Transaction::Beef.from_binary(beef_data)
+      subject_txid = beef.subject_txid
+
+      engine.internalize_action(
+        tx: beef_data,
+        description: 'proof link test',
+        labels: ['proof-link'],
+        outputs: [
+          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'proof_link_test' } }
+        ]
+      )
+
+      # Verify the proof exists
+      proof = proof_store.find_proof(txid: subject_txid)
+      expect(proof).not_to be_nil
+
+      # Verify the action has the proof linked via the txid
+      action = store.find_action(txid: subject_txid)
+      expect(action).not_to be_nil
+
+      # Query the underlying record to check tx_proof_id
+      action_record = BSV::Wallet::Postgres::Action.first(
+        txid: Sequel.blob(subject_txid)
+      )
+      expect(action_record.tx_proof_id).to eq(proof[:id])
+    end
+
+    it 'does not link proof when subject has no BUMP' do
+      beef_data = build_test_beef(satoshis: 500, with_proof: false)
+
+      engine.internalize_action(
+        tx: beef_data,
+        description: 'no proof link test',
+        labels: ['no-proof'],
+        outputs: [
+          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'no_proof_test' } }
+        ]
+      )
+
+      listed = engine.list_actions(labels: ['no-proof'])
+      action = listed[:actions].first
+      expect(action[:tx_proof_id]).to be_nil
+    end
+
+    it 'raises InvalidBeefError for truncated BEEF' do
+      expect do
+        engine.internalize_action(
+          tx: "\x01\x00".b,
+          description: 'truncated test',
+          outputs: []
+        )
+      end.to raise_error(BSV::Wallet::InvalidBeefError, /truncated/)
+    end
+
+    it 'raises InvalidBeefError for non-BEEF data' do
+      expect do
+        engine.internalize_action(
+          tx: SecureRandom.random_bytes(200),
+          description: 'random data test',
+          outputs: []
+        )
+      end.to raise_error(BSV::Wallet::InvalidBeefError)
+    end
+
+    it 'raises InvalidBeefError for BEEF with no transactions' do
+      # Construct a BEEF with zero transactions
+      BSV::Transaction::Beef.new
+      # Manually build atomic BEEF with no transactions
+      buf = [BSV::Transaction::Beef::ATOMIC_BEEF].pack('V')
+      buf << ("\x00" * 32) # subject txid
+      buf << [BSV::Transaction::Beef::BEEF_V1].pack('V')
+      buf << "\x00" # 0 bumps
+      buf << "\x00" # 0 transactions
+
+      expect do
+        engine.internalize_action(
+          tx: buf,
+          description: 'empty beef test',
+          outputs: []
+        )
+      end.to raise_error(BSV::Wallet::InvalidBeefError, /no transactions/)
+    end
+
     it 'validates description' do
       expect do
         engine.internalize_action(tx: "\x00".b, description: 'hi', outputs: [])
       end.to raise_error(BSV::Wallet::InvalidParameterError)
+    end
+
+    # --- SPV validation (#30) ---
+
+    context 'SPV validation' do
+      it 'accepts valid BEEF that passes structural validation' do
+        beef_data = build_test_beef(satoshis: 500)
+
+        result = engine.internalize_action(
+          tx: beef_data,
+          description: 'valid beef passes',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'spv_valid' } }
+          ]
+        )
+
+        expect(result).to eq({ accepted: true })
+      end
+
+      it 'rejects BEEF with tampered BUMP txid leaf' do
+        beef_data = build_test_beef(satoshis: 500, ancestor_count: 1)
+
+        # Parse, tamper the txid leaf so compute_root can't find the transaction
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        bump = beef.bumps.first
+        txid_leaf = bump.path[0].find(&:txid)
+        tampered_hash = txid_leaf.hash.dup
+        tampered_hash.setbyte(0, tampered_hash.getbyte(0) ^ 0xFF)
+        txid_leaf.instance_variable_set(:@hash, tampered_hash)
+
+        subject_txid = beef.subject_txid
+        tampered_data = beef.to_atomic_binary(subject_txid)
+
+        expect do
+          engine.internalize_action(
+            tx: tampered_data,
+            description: 'tampered bump test',
+            outputs: []
+          )
+        end.to raise_error(BSV::Wallet::InvalidBeefError, /structural validation/)
+      end
+
+      it 'rejects BEEF with missing ancestor' do
+        ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                 satoshis: 1000,
+                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                               ))
+
+        subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        # prev_tx_id is internal byte order (reverse of display-order txid)
+        subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                               prev_tx_id: ancestor_tx.txid.reverse,
+                               prev_tx_out_index: 0,
+                               sequence: 0xFFFFFFFF
+                             ))
+        subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                satoshis: 900,
+                                locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                              ))
+
+        beef = BSV::Transaction::Beef.new
+        beef.merge_transaction(subject_tx)
+        beef_data = beef.to_atomic_binary(subject_tx.txid)
+
+        expect do
+          engine.internalize_action(
+            tx: beef_data,
+            description: 'missing ancestor',
+            outputs: []
+          )
+        end.to raise_error(BSV::Wallet::InvalidBeefError, /structural validation/)
+      end
+
+      it 'verifies merkle roots against chain tracker when configured' do
+        chain_tracker = double('ChainTracker')
+        allow(chain_tracker).to receive(:valid_root_for_height?).and_return(true)
+
+        engine_with_tracker = described_class.new(
+          store: store, utxo_pool: utxo_pool,
+          broadcast_queue: broadcast_queue, proof_store: proof_store,
+          chain_tracker: chain_tracker, network: :mainnet
+        )
+
+        beef_data = build_test_beef(satoshis: 500, with_proof: true)
+
+        result = engine_with_tracker.internalize_action(
+          tx: beef_data,
+          description: 'chain tracker ok',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'tracker_ok' } }
+          ]
+        )
+
+        expect(result).to eq({ accepted: true })
+        expect(chain_tracker).to have_received(:valid_root_for_height?)
+      end
+
+      it 'rejects BEEF when chain tracker rejects a merkle root' do
+        chain_tracker = double('ChainTracker')
+        allow(chain_tracker).to receive(:valid_root_for_height?).and_return(false)
+
+        engine_with_tracker = described_class.new(
+          store: store, utxo_pool: utxo_pool,
+          broadcast_queue: broadcast_queue, proof_store: proof_store,
+          chain_tracker: chain_tracker, network: :mainnet
+        )
+
+        beef_data = build_test_beef(satoshis: 500, with_proof: true)
+
+        expect do
+          engine_with_tracker.internalize_action(
+            tx: beef_data,
+            description: 'tracker rejects',
+            outputs: []
+          )
+        end.to raise_error(BSV::Wallet::InvalidBeefError, /merkle root verification/)
+      end
+
+      it 'runs structural validation without a chain tracker' do
+        beef_data = build_test_beef(satoshis: 500)
+
+        result = engine.internalize_action(
+          tx: beef_data,
+          description: 'no tracker struct',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'no_tracker' } }
+          ]
+        )
+
+        expect(result).to eq({ accepted: true })
+      end
+    end
+
+    context 'fee adequacy' do
+      def build_test_beef_with_fee(input_satoshis:, output_satoshis:)
+        ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                 satoshis: input_satoshis,
+                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                               ))
+
+        txid_internal = ancestor_tx.txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        merkle_path = BSV::Transaction::MerklePath.new(
+          block_height: 800_000,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+        ancestor_tx.merkle_path = merkle_path
+
+        subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        # prev_tx_id is internal byte order (reverse of display-order txid)
+        subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                               prev_tx_id: ancestor_tx.txid.reverse,
+                               prev_tx_out_index: 0,
+                               sequence: 0xFFFFFFFF
+                             ))
+        subject_tx.inputs[0].source_transaction = ancestor_tx
+        subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                satoshis: output_satoshis,
+                                locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                              ))
+
+        beef = BSV::Transaction::Beef.new
+        beef.merge_transaction(ancestor_tx)
+        beef.merge_transaction(subject_tx)
+        beef.to_atomic_binary(subject_tx.txid)
+      end
+
+      it 'accepts a transaction with adequate fee' do
+        beef_data = build_test_beef_with_fee(input_satoshis: 1000, output_satoshis: 900)
+
+        result = engine.internalize_action(
+          tx: beef_data,
+          description: 'fee adequate test',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 900,
+              insertion_remittance: { basket: 'fee_ok' } }
+          ]
+        )
+
+        expect(result).to eq({ accepted: true })
+      end
+
+      it 'rejects a transaction where outputs equal inputs (zero fee)' do
+        beef_data = build_test_beef_with_fee(input_satoshis: 1000, output_satoshis: 1000)
+
+        expect do
+          engine.internalize_action(
+            tx: beef_data,
+            description: 'zero fee rejects',
+            outputs: []
+          )
+        end.to raise_error(BSV::Wallet::InvalidBeefError, /inadequate fee/)
+      end
+
+      it 'rejects a transaction where outputs exceed inputs' do
+        beef_data = build_test_beef_with_fee(input_satoshis: 500, output_satoshis: 600)
+
+        expect do
+          engine.internalize_action(
+            tx: beef_data,
+            description: 'negative fee test',
+            outputs: []
+          )
+        end.to raise_error(BSV::Wallet::InvalidBeefError, /inadequate fee/)
+      end
+    end
+
+    # --- trustSelf and known_txids (#31) ---
+
+    context 'trustSelf and known_txids' do
+      it 'accepts BEEF with all ancestors known in ProofStore' do
+        beef_data = build_test_beef(satoshis: 500, ancestor_count: 2)
+
+        # Pre-populate ProofStore with proofs for all ancestors
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        beef.transactions
+            .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+            .each do |bt|
+          proof_store.save_proof(
+            txid: bt.txid,
+            proof: { height: 800_000, merkle_path: "\x00".b }
+          )
+        end
+
+        result = engine.internalize_action(
+          tx: beef_data,
+          description: 'all ancestors known',
+          trust_self: 'known',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'trust_all' } }
+          ]
+        )
+
+        expect(result).to eq({ accepted: true })
+      end
+
+      it 'accepts BEEF with some ancestors known and others proven via BUMP' do
+        beef_data = build_test_beef(satoshis: 500, ancestor_count: 2)
+
+        # Only populate ProofStore for the first ancestor
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        proven_txids = beef.transactions
+                           .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                           .map(&:txid)
+
+        proof_store.save_proof(
+          txid: proven_txids.first,
+          proof: { height: 800_000, merkle_path: "\x00".b }
+        )
+
+        result = engine.internalize_action(
+          tx: beef_data,
+          description: 'some known some bump',
+          trust_self: 'known',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'trust_some' } }
+          ]
+        )
+
+        expect(result).to eq({ accepted: true })
+      end
+
+      it 'rejects BEEF with unknown ancestor that has no BUMP' do
+        # Build a BEEF where an ancestor is missing its proof
+        ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                 satoshis: 1000,
+                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                               ))
+
+        subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                               prev_tx_id: ancestor_tx.txid.reverse,
+                               prev_tx_out_index: 0,
+                               sequence: 0xFFFFFFFF
+                             ))
+        subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                satoshis: 900,
+                                locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                              ))
+
+        beef = BSV::Transaction::Beef.new
+        beef.merge_transaction(subject_tx)
+        beef_data = beef.to_atomic_binary(subject_tx.txid)
+
+        expect do
+          engine.internalize_action(
+            tx: beef_data,
+            description: 'unknown no bump rej',
+            trust_self: 'known',
+            outputs: []
+          )
+        end.to raise_error(BSV::Wallet::InvalidBeefError, /structural validation/)
+      end
+
+      it 'treats known_txids entries as known ancestors' do
+        beef_data = build_test_beef(satoshis: 500, ancestor_count: 1)
+
+        # Get the ancestor txid but do NOT put it in ProofStore
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        ancestor_txid = beef.transactions
+                            .find { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                            &.txid
+
+        result = engine.internalize_action(
+          tx: beef_data,
+          description: 'known txids supple',
+          trust_self: 'known',
+          known_txids: [ancestor_txid],
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'known_txids' } }
+          ]
+        )
+
+        expect(result).to eq({ accepted: true })
+      end
+
+      it 'runs full validation without trust_self regardless of ProofStore' do
+        beef_data = build_test_beef(satoshis: 500, ancestor_count: 1)
+
+        # Pre-populate ProofStore — but since trust_self is nil, full validation runs
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        beef.transactions
+            .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+            .each do |bt|
+          proof_store.save_proof(
+            txid: bt.txid,
+            proof: { height: 800_000, merkle_path: "\x00".b }
+          )
+        end
+
+        # Without trust_self, BEEF keeps its original proven format — validation passes
+        # because the ancestors have valid BUMPs in the BEEF itself
+        result = engine.internalize_action(
+          tx: beef_data,
+          description: 'no trust self full',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'no_trust' } }
+          ]
+        )
+
+        expect(result).to eq({ accepted: true })
+      end
+    end
+
+    # --- Ancestor proof chain storage (#33) ---
+
+    context 'ancestor proof chain storage' do
+      it 'stores raw_tx for each ancestor in ProofStore' do
+        beef_data = build_test_beef(satoshis: 500, ancestor_count: 2)
+
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        ancestor_txids = beef.transactions
+                             .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                             .map(&:txid)
+
+        engine.internalize_action(
+          tx: beef_data,
+          description: 'raw_tx storage test',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'raw_tx_test' } }
+          ]
+        )
+
+        ancestor_txids.each do |txid|
+          proof = proof_store.find_proof(txid: txid)
+          expect(proof).not_to be_nil
+          expect(proof[:raw_tx]).to be_a(String)
+          expect(proof[:raw_tx].bytesize).to be > 0
+
+          # Verify the raw_tx can be deserialized back to a valid transaction
+          tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
+          expect(tx.txid).to eq(txid)
+        end
+      end
+
+      it 'stores consistent format from BEEF and broadcast sources' do
+        # BEEF source: internalize action stores merkle_path as BRC-74 binary
+        beef_data = build_test_beef(satoshis: 500, ancestor_count: 1)
+
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        ancestor_bt = beef.transactions.find do |bt|
+          bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP
+        end
+        ancestor_txid = ancestor_bt.txid
+
+        engine.internalize_action(
+          tx: beef_data,
+          description: 'format consistency',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'fmt_test' } }
+          ]
+        )
+
+        proof = proof_store.find_proof(txid: ancestor_txid)
+        expect(proof[:merkle_path].encoding).to eq(Encoding::ASCII_8BIT)
+
+        # Verify it can be deserialized as BRC-74
+        mp, = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path])
+        expect(mp).to be_a(BSV::Transaction::MerklePath)
+        expect(mp.block_height).to be_a(Integer)
+      end
+    end
+
+    context 'handle_proof_from_broadcast normalization' do
+      it 'normalizes hex merkle_path to binary before storing' do
+        # Create an action that will receive a broadcast proof
+        beef_data = build_test_beef(satoshis: 500)
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        subject_txid = beef.subject_txid
+
+        engine.internalize_action(
+          tx: beef_data,
+          description: 'hex proof normal',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'hex_test' } }
+          ]
+        )
+
+        # Build a valid merkle path and encode as hex
+        txid_internal = subject_txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        mp = BSV::Transaction::MerklePath.new(
+          block_height: 850_000,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+        merkle_path_hex = mp.to_binary.unpack1('H*')
+
+        # Find the action and simulate broadcast proof with hex merkle_path
+        action = store.find_action(txid: subject_txid)
+        engine.send(:handle_proof_from_broadcast, action[:id], {
+                      txid: subject_txid,
+                      block_height: 850_000,
+                      merkle_path: merkle_path_hex
+                    })
+
+        proof = proof_store.find_proof(txid: subject_txid)
+        expect(proof).not_to be_nil
+        expect(proof[:merkle_path].encoding).to eq(Encoding::ASCII_8BIT)
+
+        # Verify it can be deserialized
+        stored_mp, = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path])
+        expect(stored_mp.block_height).to eq(850_000)
+      end
+
+      it 'passes through binary merkle_path unchanged' do
+        beef_data = build_test_beef(satoshis: 500)
+        beef = BSV::Transaction::Beef.from_binary(beef_data)
+        subject_txid = beef.subject_txid
+
+        engine.internalize_action(
+          tx: beef_data,
+          description: 'bin proof pass',
+          outputs: [
+            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+              insertion_remittance: { basket: 'bin_test' } }
+          ]
+        )
+
+        txid_internal = subject_txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        mp = BSV::Transaction::MerklePath.new(
+          block_height: 850_000,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+        merkle_path_binary = mp.to_binary
+
+        action = store.find_action(txid: subject_txid)
+        engine.send(:handle_proof_from_broadcast, action[:id], {
+                      txid: subject_txid,
+                      block_height: 850_000,
+                      merkle_path: merkle_path_binary
+                    })
+
+        proof = proof_store.find_proof(txid: subject_txid)
+        expect(proof[:merkle_path]).to eq(merkle_path_binary)
+      end
+
+      it 'stores raw_tx from the action for BEEF construction' do
+        # Create an outgoing action so it has raw_tx set
+        locking_script = SecureRandom.random_bytes(25)
+        result = engine.create_action(
+          description: 'broadcast raw_tx',
+          no_send: true,
+          outputs: [{ satoshis: 500, locking_script: locking_script,
+                      basket: 'proof_raw_tx' }]
+        )
+
+        txid = result[:txid]
+        action = store.find_action(txid: txid)
+
+        # Simulate ARC returning MINED with merkle_path
+        txid_internal = txid.reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        mp = BSV::Transaction::MerklePath.new(
+          block_height: 850_000,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+
+        engine.send(:handle_proof_from_broadcast, action[:id], {
+                      txid: txid,
+                      block_height: 850_000,
+                      merkle_path: mp.to_binary
+                    })
+
+        proof = proof_store.find_proof(txid: txid)
+        expect(proof).not_to be_nil
+        expect(proof[:raw_tx]).not_to be_nil
+        expect(proof[:raw_tx].bytesize).to be > 0
+      end
     end
   end
 
@@ -1654,13 +2386,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(result[:tx]).to be_a(String)
 
         # Deserialize and verify wire format
-        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(1)
         expect(parsed.outputs.length).to eq(1)
         expect(parsed.outputs[0].satoshis).to eq(900)
 
         # Verify txid = double-SHA-256 of serialized tx (display byte order)
-        expected_txid = BSV::Primitives::Digest.sha256d(result[:tx]).reverse
+        expected_txid = parse_beef_tx(result[:tx]).txid
         expect(result[:txid]).to eq(expected_txid)
 
         # Set source data for script verification
@@ -1670,8 +2402,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         # Verify the input signature
         expect(parsed.verify_input(0)).to be true
 
-        # Verify serialization round-trip
-        expect(parsed.to_binary).to eq(result[:tx])
+        # Verify BEEF round-trip: re-parsing yields the same raw tx
+        reparsed = parse_beef_tx(result[:tx])
+        expect(reparsed.to_binary).to eq(parsed.to_binary)
 
         # Verify outputs are promoted in the database
         payments = engine_with_keys.list_outputs(basket: 'payments')
@@ -1704,7 +2437,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           randomize_outputs: false
         )
 
-        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(3)
         expect(parsed.outputs.length).to eq(1)
         expect(parsed.outputs[0].satoshis).to eq(1400)
@@ -1720,7 +2453,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         end
 
         # Verify txid
-        expected_txid = BSV::Primitives::Digest.sha256d(result[:tx]).reverse
+        expected_txid = parse_beef_tx(result[:tx]).txid
         expect(result[:txid]).to eq(expected_txid)
       end
     end
@@ -1751,7 +2484,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           randomize_outputs: false
         )
 
-        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(1)
         expect(parsed.outputs.length).to eq(3)
         expect(parsed.outputs.map(&:satoshis)).to eq([600, 700, 500])
@@ -1786,7 +2519,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(result[:txid].bytesize).to eq(32)
 
         # Transaction is valid
-        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        parsed = parse_beef_tx(result[:tx])
         parsed.inputs[0].source_satoshis = 1000
         parsed.inputs[0].source_locking_script = p2pkh_locking_script_for(derive_key)
         expect(parsed.verify_input(0)).to be true
@@ -1826,7 +2559,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(sign_result[:txid].bytesize).to eq(32)
 
         # Verify the signed transaction
-        parsed = BSV::Transaction::Transaction.from_binary(sign_result[:tx])
+        parsed = parse_beef_tx(sign_result[:tx])
         expect(parsed.inputs.length).to eq(1)
         expect(parsed.outputs.length).to eq(1)
         expect(parsed.outputs[0].satoshis).to eq(900)
@@ -1837,7 +2570,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(parsed.verify_input(0)).to be true
 
         # Verify txid
-        expected_txid = BSV::Primitives::Digest.sha256d(sign_result[:tx]).reverse
+        expected_txid = parse_beef_tx(sign_result[:tx]).txid
         expect(sign_result[:txid]).to eq(expected_txid)
       end
     end
@@ -1870,12 +2603,12 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           no_send: true
         )
 
-        parsed = BSV::Transaction::Transaction.from_binary(result[:tx])
+        parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs[0].unlocking_script.to_binary).to eq(custom_unlock)
         expect(parsed.outputs[0].satoshis).to eq(900)
 
         # Txid is still valid (even though the custom script won't verify against P2PKH)
-        expected_txid = BSV::Primitives::Digest.sha256d(result[:tx]).reverse
+        expected_txid = parse_beef_tx(result[:tx]).txid
         expect(result[:txid]).to eq(expected_txid)
       end
     end
@@ -1901,9 +2634,141 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         )
 
         # The txid from create_action should match the double-SHA-256
-        computed_txid = BSV::Primitives::Digest.sha256d(result[:tx]).reverse
+        computed_txid = parse_beef_tx(result[:tx]).txid
         expect(result[:txid]).to eq(computed_txid)
       end
+    end
+  end
+
+  # --- Ancestor proof chain storage (#33) ---
+
+  describe '#collect_input_ancestry (private)' do
+    def p2pkh_locking_script_for(private_key)
+      pubkey_hash = BSV::Primitives::Digest.hash160(private_key.public_key.compressed)
+      BSV::Script::Script.p2pkh_lock(pubkey_hash)
+    end
+
+    def derive_key(prefix: 'wallet payment', suffix: 'suffix', counterparty: 'self')
+      key_deriver.derive_private_key(
+        protocol_id: [2, prefix], key_id: suffix, counterparty: counterparty
+      )
+    end
+
+    it 'returns empty for action with no proven ancestors' do
+      fund_wallet(satoshis: 1000)
+      listed = engine_with_keys.list_outputs(basket: 'default')
+      output_id = listed[:outputs].first[:id]
+
+      result = engine_with_keys.create_action(
+        description: 'no ancestors test',
+        no_send: true,
+        inputs: [{ output_id: output_id }],
+        outputs: [{ satoshis: 900, locking_script: SecureRandom.random_bytes(25) }]
+      )
+
+      action = store.find_action(txid: result[:txid])
+      ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
+      expect(ancestry).to eq([])
+    end
+
+    it 'returns ancestor transactions with merkle_path for proven inputs' do
+      fund_wallet(satoshis: 1000)
+      listed = engine_with_keys.list_outputs(basket: 'default')
+      output_id = listed[:outputs].first[:id]
+
+      result = engine_with_keys.create_action(
+        description: 'proven ancestry test',
+        no_send: true,
+        inputs: [{ output_id: output_id }],
+        outputs: [{ satoshis: 900, locking_script: SecureRandom.random_bytes(25) }]
+      )
+
+      # Simulate a proof arriving for the source transaction
+      source_action = store.find_action(txid: result[:txid])
+      resolved = store.resolve_inputs_for_signing(action_id: source_action[:id])
+      source_txid = resolved.first[:source_txid]
+
+      # Build a fake source raw_tx and merkle proof
+      fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      fake_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                           satoshis: 1000,
+                           locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                         ))
+      fake_raw_tx = fake_tx.to_binary
+
+      txid_internal = source_txid.is_a?(String) ? source_txid.reverse : source_txid
+      sibling_hash = SecureRandom.random_bytes(32)
+      mp = BSV::Transaction::MerklePath.new(
+        block_height: 800_000,
+        path: [[
+          BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+          BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+        ]]
+      )
+
+      proof_store.save_proof(
+        txid: source_txid,
+        proof: { height: 800_000, merkle_path: mp.to_binary, raw_tx: fake_raw_tx }
+      )
+
+      ancestry = engine_with_keys.send(:collect_input_ancestry, source_action[:id])
+      expect(ancestry.length).to eq(1)
+      expect(ancestry.first).to be_a(BSV::Transaction::Transaction)
+      expect(ancestry.first.merkle_path).to be_a(BSV::Transaction::MerklePath)
+      expect(ancestry.first.merkle_path.block_height).to eq(800_000)
+    end
+
+    it 'collects ancestry for multi-input transactions' do
+      fund_wallet(satoshis: 500, suffix: 'anc0')
+      fund_wallet(satoshis: 500, suffix: 'anc1')
+      fund_wallet(satoshis: 500, suffix: 'anc2')
+
+      listed = engine_with_keys.list_outputs(basket: 'default')
+      output_ids = listed[:outputs].sort_by { |o| o[:id] }.map { |o| o[:id] }
+
+      result = engine_with_keys.create_action(
+        description: 'multi anc test 33',
+        no_send: true,
+        inputs: output_ids.each_with_index.map { |id, i| { output_id: id, vin: i } },
+        outputs: [{ satoshis: 1400, locking_script: SecureRandom.random_bytes(25) }]
+      )
+
+      action = store.find_action(txid: result[:txid])
+      resolved = store.resolve_inputs_for_signing(action_id: action[:id])
+
+      # Add proofs for 2 of 3 inputs (different block heights)
+      proven_count = 0
+      resolved.each_with_index do |r, i|
+        next if i == 2 # leave the third without proof
+
+        fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        fake_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                             satoshis: 500,
+                             locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                           ))
+
+        txid_internal = r[:source_txid].reverse
+        sibling_hash = SecureRandom.random_bytes(32)
+        mp = BSV::Transaction::MerklePath.new(
+          block_height: 800_000 + i,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: txid_internal, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
+          ]]
+        )
+
+        proof_store.save_proof(
+          txid: r[:source_txid],
+          proof: { height: 800_000 + i, merkle_path: mp.to_binary, raw_tx: fake_tx.to_binary }
+        )
+        proven_count += 1
+      end
+
+      ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
+      expect(ancestry.length).to eq(proven_count)
+
+      block_heights = ancestry.map { |tx| tx.merkle_path.block_height }
+      expect(block_heights).to contain_exactly(800_000, 800_001)
     end
   end
 end
