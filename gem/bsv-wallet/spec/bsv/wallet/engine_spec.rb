@@ -184,7 +184,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'output', basket: 'deferred' }
+            output_description: 'output', basket: 'deferred', output_type: 'change' }
         ]
       )
 
@@ -257,7 +257,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           accept_delayed_broadcast: false,
           outputs: [
             { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-              output_description: 'output', basket: 'payments' }
+              output_description: 'output', basket: 'payments', output_type: 'change' }
           ]
         )
 
@@ -272,7 +272,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   end
 
   describe '#sign_action' do
-    it 'raises for invalid reference' do
+    it 'raises for non-UUID reference' do
+      expect do
+        engine.sign_action(spends: {}, reference: 'not-a-uuid')
+      end.to raise_error(BSV::Wallet::InvalidParameterError)
+    end
+
+    it 'raises for nonexistent reference' do
       expect do
         engine.sign_action(spends: {}, reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
@@ -286,7 +292,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: locking_script,
-            output_description: 'output', basket: 'deferred_sign' }
+            output_description: 'output', basket: 'deferred_sign', output_type: 'change' }
         ]
       )
 
@@ -506,7 +512,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           sign_and_process: false,
           outputs: [
             { satoshis: 500, locking_script: binary_script,
-              basket: 'deferred_test', output_description: 'test output' }
+              basket: 'deferred_test', output_description: 'test output', output_type: 'change' }
           ]
         )
 
@@ -540,7 +546,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           sign_and_process: false,
           outputs: [
             { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-              basket: 'cascade_test' }
+              basket: 'cascade_test', output_type: 'change' }
           ]
         )
 
@@ -611,7 +617,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       expect(found).to be_nil
     end
 
-    it 'raises for invalid reference' do
+    it 'raises for non-UUID reference' do
+      expect do
+        engine.abort_action(reference: 'not-a-uuid')
+      end.to raise_error(BSV::Wallet::InvalidParameterError)
+    end
+
+    it 'raises for nonexistent reference' do
       expect do
         engine.abort_action(reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
@@ -1445,11 +1457,11 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'create outputs', no_send: true,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'first', basket: 'wallet', tags: ['payment'] },
+            output_description: 'first', basket: 'wallet', tags: ['payment'], output_type: 'root' },
           { satoshis: 300, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'second', basket: 'wallet', tags: ['change'] },
+            output_description: 'second', basket: 'wallet', tags: ['change'], output_type: 'change' },
           { satoshis: 100, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'third', basket: 'other' }
+            output_description: 'third', basket: 'other', output_type: 'root' }
         ]
       )
     end
@@ -1477,7 +1489,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'with output', no_send: true,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'to relinquish', basket: 'wallet' }
+            output_description: 'to relinquish', basket: 'wallet', output_type: 'root' }
         ]
       )
 
@@ -2409,7 +2421,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           inputs: [{ output_id: output_id }],
           outputs: [
             { satoshis: 900, locking_script: output_script,
-              output_description: 'payment', basket: 'payments' }
+              output_description: 'payment', basket: 'payments', output_type: 'root' }
           ],
           randomize_outputs: false
         )

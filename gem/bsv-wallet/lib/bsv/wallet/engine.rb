@@ -20,6 +20,7 @@ module BSV
       include BSV::Wallet::Interface::BRC100
 
       ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK MINED ACCEPTED_BY_NETWORK IMMUTABLE].freeze
+      UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
       def initialize(store:, utxo_pool:, broadcast_queue:, proof_store:,
                      key_deriver: nil, chain_tracker: nil, network: :mainnet)
@@ -118,6 +119,7 @@ module BSV
       def sign_action(spends:, reference:, accept_delayed_broadcast: true,
                       return_txid_only: false, no_send: false, send_with: nil,
                       originator: nil)
+        validate_reference!(reference)
         action = @store.find_action(reference: reference)
         raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
@@ -154,6 +156,7 @@ module BSV
       end
 
       def abort_action(reference:, originator: nil)
+        validate_reference!(reference)
         action = @store.find_action(reference: reference)
         raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
@@ -227,7 +230,13 @@ module BSV
             )
           end
           spec[:locking_script] = tx_out.locking_script.to_binary
-          spec[:satoshis] = tx_out.satoshis if spec[:satoshis].nil? || spec[:satoshis].zero?
+          if spec[:satoshis]&.positive? && spec[:satoshis] != tx_out.satoshis
+            raise BSV::Wallet::InvalidParameterError.new(
+              'satoshis',
+              "declared satoshis #{spec[:satoshis]} != transaction output #{tx_out.satoshis} at vout #{spec[:vout]}"
+            )
+          end
+          spec[:satoshis] = tx_out.satoshis
           spec
         end
         @store.promote_action(action_id: action_result[:id], outputs: output_specs)
@@ -524,11 +533,6 @@ module BSV
                    out[:vout] || idx
                  end
 
-          # Infer output_type when not explicit: wallet-owned outputs without
-          # derivation fields are 'change' (self-payment, no BRC-42 derivation).
-          inferred_type = out[:output_type]
-          inferred_type = 'change' if inferred_type.nil? && out[:derivation_prefix].nil? && out[:basket]
-
           {
             satoshis: out[:satoshis],
             vout: vout,
@@ -537,7 +541,7 @@ module BSV
             tags: out[:tags],
             description: out[:output_description],
             custom_instructions: out[:custom_instructions],
-            output_type: inferred_type,
+            output_type: out[:output_type],
             derivation_prefix: out[:derivation_prefix],
             derivation_suffix: out[:derivation_suffix],
             sender_identity_key: out[:sender_identity_key]
@@ -855,11 +859,18 @@ module BSV
           spec[:basket]              = rem[:basket]
           spec[:custom_instructions] = rem[:custom_instructions]
           spec[:tags]                = rem[:tags]
-          # Basket insertion without derivation fields is a root-key payment
+          # Basket insertion protocol: no derivation fields means root-key ownership.
+          # This is a protocol-level decision, not inference from field absence.
           spec[:output_type] = 'root' unless rem[:derivation_prefix]
         end
 
         spec
+      end
+
+      def validate_reference!(reference)
+        return if reference.is_a?(String) && reference.match?(UUID_RE)
+
+        raise BSV::Wallet::InvalidParameterError, 'reference'
       end
 
       def require_key_deriver!

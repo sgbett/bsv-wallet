@@ -48,9 +48,9 @@ module BSV
         # Adds to the proof-harvesting work queue (tx_reqs).
         #
         # @param wtxid [String] 32-byte binary wtxid (wire byte order)
-        # @param raw_tx [String, nil] binary transaction (aids lookup)
+        # @param raw_tx [String] binary transaction (required — tx_proofs.raw_tx is NOT NULL)
         # @param input_beef [String, nil] binary BEEF for context
-        def request_proof(wtxid:, raw_tx: nil, input_beef: nil)
+        def request_proof(wtxid:, raw_tx:, input_beef: nil)
           raise NotImplementedError
         end
 
