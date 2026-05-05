@@ -5,14 +5,18 @@ RSpec.describe BSV::Wallet::Postgres::UTXOPool do
   subject(:pool) { described_class.new(store: store) }
 
   def create_funded_output(satoshis: 1000, vout: 0, basket: 'default')
-    source = BSV::Wallet::Postgres::Action.create(outgoing: false, wtxid: SecureRandom.random_bytes(32))
+    source = BSV::Wallet::Postgres::Action.create(outgoing: false, description: 'test action',
+                                                  wtxid: SecureRandom.random_bytes(32),
+                                                  raw_tx: SecureRandom.random_bytes(100))
     output = BSV::Wallet::Postgres::Output.create(
       action_id: source.id, satoshis: satoshis, vout: vout,
       locking_script: SecureRandom.random_bytes(25)
     )
-    BSV::Wallet::Postgres::Spendable.create(output_id: output.id)
-    basket_id = store.find_or_create_basket(name: basket)
-    BSV::Wallet::Postgres::OutputBasket.create(output_id: output.id, basket_id: basket_id)
+    BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: source.id, output_type: 'change')
+    unless basket == 'default'
+      basket_id = store.find_or_create_basket(name: basket)
+      BSV::Wallet::Postgres::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: source.id)
+    end
     output
   end
 
@@ -71,7 +75,7 @@ RSpec.describe BSV::Wallet::Postgres::UTXOPool do
       output = create_funded_output(satoshis: 1000, vout: 0)
       create_funded_output(satoshis: 500, vout: 0)
 
-      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true)
+      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action')
       BSV::Wallet::Postgres::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
       expect(pool.balance).to eq(500)

@@ -76,6 +76,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     BSV::Transaction::Transaction.from_beef(beef_data)
   end
 
+  # Real signed P2PKH transaction (191 bytes) for test proofs.
+  # Must be parseable by Transaction.from_binary for BEEF construction.
+  DUMMY_RAW_TX = ['01000000016ce7229f014164e254aad172b1f8b40d496942ad7e323b47e0424c2b2e2e3772010000006a4730440220463fcf8f57a61c4f8ede208773db8732bf3a0757d929a8cbbe29bf4905fe5ef6022005d74398faf5b24912821836171af44f55f89858f3edf92863cde4823da11d4641210362f5fb9274834bb0cd0376a8d5d02bdbf459a37a62c5baef3fb06d1159b55597ffffffff01f0991600000000001976a9141f36a49fcf6ada1f74f82377b33b17b68f7a016188acd3740e00'].pack('H*').freeze
+
   # Pre-fund the wallet with spendable outputs.
   #
   # Creates outputs with real P2PKH locking scripts derived from the
@@ -83,13 +87,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   # to random scripts when no key_deriver is available.
   def fund_wallet(satoshis: 1000, count: 1, basket: 'default',
                   prefix: 'wallet payment', suffix: 'suffix',
-                  sender_identity_key: nil)
+                  sender_identity_key: 'self')
     source_action = store.create_action(
       action: { description: 'funding source', broadcast: :none, outgoing: false }
     )
     # Source actions need a real wtxid for input resolution
     source_wtxid = SecureRandom.random_bytes(32)
-    store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: "\x00".b)
+    store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: DUMMY_RAW_TX)
 
     outputs = count.times.map do |i|
       out_suffix = count > 1 ? "#{suffix}#{i}" : suffix
@@ -134,14 +138,14 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
       hex_dtxid = 'a' * 64 # 64-char hex string, not 32-byte binary
       expect do
-        store.sign_action(action_id: action[:id], wtxid: hex_dtxid, raw_tx: "\x00".b)
+        store.sign_action(action_id: action[:id], wtxid: hex_dtxid, raw_tx: DUMMY_RAW_TX)
       end.to raise_error(ArgumentError, /sign_action wtxid/)
     end
 
     it 'ProofStore#save_proof rejects display-order hex as wtxid' do
       hex_dtxid = 'b' * 64
       expect do
-        proof_store.save_proof(wtxid: hex_dtxid, proof: { raw_tx: "\x00".b })
+        proof_store.save_proof(wtxid: hex_dtxid, proof: { raw_tx: DUMMY_RAW_TX })
       end.to raise_error(ArgumentError, /save_proof wtxid/)
     end
 
@@ -180,7 +184,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'output', basket: 'deferred' }
+            output_description: 'output', basket: 'deferred', output_type: 'change' }
         ]
       )
 
@@ -253,7 +257,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           accept_delayed_broadcast: false,
           outputs: [
             { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-              output_description: 'output', basket: 'payments' }
+              output_description: 'output', basket: 'payments', output_type: 'change' }
           ]
         )
 
@@ -268,9 +272,15 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
   end
 
   describe '#sign_action' do
-    it 'raises for invalid reference' do
+    it 'raises for non-UUID reference' do
       expect do
-        engine.sign_action(spends: {}, reference: 'nonexistent')
+        engine.sign_action(spends: {}, reference: 'not-a-uuid')
+      end.to raise_error(BSV::Wallet::InvalidParameterError)
+    end
+
+    it 'raises for nonexistent reference' do
+      expect do
+        engine.sign_action(spends: {}, reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
 
@@ -282,7 +292,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: locking_script,
-            output_description: 'output', basket: 'deferred_sign' }
+            output_description: 'output', basket: 'deferred_sign', output_type: 'change' }
         ]
       )
 
@@ -332,7 +342,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     # Fund the wallet with a real P2PKH output that can be signed
     def fund_wallet_with_keys(satoshis: 1000, count: 1,
                               prefix: 'wallet payment', suffix: 'suffix1',
-                              sender_identity_key: nil)
+                              sender_identity_key: 'self')
       derived_key = key_deriver.derive_private_key(
         protocol_id: [2, prefix], key_id: suffix,
         counterparty: sender_identity_key || 'self'
@@ -345,7 +355,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
       # Set a real wtxid on the source action
       source_wtxid = SecureRandom.random_bytes(32)
-      store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: "\x00".b)
+      store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: DUMMY_RAW_TX)
 
       outputs = count.times.map do |i|
         {
@@ -502,7 +512,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           sign_and_process: false,
           outputs: [
             { satoshis: 500, locking_script: binary_script,
-              basket: 'deferred_test', output_description: 'test output' }
+              basket: 'deferred_test', output_description: 'test output', output_type: 'change' }
           ]
         )
 
@@ -536,7 +546,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           sign_and_process: false,
           outputs: [
             { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-              basket: 'cascade_test' }
+              basket: 'cascade_test', output_type: 'change' }
           ]
         )
 
@@ -607,9 +617,15 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       expect(found).to be_nil
     end
 
-    it 'raises for invalid reference' do
+    it 'raises for non-UUID reference' do
       expect do
-        engine.abort_action(reference: 'nonexistent')
+        engine.abort_action(reference: 'not-a-uuid')
+      end.to raise_error(BSV::Wallet::InvalidParameterError)
+    end
+
+    it 'raises for nonexistent reference' do
+      expect do
+        engine.abort_action(reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
   end
@@ -618,15 +634,15 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     before do
       engine.create_action(
         description: 'payment action', no_send: true, labels: ['payment'],
-        outputs: [{ satoshis: 100, output_description: 'output', locking_script: "\x00".b }]
+        outputs: [{ satoshis: 100, output_description: 'output', locking_script: "\x01".b }]
       )
       engine.create_action(
         description: 'transfer action', no_send: true, labels: ['transfer'],
-        outputs: [{ satoshis: 200, output_description: 'output', locking_script: "\x00".b }]
+        outputs: [{ satoshis: 200, output_description: 'output', locking_script: "\x01".b }]
       )
       engine.create_action(
         description: 'both labels', no_send: true, labels: %w[payment transfer],
-        outputs: [{ satoshis: 300, output_description: 'output', locking_script: "\x00".b }]
+        outputs: [{ satoshis: 300, output_description: 'output', locking_script: "\x01".b }]
       )
     end
 
@@ -1126,7 +1142,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
             .each do |bt|
           proof_store.save_proof(
             wtxid: bt.wtxid,
-            proof: { height: 800_000, merkle_path: "\x00".b }
+            proof: { height: 800_000, merkle_path: "\x00".b, raw_tx: bt.transaction.to_binary }
           )
         end
 
@@ -1148,13 +1164,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
         # Only populate ProofStore for the first ancestor
         beef = BSV::Transaction::Beef.from_binary(beef_data)
-        proven_txids = beef.transactions
-                           .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
-                           .map(&:wtxid)
+        first_ancestor = beef.transactions
+                             .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                             .first
 
         proof_store.save_proof(
-          wtxid: proven_txids.first,
-          proof: { height: 800_000, merkle_path: "\x00".b }
+          wtxid: first_ancestor.wtxid,
+          proof: { height: 800_000, merkle_path: "\x00".b, raw_tx: first_ancestor.transaction.to_binary }
         )
 
         result = engine.internalize_action(
@@ -1236,7 +1252,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
             .each do |bt|
           proof_store.save_proof(
             wtxid: bt.wtxid,
-            proof: { height: 800_000, merkle_path: "\x00".b }
+            proof: { height: 800_000, merkle_path: "\x00".b, raw_tx: bt.transaction.to_binary }
           )
         end
 
@@ -1441,11 +1457,11 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'create outputs', no_send: true,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'first', basket: 'wallet', tags: ['payment'] },
+            output_description: 'first', basket: 'wallet', tags: ['payment'], output_type: 'root' },
           { satoshis: 300, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'second', basket: 'wallet', tags: ['change'] },
+            output_description: 'second', basket: 'wallet', tags: ['change'], output_type: 'change' },
           { satoshis: 100, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'third', basket: 'other' }
+            output_description: 'third', basket: 'other', output_type: 'root' }
         ]
       )
     end
@@ -1473,7 +1489,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'with output', no_send: true,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'to relinquish', basket: 'wallet' }
+            output_description: 'to relinquish', basket: 'wallet', output_type: 'root' }
         ]
       )
 
@@ -2405,7 +2421,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           inputs: [{ output_id: output_id }],
           outputs: [
             { satoshis: 900, locking_script: output_script,
-              output_description: 'payment', basket: 'payments' }
+              output_description: 'payment', basket: 'payments', output_type: 'root' }
           ],
           randomize_outputs: false
         )
@@ -2683,7 +2699,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       )
     end
 
-    it 'returns empty for action with no proven ancestors' do
+    it 'returns unproven ancestors without merkle_path' do
       fund_wallet(satoshis: 1000)
       listed = engine_with_keys.list_outputs(basket: 'default')
       output_id = listed[:outputs].first[:id]
@@ -2697,7 +2713,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       action = store.find_action(wtxid: result[:txid])
       ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
-      expect(ancestry).to eq([])
+      expect(ancestry.length).to eq(1)
+      expect(ancestry.first.merkle_path).to be_nil
     end
 
     it 'returns ancestor transactions with merkle_path for proven inputs' do
@@ -2794,10 +2811,15 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       end
 
       ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
-      expect(ancestry.length).to eq(proven_count)
+      expect(ancestry.length).to eq(3)
 
-      block_heights = ancestry.map { |tx| tx.merkle_path.block_height }
+      proven = ancestry.select(&:merkle_path)
+      expect(proven.length).to eq(proven_count)
+      block_heights = proven.map { |tx| tx.merkle_path.block_height }
       expect(block_heights).to contain_exactly(800_000, 800_001)
+
+      unproven = ancestry.reject(&:merkle_path)
+      expect(unproven.length).to eq(1)
     end
   end
 end

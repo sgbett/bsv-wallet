@@ -37,7 +37,7 @@ module BSV
           TxProof.where(wtxid: Sequel.blob(wtxid)).any?
         end
 
-        def request_proof(wtxid:, raw_tx: nil, input_beef: nil)
+        def request_proof(wtxid:, raw_tx:, input_beef: nil)
           BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'request_proof wtxid')
           @db[:tx_reqs].insert_conflict(target: :wtxid).insert(
             wtxid:      Sequel.blob(wtxid),
@@ -67,7 +67,8 @@ module BSV
               proof_id = save_proof(wtxid: req.wtxid, proof: {
                 height:      data[:blockHeight] || data[:block_height],
                 block_hash:  decode_hex(data[:blockHash] || data[:block_hash]),
-                merkle_path: decode_hex(data[:merklePath] || data[:merkle_path])
+                merkle_path: decode_hex(data[:merklePath] || data[:merkle_path]),
+                raw_tx:      req.raw_tx
               })
               req.update(tx_proof_id: proof_id, status: 'completed')
               { wtxid: req.wtxid, tx_proof_id: proof_id }

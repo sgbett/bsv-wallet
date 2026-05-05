@@ -9,6 +9,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
       height: 800_000,
       block_index: 42,
       merkle_path: SecureRandom.random_bytes(64),
+      raw_tx: SecureRandom.random_bytes(100),
       block_hash: SecureRandom.random_bytes(32),
       merkle_root: SecureRandom.random_bytes(32)
     }
@@ -73,7 +74,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
 
   describe '#request_proof' do
     it 'creates a tx_req entry' do
-      proof_store.request_proof(wtxid: wtxid)
+      proof_store.request_proof(wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
       req = BSV::Wallet::Postgres::TxReq.first(wtxid: Sequel.blob(wtxid))
 
       expect(req).not_to be_nil
@@ -82,8 +83,8 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
     end
 
     it 'is idempotent — duplicate wtxid is ignored' do
-      proof_store.request_proof(wtxid: wtxid)
-      proof_store.request_proof(wtxid: wtxid)
+      proof_store.request_proof(wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
+      proof_store.request_proof(wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
 
       expect(BSV::Wallet::Postgres::TxReq.where(wtxid: Sequel.blob(wtxid)).count).to eq(1)
     end
@@ -102,7 +103,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
   describe '#process_pending' do
     context 'without arc_client' do
       it 'returns empty (no client to poll)' do
-        proof_store.request_proof(wtxid: wtxid)
+        proof_store.request_proof(wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
         expect(proof_store.process_pending).to eq([])
       end
     end
@@ -120,7 +121,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
       subject(:proof_store) { described_class.new(arc_client: arc_client) }
 
       it 'resolves pending requests and creates proofs' do
-        proof_store.request_proof(wtxid: wtxid)
+        proof_store.request_proof(wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
 
         results = proof_store.process_pending(limit: 10)
         expect(results.size).to eq(1)
@@ -144,7 +145,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
       subject(:proof_store) { described_class.new(arc_client: arc_client) }
 
       it 'increments attempts but does not create a proof' do
-        proof_store.request_proof(wtxid: wtxid)
+        proof_store.request_proof(wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
         results = proof_store.process_pending
         expect(results).to eq([])
 

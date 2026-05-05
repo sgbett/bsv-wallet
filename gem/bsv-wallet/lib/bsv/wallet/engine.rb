@@ -20,6 +20,7 @@ module BSV
       include BSV::Wallet::Interface::BRC100
 
       ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK MINED ACCEPTED_BY_NETWORK IMMUTABLE].freeze
+      UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
       def initialize(store:, utxo_pool:, broadcast_queue:, proof_store:,
                      key_deriver: nil, chain_tracker: nil, network: :mainnet)
@@ -51,8 +52,7 @@ module BSV
           action: {
             description: description, broadcast: broadcast,
             nlocktime: lock_time || 0, version: version,
-            input_beef: input_beef, outgoing: true,
-            satoshis: total_satoshis(outputs)
+            input_beef: input_beef, outgoing: true
           },
           inputs: input_specs
         )
@@ -119,6 +119,7 @@ module BSV
       def sign_action(spends:, reference:, accept_delayed_broadcast: true,
                       return_txid_only: false, no_send: false, send_with: nil,
                       originator: nil)
+        validate_reference!(reference)
         action = @store.find_action(reference: reference)
         raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
@@ -155,6 +156,7 @@ module BSV
       end
 
       def abort_action(reference:, originator: nil)
+        validate_reference!(reference)
         action = @store.find_action(reference: reference)
         raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
@@ -218,8 +220,25 @@ module BSV
         # Save ancestor proofs and link subject proof
         save_beef_proofs(beef, subject_tx.wtxid, action_result[:id])
 
-        # Process outputs by protocol
-        output_specs = outputs.map { |out| resolve_internalize_output(out) }
+        output_specs = outputs.map do |out|
+          spec = resolve_internalize_output(out)
+          tx_out = subject_tx.outputs[spec[:vout]]
+          unless tx_out
+            raise BSV::Wallet::InvalidParameterError.new(
+              'output_index',
+              "vout #{spec[:vout]} does not exist in subject transaction (#{subject_tx.outputs.length} outputs)"
+            )
+          end
+          spec[:locking_script] = tx_out.locking_script.to_binary
+          if spec[:satoshis]&.positive? && spec[:satoshis] != tx_out.satoshis
+            raise BSV::Wallet::InvalidParameterError.new(
+              'satoshis',
+              "declared satoshis #{spec[:satoshis]} != transaction output #{tx_out.satoshis} at vout #{spec[:vout]}"
+            )
+          end
+          spec[:satoshis] = tx_out.satoshis
+          spec
+        end
         @store.promote_action(action_id: action_result[:id], outputs: output_specs)
 
         { accepted: true }
@@ -497,12 +516,6 @@ module BSV
         end
       end
 
-      def total_satoshis(outputs)
-        return 0 unless outputs
-
-        outputs.sum { |o| o[:satoshis] || 0 }
-      end
-
       def attach_labels(action_id, labels)
         return unless labels&.any?
 
@@ -528,7 +541,7 @@ module BSV
             tags: out[:tags],
             description: out[:output_description],
             custom_instructions: out[:custom_instructions],
-            change: out[:change],
+            output_type: out[:output_type],
             derivation_prefix: out[:derivation_prefix],
             derivation_suffix: out[:derivation_suffix],
             sender_identity_key: out[:sender_identity_key]
@@ -846,9 +859,18 @@ module BSV
           spec[:basket]              = rem[:basket]
           spec[:custom_instructions] = rem[:custom_instructions]
           spec[:tags]                = rem[:tags]
+          # Basket insertion protocol: no derivation fields means root-key ownership.
+          # This is a protocol-level decision, not inference from field absence.
+          spec[:output_type] = 'root' unless rem[:derivation_prefix]
         end
 
         spec
+      end
+
+      def validate_reference!(reference)
+        return if reference.is_a?(String) && reference.match?(UUID_RE)
+
+        raise BSV::Wallet::InvalidParameterError, 'reference'
       end
 
       def require_key_deriver!
