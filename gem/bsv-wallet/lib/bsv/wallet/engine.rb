@@ -63,7 +63,17 @@ module BSV
         deferred = !sign_and_process ||
                    inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
 
+        # Phase 2: Build transaction (sign unless deferred)
+        txid, raw_tx, vout_mapping = build_transaction(
+          action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,
+          sign: !deferred
+        )
         if deferred
+          # Store unsigned raw_tx (empty unlocking scripts) and promote outputs now.
+          # Outputs are fully known at createAction time — the deferral is about
+          # inputs (waiting for caller-provided unlocking scripts), not outputs.
+          @store.sign_action(action_id: action_result[:id], txid: txid, raw_tx: raw_tx)
+          promote_with_outputs(action_result[:id], outputs, vout_mapping)
           return {
             signable_transaction: {
               tx: nil,
@@ -72,13 +82,11 @@ module BSV
           }
         end
 
-        # Phase 2: Sign
-        txid, raw_tx = build_transaction(inputs, outputs, lock_time, version, randomize_outputs)
         @store.sign_action(action_id: action_result[:id], txid: txid, raw_tx: raw_tx)
 
         # No-send path: promote immediately, return change outpoints
         if no_send
-          promote_with_outputs(action_result[:id], outputs)
+          promote_with_outputs(action_result[:id], outputs, vout_mapping)
           change = query_change_outpoints(action_result[:id])
           result = { txid: txid, tx: raw_tx, no_send_change: change }
           result[:send_with_results] = process_send_with(send_with) if send_with&.any?
@@ -94,7 +102,7 @@ module BSV
 
         # Phase 4: Promote (if inline broadcast accepted)
         if broadcast == :inline && accepted?(broadcast_result)
-          promote_with_outputs(action_result[:id], outputs)
+          promote_with_outputs(action_result[:id], outputs, vout_mapping)
           handle_proof_from_broadcast(action_result[:id], broadcast_result)
         end
 
@@ -109,10 +117,19 @@ module BSV
         action = @store.find_action(reference: reference)
         raise BSV::Wallet::InvalidParameterError.new('reference') unless action
 
+        # Outputs were already written during create_action — sign_action only
+        # deserializes the unsigned tx, applies caller unlocking scripts, signs
+        # remaining P2PKH inputs, and updates the action with signed raw_tx + txid.
         txid, raw_tx = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], txid: txid, raw_tx: raw_tx)
 
         broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
+
+        if no_send
+          result = { txid: txid, tx: raw_tx }
+          result[:send_with_results] = process_send_with(send_with) if send_with&.any?
+          return result
+        end
 
         unless broadcast == :none
           broadcast_result = @broadcast_queue.submit(
@@ -185,7 +202,7 @@ module BSV
         result = @store.query_outputs(
           basket: basket, tags: tags, tag_query_mode: tag_query_mode,
           limit: [limit, 10_000].min, offset: offset,
-          include_locking_scripts: include == :locking_scripts || include == 'locking scripts',
+          include_locking_scripts: [:locking_scripts, 'locking scripts'].include?(include),
           include_custom_instructions: include_custom_instructions,
           include_tags: include_tags, include_labels: include_labels
         )
@@ -218,8 +235,8 @@ module BSV
       end
 
       def reveal_counterparty_key_linkage(counterparty:, verifier:,
-                                         privileged: false, privileged_reason: nil,
-                                         originator: nil)
+                                          privileged: false, privileged_reason: nil,
+                                          originator: nil)
         require_key_deriver!
         @key_deriver.reveal_counterparty_linkage(
           counterparty: counterparty, verifier: verifier, privileged: privileged
@@ -227,8 +244,8 @@ module BSV
       end
 
       def reveal_specific_key_linkage(counterparty:, verifier:, protocol_id:, key_id:,
-                                     privileged: false, privileged_reason: nil,
-                                     originator: nil)
+                                      privileged: false, privileged_reason: nil,
+                                      originator: nil)
         require_key_deriver!
         @key_deriver.reveal_specific_linkage(
           counterparty: counterparty, verifier: verifier,
@@ -333,7 +350,7 @@ module BSV
           raise BSV::Wallet::UnsupportedActionError, 'certificate issuance protocol'
         else
           raise BSV::Wallet::InvalidParameterError.new('acquisition_protocol',
-            'either :direct or :issuance')
+                                                       'either :direct or :issuance')
         end
       end
 
@@ -426,7 +443,8 @@ module BSV
         has_outputs = outputs&.any?
         return if has_inputs || has_outputs
 
-        raise BSV::Wallet::InvalidParameterError.new('inputs/outputs', 'present (at least one input or output required)')
+        raise BSV::Wallet::InvalidParameterError.new('inputs/outputs',
+                                                     'present (at least one input or output required)')
       end
 
       def determine_broadcast(no_send, accept_delayed_broadcast)
@@ -441,9 +459,9 @@ module BSV
 
         inputs.each_with_index.map do |inp, idx|
           {
-            output_id:  inp[:output_id],
-            vin:        inp[:vin] || idx,
-            nsequence:  inp[:sequence_number],
+            output_id: inp[:output_id],
+            vin: inp[:vin] || idx,
+            nsequence: inp[:sequence_number],
             description: inp[:input_description]
           }
         end
@@ -462,19 +480,25 @@ module BSV
         @store.label_action(action_id: action_id, label_ids: label_ids)
       end
 
-      def promote_with_outputs(action_id, outputs)
+      def promote_with_outputs(action_id, outputs, vout_mapping = nil)
         return unless outputs&.any?
 
         output_specs = outputs.each_with_index.map do |out, idx|
+          vout = if vout_mapping
+                   vout_mapping[idx] || idx
+                 else
+                   out[:vout] || idx
+                 end
+
           {
-            satoshis:            out[:satoshis],
-            vout:                out[:vout] || idx,
-            locking_script:      out[:locking_script],
-            basket:              out[:basket],
-            tags:                out[:tags],
-            description:         out[:output_description],
+            satoshis: out[:satoshis],
+            vout: vout,
+            locking_script: out[:locking_script],
+            basket: out[:basket],
+            tags: out[:tags],
+            description: out[:output_description],
             custom_instructions: out[:custom_instructions],
-            change:              out[:change]
+            change: out[:change]
           }
         end
         @store.promote_action(action_id: action_id, outputs: output_specs)
@@ -492,8 +516,8 @@ module BSV
         proof_id = @proof_store.save_proof(
           txid: broadcast_result[:txid] || @store.find_action(id: action_id)&.dig(:txid),
           proof: {
-            height:      broadcast_result[:block_height],
-            block_hash:  broadcast_result[:block_hash],
+            height: broadcast_result[:block_height],
+            block_hash: broadcast_result[:block_hash],
             merkle_path: broadcast_result[:merkle_path]
           }
         )
@@ -517,7 +541,7 @@ module BSV
         end
       end
 
-      def query_change_outpoints(action_id)
+      def query_change_outpoints(_action_id)
         # Query outputs marked as change for this action
         # Returns outpoint strings for no_send_change
         []
@@ -555,19 +579,272 @@ module BSV
         result.zero?
       end
 
-      # Placeholder — SDK transaction construction
-      def build_transaction(_inputs, _outputs, _lock_time, _version, _randomize)
-        # In production: construct and sign via SDK
-        # For now: generate a dummy txid
-        txid = SecureRandom.random_bytes(32)
-        raw_tx = SecureRandom.random_bytes(100)
-        [txid, raw_tx]
+      # Build TransactionOutput objects from caller output specs.
+      #
+      # Each output spec has :satoshis and :locking_script (binary or hex).
+      # When randomize is true, the output order is shuffled and a mapping
+      # from original index to new vout position is returned.
+      #
+      # @param outputs [Array<Hash>] output specifications
+      # @param randomize [Boolean] whether to shuffle output order
+      # @return [Array(Array<TransactionOutput>, Hash<Integer,Integer>)]
+      #   the ordered outputs and original-index-to-vout mapping
+      def build_outputs(outputs, randomize)
+        return [[], {}] if outputs.nil? || outputs.empty?
+
+        tx_outputs = outputs.map do |out|
+          script = resolve_locking_script(out[:locking_script])
+          BSV::Transaction::TransactionOutput.new(
+            satoshis: out[:satoshis] || 0,
+            locking_script: script
+          )
+        end
+
+        indices = (0...tx_outputs.length).to_a
+
+        if randomize && tx_outputs.length > 1
+          indices.shuffle!
+          tx_outputs = indices.map { |i| tx_outputs[i] }
+        end
+
+        # Map original index → new vout position
+        vout_mapping = {}
+        indices.each_with_index { |orig, new_pos| vout_mapping[orig] = new_pos }
+
+        [tx_outputs, vout_mapping]
       end
 
-      # Placeholder — SDK signing for deferred (HLR #5)
-      def apply_spends(action, _spends)
-        txid = SecureRandom.random_bytes(32)
-        raw_tx = SecureRandom.random_bytes(100)
+      # Resolve a locking script value to a Script object.
+      #
+      # Binary strings (ASCII-8BIT / non-hex) are wrapped via from_binary.
+      # Hex strings are decoded via from_hex.
+      def resolve_locking_script(script_data)
+        if script_data.encoding == Encoding::ASCII_8BIT || !script_data.match?(/\A[0-9a-fA-F]*\z/)
+          BSV::Script::Script.from_binary(script_data)
+        else
+          BSV::Script::Script.from_hex(script_data)
+        end
+      end
+
+      # Build TransactionInput objects from resolved input data.
+      #
+      # For each resolved input (from Store#resolve_inputs_for_signing):
+      # - Creates a TransactionInput with the source outpoint
+      # - Sets source_satoshis and source_locking_script for sighash computation
+      # - For P2PKH inputs: derives the signing key via KeyDeriver
+      # - For custom scripts: uses the caller-provided unlocking_script
+      #
+      # @param resolved_inputs [Array<Hash>] from Store#resolve_inputs_for_signing
+      # @param caller_inputs [Array<Hash>, nil] the original inputs array from create_action
+      # @return [Array(Array<TransactionInput>, Hash<Integer, PrivateKey>)]
+      #   the ordered inputs and a mapping of input index to derived PrivateKey
+      #   (nil for custom script inputs)
+      def build_inputs(resolved_inputs, caller_inputs)
+        return [[], {}] if resolved_inputs.nil? || resolved_inputs.empty?
+
+        tx_inputs = []
+        signing_keys = {}
+
+        resolved_inputs.each_with_index do |resolved, idx|
+          input = BSV::Transaction::TransactionInput.new(
+            prev_tx_id: resolved[:source_txid],
+            prev_tx_out_index: resolved[:source_vout],
+            sequence: resolved[:sequence] || 0xFFFFFFFF
+          )
+          input.source_satoshis = resolved[:source_satoshis]
+
+          locking_script = resolve_source_locking_script(resolved[:source_locking_script])
+          input.source_locking_script = locking_script
+
+          # Find the caller's input spec for this vin (for custom unlocking scripts)
+          caller_input = find_caller_input(caller_inputs, resolved[:vin])
+
+          if caller_input&.dig(:unlocking_script)
+            # Custom unlocking script provided by the caller
+            input.unlocking_script = resolve_unlocking_script(caller_input[:unlocking_script])
+          elsif locking_script&.p2pkh?
+            # P2PKH: derive the signing key
+            require_key_deriver!
+            signing_keys[idx] = derive_signing_key(resolved)
+          else
+            raise BSV::Wallet::Error,
+                  "input at vin #{resolved[:vin]} has a non-P2PKH locking script " \
+                  'and no unlocking_script was provided'
+          end
+
+          tx_inputs << input
+        end
+
+        [tx_inputs, signing_keys]
+      end
+
+      # Resolve a source locking script (binary) into a Script object.
+      #
+      # @param script_data [String, nil] binary locking script
+      # @return [Script::Script, nil]
+      def resolve_source_locking_script(script_data)
+        return if script_data.nil?
+
+        BSV::Script::Script.from_binary(script_data)
+      end
+
+      # Resolve an unlocking script value to a Script object.
+      #
+      # @param script_data [String] binary or hex unlocking script
+      # @return [Script::Script]
+      def resolve_unlocking_script(script_data)
+        if script_data.encoding == Encoding::ASCII_8BIT || !script_data.match?(/\A[0-9a-fA-F]*\z/)
+          BSV::Script::Script.from_binary(script_data)
+        else
+          BSV::Script::Script.from_hex(script_data)
+        end
+      end
+
+      # Find the caller's input spec matching a given vin.
+      #
+      # @param caller_inputs [Array<Hash>, nil]
+      # @param vin [Integer]
+      # @return [Hash, nil]
+      def find_caller_input(caller_inputs, vin)
+        return unless caller_inputs
+
+        caller_inputs.each_with_index do |inp, idx|
+          return inp if (inp[:vin] || idx) == vin
+        end
+        nil
+      end
+
+      # Derive a private key for signing a P2PKH input.
+      #
+      # Maps the resolved input's derivation parameters to KeyDeriver's
+      # protocol_id/key_id/counterparty format:
+      # - protocol_id: [2, derivation_prefix]
+      # - key_id: derivation_suffix
+      # - counterparty: sender_identity_key, or 'self' for self-payments
+      #
+      # @param resolved [Hash] a single resolved input hash
+      # @return [BSV::Primitives::PrivateKey]
+      def derive_signing_key(resolved)
+        counterparty = resolved[:sender_identity_key] || 'self'
+
+        @key_deriver.derive_private_key(
+          protocol_id: [2, resolved[:derivation_prefix]],
+          key_id: resolved[:derivation_suffix],
+          counterparty: counterparty
+        )
+      end
+
+      # Assemble, optionally sign, and serialize an SDK transaction.
+      #
+      # Resolves locked inputs from the Store, builds TransactionInput and
+      # TransactionOutput objects via the helpers from Tasks 21/22, signs
+      # P2PKH inputs (unless sign: false), and serializes.
+      #
+      # When sign is false, the transaction is assembled with empty unlocking
+      # scripts for P2PKH inputs. This produces a valid serialized transaction
+      # that can be deserialized later for deferred signing.
+      #
+      # @param action_id [Integer] the action whose locked inputs to resolve
+      # @param inputs [Array<Hash>, nil] caller's input specs (for custom unlocking scripts)
+      # @param outputs [Array<Hash>, nil] caller's output specs
+      # @param lock_time [Integer, nil] nLockTime
+      # @param version [Integer, nil] transaction version
+      # @param randomize [Boolean] whether to shuffle output order
+      # @param sign [Boolean] whether to sign P2PKH inputs (default: true)
+      # @return [Array(String, String, Hash)] txid (32-byte display order),
+      #   raw_tx (binary), and vout_mapping (original index -> new vout)
+      def build_transaction(action_id, inputs, outputs, lock_time, version, randomize, sign: true)
+        resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
+
+        tx_outputs, vout_mapping = build_outputs(outputs, randomize)
+        tx_inputs, signing_keys = build_inputs(resolved_inputs, inputs)
+
+        tx = BSV::Transaction::Transaction.new(
+          version: version || 1,
+          lock_time: lock_time || 0
+        )
+
+        tx_inputs.each { |inp| tx.add_input(inp) }
+        tx_outputs.each { |out| tx.add_output(out) }
+
+        signing_keys.each { |idx, key| tx.sign(idx, key) } if sign
+
+        raw_tx = tx.to_binary
+        txid = tx.txid
+
+        [txid, raw_tx, vout_mapping]
+      end
+
+      # Apply caller-provided unlocking scripts and sign remaining inputs.
+      #
+      # Deserializes the unsigned transaction stored during deferred
+      # create_action, applies unlocking scripts from the spends hash,
+      # signs any remaining P2PKH inputs the wallet can sign, serializes,
+      # and returns [txid, raw_tx].
+      #
+      # @param action [Hash] the action record from find_action
+      # @param spends [Hash{Integer => Hash}] vin => { unlocking_script:, sequence_number: }
+      # @return [Array(String, String)] txid (32-byte display order), raw_tx (binary)
+      def apply_spends(action, spends)
+        # Deserialize the unsigned transaction stored during create_action
+        unsigned_raw = action[:raw_tx]
+        raise BSV::Wallet::Error, 'no unsigned transaction for deferred action' unless unsigned_raw
+
+        tx = BSV::Transaction::Transaction.from_binary(unsigned_raw)
+
+        # Resolve inputs from the Store — needed for source data (satoshis,
+        # locking script, derivation params) which are not in the wire format
+        resolved_inputs = @store.resolve_inputs_for_signing(action_id: action[:id])
+
+        # Re-attach source data and apply spends
+        signing_keys = {}
+        resolved_inputs.each_with_index do |resolved, idx|
+          input = tx.inputs[idx]
+          input.source_satoshis = resolved[:source_satoshis]
+          input.source_locking_script = resolve_source_locking_script(resolved[:source_locking_script])
+
+          spend = spends[resolved[:vin]] || spends[idx]
+          if spend
+            # Apply sequence override if provided
+            input.sequence = spend[:sequence_number] if spend[:sequence_number]
+
+            # Apply caller-provided unlocking script
+            input.unlocking_script = resolve_unlocking_script(spend[:unlocking_script]) if spend[:unlocking_script]
+          elsif input.source_locking_script&.p2pkh?
+            # No spend provided for this P2PKH input — wallet signs it
+            require_key_deriver!
+            signing_keys[idx] = derive_signing_key(resolved)
+          end
+        end
+
+        # Validate: check for unresolvable inputs (no spend + no P2PKH)
+        resolved_inputs.each_with_index do |resolved, idx|
+          spend = spends[resolved[:vin]] || spends[idx]
+          next if spend&.dig(:unlocking_script)
+          next if signing_keys.key?(idx)
+
+          raise BSV::Wallet::Error,
+                "input at vin #{resolved[:vin]} has no unlocking script in spends " \
+                'and is not a P2PKH input the wallet can sign'
+        end
+
+        # Sign wallet-owned P2PKH inputs
+        signing_keys.each { |idx, key| tx.sign(idx, key) }
+
+        # Validate spends don't reference non-existent input indices
+        valid_vins = resolved_inputs.map { |r| r[:vin] }
+        valid_indices = (0...resolved_inputs.length).to_a
+        spends.each_key do |vin|
+          next if valid_vins.include?(vin) || valid_indices.include?(vin)
+
+          raise BSV::Wallet::InvalidParameterError.new(
+            'spends', "vin #{vin} does not exist in the transaction"
+          )
+        end
+
+        raw_tx = tx.to_binary
+        txid = tx.txid
+
         [txid, raw_tx]
       end
     end

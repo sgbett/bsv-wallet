@@ -157,15 +157,29 @@ RSpec.describe BSV::Wallet::Postgres::Store do
       expect(output.reload.spendable?).to be true
     end
 
-    it 'refuses to abort a signed action' do
-      result = store.create_action(action: { description: 'signed' })
+    it 'refuses to abort a broadcast action' do
+      result = store.create_action(action: { description: 'broadcast' })
       store.sign_action(action_id: result[:id], txid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
 
+      # Create a broadcast entry — simulates having been submitted to ARC
+      BSV::Wallet::Postgres::Broadcast.create(action_id: result[:id])
+
       store.abort_action(action_id: result[:id])
 
-      # Action should still exist — the WHERE txid IS NULL guard prevented deletion
+      # Action should still exist — the broadcast guard prevented deletion
       expect(BSV::Wallet::Postgres::Action[result[:id]]).not_to be_nil
+    end
+
+    it 'allows aborting a signed but not-broadcast action (deferred)' do
+      result = store.create_action(action: { description: 'deferred' })
+      store.sign_action(action_id: result[:id], txid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+
+      # No broadcast entry — this is a deferred action with unsigned tx
+      store.abort_action(action_id: result[:id])
+
+      expect(BSV::Wallet::Postgres::Action[result[:id]]).to be_nil
     end
   end
 
@@ -371,6 +385,142 @@ RSpec.describe BSV::Wallet::Postgres::Store do
       store.set_setting(key: 'network', value: 'mainnet')
       store.set_setting(key: 'network', value: 'testnet')
       expect(store.get_setting(key: 'network')).to eq('testnet')
+    end
+  end
+
+  # --- Input Resolution ---
+
+  describe '#resolve_inputs_for_signing' do
+    let(:source_txid_1) { SecureRandom.random_bytes(32) }
+    let(:source_txid_2) { SecureRandom.random_bytes(32) }
+    let(:locking_script_1) { SecureRandom.random_bytes(25) }
+    let(:locking_script_2) { SecureRandom.random_bytes(25) }
+
+    def create_source_output(txid:, satoshis:, vout:, locking_script: nil,
+                             derivation_prefix: nil, derivation_suffix: nil,
+                             sender_identity_key: nil)
+      source_action = BSV::Wallet::Postgres::Action.create(outgoing: false, txid: txid)
+      BSV::Wallet::Postgres::Output.create(
+        action_id: source_action.id,
+        satoshis: satoshis,
+        vout: vout,
+        locking_script: locking_script,
+        derivation_prefix: derivation_prefix,
+        derivation_suffix: derivation_suffix,
+        sender_identity_key: sender_identity_key
+      )
+    end
+
+    it 'returns resolved input data for an action with inputs' do
+      output1 = create_source_output(
+        txid: source_txid_1, satoshis: 1000, vout: 0,
+        locking_script: locking_script_1,
+        derivation_prefix: 'prefix1', derivation_suffix: 'suffix1',
+        sender_identity_key: 'sender_key_1'
+      )
+      output2 = create_source_output(
+        txid: source_txid_2, satoshis: 2000, vout: 3,
+        locking_script: locking_script_2,
+        derivation_prefix: 'prefix2', derivation_suffix: 'suffix2',
+        sender_identity_key: 'sender_key_2'
+      )
+
+      action = store.create_action(
+        action: { description: 'spending' },
+        inputs: [
+          { output_id: output1.id, vin: 0 },
+          { output_id: output2.id, vin: 1, nsequence: 0xFFFFFFFE }
+        ]
+      )
+
+      resolved = store.resolve_inputs_for_signing(action_id: action[:id])
+
+      expect(resolved.size).to eq(2)
+
+      expect(resolved[0]).to eq({
+        vin: 0,
+        sequence: 4_294_967_295,
+        source_txid: source_txid_1,
+        source_vout: 0,
+        source_satoshis: 1000,
+        source_locking_script: locking_script_1,
+        derivation_prefix: 'prefix1',
+        derivation_suffix: 'suffix1',
+        sender_identity_key: 'sender_key_1'
+      })
+
+      expect(resolved[1]).to eq({
+        vin: 1,
+        sequence: 0xFFFFFFFE,
+        source_txid: source_txid_2,
+        source_vout: 3,
+        source_satoshis: 2000,
+        source_locking_script: locking_script_2,
+        derivation_prefix: 'prefix2',
+        derivation_suffix: 'suffix2',
+        sender_identity_key: 'sender_key_2'
+      })
+    end
+
+    it 'orders results by vin' do
+      output1 = create_source_output(txid: source_txid_1, satoshis: 500, vout: 0)
+      output2 = create_source_output(txid: source_txid_2, satoshis: 300, vout: 1)
+
+      action = store.create_action(
+        action: { description: 'ordering test' },
+        inputs: [
+          { output_id: output2.id, vin: 5 },
+          { output_id: output1.id, vin: 2 }
+        ]
+      )
+
+      resolved = store.resolve_inputs_for_signing(action_id: action[:id])
+      expect(resolved.map { |r| r[:vin] }).to eq([2, 5])
+    end
+
+    it 'returns source txid from the action that created the output' do
+      output = create_source_output(txid: source_txid_1, satoshis: 1000, vout: 7)
+
+      # Create a spending action — this action's txid is NOT what we want
+      spending_action = store.create_action(
+        action: { description: 'spender' },
+        inputs: [{ output_id: output.id, vin: 0 }]
+      )
+      store.sign_action(
+        action_id: spending_action[:id],
+        txid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+
+      resolved = store.resolve_inputs_for_signing(action_id: spending_action[:id])
+      expect(resolved.first[:source_txid]).to eq(source_txid_1)
+      expect(resolved.first[:source_vout]).to eq(7)
+    end
+
+    it 'returns empty array for action with no inputs' do
+      action = store.create_action(action: { description: 'no inputs' })
+
+      resolved = store.resolve_inputs_for_signing(action_id: action[:id])
+      expect(resolved).to eq([])
+    end
+
+    it 'raises when source action has nil txid' do
+      # Create a source output whose parent action has no txid
+      source_action = BSV::Wallet::Postgres::Action.create(outgoing: false)
+      output = BSV::Wallet::Postgres::Output.create(
+        action_id: source_action.id, satoshis: 500, vout: 0,
+        locking_script: SecureRandom.random_bytes(25)
+      )
+      BSV::Wallet::Postgres::Spendable.create(output_id: output.id)
+
+      action = store.create_action(
+        action: { description: 'nil txid source' },
+        inputs: [{ output_id: output.id, vin: 0 }]
+      )
+
+      expect {
+        store.resolve_inputs_for_signing(action_id: action[:id])
+      }.to raise_error(RuntimeError, /nil txid/)
     end
   end
 

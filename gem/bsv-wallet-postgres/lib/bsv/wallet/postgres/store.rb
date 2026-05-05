@@ -73,16 +73,17 @@ module BSV
                 sender_identity_key: out[:sender_identity_key]
               )
 
-              Spendable.create(output_id: output.id)
+              Spendable.create(output_id: output.id, action_id: action_id)
 
               if out[:basket]
                 basket_id = find_or_create_basket(name: out[:basket])
-                OutputBasket.create(output_id: output.id, basket_id: basket_id)
+                OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: action_id)
               end
 
               if out[:description] || out[:custom_instructions] || out.key?(:change)
                 OutputDetail.create(
                   output_id:          output.id,
+                  action_id:          action_id,
                   description:        out[:description],
                   custom_instructions: out[:custom_instructions],
                   change:             out[:change] || false
@@ -102,7 +103,15 @@ module BSV
         end
 
         def abort_action(action_id:)
-          Action.where(id: action_id, txid: nil).delete
+          # Allow deletion of actions that haven't been broadcast.
+          # After the deferred signing rework, actions may have an unsigned
+          # raw_tx and txid before broadcast — the guard checks for absence
+          # of a broadcast entry rather than absence of txid.
+          broadcast_exists = Broadcast.where(
+            Sequel[:broadcasts][:action_id] => Sequel[:actions][:id]
+          ).select(1)
+
+          Action.where(id: action_id).exclude(broadcast_exists.exists).delete
         end
 
         # --- Queries ---
@@ -300,6 +309,46 @@ module BSV
           Setting.set(key, value)
         end
 
+        # --- Input Resolution ---
+
+        def resolve_inputs_for_signing(action_id:)
+          rows = @db[:inputs]
+            .join(:outputs, id: :output_id)
+            .join(Sequel[:actions].as(:source_actions), id: Sequel[:outputs][:action_id])
+            .where(Sequel[:inputs][:action_id] => action_id)
+            .order(Sequel[:inputs][:vin])
+            .select(
+              Sequel[:inputs][:vin],
+              Sequel[:inputs][:nsequence].as(:sequence),
+              Sequel[:source_actions][:txid].as(:source_txid),
+              Sequel[:outputs][:vout].as(:source_vout),
+              Sequel[:outputs][:satoshis].as(:source_satoshis),
+              Sequel[:outputs][:locking_script].as(:source_locking_script),
+              Sequel[:outputs][:derivation_prefix],
+              Sequel[:outputs][:derivation_suffix],
+              Sequel[:outputs][:sender_identity_key]
+            )
+            .all
+
+          rows.map do |row|
+            if row[:source_txid].nil?
+              raise "Source action has nil txid for input vin #{row[:vin]} of action #{action_id}"
+            end
+
+            {
+              vin:                  row[:vin],
+              sequence:             row[:sequence],
+              source_txid:          row[:source_txid],
+              source_vout:          row[:source_vout],
+              source_satoshis:      row[:source_satoshis],
+              source_locking_script: row[:source_locking_script],
+              derivation_prefix:    row[:derivation_prefix],
+              derivation_suffix:    row[:derivation_suffix],
+              sender_identity_key:  row[:sender_identity_key]
+            }
+          end
+        end
+
         # --- UTXO Selection ---
 
         def find_spendable(satoshis:, basket: nil, exclude: [])
@@ -349,6 +398,7 @@ module BSV
           h = {
             id:          record.id,
             txid:        record.txid,
+            raw_tx:      record.raw_tx,
             reference:   record.reference,
             satoshis:    record.satoshis,
             status:      record.derived_status,

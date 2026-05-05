@@ -8,6 +8,7 @@ module BSV
 
         many_to_one :output, class: 'BSV::Wallet::Postgres::Output'
         many_to_one :basket, class: 'BSV::Wallet::Postgres::Basket'
+        many_to_one :action, class: 'BSV::Wallet::Postgres::Action'
       end
     end
   end

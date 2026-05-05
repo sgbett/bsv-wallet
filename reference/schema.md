@@ -177,7 +177,7 @@ end
 
 ### Action Lifecycle — The Database Perspective
 
-Every `createAction` is a series of small atomic database transactions. No database transaction is ever held open across a network call. No speculative data enters the immutable outputs table.
+Every `createAction` is a series of small atomic database transactions. No database transaction is ever held open across a network call.
 
 #### Phase 1: Lock (atomic, milliseconds)
 
@@ -204,7 +204,7 @@ COMMIT
 
 UTXO selection, key derivation, template evaluation, ECDSA signing — all happen in memory between Phase 1 and the Phase 2 commit. If signing fails, the action stays unsigned (inputs remain locked, reaper will clean up).
 
-If `signAndProcess: false`, this phase is deferred — `createAction` returns a `signableTransaction` reference and the caller invokes `signAction` later.
+If `signAndProcess: false`, this phase is deferred — see **Deferred Signing — signAction** below. The deferred path runs the full pipeline (including output promotion) but skips signing and broadcasting.
 
 ```
 -- signing happens in memory (key derivation, ECDSA, script templates)
@@ -278,7 +278,28 @@ COMMIT
 
 Two classes of stale actions:
 
-**Never sent** (no broadcast row — safe to reap):
+**Never signed** (deferred actions that were abandoned — have outputs but no txid):
+```sql
+-- Clean up output relationships first
+DELETE FROM spendable WHERE output_id IN (
+  SELECT o.id FROM outputs o JOIN actions a ON o.action_id = a.id
+  WHERE a.txid IS NULL AND a.created_at < (now() - interval '?')
+);
+DELETE FROM output_baskets WHERE output_id IN (
+  SELECT o.id FROM outputs o JOIN actions a ON o.action_id = a.id
+  WHERE a.txid IS NULL AND a.created_at < (now() - interval '?')
+);
+DELETE FROM output_details WHERE output_id IN (
+  SELECT o.id FROM outputs o JOIN actions a ON o.action_id = a.id
+  WHERE a.txid IS NULL AND a.created_at < (now() - interval '?')
+);
+-- Then delete the action (CASCADE to inputs, freeing locked UTXOs)
+DELETE FROM actions a
+WHERE a.txid IS NULL
+  AND a.created_at < (now() - interval '?');
+```
+
+**Never sent** (signed but never broadcast — no outputs because promotion was post-broadcast):
 ```sql
 DELETE FROM actions a
 WHERE a.txid IS NOT NULL
@@ -327,6 +348,80 @@ COMMIT
 
 After broadcast, abort is meaningless — the network has the transaction.
 
+#### Deferred Signing — signAction
+
+**When:** `createAction` is called with `signAndProcess: false`, or when any input declares `unlocking_script_length` without providing an `unlocking_script`. The wallet can't fully sign the transaction — the caller needs to provide unlocking scripts for some inputs.
+
+**What's deferred:** Only signing and broadcasting. The deferral is about **inputs**, not outputs. The outputs are fully known at `createAction` time — they don't change between `createAction` and `signAction`.
+
+**Deferred createAction** runs the full pipeline except signing and broadcasting:
+
+```
+BEGIN
+  -- Phase 1: Lock (same as synchronous)
+  INSERT INTO actions (broadcast, nlocktime, description, ...)
+    -- txid IS NULL
+  INSERT INTO inputs (action_id, output_id, vin, nsequence, description)
+    ON CONFLICT (output_id) DO NOTHING RETURNING output_id
+
+  -- Build unsigned transaction in memory
+  -- (resolve inputs, assemble outputs, determine vout ordering — no signing)
+  UPDATE actions SET raw_tx = unsigned_tx WHERE id = ?
+
+  -- Promote outputs (not deferred — outputs are known now)
+  INSERT INTO outputs (action_id, satoshis, vout, locking_script, derivation_*, sender_identity_key)
+  INSERT INTO spendable (output_id)
+  INSERT INTO output_baskets (output_id, basket_id)
+  INSERT INTO output_details (output_id, change, description, custom_instructions, ...)
+COMMIT
+```
+
+Returns `{ signable_transaction: { tx: unsigned_raw_tx, reference: action.reference } }`.
+
+**Database state after deferred createAction:**
+- `actions`: `txid IS NULL`, `raw_tx` has unsigned transaction bytes
+- `inputs`: locked, same as synchronous Phase 1
+- `outputs`: written — the wallet's change outputs are in the immutable log
+- `spendable`: written — outputs are immediately available for BEEF chaining (another `createAction` can spend them before the parent is signed and broadcast)
+
+**signAction** completes the deferred transaction:
+
+```
+-- In memory: deserialize unsigned raw_tx, apply caller unlocking scripts,
+-- sign remaining P2PKH inputs with derived keys
+BEGIN
+  UPDATE actions SET txid = ?, raw_tx = signed_tx WHERE id = ?
+COMMIT
+-- Broadcast (Phase 3 — same as synchronous path)
+```
+
+The outputs, spendable entries, baskets, and details are already written — signAction only touches the action row.
+
+**Cleanup for abandoned deferred actions:**
+
+If `signAction` is never called, the action sits unsigned with locked inputs and spendable outputs backed by a transaction that will never be broadcast. The reaper cleans up:
+
+```sql
+BEGIN
+  -- Remove phantom outputs from the UTXO set
+  DELETE FROM spendable
+    WHERE output_id IN (SELECT id FROM outputs WHERE action_id = ?);
+  DELETE FROM output_baskets
+    WHERE output_id IN (SELECT id FROM outputs WHERE action_id = ?);
+  DELETE FROM output_details
+    WHERE output_id IN (SELECT id FROM outputs WHERE action_id = ?);
+  -- Release locked UTXOs and remove the action
+  DELETE FROM actions WHERE id = ?;
+    -- CASCADE deletes inputs, freeing locked UTXOs
+COMMIT
+```
+
+Output rows remain in the immutable log — orphaned but harmless. They have no spendable entry (removed), no basket, and their parent action is gone. They are invisible to the wallet and will be archived with cold partitions.
+
+**BEEF chain failure cascade:** if a parent action fails broadcast, ARC rejects all descendant transactions. Each failed action is cleaned up independently — delete its spendable entries (removing its outputs from the UTXO set) and delete the action (cascade-deleting its inputs, freeing the locked UTXOs). No tree-walking required.
+
+**Note:** `abortAction` (above) only works for unsigned actions that have not yet written outputs — it relies on a clean CASCADE. For deferred actions that have written outputs, use the reaper cleanup path which explicitly removes the output relationships first.
+
 #### internalizeAction (incoming)
 
 ```
@@ -360,10 +455,10 @@ The output row stays in the log. The wallet forgets about it — no spendable en
 | **actions** | createAction | txid (sign), tx_proof_id (proof) | abort, reaper | Mutable — the lifecycle entity |
 | **inputs** | Phase 1 (lock) | never | CASCADE from action delete | Born and dies with its action |
 | **broadcasts** | Phase 3 (broadcast) | ARC response updates | CASCADE from action delete | Broadcast lifecycle |
-| **outputs** | Phase 4 / internalise | **never** | **never** | **Immutable log** |
-| **spendable** | Phase 4 / internalise | never | spend / relinquish | The wallet — INSERT/DELETE only |
-| **output_baskets** | Phase 4 / internalise | basket move | relinquish | Mutable membership |
-| **output_details** | Phase 4 / internalise | never | never | Immutable metadata |
+| **outputs** | Phase 4 / deferred Phase 1 / internalise | **never** | **never** | **Immutable log** |
+| **spendable** | Phase 4 / deferred Phase 1 / internalise | never | spend / relinquish / reaper | The wallet — INSERT/DELETE only |
+| **output_baskets** | Phase 4 / deferred Phase 1 / internalise | basket move | relinquish / reaper | Mutable membership |
+| **output_details** | Phase 4 / deferred Phase 1 / internalise | never | reaper | Immutable metadata (until reaped) |
 | **tx_proofs** | proof arrival / internalise | upsert on re-proof | never | Append-mostly |
 
 ---
@@ -487,15 +582,19 @@ The hot-path UTXO selection query scans this table (in memory), then PK-joins to
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
 | output_id | bigint | NOT NULL REFERENCES outputs (id) UNIQUE |
+| action_id | bigint | NOT NULL REFERENCES actions (id) ON DELETE CASCADE |
 
 **Indexes:**
 - The UNIQUE on `output_id` serves as the index (and enforces one spendable entry per output)
+
+**Cascade:** `action_id ON DELETE CASCADE` — deleting an action automatically removes its spendable entries. Denormalized (derivable via `output_id -> outputs.action_id`) but justified: 8 bytes per row, set once at creation, enables single-statement reaper cleanup.
 
 **Note:** No timestamps — INSERT at output creation, DELETE at spend/relinquish. The churn pattern is INSERT-heavy (~8 change outputs created per ~2 inputs consumed). Dead tuples from DELETEs are minimal and vacuum is trivial on a table this small.
 
 ```ruby
 class Wallet::Spendable < Sequel::Model
   many_to_one :output
+  many_to_one :action
 end
 ```
 
@@ -509,6 +608,7 @@ Display and application metadata. Never queried in the UTXO selection hot path. 
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
 | output_id | bigint | NOT NULL REFERENCES outputs (id) UNIQUE |
+| action_id | bigint | NOT NULL REFERENCES actions (id) ON DELETE CASCADE |
 | change | bool | NOT NULL DEFAULT false |
 | type | text | |
 | purpose | text | |
@@ -518,11 +618,14 @@ Display and application metadata. Never queried in the UTXO selection hot path. 
 | script_length | integer | |
 | script_offset | integer | |
 
+**Cascade:** `action_id ON DELETE CASCADE` — deleting an action automatically removes its output details.
+
 **Note:** No timestamps — written at output creation, immutable.
 
 ```ruby
 class Wallet::OutputDetail < Sequel::Model
   many_to_one :output
+  many_to_one :action
 end
 ```
 
@@ -536,12 +639,15 @@ Basket membership for outputs. An output belongs to at most one basket at a time
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
 | output_id | bigint | NOT NULL REFERENCES outputs (id) UNIQUE |
+| action_id | bigint | NOT NULL REFERENCES actions (id) ON DELETE CASCADE |
 | basket_id | bigint | NOT NULL REFERENCES baskets (id) |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
 
 **Constraints:**
 - `UNIQUE (output_id)` — an output can be in at most one basket
+
+**Cascade:** `action_id ON DELETE CASCADE` — deleting an action automatically removes its basket memberships.
 
 **Indexes:**
 - `idx_output_baskets_basket_satoshis` on `(basket_id)` — basket filter in UTXO selection
@@ -550,6 +656,7 @@ Basket membership for outputs. An output belongs to at most one basket at a time
 class Wallet::OutputBasket < Sequel::Model
   many_to_one :output
   many_to_one :basket
+  many_to_one :action
 end
 ```
 
@@ -910,7 +1017,7 @@ LIMIT ? OFFSET ?;
 
 **Creation:** `createAction` creates an Action (a Bitcoin transaction + metadata). Requires at least one input or output. Inputs require `inputBEEF` for SPV context. Outputs without `basket` are untracked. Can return a `signableTransaction` reference for deferred signing.
 
-**Signing:** `signAction` completes a signable transaction by providing unlocking scripts.
+**Signing:** `signAction` completes a deferred transaction. The caller provides unlocking scripts for inputs they control; the wallet signs remaining P2PKH inputs with derived keys. Outputs were already written during `createAction` — `signAction` only updates the action row (txid, signed raw_tx) and triggers broadcast. See **Deferred Signing — signAction** in the lifecycle section.
 
 **Aborting:** `abortAction` cancels an in-progress action. Cascade-deletes inputs, releasing claimed outputs.
 

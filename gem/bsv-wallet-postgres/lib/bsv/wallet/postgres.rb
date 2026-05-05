@@ -47,6 +47,7 @@ module BSV
           @db = url_or_db.is_a?(Sequel::Database) ? url_or_db : Sequel.connect(url_or_db)
           @db.extension :pg_enum
           @db.extension :pg_array
+          @db.extension :pg_json
           Sequel::Model.db = @db
           @db
         end
