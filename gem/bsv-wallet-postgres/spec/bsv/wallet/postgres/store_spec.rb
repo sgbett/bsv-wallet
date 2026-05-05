@@ -5,13 +5,15 @@ RSpec.describe BSV::Wallet::Postgres::Store do
 
   # Helpers
   def create_funded_output(satoshis: 1000, vout: 0, basket: nil)
-    source = BSV::Wallet::Postgres::Action.create(outgoing: false, wtxid: SecureRandom.random_bytes(32))
+    source = BSV::Wallet::Postgres::Action.create(outgoing: false, description: 'test action',
+                                                  wtxid: SecureRandom.random_bytes(32),
+                                                  raw_tx: SecureRandom.random_bytes(100))
     output = BSV::Wallet::Postgres::Output.create(action_id: source.id, satoshis: satoshis, vout: vout,
                                                   locking_script: SecureRandom.random_bytes(25))
-    BSV::Wallet::Postgres::Spendable.create(output_id: output.id)
+    BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: source.id, output_type: 'change')
     if basket
       basket_id = store.find_or_create_basket(name: basket)
-      BSV::Wallet::Postgres::OutputBasket.create(output_id: output.id, basket_id: basket_id)
+      BSV::Wallet::Postgres::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: source.id)
     end
     output
   end
@@ -98,12 +100,14 @@ RSpec.describe BSV::Wallet::Postgres::Store do
         {
           satoshis: 800, vout: 0,
           locking_script: SecureRandom.random_bytes(25),
-          basket: 'change', tags: %w[auto], description: 'change output', change: true
+          basket: 'change', tags: %w[auto], description: 'change output',
+          output_type: 'change'
         },
         {
           satoshis: 200, vout: 1,
           locking_script: SecureRandom.random_bytes(25),
-          basket: 'payments', tags: %w[payment outgoing], description: 'payment'
+          basket: 'payments', tags: %w[payment outgoing], description: 'payment',
+          output_type: 'root'
         }
       ])
 
@@ -118,7 +122,6 @@ RSpec.describe BSV::Wallet::Postgres::Store do
       expect(change_output.basket&.name).to eq('change')
 
       # Output details
-      expect(change_output.detail.change).to be true
       expect(change_output.detail.description).to eq('change output')
 
       # Tags
@@ -196,7 +199,7 @@ RSpec.describe BSV::Wallet::Postgres::Store do
     it 'finds by wtxid' do
       result = store.create_action(action: { description: 'find by wtxid' })
       wtxid = SecureRandom.random_bytes(32)
-      store.sign_action(action_id: result[:id], wtxid: wtxid, raw_tx: "\x00".b)
+      store.sign_action(action_id: result[:id], wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
 
       found = store.find_action(wtxid: wtxid)
       expect(found[:id]).to eq(result[:id])
@@ -259,9 +262,9 @@ RSpec.describe BSV::Wallet::Postgres::Store do
     before do
       action = store.create_action(action: { description: 'source' })
       store.promote_action(action_id: action[:id], outputs: [
-        { satoshis: 500, vout: 0, basket: 'wallet', tags: %w[payment] },
-        { satoshis: 300, vout: 1, basket: 'wallet', tags: %w[change] },
-        { satoshis: 100, vout: 2, basket: 'other' }
+        { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[payment], output_type: 'root' },
+        { satoshis: 300, vout: 1, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[change], output_type: 'change' },
+        { satoshis: 100, vout: 2, locking_script: SecureRandom.random_bytes(25), basket: 'other', output_type: 'root' }
       ])
     end
 
@@ -293,7 +296,7 @@ RSpec.describe BSV::Wallet::Postgres::Store do
     it 'removes from spendable and basket but keeps the output row' do
       action = store.create_action(action: { description: 'source' })
       store.promote_action(action_id: action[:id], outputs: [
-        { satoshis: 500, vout: 0, basket: 'wallet' }
+        { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', output_type: 'root' }
       ])
       output = BSV::Wallet::Postgres::Output.where(action_id: action[:id]).first
 
@@ -399,16 +402,31 @@ RSpec.describe BSV::Wallet::Postgres::Store do
     def create_source_output(wtxid:, satoshis:, vout:, locking_script: nil,
                              derivation_prefix: nil, derivation_suffix: nil,
                              sender_identity_key: nil)
-      source_action = BSV::Wallet::Postgres::Action.create(outgoing: false, wtxid: wtxid)
-      BSV::Wallet::Postgres::Output.create(
+      locking_script ||= SecureRandom.random_bytes(25)
+      source_action = BSV::Wallet::Postgres::Action.create(outgoing: false, description: 'test action',
+                                                           wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
+      output = BSV::Wallet::Postgres::Output.create(
         action_id: source_action.id,
         satoshis: satoshis,
         vout: vout,
-        locking_script: locking_script,
-        derivation_prefix: derivation_prefix,
-        derivation_suffix: derivation_suffix,
-        sender_identity_key: sender_identity_key
+        locking_script: locking_script
       )
+      if derivation_prefix
+        BSV::Wallet::Postgres::Spendable.create(
+          output_id: output.id,
+          action_id: source_action.id,
+          derivation_prefix: derivation_prefix,
+          derivation_suffix: derivation_suffix,
+          sender_identity_key: sender_identity_key
+        )
+      else
+        BSV::Wallet::Postgres::Spendable.create(
+          output_id: output.id,
+          action_id: source_action.id,
+          output_type: 'change'
+        )
+      end
+      output
     end
 
     it 'returns resolved input data for an action with inputs' do
@@ -506,12 +524,12 @@ RSpec.describe BSV::Wallet::Postgres::Store do
 
     it 'raises when source action has nil wtxid' do
       # Create a source output whose parent action has no wtxid
-      source_action = BSV::Wallet::Postgres::Action.create(outgoing: false)
+      source_action = BSV::Wallet::Postgres::Action.create(outgoing: false, description: 'test action')
       output = BSV::Wallet::Postgres::Output.create(
         action_id: source_action.id, satoshis: 500, vout: 0,
         locking_script: SecureRandom.random_bytes(25)
       )
-      BSV::Wallet::Postgres::Spendable.create(output_id: output.id)
+      BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: source_action.id, output_type: 'change')
 
       action = store.create_action(
         action: { description: 'nil wtxid source' },
@@ -523,24 +541,15 @@ RSpec.describe BSV::Wallet::Postgres::Store do
       }.to raise_error(RuntimeError, /nil wtxid/)
     end
 
-    it 'raises when source action has corrupt wtxid (hex instead of binary)' do
-      # Create a source output whose parent action has hex wtxid (wrong format)
-      hex_wtxid = 'a' * 64 # 64-char hex string, not 32-byte binary
-      source_action = BSV::Wallet::Postgres::Action.create(outgoing: false, wtxid: Sequel.blob(hex_wtxid))
-      output = BSV::Wallet::Postgres::Output.create(
-        action_id: source_action.id, satoshis: 500, vout: 0,
-        locking_script: SecureRandom.random_bytes(25)
-      )
-      BSV::Wallet::Postgres::Spendable.create(output_id: output.id)
-
-      action = store.create_action(
-        action: { description: 'corrupt wtxid source' },
-        inputs: [{ output_id: output.id, vin: 0 }]
-      )
-
+    it 'rejects corrupt wtxid (hex instead of binary) at database level' do
+      # A 64-char hex string is 64 bytes, not 32 — the wtxid_length CHECK
+      # constraint catches this before the application ever sees it.
+      hex_wtxid = 'a' * 64
       expect {
-        store.resolve_inputs_for_signing(action_id: action[:id])
-      }.to raise_error(ArgumentError, /resolve_inputs source vin=0/)
+        BSV::Wallet::Postgres::Action.create(outgoing: false, description: 'test action',
+                                             wtxid: Sequel.blob(hex_wtxid),
+                                             raw_tx: SecureRandom.random_bytes(100))
+      }.to raise_error(Sequel::CheckConstraintViolation, /wtxid_length/)
     end
   end
 
@@ -548,9 +557,9 @@ RSpec.describe BSV::Wallet::Postgres::Store do
 
   describe '#find_spendable' do
     before do
-      create_funded_output(satoshis: 100, vout: 0, basket: 'default')
-      create_funded_output(satoshis: 500, vout: 0, basket: 'default')
-      create_funded_output(satoshis: 1000, vout: 0, basket: 'default')
+      create_funded_output(satoshis: 100, vout: 0)
+      create_funded_output(satoshis: 500, vout: 0)
+      create_funded_output(satoshis: 1000, vout: 0)
       create_funded_output(satoshis: 200, vout: 0, basket: 'other')
     end
 
@@ -584,8 +593,8 @@ RSpec.describe BSV::Wallet::Postgres::Store do
     end
 
     it 'excludes outputs locked by inputs' do
-      output = create_funded_output(satoshis: 9999, vout: 0, basket: 'default')
-      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true)
+      output = create_funded_output(satoshis: 9999, vout: 0)
+      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action')
       BSV::Wallet::Postgres::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
       candidates = store.find_spendable(satoshis: 9999, basket: 'default')
@@ -623,7 +632,7 @@ RSpec.describe BSV::Wallet::Postgres::Store do
       result = store.create_action(action: { description: 'promoted' })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
-      store.promote_action(action_id: result[:id], outputs: [{ satoshis: 500, vout: 0 }])
+      store.promote_action(action_id: result[:id], outputs: [{ satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'change' }])
       BSV::Wallet::Postgres::Action.where(id: result[:id]).update(created_at: Time.now - 600)
 
       store.reap_stale_actions(threshold: 300)

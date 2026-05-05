@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
 RSpec.describe BSV::Wallet::Postgres::Input do
-  let(:source_action) { BSV::Wallet::Postgres::Action.create(outgoing: false, wtxid: SecureRandom.random_bytes(32)) }
-  let(:output) { BSV::Wallet::Postgres::Output.create(action_id: source_action.id, satoshis: 1000, vout: 0) }
-  let(:spending_action) { BSV::Wallet::Postgres::Action.create(outgoing: true) }
+  let(:source_action) { BSV::Wallet::Postgres::Action.create(outgoing: false, description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
+  let(:output) { BSV::Wallet::Postgres::Output.create(action_id: source_action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25)) }
+  let(:spending_action) { BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action') }
 
   describe 'structural lock' do
     it 'claims an output (single-spend enforcement)' do
@@ -14,13 +14,13 @@ RSpec.describe BSV::Wallet::Postgres::Input do
 
     it 'prevents double-spend via UNIQUE on output_id' do
       described_class.create(action_id: spending_action.id, output_id: output.id, vin: 0)
-      other_action = BSV::Wallet::Postgres::Action.create(outgoing: true)
+      other_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action')
       expect { described_class.create(action_id: other_action.id, output_id: output.id, vin: 0) }
         .to raise_error(Sequel::UniqueConstraintViolation)
     end
 
     it 'enforces unique vin within an action' do
-      output2 = BSV::Wallet::Postgres::Output.create(action_id: source_action.id, satoshis: 500, vout: 1)
+      output2 = BSV::Wallet::Postgres::Output.create(action_id: source_action.id, satoshis: 500, vout: 1, locking_script: SecureRandom.random_bytes(25))
       described_class.create(action_id: spending_action.id, output_id: output.id, vin: 0)
       expect { described_class.create(action_id: spending_action.id, output_id: output2.id, vin: 0) }
         .to raise_error(Sequel::UniqueConstraintViolation)

@@ -7,6 +7,7 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
   let(:action) do
     BSV::Wallet::Postgres::Action.create(
       outgoing: true,
+      description: 'test action',
       wtxid: SecureRandom.random_bytes(32),
       raw_tx: SecureRandom.random_bytes(100)
     )

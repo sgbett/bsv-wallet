@@ -67,7 +67,8 @@ module BSV
               proof_id = save_proof(wtxid: req.wtxid, proof: {
                 height:      data[:blockHeight] || data[:block_height],
                 block_hash:  decode_hex(data[:blockHash] || data[:block_hash]),
-                merkle_path: decode_hex(data[:merklePath] || data[:merkle_path])
+                merkle_path: decode_hex(data[:merklePath] || data[:merkle_path]),
+                raw_tx:      req.raw_tx
               })
               req.update(tx_proof_id: proof_id, status: 'completed')
               { wtxid: req.wtxid, tx_proof_id: proof_id }

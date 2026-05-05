@@ -9,6 +9,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
       height: 800_000,
       block_index: 42,
       merkle_path: SecureRandom.random_bytes(64),
+      raw_tx: SecureRandom.random_bytes(100),
       block_hash: SecureRandom.random_bytes(32),
       merkle_root: SecureRandom.random_bytes(32)
     }
@@ -120,7 +121,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
       subject(:proof_store) { described_class.new(arc_client: arc_client) }
 
       it 'resolves pending requests and creates proofs' do
-        proof_store.request_proof(wtxid: wtxid)
+        proof_store.request_proof(wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
 
         results = proof_store.process_pending(limit: 10)
         expect(results.size).to eq(1)
@@ -144,7 +145,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
       subject(:proof_store) { described_class.new(arc_client: arc_client) }
 
       it 'increments attempts but does not create a proof' do
-        proof_store.request_proof(wtxid: wtxid)
+        proof_store.request_proof(wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
         results = proof_store.process_pending
         expect(results).to eq([])
 
