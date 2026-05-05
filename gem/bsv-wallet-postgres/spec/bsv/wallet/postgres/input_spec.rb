@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 RSpec.describe BSV::Wallet::Postgres::Input do
-  let(:source_action) { BSV::Wallet::Postgres::Action.create(outgoing: false, txid: SecureRandom.random_bytes(32)) }
+  let(:source_action) { BSV::Wallet::Postgres::Action.create(outgoing: false, wtxid: SecureRandom.random_bytes(32)) }
   let(:output) { BSV::Wallet::Postgres::Output.create(action_id: source_action.id, satoshis: 1000, vout: 0) }
   let(:spending_action) { BSV::Wallet::Postgres::Action.create(outgoing: true) }
 

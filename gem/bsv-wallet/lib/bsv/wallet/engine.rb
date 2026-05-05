@@ -579,7 +579,9 @@ module BSV
         return unless send_with
 
         send_with.filter_map do |sw_wtxid|
+          BSV::Primitives::Hex.validate_wtxid!(sw_wtxid, name: 'send_with entry')
           sw_action = @store.find_action(wtxid: sw_wtxid)
+          BSV.logger&.debug { "[Engine] process_send_with: dtxid=#{sw_wtxid.reverse.unpack1('H*')} found=#{!sw_action.nil?}" }
           next unless sw_action
 
           br = @broadcast_queue.submit(
@@ -609,10 +611,19 @@ module BSV
       # @param wtxid [String] 32-byte binary wtxid (wire order, needed for TSC conversion)
       # @return [String] BRC-74 binary merkle_path
       def normalize_merkle_path(merkle_path, wtxid)
-        return normalize_tsc_merkle_path(merkle_path, wtxid) if merkle_path.is_a?(Hash)
-        return merkle_path if merkle_path.encoding == Encoding::ASCII_8BIT
-        return [merkle_path].pack('H*') if merkle_path.match?(/\A[0-9a-fA-F]+\z/)
-
+        if merkle_path.is_a?(Hash)
+          BSV.logger&.debug { "[Engine] normalize_merkle_path: format=TSC" }
+          return normalize_tsc_merkle_path(merkle_path, wtxid)
+        end
+        if merkle_path.encoding == Encoding::ASCII_8BIT
+          BSV.logger&.debug { "[Engine] normalize_merkle_path: format=binary (passthrough)" }
+          return merkle_path
+        end
+        if merkle_path.match?(/\A[0-9a-fA-F]+\z/)
+          BSV.logger&.debug { "[Engine] normalize_merkle_path: format=hex (#{merkle_path.length} chars)" }
+          return [merkle_path].pack('H*')
+        end
+        BSV.logger&.debug { "[Engine] normalize_merkle_path: format=unknown (force binary)" }
         merkle_path.b
       end
 
@@ -789,7 +800,7 @@ module BSV
       # @return [Boolean] true if any entries were replaced
       def replace_known_ancestors!(beef, subject_wtxid, known_wtxids)
         known_set = Set.new(known_wtxids || [])
-        replaced = false
+        replaced_count = 0
 
         beef.transactions.each do |beef_tx|
           wtxid = beef_tx.wtxid
@@ -798,11 +809,13 @@ module BSV
 
           next unless known_set.include?(wtxid) || @proof_store.proof_exists?(wtxid: wtxid)
 
+          BSV.logger&.debug { "[Engine] replace_known_ancestors!: replacing dtxid=#{wtxid.reverse.unpack1('H*')}" }
           beef.make_txid_only(wtxid)
-          replaced = true
+          replaced_count += 1
         end
 
-        replaced
+        BSV.logger&.debug { "[Engine] replace_known_ancestors!: replaced_count=#{replaced_count}" }
+        replaced_count > 0
       end
 
       # Check that the subject transaction's input satoshis exceed output satoshis (BRC-67).

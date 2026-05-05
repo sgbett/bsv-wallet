@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 RSpec.describe BSV::Wallet::Postgres::Output do
-  let(:action) { BSV::Wallet::Postgres::Action.create(outgoing: true, txid: SecureRandom.random_bytes(32)) }
+  let(:action) { BSV::Wallet::Postgres::Action.create(outgoing: true, wtxid: SecureRandom.random_bytes(32)) }
 
   def create_spendable_output(action_id: action.id, satoshis: 1000, vout: 0, **attrs)
     output = described_class.create(action_id: action_id, satoshis: satoshis, vout: vout, **attrs)

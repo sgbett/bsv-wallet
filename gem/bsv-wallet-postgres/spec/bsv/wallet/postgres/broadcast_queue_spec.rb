@@ -7,7 +7,7 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
   let(:action) do
     BSV::Wallet::Postgres::Action.create(
       outgoing: true,
-      txid: SecureRandom.random_bytes(32),
+      wtxid: SecureRandom.random_bytes(32),
       raw_tx: SecureRandom.random_bytes(100)
     )
   end
@@ -60,7 +60,7 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
       BSV::Wallet::Postgres::Broadcast.create(action_id: action.id)
 
       result = queue.handle_event(
-        txid: action.txid,
+        wtxid: action.wtxid,
         tx_status: 'MINED',
         status: 200,
         block_hash: SecureRandom.random_bytes(32),
@@ -78,7 +78,7 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
 
     it 'creates a broadcast record if none exists' do
       result = queue.handle_event(
-        txid: action.txid,
+        wtxid: action.wtxid,
         tx_status: 'SEEN_ON_NETWORK',
         status: 200,
         block_hash: nil, block_height: nil,
@@ -89,9 +89,9 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
       expect(BSV::Wallet::Postgres::Broadcast.where(action_id: action.id).count).to eq(1)
     end
 
-    it 'returns nil for unknown txid' do
+    it 'returns nil for unknown wtxid' do
       result = queue.handle_event(
-        txid: SecureRandom.random_bytes(32),
+        wtxid: SecureRandom.random_bytes(32),
         tx_status: 'MINED', status: 200,
         block_hash: nil, block_height: nil,
         merkle_path: nil, extra_info: nil, competing_txs: nil
@@ -125,8 +125,8 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
     let(:arc_client) { double('ARC', call: arc_response) }
 
     it 'polls ARC for stale broadcasts and updates them' do
-      # Action must have txid for process_pending to poll ARC
-      action.update(txid: Sequel.blob(SecureRandom.random_bytes(32))) unless action.txid
+      # Action must have wtxid for process_pending to poll ARC
+      action.update(wtxid: Sequel.blob(SecureRandom.random_bytes(32))) unless action.wtxid
 
       broadcast = BSV::Wallet::Postgres::Broadcast.create(
         action_id: action.id,
