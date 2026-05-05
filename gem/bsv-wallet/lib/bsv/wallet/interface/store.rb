@@ -6,7 +6,7 @@ module BSV
       # Persistence interface for wallet state.
       #
       # Methods mirror the schema's phase model — the action lifecycle is
-      # create (lock inputs) → sign (attach txid) → promote (write outputs).
+      # create (lock inputs) → sign (attach wtxid) → promote (write outputs).
       # Status is derived from structural state, never stored directly.
       #
       # All methods receive and return plain hashes/arrays — no ORM objects
@@ -29,12 +29,12 @@ module BSV
           raise NotImplementedError
         end
 
-        # Phase 2: Attach txid and signed raw transaction to an action.
+        # Phase 2: Attach wtxid and signed raw transaction to an action.
         #
         # @param action_id [Integer]
-        # @param txid [String] 32-byte binary txid
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
         # @param raw_tx [String] binary-encoded signed transaction
-        def sign_action(action_id:, txid:, raw_tx:)
+        def sign_action(action_id:, wtxid:, raw_tx:)
           raise NotImplementedError
         end
 
@@ -60,7 +60,7 @@ module BSV
         end
 
         # Abort an action. CASCADE deletes inputs, releasing locked UTXOs.
-        # Only valid for unsigned actions (txid IS NULL).
+        # Only valid for unsigned actions (wtxid IS NULL).
         #
         # @param action_id [Integer]
         def abort_action(action_id:)
@@ -69,10 +69,10 @@ module BSV
 
         # --- Queries ---
 
-        # Find an action by id, txid, or reference.
+        # Find an action by id, wtxid, or reference.
         #
         # @return [Hash, nil]
-        def find_action(id: nil, txid: nil, reference: nil)
+        def find_action(id: nil, wtxid: nil, reference: nil)
           raise NotImplementedError
         end
 
@@ -174,10 +174,10 @@ module BSV
         #
         # @param action_id [Integer]
         # @return [Array<Hash>] ordered by vin, each:
-        #   :vin, :sequence, :source_txid (32-byte binary),
+        #   :vin, :sequence, :source_wtxid (32-byte binary, wire byte order),
         #   :source_vout, :source_satoshis, :source_locking_script (binary),
         #   :derivation_prefix, :derivation_suffix, :sender_identity_key
-        # @raise [RuntimeError] if any source action has a nil txid
+        # @raise [RuntimeError] if any source action has a nil wtxid
         def resolve_inputs_for_signing(action_id:)
           raise NotImplementedError
         end

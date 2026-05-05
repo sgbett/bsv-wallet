@@ -53,11 +53,15 @@ module BSV
           end
         end
 
-        def sign_action(action_id:, txid:, raw_tx:)
-          Action.where(id: action_id).update(
-            txid:   Sequel.blob(txid),
-            raw_tx: Sequel.blob(raw_tx)
-          )
+        def sign_action(action_id:, wtxid:, raw_tx:)
+          @db.transaction do
+            Action.where(id: action_id).update(
+              wtxid:  Sequel.blob(wtxid),
+              raw_tx: Sequel.blob(raw_tx)
+            )
+            TxProof.dataset.insert_conflict(target: :wtxid, update: { raw_tx: Sequel.blob(raw_tx) })
+                          .insert(wtxid: Sequel.blob(wtxid), raw_tx: Sequel.blob(raw_tx))
+          end
         end
 
         def promote_action(action_id:, outputs:)
@@ -105,8 +109,8 @@ module BSV
         def abort_action(action_id:)
           # Allow deletion of actions that haven't been broadcast.
           # After the deferred signing rework, actions may have an unsigned
-          # raw_tx and txid before broadcast — the guard checks for absence
-          # of a broadcast entry rather than absence of txid.
+          # raw_tx and wtxid before broadcast — the guard checks for absence
+          # of a broadcast entry rather than absence of wtxid.
           broadcast_exists = Broadcast.where(
             Sequel[:broadcasts][:action_id] => Sequel[:actions][:id]
           ).select(1)
@@ -116,9 +120,9 @@ module BSV
 
         # --- Queries ---
 
-        def find_action(id: nil, txid: nil, reference: nil)
+        def find_action(id: nil, wtxid: nil, reference: nil)
           record = if id then Action[id]
-                   elsif txid then Action.first(txid: Sequel.blob(txid))
+                   elsif wtxid then Action.first(wtxid: Sequel.blob(wtxid))
                    elsif reference then Action.first(reference: reference)
                    end
           return unless record
@@ -320,7 +324,7 @@ module BSV
             .select(
               Sequel[:inputs][:vin],
               Sequel[:inputs][:nsequence].as(:sequence),
-              Sequel[:source_actions][:txid].as(:source_txid),
+              Sequel[:source_actions][:wtxid].as(:source_wtxid),
               Sequel[:outputs][:vout].as(:source_vout),
               Sequel[:outputs][:satoshis].as(:source_satoshis),
               Sequel[:outputs][:locking_script].as(:source_locking_script),
@@ -331,14 +335,14 @@ module BSV
             .all
 
           rows.map do |row|
-            if row[:source_txid].nil?
-              raise "Source action has nil txid for input vin #{row[:vin]} of action #{action_id}"
+            if row[:source_wtxid].nil?
+              raise "Source action has nil wtxid for input vin #{row[:vin]} of action #{action_id}"
             end
 
             {
               vin:                  row[:vin],
               sequence:             row[:sequence],
-              source_txid:          row[:source_txid],
+              source_wtxid:         row[:source_wtxid],
               source_vout:          row[:source_vout],
               source_satoshis:      row[:source_satoshis],
               source_locking_script: row[:source_locking_script],
@@ -385,7 +389,7 @@ module BSV
           Action
             .where { created_at < cutoff }
             .where(Sequel.~(broadcast: 'none'))
-            .where(Sequel.lit('txid IS NOT NULL'))
+            .where(Sequel.lit('wtxid IS NOT NULL'))
             .exclude(output_exists.exists)
             .delete
         end
@@ -397,7 +401,7 @@ module BSV
                            include_outputs: false, include_output_locking_scripts: false, **)
           h = {
             id:          record.id,
-            txid:        record.txid,
+            wtxid:       record.wtxid,
             raw_tx:      record.raw_tx,
             reference:   record.reference,
             satoshis:    record.satoshis,

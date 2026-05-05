@@ -17,40 +17,40 @@ module BSV
       module ProofStore
         # Store a merkle proof for a transaction.
         #
-        # Upserts — if a proof already exists for this txid, updates it.
+        # Upserts — if a proof already exists for this wtxid, updates it.
         #
-        # @param txid [String] 32-byte binary txid
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
         # @param proof [Hash] :height, :block_index, :merkle_path (binary),
         #   :raw_tx (binary), :block_hash (binary), :merkle_root (binary)
         # @return [Integer] the tx_proof ID
-        def save_proof(txid:, proof:)
+        def save_proof(wtxid:, proof:)
           raise NotImplementedError
         end
 
-        # Retrieve a proof by txid.
+        # Retrieve a proof by wtxid.
         #
-        # @param txid [String] 32-byte binary txid
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
         # @return [Hash, nil] proof data, or nil if not stored
-        def find_proof(txid:)
+        def find_proof(wtxid:)
           raise NotImplementedError
         end
 
         # Check whether a proof exists for a transaction.
-        # Used by the trustSelf mechanism — "TXIDs known to this wallet."
+        # Used by the trustSelf mechanism — "wtxids known to this wallet."
         #
-        # @param txid [String] 32-byte binary txid
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
         # @return [Boolean]
-        def proof_exists?(txid:)
+        def proof_exists?(wtxid:)
           raise NotImplementedError
         end
 
         # Request a proof for a transaction that doesn't have one yet.
         # Adds to the proof-harvesting work queue (tx_reqs).
         #
-        # @param txid [String] 32-byte binary txid
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
         # @param raw_tx [String, nil] binary transaction (aids lookup)
         # @param input_beef [String, nil] binary BEEF for context
-        def request_proof(txid:, raw_tx: nil, input_beef: nil)
+        def request_proof(wtxid:, raw_tx: nil, input_beef: nil)
           raise NotImplementedError
         end
 
@@ -58,7 +58,7 @@ module BSV
         # Polls or queries for proofs that haven't arrived yet.
         #
         # @param limit [Integer] maximum number to process
-        # @return [Array<Hash>] resolved proofs: :txid, :tx_proof_id
+        # @return [Array<Hash>] resolved proofs: :wtxid, :tx_proof_id
         def process_pending(limit: 100)
           raise NotImplementedError
         end

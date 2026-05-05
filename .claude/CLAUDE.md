@@ -7,3 +7,32 @@
 The BRC-100 specification defines method names using American English (`internalizeAction`, `randomizeOutputs`). Using British English for Ruby method names (`internalise_action`, `randomise_outputs`) while the spec uses American creates confusion about which convention applies where. Consistency wins: American English everywhere.
 
 Examples: behavior, color, organization, optimize, summarize, favor, center, internalize, randomize.
+
+## Transaction ID Convention: wtxid / dtxid
+
+Two representations, one simple rule:
+
+- **Binary** (Ruby internals, database, wire format): `wtxid` — wire-order, raw SHA256d, 32 bytes
+- **String** (JSON, logs, CLI, external APIs): `dtxid` — display-order hex, 64 characters
+
+No exceptions. If it's binary, it's `wtxid`. If it's a string, it's `dtxid`.
+
+### Naming
+
+| Name | Format | When |
+|------|--------|------|
+| `wtxid` | 32-byte binary, wire order | Method params, variables, hash keys, database columns |
+| `dtxid` | 64-char hex string, display order | ARC API calls, JSON responses, logs, CLI output |
+| `txid` | Varies | BRC-100 spec names only (`known_txids:`, return key `:txid`) — boundary comment required |
+
+### BRC-100 spec names
+
+Where a specification requires `txid` (e.g., `known_txids:` parameter, `:txid` return key), keep the spec name. Add a boundary comment. The value is a wire-order wtxid — the key name is the spec's label, not a byte-order indicator.
+
+### SDK API names
+
+Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` (TSC field). These are not our naming to change.
+
+### Source
+
+`Transaction#wtxid` returns wire order (SDK v0.17.0+). `Transaction#txid` returns display order — a convenience method, never used in the data path. The `DisplayTxid` module provides `dtxid` on Sequel models.

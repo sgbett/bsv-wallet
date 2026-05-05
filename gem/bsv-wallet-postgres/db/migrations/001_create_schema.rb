@@ -10,7 +10,7 @@ Sequel.migration do
     # 1. tx_proofs — merkle inclusion proofs (settlement evidence)
     create_table(:tx_proofs) do
       column :id, :bigint, primary_key: true, identity: :always
-      column :txid, :bytea, null: false, unique: true
+      column :wtxid, :bytea, null: false, unique: true
       column :height, :integer
       column :block_index, :integer
       column :merkle_path, :bytea
@@ -25,7 +25,7 @@ Sequel.migration do
     create_table(:actions) do
       column :id, :bigint, primary_key: true, identity: :always
       foreign_key :tx_proof_id, :tx_proofs, type: :bigint
-      column :txid, :bytea
+      column :wtxid, :bytea
       column :reference, :text, unique: true, default: Sequel.function(:gen_random_uuid)
       column :outgoing, :boolean, null: false, default: true
       column :satoshis, :bigint
@@ -38,7 +38,7 @@ Sequel.migration do
       column :created_at, :timestamptz, null: false, default: Sequel.function(:now)
       column :updated_at, :timestamptz, null: false, default: Sequel.function(:now)
 
-      index :txid, unique: true, where: Sequel.lit('txid IS NOT NULL')
+      index :wtxid, unique: true, where: Sequel.lit('wtxid IS NOT NULL')
       index :broadcast
     end
 
@@ -216,7 +216,7 @@ Sequel.migration do
     create_table(:tx_reqs) do
       column :id, :bigint, primary_key: true, identity: :always
       foreign_key :tx_proof_id, :tx_proofs, type: :bigint
-      column :txid, :bytea, null: false, unique: true
+      column :wtxid, :bytea, null: false, unique: true
       column :status, :text, null: false, default: 'unmined'
       column :attempts, :integer, null: false, default: 0
       column :notified, :boolean, null: false, default: false

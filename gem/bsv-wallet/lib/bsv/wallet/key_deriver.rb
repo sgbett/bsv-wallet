@@ -23,6 +23,12 @@ module BSV
         @privileged_key = privileged_key
       end
 
+      # The root (everyday) private key, for signing UTXOs paid directly to the
+      # identity address (no BRC-42/43 derivation).
+      def root_private_key
+        @root_key
+      end
+
       # Returns the compressed public key hex of the everyday key.
       #
       # @return [String] 66-character hex-encoded compressed public key

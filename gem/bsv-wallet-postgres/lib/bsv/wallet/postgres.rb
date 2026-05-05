@@ -16,6 +16,9 @@ module BSV
       autoload :BroadcastCallback, 'bsv/wallet/postgres/broadcast_callback'
       autoload :ProofStore,        'bsv/wallet/postgres/proof_store'
 
+      # Shared concerns
+      require_relative 'postgres/display_txid'
+
       # Models (Layer 2b — atomic services)
       autoload :TxProof,          'bsv/wallet/postgres/tx_proof'
       autoload :Action,           'bsv/wallet/postgres/action'

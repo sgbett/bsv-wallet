@@ -4,6 +4,7 @@ module BSV
   module Wallet
     module Postgres
       class Action < Sequel::Model
+        include DisplayTxid
         plugin :timestamps, update_on_create: true
 
         many_to_one  :tx_proof, class: 'BSV::Wallet::Postgres::TxProof'
@@ -19,7 +20,7 @@ module BSV
         #
         # @return [Symbol]
         def derived_status
-          return :unsigned   if txid.nil?
+          return :unsigned   if wtxid.nil?
           return :completed  if tx_proof_id
           return :nosend     if values[:broadcast] == 'none'
           return :unproven   unless outputs_dataset.empty?
