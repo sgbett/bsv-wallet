@@ -170,7 +170,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         inputs: [],
         outputs: [
           { satoshis: 500, locking_script: "\x51",
-            output_description: 'payment', basket: 'payments', output_type: 'change' }
+            output_description: 'payment', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
 
@@ -209,7 +209,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         no_send: true,
         outputs: [
           { satoshis: 500, locking_script: "\x51",
-            output_description: 'output', basket: 'pending', output_type: 'change' }
+            output_description: 'output', basket: 'pending', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
 
@@ -2438,7 +2438,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           inputs: [{ output_id: output_id }],
           outputs: [
             { satoshis: 900, locking_script: output_script,
-              output_description: 'payment', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+              output_description: 'payment', basket: 'payments',
+              derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ],
           randomize_outputs: false
         )
