@@ -455,9 +455,7 @@ module BSV
           raise BSV::Wallet::InvalidParameterError.new('protocol name', 'a string between 5 and 400 characters')
         end
 
-        if name.include?('  ')
-          raise BSV::Wallet::InvalidParameterError.new('protocol name', 'free of consecutive spaces')
-        end
+        raise BSV::Wallet::InvalidParameterError.new('protocol name', 'free of consecutive spaces') if name.include?('  ')
 
         return unless name.downcase.end_with?(' protocol')
 
@@ -465,9 +463,7 @@ module BSV
       end
 
       def validate_key_id!(key_id)
-        if key_id.nil? || (key_id.is_a?(String) && key_id.empty?)
-          raise BSV::Wallet::InvalidParameterError.new('key_id', 'a non-empty string')
-        end
+        raise BSV::Wallet::InvalidParameterError.new('key_id', 'a non-empty string') if key_id.nil? || (key_id.is_a?(String) && key_id.empty?)
 
         return unless key_id.is_a?(String) && key_id.length > 800
 

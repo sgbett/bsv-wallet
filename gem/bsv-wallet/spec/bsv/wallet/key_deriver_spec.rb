@@ -1,12 +1,12 @@
 # frozen_string_literal: true
 
 RSpec.describe BSV::Wallet::KeyDeriver do
+  subject(:deriver) { described_class.new(private_key: root_key) }
+
   let(:root_key) { BSV::Primitives::PrivateKey.generate }
   let(:privileged_key) { BSV::Primitives::PrivateKey.generate }
   let(:protocol_id) { [1, 'test proto'] }
   let(:key_id) { 'key1' }
-
-  subject(:deriver) { described_class.new(private_key: root_key) }
 
   describe '#initialize' do
     it 'stores the root key' do

@@ -8,8 +8,7 @@ module BSV
   # are arrays of hashes — documented inline with @option tags where the shape
   # is non-obvious.
   module Wallet
-
-    autoload :VERSION,          'bsv/wallet/version'
+    autoload :VERSION, 'bsv/wallet/version'
 
     # BRC-100 interface and error classes come from bsv-sdk.
     # Reopen Interface to add wallet-specific contracts (Store, UTXOPool, etc.).
@@ -24,6 +23,5 @@ module BSV
 
     # Engine (Layer 3 — orchestration)
     autoload :Engine,           'bsv/wallet/engine'
-
   end
 end

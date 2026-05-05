@@ -24,11 +24,6 @@ rescue LoadError, Sequel::DatabaseConnectionError => e
 end
 
 RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
-  let(:store) { BSV::Wallet::Postgres::Store.new }
-  let(:utxo_pool) { BSV::Wallet::Postgres::UTXOPool.new(store: store) }
-  let(:broadcast_queue) { BSV::Wallet::Postgres::BroadcastQueue.new }
-  let(:proof_store) { BSV::Wallet::Postgres::ProofStore.new }
-
   subject(:engine) do
     described_class.new(
       store: store,
@@ -39,7 +34,37 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     )
   end
 
-  around(:each) do |example|
+  let(:store) { BSV::Wallet::Postgres::Store.new }
+  let(:engine_with_privileged_keys) do
+    priv_deriver = BSV::Wallet::KeyDeriver.new(private_key: root_key, privileged_key: privileged_key)
+    described_class.new(
+      store: store, utxo_pool: utxo_pool,
+      broadcast_queue: broadcast_queue, proof_store: proof_store,
+      key_deriver: priv_deriver, network: :mainnet
+    )
+  end
+  let(:engine_with_keys) do
+    described_class.new(
+      store: store, utxo_pool: utxo_pool,
+      broadcast_queue: broadcast_queue, proof_store: proof_store,
+      key_deriver: key_deriver, network: :mainnet
+    )
+  end
+  let(:verifier_hex) { verifier_key.public_key.to_hex }
+  let(:verifier_key) { BSV::Primitives::PrivateKey.generate }
+  let(:counterparty_hex) { counterparty_key.public_key.to_hex }
+  let(:counterparty_key) { BSV::Primitives::PrivateKey.generate }
+  let(:key_deriver) { BSV::Wallet::KeyDeriver.new(private_key: root_key) }
+  let(:privileged_key) { BSV::Primitives::PrivateKey.generate }
+  # --- Key Management, Crypto, Certificates, Auth, Network (HLR #5) ---
+
+  # Real KeyDeriver for end-to-end crypto tests
+  let(:root_key) { BSV::Primitives::PrivateKey.generate }
+  let(:utxo_pool) { BSV::Wallet::Postgres::UTXOPool.new(store: store) }
+  let(:broadcast_queue) { BSV::Wallet::Postgres::BroadcastQueue.new }
+  let(:proof_store) { BSV::Wallet::Postgres::ProofStore.new }
+
+  around do |example|
     ENGINE_DB.transaction(rollback: :always, auto_savepoint: true) do
       example.run
     end
@@ -94,7 +119,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
   describe 'construction' do
     it 'accepts pluggable components' do
-      expect(engine).to be_a(BSV::Wallet::Engine)
+      expect(engine).to be_a(described_class)
     end
 
     it 'includes BRC100 interface' do
@@ -761,8 +786,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       # Parse to get ancestor txids
       beef = BSV::Transaction::Beef.from_binary(beef_data)
       ancestor_wtxids = beef.transactions
-                           .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
-                           .map(&:wtxid)
+                            .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                            .map(&:wtxid)
 
       engine.internalize_action(
         tx: beef_data,
@@ -1238,8 +1263,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         ancestor_wtxids = beef.transactions
-                             .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
-                             .map(&:wtxid)
+                              .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                              .map(&:wtxid)
 
         engine.internalize_action(
           tx: beef_data,
@@ -1461,34 +1486,6 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       listed_after = engine.list_outputs(basket: 'wallet')
       expect(listed_after[:total_outputs]).to eq(0)
     end
-  end
-
-  # --- Key Management, Crypto, Certificates, Auth, Network (HLR #5) ---
-
-  # Real KeyDeriver for end-to-end crypto tests
-  let(:root_key) { BSV::Primitives::PrivateKey.generate }
-  let(:privileged_key) { BSV::Primitives::PrivateKey.generate }
-  let(:key_deriver) { BSV::Wallet::KeyDeriver.new(private_key: root_key) }
-  let(:counterparty_key) { BSV::Primitives::PrivateKey.generate }
-  let(:counterparty_hex) { counterparty_key.public_key.to_hex }
-  let(:verifier_key) { BSV::Primitives::PrivateKey.generate }
-  let(:verifier_hex) { verifier_key.public_key.to_hex }
-
-  let(:engine_with_keys) do
-    described_class.new(
-      store: store, utxo_pool: utxo_pool,
-      broadcast_queue: broadcast_queue, proof_store: proof_store,
-      key_deriver: key_deriver, network: :mainnet
-    )
-  end
-
-  let(:engine_with_privileged_keys) do
-    priv_deriver = BSV::Wallet::KeyDeriver.new(private_key: root_key, privileged_key: privileged_key)
-    described_class.new(
-      store: store, utxo_pool: utxo_pool,
-      broadcast_queue: broadcast_queue, proof_store: proof_store,
-      key_deriver: priv_deriver, network: :mainnet
-    )
   end
 
   describe '#get_public_key' do
@@ -1892,7 +1889,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
 
     it 'builds TransactionOutput objects from hex locking scripts' do
-      hex_script = '76a914' + '00' * 20 + '88ac'
+      hex_script = "76a914#{'00' * 20}88ac"
       outputs = [{ satoshis: 500, locking_script: hex_script }]
 
       tx_outputs, _vout_mapping = build_outputs(outputs, false)
