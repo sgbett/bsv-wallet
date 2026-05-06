@@ -5,7 +5,9 @@ RSpec.describe BSV::Wallet::Postgres::Output do
 
   def create_spendable_output(action_id: action.id, satoshis: 1000, vout: 0, **attrs)
     attrs[:locking_script] ||= SecureRandom.random_bytes(25)
-    attrs[:output_type] ||= 'root'
+    attrs[:derivation_prefix] ||= SecureRandom.uuid
+    attrs[:derivation_suffix] ||= '1'
+    attrs[:sender_identity_key] ||= 'self'
     output = described_class.create(action_id: action_id, satoshis: satoshis, vout: vout, **attrs)
     BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: action_id)
     output

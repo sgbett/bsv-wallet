@@ -10,7 +10,9 @@ RSpec.describe BSV::Wallet::Postgres::Store do
                                                   raw_tx: SecureRandom.random_bytes(100))
     output = BSV::Wallet::Postgres::Output.create(action_id: source.id, satoshis: satoshis, vout: vout,
                                                   locking_script: SecureRandom.random_bytes(25),
-                                                  output_type: 'root')
+                                                  derivation_prefix: SecureRandom.uuid,
+                                                  derivation_suffix: '1',
+                                                  sender_identity_key: 'self')
     BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: source.id)
     if basket
       basket_id = store.find_or_create_basket(name: basket)
@@ -264,10 +266,12 @@ RSpec.describe BSV::Wallet::Postgres::Store do
     before do
       action = store.create_action(action: { description: 'source' })
       store.promote_action(action_id: action[:id], outputs: [
-        { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[payment], output_type: 'root' },
+        { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[payment],
+          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
         { satoshis: 300, vout: 1, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[change],
           derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
-        { satoshis: 100, vout: 2, locking_script: SecureRandom.random_bytes(25), basket: 'other', output_type: 'root' }
+        { satoshis: 100, vout: 2, locking_script: SecureRandom.random_bytes(25), basket: 'other',
+          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
       ])
     end
 
@@ -299,7 +303,8 @@ RSpec.describe BSV::Wallet::Postgres::Store do
     it 'removes from spendable and basket but keeps the output row' do
       action = store.create_action(action: { description: 'source' })
       store.promote_action(action_id: action[:id], outputs: [
-        { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', output_type: 'root' }
+        { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet',
+          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
       ])
       output = BSV::Wallet::Postgres::Output.where(action_id: action[:id]).first
 
@@ -629,7 +634,10 @@ RSpec.describe BSV::Wallet::Postgres::Store do
       result = store.create_action(action: { description: 'promoted' })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
-      store.promote_action(action_id: result[:id], outputs: [{ satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root' }])
+      store.promote_action(action_id: result[:id], outputs: [
+        { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
+          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+      ])
       BSV::Wallet::Postgres::Action.where(id: result[:id]).update(created_at: Time.now - 600)
 
       store.reap_stale_actions(threshold: 300)

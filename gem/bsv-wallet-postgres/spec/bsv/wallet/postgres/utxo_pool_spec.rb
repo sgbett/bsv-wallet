@@ -11,7 +11,9 @@ RSpec.describe BSV::Wallet::Postgres::UTXOPool do
     output = BSV::Wallet::Postgres::Output.create(
       action_id: source.id, satoshis: satoshis, vout: vout,
       locking_script: SecureRandom.random_bytes(25),
-      output_type: 'root'
+      derivation_prefix: SecureRandom.uuid,
+      derivation_suffix: '1',
+      sender_identity_key: 'self'
     )
     BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: source.id)
     unless basket == 'default'
