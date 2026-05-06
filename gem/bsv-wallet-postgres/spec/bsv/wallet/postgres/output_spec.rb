@@ -5,14 +5,17 @@ RSpec.describe BSV::Wallet::Postgres::Output do
 
   def create_spendable_output(action_id: action.id, satoshis: 1000, vout: 0, **attrs)
     attrs[:locking_script] ||= SecureRandom.random_bytes(25)
+    attrs[:derivation_prefix] ||= SecureRandom.uuid
+    attrs[:derivation_suffix] ||= '1'
+    attrs[:sender_identity_key] ||= 'self'
     output = described_class.create(action_id: action_id, satoshis: satoshis, vout: vout, **attrs)
-    BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: action_id, output_type: 'change')
+    BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: action_id)
     output
   end
 
   describe 'creation' do
     it 'creates an immutable output record' do
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25))
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       expect(output.id).to be_a(Integer)
       expect(output.satoshis).to eq(1000)
       expect(output.created_at).to be_a(Time)
@@ -20,21 +23,21 @@ RSpec.describe BSV::Wallet::Postgres::Output do
 
     it 'preserves binary locking_script' do
       script = SecureRandom.random_bytes(25)
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: script)
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: script, output_type: 'root')
       expect(output.reload.locking_script.encoding).to eq(Encoding::BINARY)
       expect(output.locking_script).to eq(script)
     end
 
     it 'enforces UNIQUE on action_id + vout' do
-      described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25))
-      expect { described_class.create(action_id: action.id, satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25)) }
+      described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      expect { described_class.create(action_id: action.id, satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root') }
         .to raise_error(Sequel::UniqueConstraintViolation)
     end
   end
 
   describe 'associations' do
     it 'belongs to action' do
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25))
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       expect(output.action).to eq(action)
     end
 
@@ -44,7 +47,7 @@ RSpec.describe BSV::Wallet::Postgres::Output do
     end
 
     it 'has one detail' do
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25))
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       BSV::Wallet::Postgres::OutputDetail.create(output_id: output.id, action_id: action.id, description: 'test output')
       expect(output.reload.detail.description).to eq('test output')
     end
@@ -57,7 +60,7 @@ RSpec.describe BSV::Wallet::Postgres::Output do
     end
 
     it 'has many tags' do
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25))
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       tag = BSV::Wallet::Postgres::Tag.create(tag: 'payment')
       BSV::Wallet::Postgres::OutputTag.create(output_id: output.id, tag_id: tag.id)
       expect(output.reload.tags.map(&:tag)).to eq(['payment'])
@@ -78,7 +81,7 @@ RSpec.describe BSV::Wallet::Postgres::Output do
     end
 
     it 'returns false when not in spendable set' do
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25))
+      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       expect(output.spendable?).to be false
     end
   end
@@ -87,7 +90,7 @@ RSpec.describe BSV::Wallet::Postgres::Output do
     it 'returns outputs that are spendable and not claimed' do
       create_spendable_output(vout: 0)
       create_spendable_output(vout: 1)
-      described_class.create(action_id: action.id, satoshis: 300, vout: 2, locking_script: SecureRandom.random_bytes(25)) # not in spendable
+      described_class.create(action_id: action.id, satoshis: 300, vout: 2, locking_script: SecureRandom.random_bytes(25), output_type: 'root') # not in spendable
 
       expect(described_class.spendable.count).to eq(2)
     end

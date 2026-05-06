@@ -16,11 +16,18 @@ RSpec.describe 'Schema constraints' do
     db[:actions].insert(description: description, outgoing: true)
   end
 
-  # Helper: create a valid output for FK references
-  def create_output(action_id:, satoshis: 1000, vout: 0)
+  # Helper: create a valid output for FK references.
+  # Defaults to root output (no derivation fields). Pass derivation
+  # fields and output_type: nil for a derived output.
+  def create_output(action_id:, satoshis: 1000, vout: 0, output_type: 'root',
+                    derivation_prefix: nil, derivation_suffix: nil, sender_identity_key: nil)
     db[:outputs].insert(
       action_id: action_id, satoshis: satoshis, vout: vout,
-      locking_script: Sequel.blob(valid_locking_script)
+      locking_script: Sequel.blob(valid_locking_script),
+      output_type: output_type,
+      derivation_prefix: derivation_prefix,
+      derivation_suffix: derivation_suffix,
+      sender_identity_key: sender_identity_key
     )
   end
 
@@ -277,87 +284,121 @@ RSpec.describe 'Schema constraints' do
       expect {
         db[:outputs].insert(
           action_id: action_id, satoshis: 0, vout: 0,
-          locking_script: Sequel.blob("\x6a".b)
+          locking_script: Sequel.blob("\x6a".b),
+          output_type: 'root'
         )
       }.not_to raise_error
     end
   end
 
-  # --- spendable (cross-column constraints) ---
+  # --- outputs (derivation cross-column constraints) ---
 
-  describe 'spendable' do
+  describe 'outputs derivation constraints' do
     it 'rejects derived output (NULL output_type) without derivation_prefix' do
       action_id = create_action
-      output_id = create_output(action_id: action_id)
       expect {
         db.transaction(savepoint: true) do
-          db[:spendable].insert(
-            output_id: output_id, action_id: action_id,
-            output_type: nil, derivation_prefix: nil,
-            derivation_suffix: 'suffix', sender_identity_key: 'self'
-          )
+          create_output(action_id: action_id, output_type: nil,
+                        derivation_prefix: nil, derivation_suffix: 'suffix',
+                        sender_identity_key: 'self')
         end
       }.to raise_error(Sequel::CheckConstraintViolation)
     end
 
     it 'rejects derived output (NULL output_type) without sender_identity_key' do
       action_id = create_action
-      output_id = create_output(action_id: action_id)
       expect {
         db.transaction(savepoint: true) do
-          db[:spendable].insert(
-            output_id: output_id, action_id: action_id,
-            output_type: nil, derivation_prefix: 'prefix',
-            derivation_suffix: 'suffix', sender_identity_key: nil
-          )
+          create_output(action_id: action_id, output_type: nil,
+                        derivation_prefix: 'prefix', derivation_suffix: 'suffix',
+                        sender_identity_key: nil)
         end
       }.to raise_error(Sequel::CheckConstraintViolation)
     end
 
-    it 'rejects typed output (root) with derivation_prefix set' do
+    it 'rejects root output with derivation_prefix set' do
       action_id = create_action
-      output_id = create_output(action_id: action_id)
       expect {
         db.transaction(savepoint: true) do
-          db[:spendable].insert(
-            output_id: output_id, action_id: action_id,
-            output_type: 'root', derivation_prefix: 'should not be here'
-          )
+          create_output(action_id: action_id, output_type: 'root',
+                        derivation_prefix: 'should not be here')
         end
       }.to raise_error(Sequel::CheckConstraintViolation)
     end
 
-    it 'rejects typed output (change) with sender_identity_key set' do
+    it 'rejects root output with sender_identity_key set' do
       action_id = create_action
-      output_id = create_output(action_id: action_id)
       expect {
         db.transaction(savepoint: true) do
-          db[:spendable].insert(
-            output_id: output_id, action_id: action_id,
-            output_type: 'change', sender_identity_key: 'should not be here'
-          )
+          create_output(action_id: action_id, output_type: 'root',
+                        sender_identity_key: 'should not be here')
         end
       }.to raise_error(Sequel::CheckConstraintViolation)
     end
 
     it 'allows root output with no derivation fields' do
       action_id = create_action
-      output_id = create_output(action_id: action_id)
       expect {
-        db[:spendable].insert(output_id: output_id, action_id: action_id, output_type: 'root')
+        create_output(action_id: action_id, output_type: 'root')
       }.not_to raise_error
     end
 
     it 'allows derived output with all derivation fields' do
       action_id = create_action
-      output_id = create_output(action_id: action_id)
       expect {
-        db[:spendable].insert(
-          output_id: output_id, action_id: action_id,
-          output_type: nil, derivation_prefix: 'prefix',
-          derivation_suffix: 'suffix', sender_identity_key: 'self'
-        )
+        create_output(action_id: action_id, output_type: nil,
+                      derivation_prefix: 'prefix', derivation_suffix: 'suffix',
+                      sender_identity_key: 'self')
       }.not_to raise_error
+    end
+
+    it 'allows outbound output with no derivation fields' do
+      action_id = create_action
+      expect {
+        create_output(action_id: action_id, output_type: 'outbound')
+      }.not_to raise_error
+    end
+
+    it 'rejects outbound output with derivation_prefix set' do
+      action_id = create_action
+      expect {
+        db.transaction(savepoint: true) do
+          create_output(action_id: action_id, output_type: 'outbound',
+                        derivation_prefix: 'should not be here')
+        end
+      }.to raise_error(Sequel::CheckConstraintViolation)
+    end
+  end
+
+  # --- spendable (pure membership) ---
+
+  describe 'spendable' do
+    it 'allows thin spendable row for root output' do
+      action_id = create_action
+      output_id = create_output(action_id: action_id, output_type: 'root')
+      expect {
+        db[:spendable].insert(output_id: output_id, action_id: action_id)
+      }.not_to raise_error
+    end
+
+    it 'allows thin spendable row for derived output' do
+      action_id = create_action
+      output_id = create_output(action_id: action_id, output_type: nil,
+                                derivation_prefix: 'prefix', derivation_suffix: 'suffix',
+                                sender_identity_key: 'self')
+      expect {
+        db[:spendable].insert(output_id: output_id, action_id: action_id)
+      }.not_to raise_error
+    end
+
+    it 'rejects spendable row for outbound output' do
+      action_id = create_action
+      output_id = create_output(action_id: action_id, output_type: 'outbound')
+      expect {
+        db.transaction(savepoint: true) do
+          db[:spendable].insert(output_id: output_id, action_id: action_id)
+        end
+      }.to raise_error(Sequel::DatabaseError, /outbound/)
     end
   end
 

@@ -5,7 +5,9 @@ Sequel.migration do
     extension :pg_enum
 
     # --- New enum ---
-    create_enum(:output_type, %w[root change])
+    # Ternary: root (identity key, no derivation), outbound (payment to
+    # others, no derivation), NULL (derived, has keys).
+    create_enum(:output_type, %w[root outbound])
 
     # --- 1. tx_proofs ---
     alter_table(:tx_proofs) do
@@ -53,39 +55,56 @@ Sequel.migration do
     end
 
     # --- 5. outputs ---
-    # Outputs is the immutable log — all outputs the wallet participated in,
-    # including payments to others. Derivation data moves to spendable.
+    # The immutable log. Derivation data lives here — it's a fact about the
+    # output, recorded when the key is derived. Spendable is pure membership.
     alter_table(:outputs) do
       set_column_not_null :locking_script
-      drop_column :derivation_prefix
-      drop_column :derivation_suffix
-      drop_column :sender_identity_key
+      add_column :output_type, :output_type
       add_constraint(:satoshis_range)          { satoshis >= 0 }
       add_constraint(:vout_range)              { vout >= 0 }
       add_constraint(:locking_script_min)      { length(locking_script) >= 1 }
+      # Typed outputs (root, outbound) use identity key or belong to
+      # others — no derivation fields allowed
+      add_constraint(:typed_no_prefix,   'output_type IS NULL OR derivation_prefix IS NULL')
+      add_constraint(:typed_no_suffix,   'output_type IS NULL OR derivation_suffix IS NULL')
+      add_constraint(:typed_no_sender,   'output_type IS NULL OR sender_identity_key IS NULL')
+      # Derived outputs (NULL type) must have all derivation fields
+      add_constraint(:derived_needs_prefix, 'output_type IS NOT NULL OR derivation_prefix IS NOT NULL')
+      add_constraint(:derived_needs_suffix, 'output_type IS NOT NULL OR derivation_suffix IS NOT NULL')
+      add_constraint(:derived_needs_sender, 'output_type IS NOT NULL OR sender_identity_key IS NOT NULL')
     end
 
     # --- 6. spendable ---
-    # Spendable is the UTXO set — only outputs the wallet can spend.
-    # Derivation data lives here because it's needed for signing.
+    # Pure set membership — a row's existence IS the wallet.
     alter_table(:spendable) do
       set_column_not_null :action_id
-      add_column :output_type, :output_type
-      add_column :derivation_prefix, :text
-      add_column :derivation_suffix, :text
-      add_column :sender_identity_key, :text
-      add_constraint(:derived_needs_prefix,    'output_type IS NOT NULL OR derivation_prefix IS NOT NULL')
-      add_constraint(:derived_needs_suffix,    'output_type IS NOT NULL OR derivation_suffix IS NOT NULL')
-      add_constraint(:derived_needs_sender,    'output_type IS NOT NULL OR sender_identity_key IS NOT NULL')
-      add_constraint(:typed_no_prefix,         'output_type IS NULL OR derivation_prefix IS NULL')
-      add_constraint(:typed_no_suffix,         'output_type IS NULL OR derivation_suffix IS NULL')
-      add_constraint(:typed_no_sender,         'output_type IS NULL OR sender_identity_key IS NULL')
     end
 
+    # Outbound outputs are payments to others — they must never have a
+    # spendable row. Cross-table CHECK constraints aren't possible in
+    # PostgreSQL, so a trigger enforces this invariant.
+    run <<~SQL
+      CREATE FUNCTION prevent_outbound_spendable() RETURNS trigger AS $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM outputs WHERE id = NEW.output_id AND output_type = 'outbound') THEN
+          RAISE EXCEPTION 'spendable row forbidden for outbound output %', NEW.output_id
+            USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    SQL
+    run <<~SQL
+      CREATE TRIGGER check_outbound_spendable
+        BEFORE INSERT ON spendable
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_outbound_spendable();
+    SQL
+
     # --- 7. output_details ---
+    # change column stays — cosmetic flag for display, not structural
     alter_table(:output_details) do
       set_column_not_null :action_id
-      drop_column :change
     end
 
     # --- 8. output_baskets ---
@@ -202,32 +221,27 @@ Sequel.migration do
     # --- 7. output_details ---
     alter_table(:output_details) do
       set_column_allow_null :action_id
-      add_column :change, :boolean, null: false, default: false
     end
 
     # --- 6. spendable ---
+    run 'DROP TRIGGER IF EXISTS check_outbound_spendable ON spendable'
+    run 'DROP FUNCTION IF EXISTS prevent_outbound_spendable()'
     alter_table(:spendable) do
       set_column_allow_null :action_id
-      drop_constraint :derived_needs_prefix
-      drop_constraint :derived_needs_suffix
-      drop_constraint :derived_needs_sender
-      drop_constraint :typed_no_prefix
-      drop_constraint :typed_no_suffix
-      drop_constraint :typed_no_sender
-      drop_column :output_type
-      drop_column :derivation_prefix
-      drop_column :derivation_suffix
-      drop_column :sender_identity_key
     end
 
     # --- 5. outputs ---
     alter_table(:outputs) do
+      drop_constraint :typed_no_prefix
+      drop_constraint :typed_no_suffix
+      drop_constraint :typed_no_sender
+      drop_constraint :derived_needs_prefix
+      drop_constraint :derived_needs_suffix
+      drop_constraint :derived_needs_sender
       drop_constraint :satoshis_range
       drop_constraint :vout_range
       drop_constraint :locking_script_min
-      add_column :derivation_prefix, :text
-      add_column :derivation_suffix, :text
-      add_column :sender_identity_key, :text
+      drop_column :output_type
       set_column_allow_null :locking_script
     end
 

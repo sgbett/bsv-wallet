@@ -5,13 +5,33 @@
 1. **Outputs are the primary entity.** The outputs table is the wallet's ledger — the source of truth for "what does this wallet own?" Actions are the events that create and consume outputs.
 2. **State is derived, not stored.** An output's spendability is structural: no `spendable` boolean, no `state` enum. Spendable = has a row in `spendable` AND no input row claims it. Spent = an input row exists. Relinquished = no `spendable` row and no input row. Action status is derived from structural state + the `broadcast` intent flag — no status column.
 3. **The inputs table is the lock mechanism.** Claiming an output for a transaction = INSERT into inputs. Releasing it = DELETE (via cascade). The UNIQUE constraint on `output_id` enforces single-spend atomically.
-4. **Outputs are immutable (append-only).** The `outputs` table is the log — a permanent record of every output the wallet has ever owned, including derivation data and locking script. It is never UPDATE'd or DELETE'd. All mutable state lives in relationship tables: basket membership in `output_baskets`, spending claims in `inputs`, tags in `output_tags`. The `spendable` table is the wallet — a minimal set of output_ids representing the current UTXO set. Outputs is the log; spendable is the wallet.
-5. **The spendable table is the UTXO set.** A row in `spendable` means "this output can be spent." Just `id` + `output_id` — fits entirely in memory at any realistic pool size. DELETE = spent or relinquished. The hot-path query scans this tiny table, then PK-joins to outputs for data.
-6. **Display metadata is vertically partitioned.** Application metadata lives in `output_details`. Basket membership lives in `output_baskets`.
+4. **Outputs are immutable (append-only).** The `outputs` table is the log — a permanent record of every output the wallet has ever participated in, including derivation data, locking script, and output type. It is never UPDATE'd or DELETE'd. All mutable state lives in relationship tables: basket membership in `output_baskets`, spending claims in `inputs`, tags in `output_tags`. The `spendable` table is the wallet — a minimal set of output_ids representing the current UTXO set. Outputs is the log; spendable is the wallet.
+5. **The spendable table is the UTXO set.** A row in `spendable` means "this output can be spent." Pure set membership: `{id, output_id, action_id}` — no data columns. The presence of a row IS the spendable state. DELETE = spent or relinquished. The hot-path query scans this tiny table, then PK-joins to outputs for data.
+6. **Display metadata is vertically partitioned.** Application metadata lives in `output_details` (including the cosmetic `change` flag). Basket membership lives in `output_baskets`.
 7. **BRC-100 drives the vocabulary.** Transactions are called "actions" (BRC-100 term). The 28 wallet methods define what the storage must serve.
 8. **Proofs are settlement receipts.** A merkle proof proves an action's transaction is in a block. `action.tx_proof_id IS NOT NULL` means settled.
 9. **No user table.** The wallet is an engine, not a user-facing service. Identity and authentication are layers above. The wallet knows who it is because it was constructed with a key — that's a runtime parameter, not a database row. Multi-tenant hosting (many users, one database) is a separate concern that can be added via a user-centric schema above the core wallet tables.
 10. **Binary data is bytea.** Transaction IDs, block hashes, merkle paths, raw transactions, and locking scripts are stored as `bytea`. Sequel models return binary strings (Ruby `Encoding::BINARY`). The entire internal stack — database, models, wallet code, SDK primitives — works with binary. Hex conversion is a presentation concern at the BRC-100 API boundary, not a storage or model concern. No relationships JOIN on txid — all FKs use surrogate bigint PKs.
+11. **The database is the last line of defense.** Every invariant enforced in code must be backed by a database constraint. Code can be bypassed, refactored, or have bugs. The schema cannot be bypassed. NOT NULL is the default stance; a column should be nullable only with an explicit reason. CHECK constraints encode cross-column invariants, binary field sizes, and range validity.
+
+## Enums
+
+```sql
+CREATE TYPE broadcast_intent AS ENUM ('delayed', 'inline', 'none');
+CREATE TYPE output_type AS ENUM ('root', 'outbound');
+```
+
+**broadcast_intent:** Immutable, set at action creation. Controls when/whether the transaction is broadcast to the network.
+
+**output_type:** Classifies outputs by ownership and derivation. Three constraint profiles:
+
+| output_type | derivation fields | spendable allowed | use case |
+|-------------|:-:|:-:|---|
+| NULL | required | yes | derived output — wallet-owned via BRC-42 keys |
+| root | forbidden | yes | identity key — imported UTXOs, transitional shim |
+| outbound | forbidden | **no** (trigger enforced) | payment to others |
+
+`change` is NOT in the enum. Change outputs are structurally identical to derived outputs (NULL type with derivation fields). The `change` flag is cosmetic metadata on `output_details`.
 
 ## Migration Order
 
@@ -26,15 +46,22 @@ Merkle inclusion proof — evidence that a transaction is in a block. Independen
 | col | type | attributes |
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| txid | bytea | NOT NULL UNIQUE |
+| wtxid | bytea | NOT NULL UNIQUE |
 | height | integer | |
 | block_index | integer | |
 | merkle_path | bytea | |
-| raw_tx | bytea | |
+| raw_tx | bytea | NOT NULL |
 | block_hash | bytea | |
 | merkle_root | bytea | |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
+
+**Constraints:**
+- `CHECK length(wtxid) = 32` — wtxid is always 32 bytes
+- `CHECK length(raw_tx) >= 20` — minimum valid transaction size (version + input_count + output_count + amount + script_len + OP_1 + locktime)
+- `CHECK merkle_path IS NULL OR height IS NOT NULL` — a proof without a block height is nonsensical
+- `CHECK block_hash IS NULL OR length(block_hash) = 32`
+- `CHECK merkle_root IS NULL OR length(merkle_root) = 32`
 
 ```ruby
 class Wallet::TxProof < Sequel::Model
@@ -51,11 +78,10 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
 | tx_proof_id | bigint | REFERENCES tx_proofs (id) |
-| txid | bytea | |
-| reference | text | UNIQUE |
+| wtxid | bytea | UNIQUE WHERE NOT NULL |
+| reference | uuid | NOT NULL UNIQUE DEFAULT gen_random_uuid() |
 | outgoing | bool | NOT NULL DEFAULT true |
-| satoshis | bigint | |
-| description | text | |
+| description | text | NOT NULL |
 | version | integer | |
 | nlocktime | bigint | NOT NULL DEFAULT 0 |
 | broadcast | broadcast_intent | NOT NULL DEFAULT 'delayed' |
@@ -65,8 +91,10 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
 
 **Constraints:**
-- `CREATE TYPE broadcast_intent AS ENUM ('delayed', 'inline', 'none')` — defined before the actions table in the migration
-- `UNIQUE (txid)` — once assigned, a txid cannot be reused (index on 32-byte bytea)
+- `CHECK wtxid IS NULL OR length(wtxid) = 32`
+- `CHECK length(description) BETWEEN 5 AND 50`
+- `CHECK nlocktime >= 0`
+- `CHECK (wtxid IS NULL) = (raw_tx IS NULL)` — an action is either unsigned (both NULL) or signed (both set)
 
 **Indexes:**
 - `idx_actions_broadcast` on `(broadcast)` — worker queries scan for actions pending broadcast
@@ -75,18 +103,13 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 
 | Structural state | Derived status |
 |---|---|
-| `txid IS NULL` | unsigned — waiting for signAction |
-| `txid IS NOT NULL`, no broadcast row, no outputs | unprocessed — broadcast pending |
-| `txid IS NOT NULL`, broadcast row exists, no outputs | sending — broadcast in progress |
+| `wtxid IS NULL` | unsigned — waiting for signAction |
+| `wtxid IS NOT NULL`, no broadcast row, no outputs | unprocessed — broadcast pending |
+| `wtxid IS NOT NULL`, broadcast row exists, no outputs | sending — broadcast in progress |
 | `broadcast = 'none'`, no `tx_proof_id` | nosend |
 | outputs exist, `tx_proof_id IS NULL` | unproven — waiting for proof |
 | `tx_proof_id IS NOT NULL` | completed |
 | broadcast row has `tx_status = 'REJECTED'` | failed — network rejected |
-
-**Broadcast intent** (immutable, set at creation):
-- `inline` — broadcast synchronously, caller waits for result
-- `delayed` — broadcast via background worker (default)
-- `none` — never broadcast (noSend)
 
 ```ruby
 class Wallet::Action < Sequel::Model
@@ -97,20 +120,13 @@ class Wallet::Action < Sequel::Model
   many_to_many :labels, join_table: :action_labels
 
   def derived_status
-    return 'unsigned'    if txid.nil?
-    return 'completed'   if tx_proof_id
-    return 'nosend'      if broadcast == 'none'
-    return 'unproven'    if outputs.any?
-    return 'failed'      if broadcast_entry&.tx_status == 'REJECTED'
-    return 'sending'     if broadcast_entry
-    'unprocessed'
-  end
-
-  def broadcast!
-    return if broadcast == 'none'
-    entry = broadcast_entry || BroadcastQueue.create(action_id: id)
-    entry.post! if broadcast == 'inline'
-    # If broadcast == 'delayed', the BroadcastQueueWorker picks it up
+    return :unsigned    if wtxid.nil?
+    return :completed   if tx_proof_id
+    return :nosend      if broadcast == 'none'
+    return :unproven    if outputs.any?
+    return :failed      if broadcast_entry&.tx_status == 'REJECTED'
+    return :sending     if broadcast_entry
+    :unprocessed
   end
 end
 ```
@@ -138,6 +154,8 @@ When ARC reports MINED with a `merklePath`, the broadcast handler creates a `tx_
 
 **Constraints:**
 - `UNIQUE (action_id)` — one broadcast record per action
+- `CHECK block_hash IS NULL OR length(block_hash) = 32`
+- `CHECK block_height IS NULL OR block_height >= 0`
 
 **ARC tx_status lifecycle:**
 ```
@@ -149,29 +167,6 @@ UNKNOWN → RECEIVED → SENT_TO_NETWORK → ACCEPTED_BY_NETWORK → SEEN_ON_NET
 ```ruby
 class Wallet::BroadcastQueue < Sequel::Model
   many_to_one :action
-
-  def post!
-    self.broadcast_at = Time.now
-    save
-    response = ARC::Protocol.post_tx(action.raw_tx)
-    self.tx_status    = response.tx_status
-    self.arc_status   = response.status
-    self.block_hash   = response.block_hash
-    self.block_height = response.block_height
-    self.merkle_path  = response.merkle_path
-    self.extra_info   = response.extra_info
-    save
-    promote_if_accepted!
-  end
-
-  private
-
-  def promote_if_accepted!
-    return unless tx_status == 'SEEN_ON_NETWORK' || tx_status == 'MINED'
-    # Write outputs to the immutable log
-    # INSERT spendable, output_baskets, output_details
-    # If MINED: create tx_proof from merkle_path + block_hash + block_height
-  end
 end
 ```
 
@@ -184,7 +179,7 @@ Every `createAction` is a series of small atomic database transactions. No datab
 ```
 BEGIN
   INSERT INTO actions (broadcast, nlocktime, description, ...)
-    -- txid IS NULL, raw_tx IS NULL — the action is unsigned
+    -- wtxid IS NULL, raw_tx IS NULL — the action is unsigned
   INSERT INTO inputs (action_id, output_id, vin, nsequence, description)
     ON CONFLICT (output_id) DO NOTHING RETURNING output_id
   -- verify we locked enough inputs to fund the transaction
@@ -193,7 +188,7 @@ COMMIT
 ```
 
 **Database state after Phase 1:**
-- `actions`: one new row, `txid IS NULL` (unsigned), no `raw_tx`
+- `actions`: one new row, `wtxid IS NULL` (unsigned), no `raw_tx`
 - `inputs`: one row per consumed output, each locking a UTXO via UNIQUE(output_id)
 - `outputs`: **untouched** — change outputs exist only in memory
 - `spendable`: **untouched** — locked outputs are still in spendable but excluded by the NOT EXISTS anti-join on inputs
@@ -209,12 +204,12 @@ If `signAndProcess: false`, this phase is deferred — see **Deferred Signing �
 ```
 -- signing happens in memory (key derivation, ECDSA, script templates)
 BEGIN
-  UPDATE actions SET txid = ?, raw_tx = ? WHERE id = ?
+  UPDATE actions SET wtxid = ?, raw_tx = ? WHERE id = ?
 COMMIT
 ```
 
 **Database state after Phase 2:**
-- `actions`: `txid` set, `raw_tx` set — the action is signed and ready for broadcast
+- `actions`: `wtxid` set, `raw_tx` set — the action is signed and ready for broadcast
 - Everything else unchanged
 
 #### Phase 3: Broadcast (managed by BroadcastQueue)
@@ -222,7 +217,6 @@ COMMIT
 The action calls `broadcast` which creates a `broadcasts` row and conditionally posts to ARC:
 
 ```ruby
-# Action#broadcast
 broadcast_entry = BroadcastQueue.create(action_id: id)
 broadcast_entry.post! if broadcast == 'inline'
 # If broadcast == 'delayed', the BroadcastQueueWorker picks it up
@@ -243,24 +237,25 @@ If the process crashes between steps 3 and 4: the broadcast row has the ARC resp
 
 ```
 BEGIN
-  INSERT INTO outputs (action_id, satoshis, vout, locking_script, derivation_*, sender_identity_key)
-  INSERT INTO spendable (output_id)
-  INSERT INTO output_baskets (output_id, basket_id)
-  INSERT INTO output_details (output_id, change, description, custom_instructions, ...)
+  INSERT INTO outputs (action_id, satoshis, vout, locking_script,
+                       output_type, derivation_prefix, derivation_suffix, sender_identity_key)
+  INSERT INTO spendable (output_id, action_id)   -- wallet-owned outputs only
+  INSERT INTO output_baskets (output_id, basket_id, action_id)
+  INSERT INTO output_details (output_id, action_id, change, description, ...)
   -- If ARC returned MINED + merklePath:
-  INSERT INTO tx_proofs (txid, height, block_index, merkle_path, block_hash, merkle_root, raw_tx)
-    ON CONFLICT (txid) DO UPDATE SET ...
+  INSERT INTO tx_proofs (wtxid, height, block_index, merkle_path, block_hash, merkle_root, raw_tx)
+    ON CONFLICT (wtxid) DO UPDATE SET ...
   UPDATE actions SET tx_proof_id = ? WHERE id = ?
 COMMIT
 ```
 
 **Database state after Phase 4:**
-- `outputs`: new rows for change/wallet outputs (immutable from this point)
-- `spendable`: new rows for each spendable output
+- `outputs`: new rows for all transaction outputs (immutable from this point). Wallet-owned outputs have derivation fields; outbound outputs have `output_type = 'outbound'`.
+- `spendable`: new rows for wallet-owned outputs only. Outbound outputs never get a spendable row (trigger enforced).
 - `tx_proofs`: proof created if ARC returned MINED (proof arrives for free!)
 - `actions`: `tx_proof_id` set if proof arrived with broadcast response
 
-The new change outputs are now live in the UTXO set. They're immediately available for the next `createAction`.
+The new wallet-owned outputs are now live in the UTXO set. They're immediately available for the next `createAction`.
 
 #### Broadcast Failure
 
@@ -278,31 +273,31 @@ COMMIT
 
 Two classes of stale actions:
 
-**Never signed** (deferred actions that were abandoned — have outputs but no txid):
+**Never signed** (deferred actions that were abandoned — have outputs but no wtxid):
 ```sql
 -- Clean up output relationships first
 DELETE FROM spendable WHERE output_id IN (
   SELECT o.id FROM outputs o JOIN actions a ON o.action_id = a.id
-  WHERE a.txid IS NULL AND a.created_at < (now() - interval '?')
+  WHERE a.wtxid IS NULL AND a.created_at < (now() - interval '?')
 );
 DELETE FROM output_baskets WHERE output_id IN (
   SELECT o.id FROM outputs o JOIN actions a ON o.action_id = a.id
-  WHERE a.txid IS NULL AND a.created_at < (now() - interval '?')
+  WHERE a.wtxid IS NULL AND a.created_at < (now() - interval '?')
 );
 DELETE FROM output_details WHERE output_id IN (
   SELECT o.id FROM outputs o JOIN actions a ON o.action_id = a.id
-  WHERE a.txid IS NULL AND a.created_at < (now() - interval '?')
+  WHERE a.wtxid IS NULL AND a.created_at < (now() - interval '?')
 );
 -- Then delete the action (CASCADE to inputs, freeing locked UTXOs)
 DELETE FROM actions a
-WHERE a.txid IS NULL
+WHERE a.wtxid IS NULL
   AND a.created_at < (now() - interval '?');
 ```
 
 **Never sent** (signed but never broadcast — no outputs because promotion was post-broadcast):
 ```sql
 DELETE FROM actions a
-WHERE a.txid IS NOT NULL
+WHERE a.wtxid IS NOT NULL
   AND a.broadcast != 'none'
   AND NOT EXISTS (SELECT 1 FROM broadcasts b WHERE b.action_id = a.id)
   AND a.created_at < (now() - interval '?')
@@ -311,7 +306,7 @@ WHERE a.txid IS NOT NULL
 
 **Sent but unresolved** (broadcast row exists, no outputs — needs investigation):
 ```sql
-SELECT a.id, a.txid, b.tx_status, b.broadcast_at
+SELECT a.id, a.wtxid, b.tx_status, b.broadcast_at
 FROM actions a
 JOIN broadcasts b ON b.action_id = a.id
 WHERE NOT EXISTS (SELECT 1 FROM outputs o WHERE o.action_id = a.id)
@@ -323,9 +318,9 @@ WHERE NOT EXISTS (SELECT 1 FROM outputs o WHERE o.action_id = a.id)
 
 ```
 BEGIN
-  INSERT INTO tx_proofs (txid, height, block_index, merkle_path, block_hash, merkle_root, raw_tx)
-    ON CONFLICT (txid) DO UPDATE SET ...
-  UPDATE actions SET tx_proof_id = ? WHERE txid = ?
+  INSERT INTO tx_proofs (wtxid, height, block_index, merkle_path, block_hash, merkle_root, raw_tx)
+    ON CONFLICT (wtxid) DO UPDATE SET ...
+  UPDATE actions SET tx_proof_id = ? WHERE wtxid = ?
   UPDATE broadcasts SET tx_status = 'MINED', block_hash = ?, block_height = ? WHERE action_id = ?
 COMMIT
 ```
@@ -340,9 +335,9 @@ The action's derived status transitions to `completed` (tx_proof_id is now set).
 
 ```
 BEGIN
-  DELETE FROM actions WHERE id = ? AND txid IS NULL
+  DELETE FROM actions WHERE id = ? AND wtxid IS NULL
     -- CASCADE deletes inputs, freeing locked UTXOs
-    -- only works on unsigned actions (txid IS NULL)
+    -- only works on unsigned actions (wtxid IS NULL)
 COMMIT
 ```
 
@@ -360,7 +355,7 @@ After broadcast, abort is meaningless — the network has the transaction.
 BEGIN
   -- Phase 1: Lock (same as synchronous)
   INSERT INTO actions (broadcast, nlocktime, description, ...)
-    -- txid IS NULL
+    -- wtxid IS NULL
   INSERT INTO inputs (action_id, output_id, vin, nsequence, description)
     ON CONFLICT (output_id) DO NOTHING RETURNING output_id
 
@@ -369,19 +364,20 @@ BEGIN
   UPDATE actions SET raw_tx = unsigned_tx WHERE id = ?
 
   -- Promote outputs (not deferred — outputs are known now)
-  INSERT INTO outputs (action_id, satoshis, vout, locking_script, derivation_*, sender_identity_key)
-  INSERT INTO spendable (output_id)
-  INSERT INTO output_baskets (output_id, basket_id)
-  INSERT INTO output_details (output_id, change, description, custom_instructions, ...)
+  INSERT INTO outputs (action_id, satoshis, vout, locking_script,
+                       output_type, derivation_prefix, derivation_suffix, sender_identity_key)
+  INSERT INTO spendable (output_id, action_id)
+  INSERT INTO output_baskets (output_id, basket_id, action_id)
+  INSERT INTO output_details (output_id, action_id, change, description, ...)
 COMMIT
 ```
 
 Returns `{ signable_transaction: { tx: unsigned_raw_tx, reference: action.reference } }`.
 
 **Database state after deferred createAction:**
-- `actions`: `txid IS NULL`, `raw_tx` has unsigned transaction bytes
+- `actions`: `wtxid IS NULL`, `raw_tx` has unsigned transaction bytes
 - `inputs`: locked, same as synchronous Phase 1
-- `outputs`: written — the wallet's change outputs are in the immutable log
+- `outputs`: written — the wallet's outputs are in the immutable log
 - `spendable`: written — outputs are immediately available for BEEF chaining (another `createAction` can spend them before the parent is signed and broadcast)
 
 **signAction** completes the deferred transaction:
@@ -390,7 +386,7 @@ Returns `{ signable_transaction: { tx: unsigned_raw_tx, reference: action.refere
 -- In memory: deserialize unsigned raw_tx, apply caller unlocking scripts,
 -- sign remaining P2PKH inputs with derived keys
 BEGIN
-  UPDATE actions SET txid = ?, raw_tx = signed_tx WHERE id = ?
+  UPDATE actions SET wtxid = ?, raw_tx = signed_tx WHERE id = ?
 COMMIT
 -- Broadcast (Phase 3 — same as synchronous path)
 ```
@@ -426,12 +422,13 @@ Output rows remain in the immutable log — orphaned but harmless. They have no 
 
 ```
 BEGIN
-  INSERT INTO tx_proofs (txid, height, ...) ON CONFLICT DO UPDATE ...
-  INSERT INTO actions (tx_proof_id, txid, outgoing: false, broadcast: 'none', ...)
-  INSERT INTO outputs (action_id, satoshis, vout, locking_script, derivation_*, ...)
-  INSERT INTO spendable (output_id)
-  INSERT INTO output_baskets (output_id, basket_id)
-  INSERT INTO output_details (output_id, ...)
+  INSERT INTO tx_proofs (wtxid, height, ...) ON CONFLICT DO UPDATE ...
+  INSERT INTO actions (tx_proof_id, wtxid, outgoing: false, broadcast: 'none', ...)
+  INSERT INTO outputs (action_id, satoshis, vout, locking_script,
+                       output_type, derivation_prefix, derivation_suffix, sender_identity_key)
+  INSERT INTO spendable (output_id, action_id)
+  INSERT INTO output_baskets (output_id, basket_id, action_id)
+  INSERT INTO output_details (output_id, action_id, ...)
 COMMIT
 ```
 
@@ -452,14 +449,14 @@ The output row stays in the log. The wallet forgets about it — no spendable en
 
 | Table | INSERT | UPDATE | DELETE | Character |
 |-------|--------|--------|--------|-----------|
-| **actions** | createAction | txid (sign), tx_proof_id (proof) | abort, reaper | Mutable — the lifecycle entity |
+| **actions** | createAction | wtxid (sign), tx_proof_id (proof) | abort, reaper | Mutable — the lifecycle entity |
 | **inputs** | Phase 1 (lock) | never | CASCADE from action delete | Born and dies with its action |
 | **broadcasts** | Phase 3 (broadcast) | ARC response updates | CASCADE from action delete | Broadcast lifecycle |
-| **outputs** | Phase 4 / deferred Phase 1 / internalise | **never** | **never** | **Immutable log** |
-| **spendable** | Phase 4 / deferred Phase 1 / internalise | never | spend / relinquish / reaper | The wallet — INSERT/DELETE only |
-| **output_baskets** | Phase 4 / deferred Phase 1 / internalise | basket move | relinquish / reaper | Mutable membership |
-| **output_details** | Phase 4 / deferred Phase 1 / internalise | never | reaper | Immutable metadata (until reaped) |
-| **tx_proofs** | proof arrival / internalise | upsert on re-proof | never | Append-mostly |
+| **outputs** | Phase 4 / deferred Phase 1 / internalize | **never** | **never** | **Immutable log** |
+| **spendable** | Phase 4 / deferred Phase 1 / internalize | never | spend / relinquish / reaper | The wallet — INSERT/DELETE only |
+| **output_baskets** | Phase 4 / deferred Phase 1 / internalize | basket move | relinquish / reaper | Mutable membership |
+| **output_details** | Phase 4 / deferred Phase 1 / internalize | never | reaper | Immutable metadata (until reaped) |
+| **tx_proofs** | proof arrival / internalize | upsert on re-proof | never | Append-mostly |
 
 ---
 
@@ -470,26 +467,23 @@ Output grouping with replenishment policy. Baskets are entities, not just string
 | col | type | attributes |
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| name | text | NOT NULL |
+| name | text | NOT NULL UNIQUE |
 | target_count | integer | |
 | target_value | integer | |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
-| deleted_at | timestamptz | |
 
 **Constraints:**
-- `UNIQUE (name) WHERE deleted_at IS NULL` — partial unique, allows soft-delete re-creation
+- `UNIQUE (name)` — plain unique (no soft delete)
+- `CHECK length(name) BETWEEN 1 AND 300`
+- `CHECK name != 'default'` — the default basket is implicit (no row needed)
+- `CHECK target_count IS NULL OR target_count >= 0`
+- `CHECK target_value IS NULL OR target_value >= 0`
 
 ```ruby
 class Wallet::Basket < Sequel::Model
   one_to_many :output_baskets
   many_to_many :outputs, join_table: :output_baskets
-
-  dataset_module do
-    def active
-      where(deleted_at: nil)
-    end
-  end
 end
 ```
 
@@ -497,7 +491,9 @@ end
 
 ## 5. Outputs
 
-The log. A permanent, append-only record of every output the wallet has ever owned, including derivation data and locking script. **Immutable** — never UPDATE'd, never DELETE'd. Provenance survives in history until cold partitions are archived.
+The immutable log. A permanent, append-only record of every output the wallet has ever participated in — both wallet-owned outputs (with derivation data) and outbound payments (with `output_type = 'outbound'`). **Immutable** — never UPDATE'd, never DELETE'd. Provenance survives in history until cold partitions are archived.
+
+Derivation data (spending authority) lives here because it's a fact about the output, recorded when the key is derived. This is separate from spendability — an output can have derivation data without being in the UTXO set.
 
 The UTXO set (what's spendable now) is the `spendable` table. Queries enter through `spendable` and PK-join back here for data — the outputs table is never full-scanned.
 
@@ -509,16 +505,28 @@ At scale, partition by id range. Old partitions where all outputs have been spen
 | action_id | bigint | NOT NULL REFERENCES actions (id) |
 | satoshis | bigint | NOT NULL |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
-| locking_script | bytea | |
+| locking_script | bytea | NOT NULL |
 | vout | integer | NOT NULL |
-| sender_identity_key | text | |
+| output_type | output_type | |
 | derivation_prefix | text | |
 | derivation_suffix | text | |
+| sender_identity_key | text | |
 
 **Constraints:**
 - `UNIQUE (action_id, vout)` — an output is uniquely identified by its position in the action that created it
+- `CHECK satoshis >= 0`
+- `CHECK vout >= 0`
+- `CHECK length(locking_script) >= 1`
+- Typed outputs (root, outbound) must NOT have derivation fields:
+  - `CHECK output_type IS NULL OR derivation_prefix IS NULL`
+  - `CHECK output_type IS NULL OR derivation_suffix IS NULL`
+  - `CHECK output_type IS NULL OR sender_identity_key IS NULL`
+- Derived outputs (NULL type) must have ALL derivation fields:
+  - `CHECK output_type IS NOT NULL OR derivation_prefix IS NOT NULL`
+  - `CHECK output_type IS NOT NULL OR derivation_suffix IS NOT NULL`
+  - `CHECK output_type IS NOT NULL OR sender_identity_key IS NOT NULL`
 
-**Note:** No `updated_at` — immutable rows have no updates. No `basket_id` — basket membership is in `output_baskets`. No `txid` — derived via `output.action.txid`. Column order optimised for alignment: 8-byte columns first, then variable-width, with 4-byte `vout` tucked after `locking_script` to reduce padding.
+**Note:** No `updated_at` — immutable rows have no updates. No `basket_id` — basket membership is in `output_baskets`. No `wtxid` — derived via `output.action.wtxid`. Column order optimized for alignment: 8-byte columns first, then variable-width, with 4-byte `vout` tucked after `locking_script` to reduce padding.
 
 ```ruby
 class Wallet::Output < Sequel::Model
@@ -545,7 +553,6 @@ class Wallet::Output < Sequel::Model
           OutputBasket.join(:baskets, id: :basket_id)
             .where(Sequel[:output_baskets][:output_id] => Sequel[:outputs][:id])
             .where(Sequel[:baskets][:name] => name)
-            .where(Sequel[:baskets][:deleted_at] => nil)
             .select(1)
         )
       )
@@ -557,7 +564,7 @@ class Wallet::Output < Sequel::Model
   end
 
   def outpoint
-    "#{action.txid}.#{vout}"
+    "#{action.wtxid}.#{vout}"
   end
 
   def basket
@@ -574,7 +581,7 @@ end
 
 ## 6. Spendable
 
-The wallet. A minimal membership table — each row says "this output is available to spend." The presence of a row IS the spendable state. DELETE = spent or relinquished. Two columns, ~28 bytes per row. At a typical UTXO pool the entire table fits in PostgreSQL's buffer cache permanently.
+The wallet. Pure set membership — each row says "this output is available to spend." The presence of a row IS the spendable state. No data columns beyond the keys. DELETE = spent or relinquished. ~28 bytes per row. At a typical UTXO pool the entire table fits in PostgreSQL's buffer cache permanently.
 
 The hot-path UTXO selection query scans this table (in memory), then PK-joins to `outputs` for satoshis, derivation data, and locking script.
 
@@ -589,7 +596,9 @@ The hot-path UTXO selection query scans this table (in memory), then PK-joins to
 
 **Cascade:** `action_id ON DELETE CASCADE` — deleting an action automatically removes its spendable entries. Denormalized (derivable via `output_id -> outputs.action_id`) but justified: 8 bytes per row, set once at creation, enables single-statement reaper cleanup.
 
-**Note:** No timestamps — INSERT at output creation, DELETE at spend/relinquish. The churn pattern is INSERT-heavy (~8 change outputs created per ~2 inputs consumed). Dead tuples from DELETEs are minimal and vacuum is trivial on a table this small.
+**Trigger:** `prevent_outbound_spendable` — BEFORE INSERT trigger rejects any row referencing an output with `output_type = 'outbound'`. The database itself prevents invalid state — outbound outputs (payments to others) can never appear in the UTXO set.
+
+**Note:** No timestamps — INSERT at output promotion, DELETE at spend/relinquish. The churn pattern is INSERT-heavy (~8 change outputs created per ~2 inputs consumed). Dead tuples from DELETEs are minimal and vacuum is trivial on a table this small.
 
 ```ruby
 class Wallet::Spendable < Sequel::Model
@@ -619,6 +628,8 @@ Display and application metadata. Never queried in the UTXO selection hot path. 
 | script_offset | integer | |
 
 **Cascade:** `action_id ON DELETE CASCADE` — deleting an action automatically removes its output details.
+
+**`change` flag:** Cosmetic. Tells the UI "this output was change from a transaction you sent." Never indexed, never queried in the hot path. UTXO selection picks by satoshis and basket, never by change flag. Change outputs are structurally identical to derived outputs — `output_type` NULL with derivation fields.
 
 **Note:** No timestamps — written at output creation, immutable.
 
@@ -680,6 +691,8 @@ The consumption relationship. The lock mechanism. Each row says "this output is 
 **Constraints:**
 - `UNIQUE (output_id)` — an output can only be claimed once (the structural lock)
 - `UNIQUE (action_id, vin)` — input indexes are unique within an action
+- `CHECK vin >= 0`
+- `CHECK nsequence BETWEEN 0 AND 4294967295`
 
 **Indexes:**
 - The UNIQUE constraints serve as indexes for both the anti-join (spendable query) and the FK lookups
@@ -695,28 +708,22 @@ end
 
 ## 10. Labels
 
-Label definitions for categorising actions. Normalised — the label string is stored once, then referenced via a join table.
+Label definitions for categorizing actions. Normalized — the label string is stored once, then referenced via a join table.
 
 | col | type | attributes |
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| label | text | NOT NULL |
+| label | text | NOT NULL UNIQUE |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
-| deleted_at | timestamptz | |
 
 **Constraints:**
-- `UNIQUE (label) WHERE deleted_at IS NULL`
+- `UNIQUE (label)` — plain unique (no soft delete)
+- `CHECK length(label) BETWEEN 1 AND 300`
 
 ```ruby
 class Wallet::Label < Sequel::Model
   many_to_many :actions, join_table: :action_labels
-
-  dataset_module do
-    def active
-      where(deleted_at: nil)
-    end
-  end
 end
 ```
 
@@ -729,11 +736,10 @@ Join table: actions to labels (many-to-many).
 | col | type | attributes |
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| action_id | bigint | NOT NULL REFERENCES actions (id) |
+| action_id | bigint | NOT NULL REFERENCES actions (id) ON DELETE CASCADE |
 | label_id | bigint | NOT NULL REFERENCES labels (id) |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
-| deleted_at | timestamptz | |
 
 **Constraints:**
 - `UNIQUE (action_id, label_id)`
@@ -752,28 +758,22 @@ end
 
 ## 12. Tags
 
-Tag definitions for categorising outputs. Same normalisation pattern as labels.
+Tag definitions for categorizing outputs. Same normalization pattern as labels.
 
 | col | type | attributes |
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| tag | text | NOT NULL |
+| tag | text | NOT NULL UNIQUE |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
-| deleted_at | timestamptz | |
 
 **Constraints:**
-- `UNIQUE (tag) WHERE deleted_at IS NULL`
+- `UNIQUE (tag)` — plain unique (no soft delete)
+- `CHECK length(tag) BETWEEN 1 AND 300`
 
 ```ruby
 class Wallet::Tag < Sequel::Model
   many_to_many :outputs, join_table: :output_tags
-
-  dataset_module do
-    def active
-      where(deleted_at: nil)
-    end
-  end
 end
 ```
 
@@ -790,7 +790,6 @@ Join table: outputs to tags (many-to-many).
 | tag_id | bigint | NOT NULL REFERENCES tags (id) |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
-| deleted_at | timestamptz | |
 
 **Constraints:**
 - `UNIQUE (output_id, tag_id)`
@@ -823,7 +822,6 @@ Identity certificate headers (BRC-52). Per-field encryption keys live in the fie
 | signature | text | |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
-| deleted_at | timestamptz | |
 
 **Constraints:**
 - `UNIQUE (type, serial_number, certifier)`
@@ -835,12 +833,6 @@ Identity certificate headers (BRC-52). Per-field encryption keys live in the fie
 ```ruby
 class Wallet::Certificate < Sequel::Model
   one_to_many :fields, class: :CertificateField
-
-  dataset_module do
-    def active
-      where(deleted_at: nil)
-    end
-  end
 end
 ```
 
@@ -879,7 +871,7 @@ Proof request lifecycle. Tracks "I need a proof for this txid" — a work queue 
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
 | tx_proof_id | bigint | REFERENCES tx_proofs (id) |
-| txid | bytea | NOT NULL UNIQUE |
+| wtxid | bytea | NOT NULL UNIQUE |
 | status | text | NOT NULL DEFAULT 'unmined' |
 | attempts | integer | NOT NULL DEFAULT 0 |
 | notified | bool | NOT NULL DEFAULT false |
@@ -890,6 +882,11 @@ Proof request lifecycle. Tracks "I need a proof for this txid" — a work queue 
 | input_beef | bytea | |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
+
+**Constraints:**
+- `CHECK length(wtxid) = 32`
+- `CHECK status IN ('unmined', 'completed', 'failed')`
+- `CHECK attempts >= 0`
 
 **Indexes:**
 - `idx_tx_reqs_status` on `(status)` — worker polling
@@ -964,7 +961,7 @@ DELETE FROM actions WHERE id = ?;
 
 ```sql
 DELETE FROM actions a
-WHERE a.txid IS NOT NULL
+WHERE a.wtxid IS NOT NULL
   AND a.broadcast != 'none'
   AND a.created_at < (now() - interval '5 minutes')
   AND NOT EXISTS (SELECT 1 FROM outputs o WHERE o.action_id = a.id);
@@ -978,8 +975,6 @@ FROM actions a
 INNER JOIN action_labels al ON al.action_id = a.id
 INNER JOIN labels l ON l.id = al.label_id
 WHERE l.label = ANY(?)
-  AND al.deleted_at IS NULL
-  AND l.deleted_at IS NULL
 ORDER BY a.created_at DESC
 LIMIT ? OFFSET ?;
 ```
@@ -995,21 +990,21 @@ INNER JOIN output_tags ot ON ot.output_id = o.id
 INNER JOIN tags t ON t.id = ot.tag_id
 WHERE b.name = ?
   AND t.tag = ANY(?)
-  AND ot.deleted_at IS NULL
-  AND t.deleted_at IS NULL
-  AND b.deleted_at IS NULL
 ORDER BY o.created_at DESC
 LIMIT ? OFFSET ?;
 ```
 
 ---
 
-## Open Questions
+## Resolved Design Questions
 
-- **`change` column placement:** Currently on `output_details`. If UTXO selection needs to distinguish change from application outputs, it could go on `spendable` or `output_baskets`. Not on `outputs` (immutable).
-- **Soft delete vs hard delete:** Baskets, labels, tags, certificates use `deleted_at`. Actions use hard delete for abort (cascade to inputs). Outputs are never deleted (immutable log).
-- **`relinquishOutput` implementation:** DELETE the `spendable` row (remove from UTXO set). DELETE the `output_baskets` row (remove from basket). The output row stays in the log forever — the historical record (including derivation provenance) remains until the partition is archived.
-- **Default basket:** No basket assignment = default basket (implicit). `listOutputs(basket: 'default')` queries spendable outputs with no `output_baskets` row. A "default" basket entity may exist in `baskets` for replenishment policy, but outputs don't need an `output_baskets` row to be in it.
+- **`change` column placement:** On `output_details` (cosmetic display flag). Change outputs are structurally identical to derived outputs — `output_type` NULL with derivation fields. The `change` flag never participates in UTXO selection or constraints.
+- **Soft delete:** Removed from baskets, labels, tags, certificates, action_labels, output_tags. Plain UNIQUE constraints replaced partial indexes. Hard delete for cleanup. Outputs are never deleted (immutable log).
+- **`relinquishOutput`:** DELETE the `spendable` row (remove from UTXO set). DELETE the `output_baskets` row (remove from basket). The output row stays in the log forever.
+- **Default basket:** No basket assignment = default basket (implicit). `listOutputs(basket: 'default')` queries spendable outputs with no `output_baskets` row. `CHECK name != 'default'` prevents explicit creation of a 'default' basket entity.
+- **Derivation data placement:** On `outputs`, not `spendable`. Derivation data is a fact about the output (recorded when the key is derived), not a statement of spendability. This preserves the state transition model: output rows record spending authority, spendable rows declare availability. Two facts, two moments in time.
+- **`actions.satoshis`:** Dropped. Derivable from `SUM(outputs.satoshis)`. No BRC-100 method returns it at the action level.
+- **`actions.reference`:** UUID type (was text). NOT NULL with `gen_random_uuid()` default.
 
 ---
 
@@ -1017,14 +1012,14 @@ LIMIT ? OFFSET ?;
 
 **Creation:** `createAction` creates an Action (a Bitcoin transaction + metadata). Requires at least one input or output. Inputs require `inputBEEF` for SPV context. Outputs without `basket` are untracked. Can return a `signableTransaction` reference for deferred signing.
 
-**Signing:** `signAction` completes a deferred transaction. The caller provides unlocking scripts for inputs they control; the wallet signs remaining P2PKH inputs with derived keys. Outputs were already written during `createAction` — `signAction` only updates the action row (txid, signed raw_tx) and triggers broadcast. See **Deferred Signing — signAction** in the lifecycle section.
+**Signing:** `signAction` completes a deferred transaction. The caller provides unlocking scripts for inputs they control; the wallet signs remaining P2PKH inputs with derived keys. Outputs were already written during `createAction` — `signAction` only updates the action row (wtxid, signed raw_tx) and triggers broadcast. See **Deferred Signing — signAction** in the lifecycle section.
 
 **Aborting:** `abortAction` cancels an in-progress action. Cascade-deletes inputs, releasing claimed outputs.
 
-**Internalisation:** `internalizeAction` accepts incoming BEEF, verifies proofs, creates output rows for outputs the wallet controls.
+**Internalization:** `internalizeAction` accepts incoming BEEF, verifies proofs, creates output rows for outputs the wallet controls.
 
 **Listing:** `listActions` queries by labels. `listOutputs` queries by basket/tags. Both are read-only with pagination.
 
 **Relinquishment:** `relinquishOutput` releases an output from wallet tracking, even if unspent.
 
-**Tags vs Labels:** Labels categorise actions (used with `listActions`). Tags categorise outputs (used with `listOutputs`). Both are purely organisational.
+**Tags vs Labels:** Labels categorize actions (used with `listActions`). Tags categorize outputs (used with `listOutputs`). Both are purely organizational.

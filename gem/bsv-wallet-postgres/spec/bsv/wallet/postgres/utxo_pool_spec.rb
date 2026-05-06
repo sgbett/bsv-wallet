@@ -10,9 +10,12 @@ RSpec.describe BSV::Wallet::Postgres::UTXOPool do
                                                   raw_tx: SecureRandom.random_bytes(100))
     output = BSV::Wallet::Postgres::Output.create(
       action_id: source.id, satoshis: satoshis, vout: vout,
-      locking_script: SecureRandom.random_bytes(25)
+      locking_script: SecureRandom.random_bytes(25),
+      derivation_prefix: SecureRandom.uuid,
+      derivation_suffix: '1',
+      sender_identity_key: 'self'
     )
-    BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: source.id, output_type: 'change')
+    BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: source.id)
     unless basket == 'default'
       basket_id = store.find_or_create_basket(name: basket)
       BSV::Wallet::Postgres::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: source.id)
