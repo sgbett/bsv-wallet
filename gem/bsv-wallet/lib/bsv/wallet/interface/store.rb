@@ -32,9 +32,9 @@ module BSV
         # Phase 2: Attach wtxid and signed raw transaction to an action.
         #
         # When +change_outputs+ is present, writes change output rows
-        # (outputs, spendable, output_details) atomically within the same
-        # database transaction. This ensures signing failure produces zero
-        # orphan output rows.
+        # (outputs + output_details) atomically within the same database
+        # transaction. No spendable rows — promotion happens after broadcast
+        # acceptance. This ensures signing failure produces zero orphan rows.
         #
         # @param action_id [Integer]
         # @param wtxid [String] 32-byte binary wtxid (wire byte order)
@@ -200,6 +200,16 @@ module BSV
         # @param action_id [Integer]
         # @return [Array<Integer>] vout positions
         def query_change_output_vouts(action_id:)
+          raise NotImplementedError
+        end
+
+        # Promote change outputs to spendable for an action.
+        #
+        # Creates spendable rows for change outputs that don't already
+        # have one. Called after broadcast acceptance or in the no_send path.
+        #
+        # @param action_id [Integer]
+        def promote_change_to_spendable(action_id:)
           raise NotImplementedError
         end
 

@@ -1129,7 +1129,11 @@ module BSV
       def auto_fund_action(description:, outputs:, lock_time:, version:,
                            broadcast:, labels:, randomize_outputs:,
                            no_send:, send_with:, return_txid_only:)
-        # Estimate satoshis needed (outputs + conservative fee margin)
+        # Estimate satoshis needed (outputs + conservative fee margin).
+        # Assumes 1 input for the estimate — if the pool returns multiple
+        # UTXOs, each extra input adds ~15 sats of fee but contributes its
+        # own satoshis (always >> 15), so the estimate is safe. The SDK
+        # computes the real fee from actual tx size regardless.
         output_total = outputs.sum { |o| o[:satoshis] || 0 }
         estimated_size = 10 + 148 + (outputs.length + 1) * 34
         fee_margin = (estimated_size / 1000.0 * 100).ceil
@@ -1146,11 +1150,11 @@ module BSV
           },
           inputs: input_specs
         )
-        raise BSV::Wallet::InsufficientFundsError.new if action_result.nil?
-
         attach_labels(action_result[:id], labels)
 
-        # Phase 2: Build funded transaction (in memory — failure is free)
+        # Phase 2: Build funded transaction (in memory). If this raises,
+        # the action + input rows from Phase 1 remain locked until the
+        # reaper cleans them up via CASCADE delete.
         wtxid, raw_tx, vout_mapping, change_outputs = build_funded_transaction(
           action_id: action_result[:id], caller_outputs: outputs,
           lock_time: lock_time, version: version, randomize: randomize_outputs
@@ -1168,9 +1172,10 @@ module BSV
 
         atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
 
-        # No-send path: promote caller outputs, return change outpoints
+        # No-send path: promote all outputs, return change outpoints
         if no_send
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
+          @store.promote_change_to_spendable(action_id: action_result[:id])
           change = query_change_outpoints(action_result[:id])
           result = { txid: wtxid, tx: atomic_beef, no_send_change: change }
           result[:send_with_results] = process_send_with(send_with) if send_with&.any?
@@ -1184,9 +1189,11 @@ module BSV
           immediate: broadcast == :inline
         )
 
-        # Phase 4: Promote caller outputs (change already written in Phase 2b)
+        # Phase 4: Promote all outputs (change output rows written in Phase 2b,
+        # but spendable rows deferred until now)
         if broadcast == :inline && accepted?(broadcast_result)
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
+          @store.promote_change_to_spendable(action_id: action_result[:id])
           handle_proof_from_broadcast(action_result[:id], broadcast_result)
         end
 
@@ -1261,10 +1268,7 @@ module BSV
         # G. Shuffle outputs AFTER fee — fee computation doesn't depend on
         # order, but Benford's remainder targets @outputs.last so change
         # must be last during tx.fee. Shuffle now for privacy before signing.
-        if randomize && tx.outputs.length > 1
-          shuffled = tx.outputs.shuffle
-          tx.outputs.replace(shuffled)
-        end
+        tx.outputs.shuffle! if randomize && tx.outputs.length > 1
 
         # H. Compute final vout positions (post-shuffle)
         vout_mapping = {}

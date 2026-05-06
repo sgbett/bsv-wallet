@@ -3023,8 +3023,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         result = engine.create_action(
           description: 'opret test12345',
           inputs: [],
-          outputs: [{ satoshis: 0, locking_script: "\x00\x6a\x04test".b,
-                      output_type: 'data' }]
+          outputs: [{ satoshis: 0, locking_script: "\x00\x6a\x04test".b }]
         )
 
         expect(result[:txid]).to be_a(String)
