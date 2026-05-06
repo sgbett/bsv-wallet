@@ -47,7 +47,7 @@ module BSV
         # Auto-fund: when inputs is nil with outputs present, the wallet
         # handles UTXO selection, fee estimation, and change generation.
         if inputs.nil? && outputs&.any?
-          if !sign_and_process
+          unless sign_and_process
             raise BSV::Wallet::InvalidParameterError.new(
               'sign_and_process', 'true when inputs is nil (auto-funded actions sign immediately)'
             )
@@ -1135,7 +1135,7 @@ module BSV
         # own satoshis (always >> 15), so the estimate is safe. The SDK
         # computes the real fee from actual tx size regardless.
         output_total = outputs.sum { |o| o[:satoshis] || 0 }
-        estimated_size = 10 + 148 + (outputs.length + 1) * 34
+        estimated_size = 10 + 148 + ((outputs.length + 1) * 34)
         fee_margin = (estimated_size / 1000.0 * 100).ceil
         candidates = @utxo_pool.select(satoshis: output_total + fee_margin)
 

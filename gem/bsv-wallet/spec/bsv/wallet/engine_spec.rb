@@ -2918,7 +2918,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       it 'change output is immediately spendable' do
         fund_wallet_for_auto(satoshis: 10_000)
 
-        result = engine_with_keys.create_action(
+        engine_with_keys.create_action(
           description: 'auto-fund spend',
           outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }],
           no_send: true
