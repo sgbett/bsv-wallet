@@ -106,46 +106,30 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
     BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
   end
 
-  def root_key_script(key_deriver)
-    pubkey_bytes = [key_deriver.identity_key].pack('H*')
-    p2pkh_script(pubkey_bytes)
-  end
-
   # --- Tests ---
 
-  it 'Alice pays Bob via create_action with no_send' do
+  it 'Alice pays Bob via auto-funded create_action with no_send' do
     # Import the funding UTXO (fetches tx from network, self-payment to derived address)
     import = alice_engine.import_utxo(dtxid: funding_dtxid, vout: FUNDING_VOUT)
     expect(import[:imported]).to be true
-    input_satoshis = import[:satoshis] # FUNDING_SATOSHIS minus 1-sat self-payment fee
+    input_satoshis = import[:satoshis]
     puts "\n  Imported #{input_satoshis} sats from funding UTXO"
 
     listed = alice_engine.list_outputs(basket: 'default')
     expect(listed[:total_outputs]).to eq(1)
-    output = listed[:outputs].first
-    output_id = output[:id]
-
-    # Payment params
-    payment_amount = 500
-    fee = 226
-    change_amount = input_satoshis - payment_amount - fee
 
     # Bob's locking script (P2PKH to Bob's root key)
+    payment_amount = 500
     bob_pubkey_bytes = [bob_key_deriver.identity_key].pack('H*')
     bob_script = p2pkh_script(bob_pubkey_bytes)
 
-    # Alice's change locking script (root key, nil derivation)
-    alice_change_script = root_key_script(alice_key_deriver)
-
-    # Create the transaction (no_send — build and sign but don't broadcast)
+    # Auto-funded: no inputs, no manual fee, no change output.
+    # The wallet selects UTXOs, computes fee, and generates change.
     result = alice_engine.create_action(
       description: 'integration test payment',
-      inputs: [{ output_id: output_id }],
       outputs: [
         { satoshis: payment_amount, locking_script: bob_script,
-          output_description: 'payment to Bob', basket: 'payments' },
-        { satoshis: change_amount, locking_script: alice_change_script,
-          output_description: 'change to self', output_type: 'root' }
+          output_description: 'payment to Bob', basket: 'payments' }
       ],
       labels: ['integration-test'],
       no_send: true
@@ -156,28 +140,40 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
     expect(wtxid.bytesize).to eq(32)
     expect(result[:tx]).to be_a(String)
 
+    # Verify change outpoints were returned
+    expect(result[:no_send_change]).to be_an(Array)
+    expect(result[:no_send_change].length).to eq(1)
+
     dtxid_hex = wtxid.reverse.unpack1('H*')
     puts "  Created dtxid: #{dtxid_hex}"
     puts "  Payment: #{payment_amount} sats to Bob"
-    puts "  Change:  #{change_amount} sats to Alice"
-    puts "  Fee:     #{fee} sats"
+    puts "  Change outpoint: #{result[:no_send_change].first}"
 
-    # Verify BEEF is parseable
+    # Verify BEEF is parseable — 1 input, 2 outputs (payment + change)
     parsed = BSV::Transaction::Transaction.from_beef(result[:tx])
     expect(parsed.inputs.length).to eq(1)
     expect(parsed.outputs.length).to eq(2)
 
+    # Verify fee is reasonable (100 sat/kB)
+    total_output = parsed.outputs.sum(&:satoshis)
+    fee = input_satoshis - total_output
+    expect(fee).to be > 0
+    expect(fee).to be < 100
+    puts "  Fee: #{fee} sats (auto-computed)"
+
     # Verify Alice's change is spendable
     alice_outputs = alice_engine.list_outputs(basket: 'default')
     expect(alice_outputs[:total_outputs]).to eq(1)
-    expect(alice_outputs[:outputs].first[:satoshis]).to eq(change_amount)
-    puts "  Alice change output: #{change_amount} sats (spendable)"
+    change_amount = alice_outputs[:outputs].first[:satoshis]
+    expect(change_amount).to eq(input_satoshis - payment_amount - fee)
+    puts "  Alice change: #{change_amount} sats (spendable)"
 
-    # Bob internalizes the payment
+    # Bob internalizes the payment — find the payment output vout
+    payment_vout = parsed.outputs.index { |o| o.satoshis == payment_amount }
     bob_engine.internalize_action(
       tx: result[:tx],
       outputs: [{
-        output_index: 0,
+        output_index: payment_vout,
         protocol: 'basket insertion',
         insertion_remittance: { basket: 'received', tags: ['from-alice'] }
       }],
