@@ -35,7 +35,7 @@ RSpec.describe 'Schema migration' do
       values = db.from(Sequel.lit(
         "pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'output_type'"
       )).select_map(:enumlabel)
-      expect(values).to eq(%w[root])
+      expect(values).to eq(%w[root outbound])
     end
   end
 

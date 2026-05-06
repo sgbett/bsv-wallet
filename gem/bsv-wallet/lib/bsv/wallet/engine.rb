@@ -533,6 +533,11 @@ module BSV
                    out[:vout] || idx
                  end
 
+          # Outputs without derivation data or explicit output_type are
+          # payments to others — mark as outbound so the constraint on
+          # outputs (NULL type requires derivation) is satisfied.
+          effective_type = out[:output_type] || (out[:derivation_prefix] ? nil : 'outbound')
+
           {
             satoshis: out[:satoshis],
             vout: vout,
@@ -541,7 +546,7 @@ module BSV
             tags: out[:tags],
             description: out[:output_description],
             custom_instructions: out[:custom_instructions],
-            output_type: out[:output_type],
+            output_type: effective_type,
             derivation_prefix: out[:derivation_prefix],
             derivation_suffix: out[:derivation_suffix],
             sender_identity_key: out[:sender_identity_key]

@@ -5,9 +5,9 @@ Sequel.migration do
     extension :pg_enum
 
     # --- New enum ---
-    # Ternary: root (identity key, no derivation), NULL (derived, has keys).
-    # Future: outbound (payment to others, no derivation, no spendable — #66).
-    create_enum(:output_type, %w[root])
+    # Ternary: root (identity key, no derivation), outbound (payment to
+    # others, no derivation), NULL (derived, has keys).
+    create_enum(:output_type, %w[root outbound])
 
     # --- 1. tx_proofs ---
     alter_table(:tx_proofs) do
@@ -63,10 +63,11 @@ Sequel.migration do
       add_constraint(:satoshis_range)          { satoshis >= 0 }
       add_constraint(:vout_range)              { vout >= 0 }
       add_constraint(:locking_script_min)      { length(locking_script) >= 1 }
-      # Root outputs use identity key directly — no derivation fields
-      add_constraint(:root_no_prefix,    "output_type != 'root' OR derivation_prefix IS NULL")
-      add_constraint(:root_no_suffix,    "output_type != 'root' OR derivation_suffix IS NULL")
-      add_constraint(:root_no_sender,    "output_type != 'root' OR sender_identity_key IS NULL")
+      # Typed outputs (root, outbound) use identity key or belong to
+      # others — no derivation fields allowed
+      add_constraint(:typed_no_prefix,   'output_type IS NULL OR derivation_prefix IS NULL')
+      add_constraint(:typed_no_suffix,   'output_type IS NULL OR derivation_suffix IS NULL')
+      add_constraint(:typed_no_sender,   'output_type IS NULL OR sender_identity_key IS NULL')
       # Derived outputs (NULL type) must have all derivation fields
       add_constraint(:derived_needs_prefix, 'output_type IS NOT NULL OR derivation_prefix IS NOT NULL')
       add_constraint(:derived_needs_suffix, 'output_type IS NOT NULL OR derivation_suffix IS NOT NULL')
@@ -208,9 +209,9 @@ Sequel.migration do
 
     # --- 5. outputs ---
     alter_table(:outputs) do
-      drop_constraint :root_no_prefix
-      drop_constraint :root_no_suffix
-      drop_constraint :root_no_sender
+      drop_constraint :typed_no_prefix
+      drop_constraint :typed_no_suffix
+      drop_constraint :typed_no_sender
       drop_constraint :derived_needs_prefix
       drop_constraint :derived_needs_suffix
       drop_constraint :derived_needs_sender

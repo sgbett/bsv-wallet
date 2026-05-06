@@ -351,6 +351,23 @@ RSpec.describe 'Schema constraints' do
                       sender_identity_key: 'self')
       }.not_to raise_error
     end
+
+    it 'allows outbound output with no derivation fields' do
+      action_id = create_action
+      expect {
+        create_output(action_id: action_id, output_type: 'outbound')
+      }.not_to raise_error
+    end
+
+    it 'rejects outbound output with derivation_prefix set' do
+      action_id = create_action
+      expect {
+        db.transaction(savepoint: true) do
+          create_output(action_id: action_id, output_type: 'outbound',
+                        derivation_prefix: 'should not be here')
+        end
+      }.to raise_error(Sequel::CheckConstraintViolation)
+    end
   end
 
   # --- spendable (pure membership) ---

@@ -184,7 +184,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'output', basket: 'deferred', output_type: 'change' }
+            output_description: 'output', basket: 'deferred', output_type: 'root' }
         ]
       )
 
@@ -257,7 +257,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           accept_delayed_broadcast: false,
           outputs: [
             { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-              output_description: 'output', basket: 'payments', output_type: 'change' }
+              output_description: 'output', basket: 'payments', output_type: 'root' }
           ]
         )
 
@@ -292,7 +292,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: locking_script,
-            output_description: 'output', basket: 'deferred_sign', output_type: 'change' }
+            output_description: 'output', basket: 'deferred_sign', output_type: 'root' }
         ]
       )
 
@@ -512,7 +512,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           sign_and_process: false,
           outputs: [
             { satoshis: 500, locking_script: binary_script,
-              basket: 'deferred_test', output_description: 'test output', output_type: 'change' }
+              basket: 'deferred_test', output_description: 'test output', output_type: 'root' }
           ]
         )
 
@@ -546,7 +546,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           sign_and_process: false,
           outputs: [
             { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-              basket: 'cascade_test', output_type: 'change' }
+              basket: 'cascade_test', output_type: 'root' }
           ]
         )
 
@@ -1459,7 +1459,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
             output_description: 'first', basket: 'wallet', tags: ['payment'], output_type: 'root' },
           { satoshis: 300, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'second', basket: 'wallet', tags: ['change'], output_type: 'change' },
+            output_description: 'second', basket: 'wallet', tags: ['change'], output_type: 'root' },
           { satoshis: 100, locking_script: SecureRandom.random_bytes(25),
             output_description: 'third', basket: 'other', output_type: 'root' }
         ]
