@@ -80,9 +80,10 @@ module BSV
               )
 
               # Only wallet-owned outputs get a spendable row.
-              # Wallet ownership is determined by the caller: either an explicit
-              # output_type (root) or derivation fields (BRC-42 payment).
-              wallet_owned = out[:output_type] || out[:derivation_prefix]
+              # Derived outputs (NULL type with derivation fields) and root
+              # outputs are wallet-owned. Outbound outputs are payments to
+              # others — never spendable.
+              wallet_owned = out[:derivation_prefix] || out[:output_type] == 'root'
               if wallet_owned
                 Spendable.create(output_id: output.id, action_id: action_id)
               end

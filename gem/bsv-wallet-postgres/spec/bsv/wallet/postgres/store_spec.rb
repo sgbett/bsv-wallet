@@ -132,6 +132,34 @@ RSpec.describe BSV::Wallet::Postgres::Store do
       payment_output = outputs.find { |o| o.vout == 1 }
       expect(payment_output.tags.map(&:tag).sort).to eq(%w[outgoing payment])
     end
+
+    it 'does not create spendable rows for outbound outputs' do
+      result = store.create_action(action: { description: 'with outbound' })
+
+      store.promote_action(action_id: result[:id], outputs: [
+        {
+          satoshis: 500, vout: 0,
+          locking_script: SecureRandom.random_bytes(25),
+          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+          sender_identity_key: 'self'
+        },
+        {
+          satoshis: 300, vout: 1,
+          locking_script: SecureRandom.random_bytes(25),
+          output_type: 'outbound'
+        }
+      ])
+
+      outputs = BSV::Wallet::Postgres::Output.where(action_id: result[:id]).all
+      expect(outputs.size).to eq(2)
+
+      # Only the derived output gets a spendable row, not the outbound one
+      spendable_ids = BSV::Wallet::Postgres::Spendable.where(output_id: outputs.map(&:id)).select_map(:output_id)
+      derived_output = outputs.find { |o| o.vout == 0 }
+      outbound_output = outputs.find { |o| o.vout == 1 }
+      expect(spendable_ids).to include(derived_output.id)
+      expect(spendable_ids).not_to include(outbound_output.id)
+    end
   end
 
   describe '#link_proof' do
