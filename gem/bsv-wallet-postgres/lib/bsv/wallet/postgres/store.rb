@@ -69,25 +69,22 @@ module BSV
           @db.transaction do
             outputs.each do |out|
               output = Output.create(
-                action_id:          action_id,
-                satoshis:           out[:satoshis],
-                vout:               out[:vout],
-                locking_script:     out[:locking_script]
+                action_id:           action_id,
+                satoshis:            out[:satoshis],
+                vout:                out[:vout],
+                locking_script:      out[:locking_script],
+                output_type:         out[:output_type],
+                derivation_prefix:   out[:derivation_prefix],
+                derivation_suffix:   out[:derivation_suffix],
+                sender_identity_key: out[:sender_identity_key]
               )
 
               # Only wallet-owned outputs get a spendable row.
               # Wallet ownership is determined by the caller: either an explicit
-              # output_type (root/change) or derivation fields (BRC-42 payment).
+              # output_type (root) or derivation fields (BRC-42 payment).
               wallet_owned = out[:output_type] || out[:derivation_prefix]
               if wallet_owned
-                Spendable.create(
-                  output_id:           output.id,
-                  action_id:           action_id,
-                  output_type:         out[:output_type],
-                  derivation_prefix:   out[:derivation_prefix],
-                  derivation_suffix:   out[:derivation_suffix],
-                  sender_identity_key: out[:sender_identity_key]
-                )
+                Spendable.create(output_id: output.id, action_id: action_id)
               end
 
               if out[:basket] && out[:basket] != 'default'
@@ -329,7 +326,6 @@ module BSV
           rows = @db[:inputs]
             .join(:outputs, id: :output_id)
             .join(Sequel[:actions].as(:source_actions), id: Sequel[:outputs][:action_id])
-            .left_join(:spendable, output_id: Sequel[:outputs][:id])
             .where(Sequel[:inputs][:action_id] => action_id)
             .order(Sequel[:inputs][:vin])
             .select(
@@ -339,9 +335,9 @@ module BSV
               Sequel[:outputs][:vout].as(:source_vout),
               Sequel[:outputs][:satoshis].as(:source_satoshis),
               Sequel[:outputs][:locking_script].as(:source_locking_script),
-              Sequel[:spendable][:derivation_prefix],
-              Sequel[:spendable][:derivation_suffix],
-              Sequel[:spendable][:sender_identity_key]
+              Sequel[:outputs][:derivation_prefix],
+              Sequel[:outputs][:derivation_suffix],
+              Sequel[:outputs][:sender_identity_key]
             )
             .all
 
@@ -385,16 +381,15 @@ module BSV
           candidates = []
           total = 0
           ds.each do |output|
-            spendable = output.spendable_entry
             candidates << {
               id:                  output.id,
               satoshis:            output.satoshis,
               vout:                output.vout,
               action_id:           output.action_id,
               locking_script:      output.locking_script,
-              derivation_prefix:   spendable&.derivation_prefix,
-              derivation_suffix:   spendable&.derivation_suffix,
-              sender_identity_key: spendable&.sender_identity_key
+              derivation_prefix:   output.derivation_prefix,
+              derivation_suffix:   output.derivation_suffix,
+              sender_identity_key: output.sender_identity_key
             }
             total += output.satoshis
             break if total >= satoshis
