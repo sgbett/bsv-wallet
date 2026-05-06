@@ -52,7 +52,7 @@ module BSV
           end
         end
 
-        def sign_action(action_id:, wtxid:, raw_tx:)
+        def sign_action(action_id:, wtxid:, raw_tx:, change_outputs: [])
           BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'sign_action wtxid')
           BSV.logger&.debug { "[Store] sign_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
           @db.transaction do
@@ -62,6 +62,27 @@ module BSV
             )
             TxProof.dataset.insert_conflict(target: :wtxid, update: { raw_tx: Sequel.blob(raw_tx) })
                           .insert(wtxid: Sequel.blob(wtxid), raw_tx: Sequel.blob(raw_tx))
+
+            # Write change output rows atomically with signing. Output rows
+            # record derivation data (spending authority) but NO spendable
+            # rows — promotion to spendable happens after broadcast acceptance
+            # or in the no_send path, same as any other output.
+            change_outputs.each do |chg|
+              output = Output.create(
+                action_id:           action_id,
+                satoshis:            chg[:satoshis],
+                vout:                chg[:vout],
+                locking_script:      chg[:locking_script],
+                derivation_prefix:   chg[:derivation_prefix],
+                derivation_suffix:   chg[:derivation_suffix],
+                sender_identity_key: chg[:sender_identity_key]
+              )
+              OutputDetail.create(
+                output_id:  output.id,
+                action_id:  action_id,
+                change:     true
+              )
+            end
           end
         end
 
@@ -369,6 +390,39 @@ module BSV
           end
 
           result
+        end
+
+        # --- Change Output Queries ---
+
+        def query_change_output_vouts(action_id:)
+          Output.where(action_id: action_id)
+                .where(
+                  OutputDetail.dataset
+                    .where(Sequel[:output_details][:output_id] => Sequel[:outputs][:id])
+                    .where(change: true)
+                    .select(1)
+                    .exists
+                )
+                .select_map(:vout)
+        end
+
+        def promote_change_to_spendable(action_id:)
+          change_outputs = Output.where(action_id: action_id)
+                                 .where(
+                                   OutputDetail.dataset
+                                     .where(Sequel[:output_details][:output_id] => Sequel[:outputs][:id])
+                                     .where(change: true)
+                                     .select(1)
+                                     .exists
+                                 )
+                                 .exclude(
+                                   Spendable.where(Sequel[:spendable][:output_id] => Sequel[:outputs][:id])
+                                            .select(1).exists
+                                 )
+                                 .all
+          change_outputs.each do |output|
+            Spendable.create(output_id: output.id, action_id: action_id)
+          end
         end
 
         # --- UTXO Selection ---

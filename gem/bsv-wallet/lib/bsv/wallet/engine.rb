@@ -44,6 +44,25 @@ module BSV
         validate_description!(description)
         validate_create_action_params!(inputs: inputs, outputs: outputs)
 
+        # Auto-fund: when inputs is nil with outputs present, the wallet
+        # handles UTXO selection, fee estimation, and change generation.
+        if inputs.nil? && outputs&.any?
+          unless sign_and_process
+            raise BSV::Wallet::InvalidParameterError.new(
+              'sign_and_process', 'true when inputs is nil (auto-funded actions sign immediately)'
+            )
+          end
+          require_key_deriver!
+          return auto_fund_action(
+            description: description, outputs: outputs,
+            lock_time: lock_time, version: version,
+            broadcast: determine_broadcast(no_send, accept_delayed_broadcast),
+            labels: labels, randomize_outputs: randomize_outputs,
+            no_send: no_send, send_with: send_with,
+            return_txid_only: return_txid_only
+          )
+        end
+
         broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
 
         # Phase 1: Lock
@@ -610,10 +629,13 @@ module BSV
         end
       end
 
-      def query_change_outpoints(_action_id)
-        # Query outputs marked as change for this action
-        # Returns outpoint strings for no_send_change
-        []
+      def query_change_outpoints(action_id)
+        action = @store.find_action(id: action_id)
+        return [] unless action&.dig(:wtxid)
+
+        dtxid = action[:wtxid].reverse.unpack1('H*')
+        vouts = @store.query_change_output_vouts(action_id: action_id)
+        vouts.map { |vout| "#{dtxid}.#{vout}" }
       end
 
       # Normalize a merkle_path value to BRC-74 binary format.
@@ -1095,6 +1117,182 @@ module BSV
         wtxid = tx.wtxid
 
         [wtxid, raw_tx, vout_mapping]
+      end
+
+      # Orchestrate the auto-fund flow for createAction when inputs is nil.
+      #
+      # Selects UTXOs, locks them (Phase 1), builds and signs a funded
+      # transaction with SDK fee computation and change distribution,
+      # then writes change outputs atomically with signing (Phase 2b).
+      #
+      # @return [Hash] same shape as create_action's return value
+      def auto_fund_action(description:, outputs:, lock_time:, version:,
+                           broadcast:, labels:, randomize_outputs:,
+                           no_send:, send_with:, return_txid_only:)
+        # Estimate satoshis needed (outputs + conservative fee margin).
+        # Assumes 1 input for the estimate — if the pool returns multiple
+        # UTXOs, each extra input adds ~15 sats of fee but contributes its
+        # own satoshis (always >> 15), so the estimate is safe. The SDK
+        # computes the real fee from actual tx size regardless.
+        output_total = outputs.sum { |o| o[:satoshis] || 0 }
+        estimated_size = 10 + 148 + ((outputs.length + 1) * 34)
+        fee_margin = (estimated_size / 1000.0 * 100).ceil
+        candidates = @utxo_pool.select(satoshis: output_total + fee_margin)
+
+        # Phase 1: Lock inputs (reversible via CASCADE)
+        input_specs = candidates.each_with_index.map do |c, idx|
+          { output_id: c[:id], vin: idx }
+        end
+        action_result = @store.create_action(
+          action: {
+            description: description, broadcast: broadcast,
+            nlocktime: lock_time || 0, version: version, outgoing: true
+          },
+          inputs: input_specs
+        )
+        attach_labels(action_result[:id], labels)
+
+        # Phase 2: Build funded transaction (in memory). If this raises,
+        # the action + input rows from Phase 1 remain locked until the
+        # reaper cleans them up via CASCADE delete.
+        wtxid, raw_tx, vout_mapping, change_outputs = build_funded_transaction(
+          action_id: action_result[:id], caller_outputs: outputs,
+          lock_time: lock_time, version: version, randomize: randomize_outputs
+        )
+
+        # Phase 2b: Atomic sign + change output creation
+        @store.sign_action(
+          action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
+          change_outputs: change_outputs
+        )
+        BSV.logger&.debug do
+          "[Engine] auto_fund_action: dtxid=#{wtxid.reverse.unpack1('H*')} " \
+            "outputs=#{outputs.length} change=#{change_outputs.length}"
+        end
+
+        atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
+
+        # No-send path: promote all outputs, return change outpoints
+        if no_send
+          promote_with_outputs(action_result[:id], outputs, vout_mapping)
+          @store.promote_change_to_spendable(action_id: action_result[:id])
+          change = query_change_outpoints(action_result[:id])
+          result = { txid: wtxid, tx: atomic_beef, no_send_change: change }
+          result[:send_with_results] = process_send_with(send_with) if send_with&.any?
+          return result
+        end
+
+        # Phase 3: Broadcast
+        broadcast_result = @broadcast_queue.submit(
+          action_id: action_result[:id],
+          raw_tx: raw_tx,
+          immediate: broadcast == :inline
+        )
+
+        # Phase 4: Promote all outputs (change output rows written in Phase 2b,
+        # but spendable rows deferred until now)
+        if broadcast == :inline && accepted?(broadcast_result)
+          promote_with_outputs(action_result[:id], outputs, vout_mapping)
+          @store.promote_change_to_spendable(action_id: action_result[:id])
+          handle_proof_from_broadcast(action_result[:id], broadcast_result)
+        end
+
+        result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
+        result[:send_with_results] = process_send_with(send_with) if send_with&.any?
+        result
+      end
+
+      # Build a funded transaction with SDK fee computation and change.
+      #
+      # Separate from build_transaction to avoid touching the existing
+      # caller-provided-inputs path. Derives a BRC-42 change key, builds
+      # the transaction with all outputs (caller + change), computes the
+      # fee via the SDK, and signs.
+      #
+      # Ordering constraint:
+      #   build → attach templates → tx.fee → shuffle → sign
+      #   Templates before fee (estimated_size needs them).
+      #   Fee before shuffle (Benford remainder targets @outputs.last).
+      #   Shuffle before sign (sighash commits to final output positions).
+      #
+      # @return [Array(String, String, Hash, Array<Hash>)]
+      #   wtxid, raw_tx, vout_mapping (caller only), change_output_specs
+      def build_funded_transaction(action_id:, caller_outputs:,
+                                   lock_time:, version:, randomize:)
+        # A. Resolve inputs + derive signing keys
+        resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
+        tx_inputs, signing_keys = build_inputs(resolved_inputs, nil)
+
+        # B. Derive change output key (BRC-42 self-payment)
+        change_prefix = SecureRandom.uuid
+        change_suffix = '1'
+        change_pub = @key_deriver.derive_public_key(
+          protocol_id: [2, change_prefix], key_id: change_suffix, counterparty: 'self'
+        )
+        change_script = BSV::Script::Script.p2pkh_lock(
+          BSV::Primitives::Digest.hash160(change_pub)
+        )
+
+        # C. Build all outputs (caller + change), shuffle together
+        caller_tx_outputs = caller_outputs.map do |out|
+          BSV::Transaction::TransactionOutput.new(
+            satoshis: out[:satoshis] || 0,
+            locking_script: resolve_locking_script(out[:locking_script])
+          )
+        end
+        change_tx_output = BSV::Transaction::TransactionOutput.new(
+          satoshis: 0, locking_script: change_script, change: true
+        )
+
+        # C2. Assemble transaction — change output last so Benford's
+        # remainder assignment targets it (SDK uses @outputs.last).
+        tx = BSV::Transaction::Transaction.new(
+          version: version || 1, lock_time: lock_time || 0
+        )
+        tx_inputs.each { |inp| tx.add_input(inp) }
+        caller_tx_outputs.each { |out| tx.add_output(out) }
+        tx.add_output(change_tx_output)
+
+        # D. Attach P2PKH templates for fee estimation
+        signing_keys.each do |idx, key|
+          tx.inputs[idx].unlocking_script_template = BSV::Transaction::P2PKH.new(key)
+        end
+
+        # E. Compute fee + distribute change (Benford for privacy)
+        fee_model = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
+        tx.fee(fee_model, change_distribution: :random)
+
+        # F. Detect change survival
+        change_survived = tx.outputs.include?(change_tx_output)
+
+        # G. Shuffle outputs AFTER fee — fee computation doesn't depend on
+        # order, but Benford's remainder targets @outputs.last so change
+        # must be last during tx.fee. Shuffle now for privacy before signing.
+        tx.outputs.shuffle! if randomize && tx.outputs.length > 1
+
+        # H. Compute final vout positions (post-shuffle)
+        vout_mapping = {}
+        caller_tx_outputs.each_with_index do |co, orig_idx|
+          vout_mapping[orig_idx] = tx.outputs.index(co)
+        end
+
+        # I. Sign (AFTER fee and shuffle — sighash commits to final output values+positions)
+        signing_keys.each { |idx, key| tx.sign(idx, key) }
+
+        # J. Build change_outputs spec for atomic store write
+        change_output_specs = []
+        if change_survived
+          change_output_specs << {
+            satoshis: change_tx_output.satoshis,
+            vout: tx.outputs.index(change_tx_output),
+            locking_script: change_script.to_binary,
+            derivation_prefix: change_prefix,
+            derivation_suffix: change_suffix,
+            sender_identity_key: @key_deriver.identity_key
+          }
+        end
+
+        [tx.wtxid, tx.to_binary, vout_mapping, change_output_specs]
       end
 
       # Apply caller-provided unlocking scripts and sign remaining inputs.
