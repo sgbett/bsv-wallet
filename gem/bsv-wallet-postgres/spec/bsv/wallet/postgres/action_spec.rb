@@ -42,14 +42,14 @@ RSpec.describe BSV::Wallet::Postgres::Action do
 
     it 'has many outputs' do
       action = described_class.create(outgoing: true, description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Postgres::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25))
-      BSV::Wallet::Postgres::Output.create(action_id: action.id, satoshis: 500, vout: 1, locking_script: SecureRandom.random_bytes(25))
+      BSV::Wallet::Postgres::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      BSV::Wallet::Postgres::Output.create(action_id: action.id, satoshis: 500, vout: 1, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       expect(action.reload.outputs.count).to eq(2)
     end
 
     it 'has many inputs' do
       source = described_class.create(outgoing: false, description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      output = BSV::Wallet::Postgres::Output.create(action_id: source.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25))
+      output = BSV::Wallet::Postgres::Output.create(action_id: source.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       action = described_class.create(outgoing: true, description: 'test action')
       BSV::Wallet::Postgres::Input.create(action_id: action.id, output_id: output.id, vin: 0)
       expect(action.reload.inputs.count).to eq(1)
@@ -81,7 +81,7 @@ RSpec.describe BSV::Wallet::Postgres::Action do
 
     it 'returns :unproven when outputs exist but no proof' do
       action = described_class.create(outgoing: true, description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Postgres::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25))
+      BSV::Wallet::Postgres::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       expect(action.reload.derived_status).to eq(:unproven)
     end
 

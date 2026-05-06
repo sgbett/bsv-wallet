@@ -35,7 +35,7 @@ RSpec.describe 'Schema migration' do
       values = db.from(Sequel.lit(
         "pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'output_type'"
       )).select_map(:enumlabel)
-      expect(values).to eq(%w[root change])
+      expect(values).to eq(%w[root])
     end
   end
 
@@ -51,7 +51,8 @@ RSpec.describe 'Schema migration' do
       action_id = db[:actions].insert(description: 'bytea test 12345', outgoing: true)
       db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
-        locking_script: Sequel.blob(valid_locking_script)
+        locking_script: Sequel.blob(valid_locking_script),
+        output_type: 'root'
       )
       row = db[:outputs].first
       expect(row[:locking_script].encoding).to eq(Encoding::BINARY)
@@ -73,7 +74,8 @@ RSpec.describe 'Schema migration' do
       action_id = db[:actions].insert(description: 'lock test source', outgoing: true)
       output_id = db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
-        locking_script: Sequel.blob(valid_locking_script)
+        locking_script: Sequel.blob(valid_locking_script),
+        output_type: 'root'
       )
       action2_id = db[:actions].insert(description: 'lock test consumer', outgoing: true)
       db[:inputs].insert(action_id: action_id, output_id: output_id, vin: 0)
@@ -95,7 +97,8 @@ RSpec.describe 'Schema migration' do
       action_id = db[:actions].insert(description: 'cascade test src', outgoing: true)
       output_id = db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
-        locking_script: Sequel.blob(valid_locking_script)
+        locking_script: Sequel.blob(valid_locking_script),
+        output_type: 'root'
       )
       lock_action_id = db[:actions].insert(description: 'cascade test lock', outgoing: true)
       db[:inputs].insert(action_id: lock_action_id, output_id: output_id, vin: 0)
