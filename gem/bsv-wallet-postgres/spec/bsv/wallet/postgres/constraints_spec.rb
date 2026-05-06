@@ -373,12 +373,32 @@ RSpec.describe 'Schema constraints' do
   # --- spendable (pure membership) ---
 
   describe 'spendable' do
-    it 'allows thin spendable row' do
+    it 'allows thin spendable row for root output' do
       action_id = create_action
-      output_id = create_output(action_id: action_id)
+      output_id = create_output(action_id: action_id, output_type: 'root')
       expect {
         db[:spendable].insert(output_id: output_id, action_id: action_id)
       }.not_to raise_error
+    end
+
+    it 'allows thin spendable row for derived output' do
+      action_id = create_action
+      output_id = create_output(action_id: action_id, output_type: nil,
+                                derivation_prefix: 'prefix', derivation_suffix: 'suffix',
+                                sender_identity_key: 'self')
+      expect {
+        db[:spendable].insert(output_id: output_id, action_id: action_id)
+      }.not_to raise_error
+    end
+
+    it 'rejects spendable row for outbound output' do
+      action_id = create_action
+      output_id = create_output(action_id: action_id, output_type: 'outbound')
+      expect {
+        db.transaction(savepoint: true) do
+          db[:spendable].insert(output_id: output_id, action_id: action_id)
+        end
+      }.to raise_error(Sequel::DatabaseError, /outbound/)
     end
   end
 

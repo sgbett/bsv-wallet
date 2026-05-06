@@ -80,6 +80,27 @@ Sequel.migration do
       set_column_not_null :action_id
     end
 
+    # Outbound outputs are payments to others — they must never have a
+    # spendable row. Cross-table CHECK constraints aren't possible in
+    # PostgreSQL, so a trigger enforces this invariant.
+    run <<~SQL
+      CREATE FUNCTION prevent_outbound_spendable() RETURNS trigger AS $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM outputs WHERE id = NEW.output_id AND output_type = 'outbound') THEN
+          RAISE EXCEPTION 'spendable row forbidden for outbound output %', NEW.output_id
+            USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    SQL
+    run <<~SQL
+      CREATE TRIGGER check_outbound_spendable
+        BEFORE INSERT ON spendable
+        FOR EACH ROW
+        EXECUTE FUNCTION prevent_outbound_spendable();
+    SQL
+
     # --- 7. output_details ---
     # change column stays — cosmetic flag for display, not structural
     alter_table(:output_details) do
@@ -203,6 +224,8 @@ Sequel.migration do
     end
 
     # --- 6. spendable ---
+    run 'DROP TRIGGER IF EXISTS check_outbound_spendable ON spendable'
+    run 'DROP FUNCTION IF EXISTS prevent_outbound_spendable()'
     alter_table(:spendable) do
       set_column_allow_null :action_id
     end
