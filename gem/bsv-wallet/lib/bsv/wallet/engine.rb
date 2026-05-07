@@ -107,7 +107,7 @@ module BSV
         # Post-lock headroom guard: inputs are now excluded from spendable.
         # If remaining balance is below limp threshold, this tx would put
         # the wallet in limp mode. Abort the action to release locked inputs.
-        if limp_mode?
+        if !@bypass_limp_mode && limp_mode?
           @store.abort_action(action_id: action_result[:id])
           raise BSV::Wallet::LimpModeError.new(
             balance: @utxo_pool.balance, threshold: @limp_threshold
