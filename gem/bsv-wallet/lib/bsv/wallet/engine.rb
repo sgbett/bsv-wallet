@@ -33,9 +33,7 @@ module BSV
       def initialize(store:, utxo_pool:, broadcast_queue:, proof_store:,
                      key_deriver: nil, chain_tracker: nil, network_provider: nil,
                      network: :mainnet, limp_threshold: LIMP_THRESHOLD)
-        if limp_threshold < LIMP_THRESHOLD_MIN
-          raise ArgumentError, "limp_threshold must be >= #{LIMP_THRESHOLD_MIN}"
-        end
+        raise ArgumentError, "limp_threshold must be >= #{LIMP_THRESHOLD_MIN}" if limp_threshold < LIMP_THRESHOLD_MIN
 
         @store = store
         @utxo_pool = utxo_pool
@@ -411,16 +409,23 @@ module BSV
         self_payment_sats = satoshis - fee
         raise BSV::Wallet::Error, "insufficient sats for self-payment (#{satoshis} - #{fee} fee)" if self_payment_sats <= 0
 
-        create_action(
-          description: 'import self-payment',
-          inputs: [{ output_id: imported_output_id }],
-          outputs: [{
-            satoshis: self_payment_sats, locking_script: derived_script,
-            derivation_prefix: derivation_prefix, derivation_suffix: derivation_suffix,
-            sender_identity_key: @key_deriver.identity_key
-          }],
-          no_send: true, randomize_outputs: false
-        )
+        # Bootstrap self-payment bypasses limp mode — this is how the
+        # wallet gets funded in the first place.
+        @bypass_limp_mode = true
+        begin
+          create_action(
+            description: 'import self-payment',
+            inputs: [{ output_id: imported_output_id }],
+            outputs: [{
+              satoshis: self_payment_sats, locking_script: derived_script,
+              derivation_prefix: derivation_prefix, derivation_suffix: derivation_suffix,
+              sender_identity_key: @key_deriver.identity_key
+            }],
+            no_send: true, randomize_outputs: false
+          )
+        ensure
+          @bypass_limp_mode = false
+        end
 
         BSV.logger&.debug { "[Engine] import_utxo complete: #{self_payment_sats} sats on derived address" }
         { imported: true, satoshis: self_payment_sats, dtxid: dtxid }
@@ -1125,6 +1130,7 @@ module BSV
       end
 
       def enforce_limp_mode!
+        return if @bypass_limp_mode
         return unless limp_mode?
 
         raise BSV::Wallet::LimpModeError.new(

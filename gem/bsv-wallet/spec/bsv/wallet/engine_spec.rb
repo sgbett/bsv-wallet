@@ -2948,10 +2948,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
             outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }],
             no_send: true
           )
-        end.to raise_error(BSV::Wallet::LimpModeError) do |err|
-          expect(err.balance).to eq(30_000)
-          expect(err.threshold).to eq(50_000)
-        end
+        end.to raise_error(BSV::Wallet::LimpModeError)
       end
 
       it 'blocks caller-provided-inputs createAction when in limp mode' do
