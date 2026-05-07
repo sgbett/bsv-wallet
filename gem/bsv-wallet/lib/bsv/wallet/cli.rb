@@ -107,7 +107,7 @@ module BSV
       # Resolve an environment variable with optional wallet-name suffix.
       #
       # @example
-      #   env_fetch('WIF', 'alice')  # => ENV['WIF_ALICE'] || ENV['WIF'] || abort
+      #   env_fetch('WIF', 'alice')  # => ENV['BSV_WALLET_WIF_ALICE'] || ENV['WIF_ALICE'] || ENV['WIF'] || abort
       #   env_fetch('WIF', nil)      # => ENV['WIF'] || abort
       #
       # @param base_name [String] e.g. "WIF", "DATABASE_URL"
@@ -115,8 +115,9 @@ module BSV
       # @return [String]
       def env_fetch(base_name, wallet_name)
         if wallet_name
+          prefixed = "BSV_WALLET_#{base_name}_#{wallet_name.upcase}"
           suffixed = "#{base_name}_#{wallet_name.upcase}"
-          ENV.fetch(suffixed) { ENV.fetch(base_name) { abort "Set #{suffixed} or #{base_name}" } }
+          ENV.fetch(prefixed) { ENV.fetch(suffixed) { ENV.fetch(base_name) { abort "Set #{prefixed} or #{suffixed}" } } }
         else
           ENV.fetch(base_name) { abort "Set #{base_name}" }
         end

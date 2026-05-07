@@ -21,7 +21,7 @@ RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do # rubocop:dis
   # Derive Bob's identity key from WIF without a database connection
   let(:bob_identity_key) do
     require 'bsv-wallet'
-    pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('WIF_BOB'))
+    pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('BSV_WALLET_WIF_BOB'))
     BSV::Wallet::KeyDeriver.new(private_key: pk).identity_key
   end
 
@@ -48,7 +48,7 @@ RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do # rubocop:dis
 
   it 'Alice pays Bob via CLI pipeline' do
     # 0. Import the funding UTXO
-    funding_dtxid = ENV.fetch('FUNDING_TXID')
+    funding_dtxid = ENV.fetch('BSV_WALLET_UTXO_ALICE')
     _stdout, _, status = run_cli('import_root_utxo', 'alice', funding_dtxid, '0')
     expect(status).to be_success
 

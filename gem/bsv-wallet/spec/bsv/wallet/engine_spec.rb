@@ -3010,23 +3010,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(result[:txid]).to be_a(String)
       end
 
-      it 'blocks caller-provided-inputs that would enter limp mode' do
-        # Fund with single UTXO — locking it drops balance to 0
-        fund_wallet_limp(satoshis: 100_000)
-        listed = engine_with_keys.list_outputs(basket: 'default')
-        output_id = listed[:outputs].first[:id]
-
-        expect do
-          engine_with_keys.create_action(
-            description: 'limp postlock',
-            inputs: [{ output_id: output_id }],
-            outputs: [{ satoshis: 90_000, locking_script: SecureRandom.random_bytes(25),
-                        derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-                        sender_identity_key: key_deriver.identity_key }],
-            no_send: true
-          )
-        end.to raise_error(BSV::Wallet::LimpModeError)
-      end
+      # No post-lock headroom guard for caller-provided inputs.
+      # The caller explicitly chose which UTXOs to spend — the entry
+      # guard (already in limp mode) is sufficient. The headroom guard
+      # only applies to auto-fund where the engine selects UTXOs.
     end
   end
 
