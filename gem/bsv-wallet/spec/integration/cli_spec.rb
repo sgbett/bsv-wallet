@@ -49,7 +49,7 @@ RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do # rubocop:dis
   it 'Alice pays Bob via CLI pipeline' do
     # 0. Import the funding UTXO
     funding_dtxid = ENV.fetch('BSV_WALLET_UTXO_ALICE')
-    _stdout, _, status = run_cli('import_root_utxo', 'alice', funding_dtxid, '0')
+    _stdout, _, status = run_cli('import_root_utxo', 'alice', funding_dtxid, '1')
     expect(status).to be_success
 
     # 1. Verify Alice has funds

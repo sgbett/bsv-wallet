@@ -17,7 +17,7 @@ require 'bsv-wallet-postgres'
 RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do # rubocop:disable RSpec/DescribeClass
   # --- Funding UTXO (mined, never moves) ---
 
-  let(:funding_vout)     { 0 }
+  let(:funding_vout)     { 1 }
   let(:funding_satoshis) { 1_000_000 }
 
   # --- Environment ---
