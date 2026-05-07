@@ -106,8 +106,13 @@ module BSV
 
         # Post-lock headroom guard: inputs are now excluded from spendable.
         # If remaining balance is below limp threshold, this tx would put
-        # the wallet in limp mode. CASCADE cleans up the locked inputs.
-        enforce_limp_mode!
+        # the wallet in limp mode. Abort the action to release locked inputs.
+        if limp_mode?
+          @store.abort_action(action_id: action_result[:id])
+          raise BSV::Wallet::LimpModeError.new(
+            balance: @utxo_pool.balance, threshold: @limp_threshold
+          )
+        end
 
         attach_labels(action_result[:id], labels)
 
@@ -1139,10 +1144,11 @@ module BSV
       end
 
       def enforce_headroom!(spending)
-        return unless @utxo_pool.balance - spending < @limp_threshold
+        projected = @utxo_pool.balance - spending
+        return unless projected < @limp_threshold
 
         raise BSV::Wallet::LimpModeError.new(
-          balance: @utxo_pool.balance, threshold: @limp_threshold
+          balance: projected, threshold: @limp_threshold
         )
       end
 
