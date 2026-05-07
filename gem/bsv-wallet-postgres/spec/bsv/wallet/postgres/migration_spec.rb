@@ -48,7 +48,7 @@ RSpec.describe 'Schema migration' do
     end
 
     it 'stores and retrieves binary locking_script on outputs' do
-      action_id = db[:actions].insert(description: 'bytea test 12345', outgoing: true)
+      action_id = db[:actions].insert(description: 'bytea test 12345', outgoing: true, nlocktime: 0)
       db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
         locking_script: Sequel.blob(valid_locking_script),
@@ -71,13 +71,13 @@ RSpec.describe 'Schema migration' do
     end
 
     it 'enforces UNIQUE on inputs.output_id (structural lock)' do
-      action_id = db[:actions].insert(description: 'lock test source', outgoing: true)
+      action_id = db[:actions].insert(description: 'lock test source', outgoing: true, nlocktime: 0)
       output_id = db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
         locking_script: Sequel.blob(valid_locking_script),
         output_type: 'root'
       )
-      action2_id = db[:actions].insert(description: 'lock test consumer', outgoing: true)
+      action2_id = db[:actions].insert(description: 'lock test consumer', outgoing: true, nlocktime: 0)
       db[:inputs].insert(action_id: action_id, output_id: output_id, vin: 0)
       expect {
         db.transaction(savepoint: true) do
@@ -94,13 +94,13 @@ RSpec.describe 'Schema migration' do
     end
 
     it 'CASCADE deletes inputs when action is deleted' do
-      action_id = db[:actions].insert(description: 'cascade test src', outgoing: true)
+      action_id = db[:actions].insert(description: 'cascade test src', outgoing: true, nlocktime: 0)
       output_id = db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
         locking_script: Sequel.blob(valid_locking_script),
         output_type: 'root'
       )
-      lock_action_id = db[:actions].insert(description: 'cascade test lock', outgoing: true)
+      lock_action_id = db[:actions].insert(description: 'cascade test lock', outgoing: true, nlocktime: 0)
       db[:inputs].insert(action_id: lock_action_id, output_id: output_id, vin: 0)
 
       expect(db[:inputs].where(action_id: lock_action_id).count).to eq(1)
@@ -118,13 +118,13 @@ RSpec.describe 'Schema migration' do
     end
 
     it 'generates reference UUID by default on actions' do
-      action_id = db[:actions].insert(description: 'uuid test 12345', outgoing: true)
+      action_id = db[:actions].insert(description: 'uuid test 12345', outgoing: true, nlocktime: 0)
       row = db[:actions].where(id: action_id).first
       expect(row[:reference].to_s).to match(/\A[0-9a-f]{8}-[0-9a-f]{4}-/)
     end
 
     it 'defaults broadcast to delayed' do
-      action_id = db[:actions].insert(description: 'broadcast test 1', outgoing: true)
+      action_id = db[:actions].insert(description: 'broadcast test 1', outgoing: true, nlocktime: 0)
       row = db[:actions].where(id: action_id).first
       expect(row[:broadcast]).to eq('delayed')
     end

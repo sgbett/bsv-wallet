@@ -1,0 +1,84 @@
+# frozen_string_literal: true
+
+# CLI integration tests: Alice sends BSV to Bob via separate processes.
+#
+# Each CLI tool runs in its own OS process, so the global Sequel::Model.db
+# is scoped per-wallet — no multi-tenant issues.
+#
+# Environment variables (set in shell profile or CI):
+#   WIF_ALICE, WIF_BOB       — wallet private keys
+#   FUNDING_TXID              — dtxid hex of Alice's mined P2PKH UTXO
+#   DATABASE_URL_ALICE/BOB    — optional, defaults to localhost:5433
+#
+# Run:
+#   cd gem/bsv-wallet && bundle exec rspec --tag on_chain spec/integration/cli_spec.rb
+
+require 'open3'
+require 'sequel'
+
+RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do # rubocop:disable RSpec/DescribeClass
+  let(:bin_dir) { File.expand_path('../../bin', __dir__) }
+  # Derive Bob's identity key from WIF without a database connection
+  let(:bob_identity_key) do
+    require 'bsv-wallet'
+    pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('WIF_BOB'))
+    BSV::Wallet::KeyDeriver.new(private_key: pk).identity_key
+  end
+
+  before do
+    # Clean slate — other specs may have used these databases
+    %w[DATABASE_URL_ALICE DATABASE_URL_BOB].each do |env_key|
+      url = ENV.fetch(env_key, "postgres://postgres:postgres@localhost:5433/bsv_wallet_#{env_key.split('_').last.downcase}")
+      db = Sequel.connect(url)
+      db.tables.each { |t| db[t].truncate(cascade: true) unless t == :schema_info }
+      db.disconnect
+    end
+  end
+
+  def run_cli(tool, *args, stdin_data: nil)
+    cmd = [File.join(bin_dir, tool)] + args
+    env = {} # inherits parent env
+    stdout, stderr, status = Open3.capture3(env, *cmd, stdin_data: stdin_data, binmode: true)
+    unless status.success?
+      warn "  [#{tool}] failed (exit #{status.exitstatus}):"
+      warn stderr.gsub(/^/, '    ')
+    end
+    [stdout, stderr, status]
+  end
+
+  it 'Alice pays Bob via CLI pipeline' do
+    # 0. Import the funding UTXO
+    funding_dtxid = ENV.fetch('FUNDING_TXID')
+    _stdout, _, status = run_cli('import_root_utxo', 'alice', funding_dtxid, '0')
+    expect(status).to be_success
+
+    # 1. Verify Alice has funds
+    stdout, _stderr, status = run_cli('balance', 'alice')
+    expect(status).to be_success
+    alice_balance = stdout.strip.to_i
+    expect(alice_balance).to be > 0
+
+    # 2. Alice sends 500 sats to Bob (no_send — outputs BEEF to stdout)
+    beef_stdout, _, status = run_cli(
+      'send', 'alice', '--to', bob_identity_key, '--sats', '500'
+    )
+    expect(status).to be_success
+    expect(beef_stdout.bytesize).to be > 0
+
+    # 3. Bob receives the BEEF into 'received' basket
+    _stdout, _, status = run_cli('receive', 'bob', '--basket', 'received', stdin_data: beef_stdout)
+    expect(status).to be_success
+
+    # 4. Verify Bob's balance in 'received' basket
+    stdout, _stderr, status = run_cli('balance', 'bob', '--basket', 'received')
+    expect(status).to be_success
+    bob_balance = stdout.strip.to_i
+    expect(bob_balance).to eq(500)
+
+    # 5. Verify Alice's change returned
+    stdout, _stderr, status = run_cli('balance', 'alice')
+    expect(status).to be_success
+    new_alice_balance = stdout.strip.to_i
+    expect(new_alice_balance).to eq(alice_balance - 500 - 1) # bin/send defaults to 1-sat fee
+  end
+end

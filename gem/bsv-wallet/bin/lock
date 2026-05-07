@@ -1,0 +1,75 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Construct a P2PKH locking script from an identity key and optional derivation.
+#
+# Root-key payment (no derivation, no wallet boot needed):
+#   bin/lock --to <identity_key_hex>
+#
+# Derived payment (BRC-42, requires wallet for ECDH):
+#   bin/lock [wallet] --to <identity_key_hex> --prefix <prefix> --suffix <suffix>
+#
+# Derivation can also be piped from bin/derive:
+#   bin/derive alice --counterparty <key> | bin/lock alice --to <key>
+#
+# Outputs locking script: binary when piped, hex when interactive.
+
+require 'optparse'
+
+options = {}
+# Pre-scan ARGV for wallet name (before OptionParser consumes flags)
+first = ARGV.first
+wallet_name = (ARGV.shift if first && !first.start_with?('-') && first.match?(/\A[a-zA-Z]\w*\z/))
+
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/lock [wallet] --to <identity_key_hex> [--prefix <prefix>] [--suffix <suffix>]'
+  opts.on('--to KEY', 'Recipient identity key (66-char compressed hex)') { |v| options[:to] = v }
+  opts.on('--prefix STR', 'Derivation prefix') { |v| options[:prefix] = v }
+  opts.on('--suffix STR', 'Derivation suffix') { |v| options[:suffix] = v }
+  opts.on('-b', 'Force binary output to TTY') { options[:binary] = true }
+  opts.on('-o FILE', 'Write to file') { |v| options[:output_file] = v }
+end.parse!
+
+abort 'Missing or invalid --to (expected 66-char compressed public key hex)' unless options[:to]&.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
+
+# Read prefix/suffix from stdin if not provided via flags and stdin is not a TTY
+if options[:prefix].nil? && options[:suffix].nil? && !$stdin.tty?
+  lines = $stdin.read.strip.split("\n")
+  if lines.length >= 2
+    options[:prefix] = lines[0]
+    options[:suffix] = lines[1]
+  end
+end
+
+derived = options[:prefix] && options[:suffix]
+
+if derived
+  # BRC-42 derived payment — needs wallet for ECDH
+  require_relative '../lib/bsv/wallet/cli'
+  ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+
+  derived_pub = ctx[:key_deriver].derive_public_key(
+    protocol_id: [2, options[:prefix]],
+    key_id: options[:suffix],
+    counterparty: options[:to],
+    for_self: true
+  )
+  pubkey_hash = BSV::Primitives::Digest.hash160(derived_pub)
+else
+  # Root-key payment — just hash the raw public key bytes
+  require 'bsv-wallet'
+  pubkey_bytes = [options[:to]].pack('H*')
+  pubkey_hash = BSV::Primitives::Digest.hash160(pubkey_bytes)
+end
+
+script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
+
+# Output
+require_relative '../lib/bsv/wallet/cli' unless defined?(BSV::Wallet::CLI)
+BSV::Wallet::CLI::Output.write_binary(script,
+                                      output_file: options[:output_file],
+                                      binary: options[:binary])
+
+warn "script: #{script.bytesize} bytes (P2PKH)"
+warn "hash160: #{pubkey_hash.unpack1('H*')}"
+warn "derived: #{derived ? 'yes' : 'no (root key)'}"

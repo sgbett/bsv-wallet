@@ -78,6 +78,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
   # Real signed P2PKH transaction (191 bytes) for test proofs.
   # Must be parseable by Transaction.from_binary for BEEF construction.
+  # Trivially valid locking script — anyone can spend. Used as a test
+  # placeholder where the actual script content doesn't matter.
+  OP_TRUE = "\x51".b.freeze
+
   DUMMY_RAW_TX = ['01000000016ce7229f014164e254aad172b1f8b40d496942ad7e323b47e0424c2b2e2e3772010000006a4730440220463fcf8f57a61c4f8ede208773db8732bf3a0757d929a8cbbe29bf4905fe5ef6022005d74398faf5b24912821836171af44f55f89858f3edf92863cde4823da11d4641210362f5fb9274834bb0cd0376a8d5d02bdbf459a37a62c5baef3fb06d1159b55597ffffffff01f0991600000000001976a9141f36a49fcf6ada1f74f82377b33b17b68f7a016188acd3740e00'].pack('H*').freeze
 
   # Pre-fund the wallet with spendable outputs.
@@ -106,7 +110,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                  pubkey_hash = BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
                  BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
                else
-                 SecureRandom.random_bytes(25)
+                 OP_TRUE
                end
 
       {
@@ -169,8 +173,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'test payment',
         inputs: [],
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'payment', basket: 'payments' }
+          { satoshis: 500, locking_script: OP_TRUE,
+            output_description: 'payment', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
 
@@ -185,7 +189,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+          { satoshis: 500, locking_script: OP_TRUE,
             output_description: 'output', basket: 'deferred', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
@@ -208,8 +212,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         inputs: [],
         no_send: true,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'output', basket: 'pending' }
+          { satoshis: 500, locking_script: OP_TRUE,
+            output_description: 'output', basket: 'pending', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
 
@@ -223,7 +227,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         no_send: true,
         labels: %w[payment urgent],
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+          { satoshis: 500, locking_script: OP_TRUE,
             output_description: 'output' }
         ]
       )
@@ -261,7 +265,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           inputs: [],
           accept_delayed_broadcast: false,
           outputs: [
-            { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+            { satoshis: 500, locking_script: OP_TRUE,
               output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -291,7 +295,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
     it 'completes a deferred signing flow with outputs only' do
       # Deferred action with outputs but no inputs
-      locking_script = SecureRandom.random_bytes(25)
+      locking_script = OP_TRUE
       create_result = engine.create_action(
         description: 'deferred outputs',
         inputs: [],
@@ -420,7 +424,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     context 'caller provides unlocking scripts for all inputs' do
       it 'applies caller scripts without wallet signing' do
         fund_wallet_with_keys(satoshis: 1000)
-        output_script = SecureRandom.random_bytes(25)
+        output_script = OP_TRUE
 
         listed = engine_with_keys.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
@@ -456,7 +460,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       it 'applies caller scripts for some inputs, wallet signs the rest' do
         # Fund with two outputs
         fund_wallet_with_keys(satoshis: 1000, count: 2)
-        output_script = SecureRandom.random_bytes(25)
+        output_script = OP_TRUE
 
         listed = engine_with_keys.list_outputs(basket: 'default')
         output_ids = listed[:outputs].map { |o| o[:id] }
@@ -496,7 +500,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'deferred invalid',
           inputs: [],
           sign_and_process: false,
-          outputs: [{ satoshis: 500, locking_script: SecureRandom.random_bytes(25) }]
+          outputs: [{ satoshis: 500, locking_script: OP_TRUE }]
         )
 
         reference = create_result[:signable_transaction][:reference]
@@ -535,7 +539,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'deferred rawtx',
           inputs: [],
           sign_and_process: false,
-          outputs: [{ satoshis: 500, locking_script: SecureRandom.random_bytes(25) }]
+          outputs: [{ satoshis: 500, locking_script: OP_TRUE }]
         )
 
         action = store.find_action(reference: create_result[:signable_transaction][:reference])
@@ -555,7 +559,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           inputs: [],
           sign_and_process: false,
           outputs: [
-            { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+            { satoshis: 500, locking_script: OP_TRUE,
               basket: 'cascade_test', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -580,7 +584,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     context 'sequence number override' do
       it 'applies sequence number from spends' do
         fund_wallet_with_keys(satoshis: 1000)
-        output_script = SecureRandom.random_bytes(25)
+        output_script = OP_TRUE
 
         listed = engine_with_keys.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
@@ -613,7 +617,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
+          { satoshis: 500, locking_script: OP_TRUE,
             output_description: 'output' }
         ]
       )
@@ -688,7 +692,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
       subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
                               satoshis: satoshis,
-                              locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                              locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                             ))
 
       beef = BSV::Transaction::Beef.new
@@ -698,7 +702,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                  satoshis: 1000 + i,
-                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                 locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                                ))
 
         # Create a merkle path for the ancestor
@@ -748,7 +752,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
             insertion_remittance: {
               basket: 'tokens',
               tags: ['nft'],
-              custom_instructions: 'token-id-123'
+              custom_instructions: 'token-id-123',
+              derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self'
             }
           }
         ]
@@ -798,7 +803,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         labels: ['test'],
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-            insertion_remittance: { basket: 'wtxid_test' } }
+            insertion_remittance: { basket: 'wtxid_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -821,7 +826,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'ancestor proof test',
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-            insertion_remittance: { basket: 'ancestor_test' } }
+            insertion_remittance: { basket: 'ancestor_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -845,7 +850,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         labels: ['proof-link'],
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-            insertion_remittance: { basket: 'proof_link_test' } }
+            insertion_remittance: { basket: 'proof_link_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -873,7 +878,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         labels: ['no-proof'],
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-            insertion_remittance: { basket: 'no_proof_test' } }
+            insertion_remittance: { basket: 'no_proof_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -938,7 +943,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'valid beef passes',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'spv_valid' } }
+              insertion_remittance: { basket: 'spv_valid', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -972,7 +977,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                  satoshis: 1000,
-                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                 locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                                ))
 
         subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
@@ -984,7 +989,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                              ))
         subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                 satoshis: 900,
-                                locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                               ))
 
         beef = BSV::Transaction::Beef.new
@@ -1017,7 +1022,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'chain tracker ok',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'tracker_ok' } }
+              insertion_remittance: { basket: 'tracker_ok', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1054,7 +1059,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'no tracker struct',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'no_tracker' } }
+              insertion_remittance: { basket: 'no_tracker', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1067,7 +1072,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                  satoshis: input_satoshis,
-                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                 locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                                ))
 
         wtxid_internal = ancestor_tx.wtxid
@@ -1091,7 +1096,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         subject_tx.inputs[0].source_transaction = ancestor_tx
         subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                 satoshis: output_satoshis,
-                                locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                               ))
 
         beef = BSV::Transaction::Beef.new
@@ -1108,7 +1113,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'fee adequate test',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 900,
-              insertion_remittance: { basket: 'fee_ok' } }
+              insertion_remittance: { basket: 'fee_ok', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1163,7 +1168,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           trust_self: 'known',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'trust_all' } }
+              insertion_remittance: { basket: 'trust_all', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1190,7 +1195,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           trust_self: 'known',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'trust_some' } }
+              insertion_remittance: { basket: 'trust_some', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1202,7 +1207,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         ancestor_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         ancestor_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                  satoshis: 1000,
-                                 locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                 locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                                ))
 
         subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
@@ -1213,7 +1218,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                              ))
         subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                 satoshis: 900,
-                                locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                                locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                               ))
 
         beef = BSV::Transaction::Beef.new
@@ -1246,7 +1251,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           known_txids: [ancestor_wtxid],
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'known_txids' } }
+              insertion_remittance: { basket: 'known_txids', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1274,7 +1279,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'no trust self full',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'no_trust' } }
+              insertion_remittance: { basket: 'no_trust', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1298,7 +1303,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'raw_tx storage test',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'raw_tx_test' } }
+              insertion_remittance: { basket: 'raw_tx_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1329,7 +1334,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'format consistency',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'fmt_test' } }
+              insertion_remittance: { basket: 'fmt_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1355,7 +1360,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'hex proof normal',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'hex_test' } }
+              insertion_remittance: { basket: 'hex_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1398,7 +1403,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           description: 'bin proof pass',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'bin_test' } }
+              insertion_remittance: { basket: 'bin_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1426,7 +1431,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       it 'stores raw_tx from the action for BEEF construction' do
         # Create an outgoing action so it has raw_tx set
-        locking_script = SecureRandom.random_bytes(25)
+        locking_script = OP_TRUE
         result = engine.create_action(
           description: 'broadcast raw_tx',
           inputs: [],
@@ -1468,12 +1473,15 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       engine.create_action(
         description: 'create outputs', inputs: [], no_send: true,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'first', basket: 'wallet', tags: ['payment'], derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
-          { satoshis: 300, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'second', basket: 'wallet', tags: ['change'], derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
-          { satoshis: 100, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'third', basket: 'other', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          { satoshis: 500, locking_script: OP_TRUE,
+            output_description: 'first', basket: 'wallet', tags: ['payment'],
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
+          { satoshis: 300, locking_script: OP_TRUE,
+            output_description: 'second', basket: 'wallet', tags: ['change'],
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
+          { satoshis: 100, locking_script: OP_TRUE,
+            output_description: 'third', basket: 'other',
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
     end
@@ -1500,8 +1508,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       engine.create_action(
         description: 'with output', inputs: [], no_send: true,
         outputs: [
-          { satoshis: 500, locking_script: SecureRandom.random_bytes(25),
-            output_description: 'to relinquish', basket: 'wallet', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          { satoshis: 500, locking_script: OP_TRUE,
+            output_description: 'to relinquish', basket: 'wallet',
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
 
@@ -1960,7 +1969,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     context 'with randomization enabled' do
       it 'shuffles output order (statistical)' do
         outputs = 10.times.map do |i|
-          { satoshis: (i + 1) * 100, locking_script: SecureRandom.random_bytes(25) }
+          { satoshis: (i + 1) * 100, locking_script: OP_TRUE }
         end
 
         original_order = outputs.map { |o| o[:satoshis] }
@@ -1980,7 +1989,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       it 'preserves all outputs (no data loss)' do
         outputs = 5.times.map do |i|
-          { satoshis: (i + 1) * 100, locking_script: SecureRandom.random_bytes(25) }
+          { satoshis: (i + 1) * 100, locking_script: OP_TRUE }
         end
 
         tx_outputs, _vout_mapping = build_outputs(outputs, true)
@@ -1990,7 +1999,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
       it 'produces correct vout mapping' do
         outputs = 5.times.map do |i|
-          { satoshis: (i + 1) * 100, locking_script: SecureRandom.random_bytes(25) }
+          { satoshis: (i + 1) * 100, locking_script: OP_TRUE }
         end
 
         tx_outputs, vout_mapping = build_outputs(outputs, true)
@@ -2008,7 +2017,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       end
 
       it 'is a no-op for a single output' do
-        outputs = [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }]
+        outputs = [{ satoshis: 1000, locking_script: OP_TRUE }]
 
         tx_outputs, vout_mapping = build_outputs(outputs, true)
 
@@ -2043,7 +2052,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
                elsif private_key
                  p2pkh_locking_script_for(private_key).to_binary
                else
-                 SecureRandom.random_bytes(25)
+                 OP_TRUE
                end
 
       {
@@ -2433,7 +2442,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
           inputs: [{ output_id: output_id }],
           outputs: [
             { satoshis: 900, locking_script: output_script,
-              output_description: 'payment', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+              output_description: 'payment', basket: 'payments',
+              derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ],
           randomize_outputs: false
         )
@@ -2720,7 +2730,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'no ancestors test',
         no_send: true,
         inputs: [{ output_id: output_id }],
-        outputs: [{ satoshis: 900, locking_script: SecureRandom.random_bytes(25) }]
+        outputs: [{ satoshis: 900, locking_script: OP_TRUE }]
       )
 
       action = store.find_action(wtxid: result[:txid])
@@ -2738,7 +2748,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'proven ancestry test',
         no_send: true,
         inputs: [{ output_id: output_id }],
-        outputs: [{ satoshis: 900, locking_script: SecureRandom.random_bytes(25) }]
+        outputs: [{ satoshis: 900, locking_script: OP_TRUE }]
       )
 
       # Simulate a proof arriving for the source transaction
@@ -2750,7 +2760,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
       fake_tx.add_output(BSV::Transaction::TransactionOutput.new(
                            satoshis: 1000,
-                           locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                           locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                          ))
       fake_raw_tx = fake_tx.to_binary
 
@@ -2788,7 +2798,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         description: 'multi anc test 33',
         no_send: true,
         inputs: output_ids.each_with_index.map { |id, i| { output_id: id, vin: i } },
-        outputs: [{ satoshis: 1400, locking_script: SecureRandom.random_bytes(25) }]
+        outputs: [{ satoshis: 1400, locking_script: OP_TRUE }]
       )
 
       action = store.find_action(wtxid: result[:txid])
@@ -2802,7 +2812,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
         fake_tx.add_output(BSV::Transaction::TransactionOutput.new(
                              satoshis: 500,
-                             locking_script: BSV::Script::Script.from_binary(SecureRandom.random_bytes(25))
+                             locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                            ))
 
         # wtxid is already wire order — use directly as merkle path hash

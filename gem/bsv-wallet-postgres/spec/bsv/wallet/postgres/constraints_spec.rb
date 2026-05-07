@@ -13,7 +13,7 @@ RSpec.describe 'Schema constraints' do
 
   # Helper: create a valid action for FK references
   def create_action(description: 'test action 12345')
-    db[:actions].insert(description: description, outgoing: true)
+    db[:actions].insert(description: description, outgoing: true, nlocktime: 0)
   end
 
   # Helper: create a valid output for FK references.
@@ -115,7 +115,7 @@ RSpec.describe 'Schema constraints' do
     it 'rejects NULL description' do
       expect {
         db.transaction(savepoint: true) do
-          db[:actions].insert(outgoing: true, description: nil)
+          db[:actions].insert(outgoing: true, description: nil, nlocktime: 0)
         end
       }.to raise_error(Sequel::NotNullConstraintViolation)
     end
@@ -123,7 +123,7 @@ RSpec.describe 'Schema constraints' do
     it 'rejects description shorter than 5 characters' do
       expect {
         db.transaction(savepoint: true) do
-          db[:actions].insert(outgoing: true, description: 'tiny')
+          db[:actions].insert(outgoing: true, description: 'tiny', nlocktime: 0)
         end
       }.to raise_error(Sequel::CheckConstraintViolation)
     end
@@ -131,7 +131,7 @@ RSpec.describe 'Schema constraints' do
     it 'rejects description longer than 50 characters' do
       expect {
         db.transaction(savepoint: true) do
-          db[:actions].insert(outgoing: true, description: 'x' * 51)
+          db[:actions].insert(outgoing: true, description: 'x' * 51, nlocktime: 0)
         end
       }.to raise_error(Sequel::CheckConstraintViolation)
     end
@@ -140,7 +140,7 @@ RSpec.describe 'Schema constraints' do
       expect {
         db.transaction(savepoint: true) do
           db[:actions].insert(
-            outgoing: true, description: 'test action 12345',
+            outgoing: true, description: 'test action 12345', nlocktime: 0,
             wtxid: Sequel.blob("\x00" * 31), raw_tx: Sequel.blob(valid_raw_tx)
           )
         end
@@ -151,7 +151,7 @@ RSpec.describe 'Schema constraints' do
       expect {
         db.transaction(savepoint: true) do
           db[:actions].insert(
-            outgoing: true, description: 'test action 12345',
+            outgoing: true, description: 'test action 12345', nlocktime: 0,
             wtxid: Sequel.blob(valid_wtxid), raw_tx: nil
           )
         end
@@ -162,7 +162,7 @@ RSpec.describe 'Schema constraints' do
       expect {
         db.transaction(savepoint: true) do
           db[:actions].insert(
-            outgoing: true, description: 'test action 12345',
+            outgoing: true, description: 'test action 12345', nlocktime: 0,
             wtxid: nil, raw_tx: Sequel.blob(valid_raw_tx)
           )
         end
@@ -172,7 +172,7 @@ RSpec.describe 'Schema constraints' do
     it 'allows both wtxid and raw_tx NULL (unsigned action)' do
       expect {
         db[:actions].insert(
-          outgoing: true, description: 'test action 12345',
+          outgoing: true, description: 'test action 12345', nlocktime: 0,
           wtxid: nil, raw_tx: nil
         )
       }.not_to raise_error

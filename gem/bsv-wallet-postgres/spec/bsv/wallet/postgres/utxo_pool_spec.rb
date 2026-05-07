@@ -78,7 +78,7 @@ RSpec.describe BSV::Wallet::Postgres::UTXOPool do
       output = create_funded_output(satoshis: 1000, vout: 0)
       create_funded_output(satoshis: 500, vout: 0)
 
-      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action')
+      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
       BSV::Wallet::Postgres::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
       expect(pool.balance).to eq(500)

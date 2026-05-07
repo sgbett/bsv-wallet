@@ -9,32 +9,55 @@ d5d02bdbf459a37a62c5baef3fb06d1159b55597ffffffff01f0991600000000001976a9141f36a4
 ## Chunks by protocol
 
 ```
-*rawtx*
-├─ version          01000000
-├─ inputs           01
-├*vin[0]*
-│├─ txid            6ce7229f014164e254aad172b1f8b40d496942ad7e323b47e0424c2b2e2e3772
-│├─ vout            01000000
-│├*scriptSig*
-││├─ length         6a
-││├─ OP_PUSH71      47
-│││   ├─ dersig     30440220463fcf8f57a61c4f8ede208773db8732bf3a0757d929a8cbbe29bf4905fe5ef6022005d74398faf5b24912821836171af44f55f89858f3edf92863cde4823da11d46
-│││   ├─ sighash    41
-││└─ OP_PUSH33      21
-││    └─ pubkey🗜️   0362f5fb9274834bb0cd0376a8d5d02bdbf459a37a62c5baef3fb06d1159b55597
-│└─ nsequence       ffffffff
-├─ outputs          01
-├*vout[0]
-│├─ amount          f099160000000000
-│└*scriptPubKey*
-│ ├─ length         19
-│ ├─ OP_DUP         76
-│ ├─ OP_HASH160     a9
-│ ├─ OP_PUSH20      14
-│ │   └─ pubkey#️⃣   1f36a49fcf6ada1f74f82377b33b17b68f7a0161
-│ ├─ OP_EQUALVERIFY 88
-│ └─ OP_CHECKSIG    ac
-└─ nlocktime        d3740e00
+╔═══════╗
+║ rawTX ║
+╚╤══════╝
+ ├─ version................. 01000000
+ ├─ inputs.................. 01
+ │ ╔════════╗
+ ├─╢ vin.0  ║
+ │ ╚╤═══════╝
+ │  ├─ txid................. 6ce7229f014164e2 54aad172b1f8b40d 496942ad7e323b47 e0424c2b2e2e3772
+ │  ├─ vout................. 01000000
+ │  │ ╔══════════════╗
+ │  ├─╢ scriptSig    ║
+ │  │ ║ length (106) ║...... 6a
+ │  │ ╚╤═════════════╝
+ │  │  ├─ OP_PUSH(71)....... 47
+ │  │  │   └┬───────────────────────────────────────────────────────────────────────────────────
+ │  │  │    ├─ Signature
+ │  │  │    │  ↪32 bytes.... 30440220463fcf8f 57a61c4f8ede2087 73db8732bf3a0757 d929a8cbbe29bf49
+ │  │  │    │  ↪64 bytes.... 05fe5ef6022005d7 4398faf5b2491282 1836171af44f55f8 9858f3edf92863cd
+ │  │  │    │  ↪70 bytes.... e4823da11d46
+ │  │  │    ├─ sighash
+ │  │  │    │  ↪71 bytes.... 41
+ │  │  │    └───────────────────────────────────────────────────────────────────────────────────
+ │  │  └─ OP_PUSH(33)....... 21
+ │  │      └┬───────────────────────────────────────────────────────────────────────────────────
+ │  │       ├─ Compressed PubKey
+ │  │       │  ↪32.......... 0362f5fb9274834b b0cd0376a8d5d02b dbf459a37a62c5ba ef3fb06d1159b555
+ │  │       │  ↪33 bytes.... 97
+ │  │       └───────────────────────────────────────────────────────────────────────────────────
+ │  └─ nsequence............ ffffffff
+ ├─ outputs................. 01
+ │ ╔════════╗
+ ├─╢ vout.0 ║
+ │ ╚╤═══════╝
+ │  ├─ amount............... f099160000000000
+ │  │ ╔══════════════╗
+ │  └─╢ scriptPubKey ║
+ │    ║ length (25)  ║...... 19
+ │    ╚╤═════════════╝
+ │     ├─ OP_DUP............ 76
+ │     ├─ OP_HASH160........ a9
+ │     ├─ OP_PUSH20......... 14
+ │     │   └┬───────────────────────────────────────────────────────────────────────────────────
+ │     │    ├─ PubKey hash
+ │     │    │  ↪20 bytes.... 1f36a49fcf6ada1f 74f82377b33b17b6 8f7a0161
+ │     │    └───────────────────────────────────────────────────────────────────────────────────
+ │     ├─ OP_EQUALVERIFY.... 88
+ │     └─ OP_CHECKSIG....... ac
+ └─ nlocktime............... d3740e00
 ```
 
 ## Processing the TX
@@ -107,11 +130,11 @@ The DER-encoded ECDSA signature uses two integers (r, s), each 32 bytes when ful
 
 Each byte below 70 requires the value to be ≈256x smaller. A minimum signed P2PKH transaction (1-in/1-out) is 191 bytes with a typical 70-byte signature, 189 bytes with a 68-byte signature. The database constraint uses 20 bytes (minimum 1-output tx with 1-byte script) because unsigned transactions during deferred signing are ~85 bytes.
 
-## pubkey
+## PubKey
 
 Pubkey is used twice, in *scriptSig* where it is compressed and in *scriptPubKey* where it is hashed
 
-### pubkey 🗜️
+### Compressed
 
 When an output is spent the scriptsig must reveal the pubkey so that proof can be verified, to save space the key is compressed.
 
@@ -119,7 +142,7 @@ A public key is a point x,y on a graph. Because the curve is mathematically defi
 
 However y^2 = b has two solutions for b, positive and negative, so the first byte is used to indicate which of these it is 0x02 is even, 0x03 is odd.
 
-### pubkey #️⃣
+### Hash
 
 Hashing the pubkey affords privacy to unspent outputs until such time as they need to be spent. The pubkey is hashed using:
 

@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require 'securerandom'
+require 'set'
+
 module BSV
   module Wallet
     # Layer 3 — BRC-100 business process orchestration.
@@ -23,13 +26,15 @@ module BSV
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
       def initialize(store:, utxo_pool:, broadcast_queue:, proof_store:,
-                     key_deriver: nil, chain_tracker: nil, network: :mainnet)
+                     key_deriver: nil, chain_tracker: nil, network_provider: nil,
+                     network: :mainnet)
         @store = store
         @utxo_pool = utxo_pool
         @broadcast_queue = broadcast_queue
         @proof_store = proof_store
         @key_deriver = key_deriver
         @chain_tracker = chain_tracker
+        @network_provider = network_provider
         @network_name = network
       end
 
@@ -43,6 +48,7 @@ module BSV
                         randomize_outputs: true, originator: nil)
         validate_description!(description)
         validate_create_action_params!(inputs: inputs, outputs: outputs)
+        validate_output_ownership!(outputs)
 
         # Auto-fund: when inputs is nil with outputs present, the wallet
         # handles UTXO selection, fee estimation, and change generation.
@@ -282,6 +288,116 @@ module BSV
         { relinquished: true }
       end
 
+      # --- UTXO Import (bootstrap) ---
+
+      # Import a root-key UTXO and immediately pay to self on a derived address.
+      #
+      # Rescues funds sent directly to the wallet's root key (an error condition
+      # or bootstrap from a non-BRC-100 source). Fetches the transaction and
+      # merkle proof from the network provider, verifies the output is P2PKH to
+      # the wallet's root key, imports it, then immediately spends it to a
+      # BRC-42 derived self-address. The root UTXO is promoted as spendable
+      # briefly, then consumed by the self-payment — only the derived output
+      # remains spendable after completion.
+      #
+      # @param dtxid [String] 64-char hex transaction ID (display order)
+      # @param vout [Integer] output index (default: 0)
+      # @return [Hash] { imported: true, satoshis:, dtxid: }
+      def import_utxo(dtxid:, vout: 0)
+        require_key_deriver!
+        raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
+
+        # Fetch transaction from network
+        BSV.logger&.debug { "[Engine] import_utxo: fetching #{dtxid} from network" }
+        result = @network_provider.call(:get_tx, txid: dtxid)
+        raise BSV::Wallet::Error, "failed to fetch tx #{dtxid}" unless result.success?
+
+        raw_tx = [result.data.strip].pack('H*')
+        tx = BSV::Transaction::Transaction.from_binary(raw_tx)
+
+        # Verify output exists and is P2PKH to our root key
+        unless vout.is_a?(Integer) && vout >= 0 && vout < tx.outputs.length
+          raise BSV::Wallet::InvalidParameterError.new('vout', "out of range (#{tx.outputs.length} outputs)")
+        end
+
+        output = tx.outputs[vout]
+        locking_script = output.locking_script
+        root_hash = @key_deriver.root_private_key.public_key.hash160
+
+        unless locking_script.p2pkh? && locking_script.chunks[2].data == root_hash
+          raise BSV::Wallet::InvalidParameterError.new('vout', 'output is not P2PKH to the wallet root key')
+        end
+
+        satoshis = output.satoshis
+        wtxid = tx.wtxid
+
+        # Fetch merkle proof if mined
+        merkle_path = nil
+        block_height = nil
+        details_result = @network_provider.call(:get_tx_details, txid: dtxid)
+        if details_result.success? && details_result.data['blockheight']
+          block_height = details_result.data['blockheight']
+          proof_result = @network_provider.call(:get_merkle_path, txid: dtxid)
+          if proof_result.success? && proof_result.data.is_a?(Array) && proof_result.data.any?
+            tsc = proof_result.data.first
+            mp = BSV::Transaction::MerklePath.from_tsc(
+              dtxid_hex: tsc['txOrId'], index: tsc['index'],
+              nodes: tsc['nodes'], block_height: block_height
+            )
+            merkle_path = mp.to_binary
+          end
+        end
+
+        BSV.logger&.debug { "[Engine] import_utxo: #{satoshis} sats at vout #{vout}, height=#{block_height || 'unconfirmed'}" }
+
+        # Phase 1: Record the root-key UTXO
+        import_action = @store.create_action(
+          action: { description: 'imported UTXO', broadcast: :none, outgoing: false }
+        )
+        @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
+        output_ids = @store.promote_action(
+          action_id: import_action[:id],
+          outputs: [{ satoshis: satoshis, vout: vout, locking_script: locking_script.to_binary, output_type: 'root' }]
+        )
+        imported_output_id = output_ids.first
+
+        # Store proof and link
+        proof = { raw_tx: raw_tx, merkle_path: merkle_path, height: block_height }.compact
+        if proof.any?
+          proof_id = @proof_store.save_proof(wtxid: wtxid, proof: proof)
+          @store.link_proof(action_id: import_action[:id], tx_proof_id: proof_id)
+        end
+
+        # Phase 2: Self-payment to derived address
+
+        derivation_prefix = SecureRandom.uuid
+        derivation_suffix = '1'
+        derived_pub = @key_deriver.derive_public_key(
+          protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
+        )
+        derived_script = BSV::Script::Script.p2pkh_lock(
+          BSV::Primitives::Digest.hash160(derived_pub)
+        ).to_binary
+
+        fee = 1 # token fee for no_send self-payment (BRC-67: inputs > outputs)
+        self_payment_sats = satoshis - fee
+        raise BSV::Wallet::Error, "insufficient sats for self-payment (#{satoshis} - #{fee} fee)" if self_payment_sats <= 0
+
+        create_action(
+          description: 'import self-payment',
+          inputs: [{ output_id: imported_output_id }],
+          outputs: [{
+            satoshis: self_payment_sats, locking_script: derived_script,
+            derivation_prefix: derivation_prefix, derivation_suffix: derivation_suffix,
+            sender_identity_key: @key_deriver.identity_key
+          }],
+          no_send: true, randomize_outputs: false
+        )
+
+        BSV.logger&.debug { "[Engine] import_utxo complete: #{self_payment_sats} sats on derived address" }
+        { imported: true, satoshis: self_payment_sats, dtxid: dtxid }
+      end
+
       # --- Public Key Management (codes 8-10) ---
 
       def get_public_key(identity_key: false, protocol_id: nil, key_id: nil,
@@ -515,6 +631,37 @@ module BSV
                                                      'present (at least one input or output required)')
       end
 
+      # Validate output_type declarations against locking scripts.
+      #
+      # If output_type is 'root', the locking script must be P2PKH to the
+      # wallet's identity key. Other output_type values are not validated here.
+      def validate_output_ownership!(outputs)
+        return unless outputs && @key_deriver
+
+        outputs.each_with_index do |out, idx|
+          next unless out[:output_type] == 'root'
+
+          script = resolve_locking_script(out[:locking_script])
+          unless script.p2pkh?
+            raise BSV::Wallet::InvalidParameterError.new(
+              "outputs[#{idx}].output_type",
+              "'root' requires a P2PKH script"
+            )
+          end
+
+          root_hash = BSV::Primitives::Digest.hash160(
+            [@key_deriver.identity_key].pack('H*')
+          )
+          pubkey_hash = script.chunks[2].data
+          next if pubkey_hash == root_hash
+
+          raise BSV::Wallet::InvalidParameterError.new(
+            "outputs[#{idx}].output_type",
+            "'root' but script does not match identity key"
+          )
+        end
+      end
+
       def determine_broadcast(no_send, accept_delayed_broadcast)
         if no_send then :none
         elsif accept_delayed_broadcast then :delayed
@@ -671,7 +818,7 @@ module BSV
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'normalize_tsc wtxid')
         dtxid = wtxid.reverse.unpack1('H*')
         BSV::Transaction::MerklePath.from_tsc(
-          txid: tsc[:txOrId] || tsc[:tx_or_id] || dtxid,
+          dtxid_hex: tsc[:txOrId] || tsc[:tx_or_id] || dtxid,
           index: tsc[:index],
           nodes: tsc[:nodes],
           block_height: tsc[:blockHeight] || tsc[:block_height]
@@ -718,24 +865,15 @@ module BSV
         tx = BSV::Transaction::Transaction.from_binary(raw_tx)
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
 
-        # Wire source_transaction and merkle_path on each input
+        # Wire source_transaction and merkle_path on each input.
+        # For unconfirmed ancestors, recursively wire their ancestry
+        # so the BEEF contains the full chain back to mined transactions.
         resolved_inputs.each_with_index do |resolved, idx|
           input = tx.inputs[idx]
           next unless input
 
-          source_wtxid = resolved[:source_wtxid]
-          proof = @proof_store.find_proof(wtxid: source_wtxid)
-
-          unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
-            BSV.logger&.debug { "[Engine] build_atomic_beef: ancestor #{source_wtxid.reverse.unpack1('H*')} proof=missing" }
-            next
-          end
-
-          source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
-
-          has_bump = !proof[:merkle_path].nil?
-          source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first if has_bump
-          BSV.logger&.debug { "[Engine] build_atomic_beef: ancestor #{source_wtxid.reverse.unpack1('H*')} proof=#{has_bump ? 'bump' : 'raw_tx'}" }
+          source_tx = resolve_ancestor(resolved[:source_wtxid])
+          next unless source_tx
 
           input.source_transaction = source_tx
         end
@@ -743,6 +881,61 @@ module BSV
         beef = BSV::Transaction::Beef.new
         beef.merge_transaction(tx)
         beef.to_atomic_binary(tx.wtxid)
+      end
+
+      # Recursively resolve an ancestor transaction with its full proof chain.
+      #
+      # If the ancestor is mined (has merkle_path), wires the BUMP and returns.
+      # If unconfirmed, finds the ancestor's own action, resolves ITS inputs
+      # recursively, and wires them as source_transactions so the SDK includes
+      # the full chain in the BEEF.
+      #
+      # @param wtxid [String] 32-byte wire-order wtxid
+      # @param visited [Set] prevents infinite loops on circular references
+      # @return [BSV::Transaction::Transaction, nil]
+      def resolve_ancestor(wtxid, visited: Set.new)
+        return if visited.include?(wtxid)
+
+        visited.add(wtxid)
+
+        proof = @proof_store.find_proof(wtxid: wtxid)
+        unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
+          BSV.logger&.debug { "[Engine] resolve_ancestor: #{wtxid.reverse.unpack1('H*')} proof=missing" }
+          return
+        end
+
+        source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
+
+        if proof[:merkle_path]
+          source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
+          BSV.logger&.debug { "[Engine] resolve_ancestor: #{wtxid.reverse.unpack1('H*')} proof=bump" }
+          return source_tx
+        end
+
+        # Unconfirmed: resolve each input's ancestor recursively.
+        # For outgoing actions with inputs, use the action's input rows.
+        # Otherwise (internalized actions or bare proofs from BEEF), parse
+        # the raw_tx and resolve each input's prev_wtxid from ProofStore.
+        action = @store.find_action(wtxid: wtxid)
+        parent_inputs = action ? @store.resolve_inputs_for_signing(action_id: action[:id]) : []
+
+        if parent_inputs.any?
+          parent_inputs.each_with_index do |parent_resolved, idx|
+            parent_input = source_tx.inputs[idx]
+            next unless parent_input
+
+            grandparent = resolve_ancestor(parent_resolved[:source_wtxid], visited: visited)
+            parent_input.source_transaction = grandparent if grandparent
+          end
+        else
+          source_tx.inputs.each do |input|
+            grandparent = resolve_ancestor(input.prev_wtxid, visited: visited)
+            input.source_transaction = grandparent if grandparent
+          end
+        end
+
+        BSV.logger&.debug { "[Engine] resolve_ancestor: #{wtxid.reverse.unpack1('H*')} proof=raw_tx (recursive)" }
+        source_tx
       end
 
       # Parse the tx: parameter as BEEF and extract the subject transaction.
@@ -781,23 +974,19 @@ module BSV
         subject_proof_id = nil
 
         beef.transactions.each do |beef_tx|
-          next unless beef_tx.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP
           next unless beef_tx.transaction
 
           wtxid = beef_tx.transaction.wtxid
           merkle_path = beef_tx.transaction.merkle_path ||
                         (beef_tx.bump_index && beef.bumps[beef_tx.bump_index])
-          next unless merkle_path
 
-          proof_id = @proof_store.save_proof(
-            wtxid: wtxid,
-            proof: {
-              height: merkle_path.block_height,
-              merkle_path: merkle_path.to_binary,
-              raw_tx: beef_tx.transaction.to_binary
-            }
-          )
+          proof = { raw_tx: beef_tx.transaction.to_binary }
+          if merkle_path
+            proof[:height] = merkle_path.block_height
+            proof[:merkle_path] = merkle_path.to_binary
+          end
 
+          proof_id = @proof_store.save_proof(wtxid: wtxid, proof: proof)
           subject_proof_id = proof_id if wtxid == subject_wtxid
         end
 
@@ -886,6 +1075,9 @@ module BSV
           spec[:basket]              = rem[:basket]
           spec[:custom_instructions] = rem[:custom_instructions]
           spec[:tags]                = rem[:tags]
+          spec[:derivation_prefix]   = rem[:derivation_prefix]
+          spec[:derivation_suffix]   = rem[:derivation_suffix]
+          spec[:sender_identity_key] = rem[:sender_identity_key]
           # Basket insertion protocol: no derivation fields means root-key ownership.
           # This is a protocol-level decision, not inference from field absence.
           spec[:output_type] = 'root' unless rem[:derivation_prefix]

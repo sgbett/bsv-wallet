@@ -1,0 +1,86 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Raw Engine#internalize_action wrapper.
+#
+# Reads BEEF from stdin and internalizes specified outputs.
+#
+# Usage:
+#   bin/send alice ... | bin/internalize bob --description "received" --output "0:basket:received"
+#
+# Output specs (repeatable):
+#   --output "<vout>:basket:<basket_name>"           basket insertion
+#   --output "<vout>:wallet:<prefix>:<suffix>:<sender>"  wallet payment
+
+require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+
+options = { outputs: [], labels: [] }
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/internalize [wallet] --description "..." --output "<spec>"...'
+  opts.on('--description DESC', 'Action description (5-50 chars)') { |v| options[:description] = v }
+  opts.on('--output SPEC', 'Output spec (repeatable)') { |v| options[:outputs] << v }
+  opts.on('--label NAME', 'Add label (repeatable)') { |v| options[:labels] << v }
+end.parse!(args)
+
+abort 'Missing --description' unless options[:description]
+abort 'Missing --output (at least one required)' if options[:outputs].empty?
+
+# Parse output specs
+output_specs = options[:outputs].map do |spec| # rubocop:disable Metrics/BlockLength
+  parts = spec.split(':')
+  vout = parts[0].to_i
+  protocol = parts[1]
+
+  case protocol
+  when 'basket'
+    basket = parts[2] || 'received'
+    {
+      output_index: vout,
+      protocol: 'basket insertion',
+      insertion_remittance: { basket: basket }
+    }
+  when 'wallet'
+    prefix = parts[2]
+    suffix = parts[3]
+    sender = parts[4]
+    abort "wallet spec requires prefix:suffix:sender — got: #{spec}" unless prefix && suffix && sender
+    {
+      output_index: vout,
+      protocol: 'wallet payment',
+      payment_remittance: {
+        derivation_prefix: prefix,
+        derivation_suffix: suffix,
+        sender_identity_key: sender
+      }
+    }
+  else
+    abort "Unknown protocol '#{protocol}' in --output spec. Use 'basket' or 'wallet'."
+  end
+end
+
+# Read BEEF from stdin
+$stdin.binmode
+beef_data = $stdin.read
+abort 'No BEEF data on stdin' if beef_data.nil? || beef_data.empty?
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+engine = ctx[:engine]
+
+engine.internalize_action(
+  tx: beef_data,
+  outputs: output_specs,
+  description: options[:description],
+  labels: options[:labels].any? ? options[:labels] : nil
+)
+
+warn "internalized: #{output_specs.length} output(s)"
+output_specs.each do |os|
+  if os[:protocol] == 'basket insertion'
+    warn "  vout #{os[:output_index]} -> basket '#{os[:insertion_remittance][:basket]}'"
+  else
+    warn "  vout #{os[:output_index]} -> wallet payment (derived)"
+  end
+end

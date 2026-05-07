@@ -55,6 +55,7 @@ module BSV
         # @param outputs [Array<Hash>] each: :satoshis, :vout, :locking_script,
         #   :derivation_prefix, :derivation_suffix, :sender_identity_key,
         #   :basket, :tags, :description, :custom_instructions, :change
+        # @return [Array<Integer>] output IDs in the same order as outputs
         def promote_action(action_id:, outputs:)
           raise NotImplementedError
         end

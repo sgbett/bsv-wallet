@@ -24,7 +24,7 @@ module BSV
             record = Action.create(
               description: action[:description],
               broadcast:   action[:broadcast]&.to_s || 'delayed',
-              nlocktime:   action[:nlocktime] || 0,
+              nlocktime:   action[:nlocktime],
               version:     action[:version],
               outgoing:    action.fetch(:outgoing, true),
               input_beef:  action[:input_beef]
@@ -88,7 +88,7 @@ module BSV
 
         def promote_action(action_id:, outputs:)
           @db.transaction do
-            outputs.each do |out|
+            outputs.map do |out|
               output = Output.create(
                 action_id:           action_id,
                 satoshis:            out[:satoshis],
@@ -127,6 +127,8 @@ module BSV
                 tag_ids = find_or_create_tags(names: out[:tags])
                 tag_ids.each { |tid| OutputTag.create(output_id: output.id, tag_id: tid) }
               end
+
+              output.id
             end
           end
         end

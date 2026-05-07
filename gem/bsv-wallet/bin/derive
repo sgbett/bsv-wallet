@@ -1,0 +1,50 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Generate a derivation prefix and suffix for a counterparty payment.
+#
+# Usage:
+#   bin/derive [wallet] --counterparty <identity_key_hex> [--prefix <str>] [--suffix <str>]
+#
+# Outputs prefix and suffix (one per line) to stdout.
+# These values are passed to bin/lock and communicated to the recipient
+# so they can derive the corresponding private key to spend the output.
+
+require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
+require 'securerandom'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+
+options = {}
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/derive [wallet] --counterparty <identity_key_hex> [--prefix <str>] [--suffix <str>]'
+  opts.on('--counterparty KEY', 'Recipient identity key (66-char compressed hex)') { |v| options[:counterparty] = v }
+  opts.on('--prefix STR', 'Derivation prefix (default: random UUID)') { |v| options[:prefix] = v }
+  opts.on('--suffix STR', 'Derivation suffix (default: "1")') { |v| options[:suffix] = v }
+end.parse!(args)
+
+unless options[:counterparty]&.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
+  abort 'Missing or invalid --counterparty (expected 66-char compressed public key hex)'
+end
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+
+prefix = options[:prefix] || SecureRandom.uuid
+suffix = options[:suffix] || '1'
+
+# Verify derivation works by deriving the counterparty's child public key
+derived_pub = ctx[:key_deriver].derive_public_key(
+  protocol_id: [2, prefix],
+  key_id: suffix,
+  counterparty: options[:counterparty],
+  for_self: true
+)
+
+$stdout.puts prefix
+$stdout.puts suffix
+
+warn "prefix:      #{prefix}"
+warn "suffix:      #{suffix}"
+warn "counterparty: #{options[:counterparty][0..15]}..."
+warn "derived_pub:  #{derived_pub.unpack1('H*')[0..15]}..."

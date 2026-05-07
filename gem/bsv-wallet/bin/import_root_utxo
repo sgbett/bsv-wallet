@@ -1,0 +1,28 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Import a root-key P2PKH UTXO into the wallet.
+#
+# The engine fetches the transaction from the network, verifies the output
+# is P2PKH to the wallet's root key, and immediately pays to a derived
+# self-address. The root key UTXO never persists as spendable.
+#
+# Usage:
+#   bin/import_root_utxo [wallet] <dtxid_hex> [vout]
+
+require_relative '../lib/bsv/wallet/cli'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+dtxid = args[0]
+vout = (args[1] || 0).to_i
+
+abort 'Usage: bin/import_root_utxo [wallet] <dtxid_hex> [vout]' unless dtxid&.match?(/\A[0-9a-f]{64}\z/i)
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+
+result = ctx[:engine].import_utxo(dtxid: dtxid, vout: vout)
+
+listed = ctx[:engine].list_outputs(basket: 'default')
+warn "Imported #{result[:satoshis]} sats (#{result[:dtxid]})"
+warn "Spendable outputs: #{listed[:total_outputs]}"
+warn "Total balance: #{listed[:outputs].sum { |o| o[:satoshis] }} sats"

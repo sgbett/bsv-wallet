@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 RSpec.describe BSV::Wallet::Postgres::Output do
-  let(:action) { BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
+  let(:action) { BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
 
   def create_spendable_output(action_id: action.id, satoshis: 1000, vout: 0, **attrs)
     attrs[:locking_script] ||= SecureRandom.random_bytes(25)
@@ -54,7 +54,7 @@ RSpec.describe BSV::Wallet::Postgres::Output do
 
     it 'has one input (when claimed)' do
       output = create_spendable_output
-      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action')
+      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
       BSV::Wallet::Postgres::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
       expect(output.reload.input).to be_a(BSV::Wallet::Postgres::Input)
     end
@@ -75,7 +75,7 @@ RSpec.describe BSV::Wallet::Postgres::Output do
 
     it 'returns false when claimed by an input' do
       output = create_spendable_output
-      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action')
+      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
       BSV::Wallet::Postgres::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
       expect(output.reload.spendable?).to be false
     end
@@ -99,7 +99,7 @@ RSpec.describe BSV::Wallet::Postgres::Output do
       output = create_spendable_output(vout: 0)
       create_spendable_output(vout: 1)
 
-      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action')
+      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
       BSV::Wallet::Postgres::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
       expect(described_class.spendable.count).to eq(1)

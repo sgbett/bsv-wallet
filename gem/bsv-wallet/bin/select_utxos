@@ -1,0 +1,41 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Select UTXOs to meet a target satoshi amount.
+#
+# Does NOT lock the UTXOs — locking happens when create_action is called.
+#
+# Usage:
+#   bin/select_utxos [wallet] --sats <amount>
+#
+# Prints JSON to stdout, summary to stderr.
+
+require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+
+options = {}
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/select_utxos [wallet] --sats <amount>'
+  opts.on('--sats N', Integer, 'Target amount in satoshis') { |v| options[:sats] = v }
+end.parse!(args)
+
+abort 'Missing --sats' unless options[:sats]&.positive?
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+
+candidates = ctx[:utxo_pool].select(satoshis: options[:sats])
+
+outputs = candidates.map do |c|
+  { id: c[:id], satoshis: c[:satoshis], vout: c[:vout] }
+end
+
+BSV::Wallet::CLI::Output.write_json(outputs)
+
+total = candidates.sum { |c| c[:satoshis] }
+surplus = total - options[:sats]
+warn "selected: #{candidates.length} output(s)"
+warn "total:    #{total} sats"
+warn "target:   #{options[:sats]} sats"
+warn "surplus:  #{surplus} sats"

@@ -15,6 +15,7 @@ module BSV
       autoload :BroadcastQueue,    'bsv/wallet/postgres/broadcast_queue'
       autoload :BroadcastCallback, 'bsv/wallet/postgres/broadcast_callback'
       autoload :ProofStore,        'bsv/wallet/postgres/proof_store'
+      autoload :ArcAdapter,        'bsv/wallet/postgres/arc_adapter'
 
       # Shared concerns
       require_relative 'postgres/display_txid'

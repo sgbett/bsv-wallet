@@ -3,7 +3,7 @@
 RSpec.describe BSV::Wallet::Postgres::Input do
   let(:source_action) { BSV::Wallet::Postgres::Action.create(outgoing: false, description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
   let(:output) { BSV::Wallet::Postgres::Output.create(action_id: source_action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root') }
-  let(:spending_action) { BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action') }
+  let(:spending_action) { BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0) }
 
   describe 'structural lock' do
     it 'claims an output (single-spend enforcement)' do
@@ -14,7 +14,7 @@ RSpec.describe BSV::Wallet::Postgres::Input do
 
     it 'prevents double-spend via UNIQUE on output_id' do
       described_class.create(action_id: spending_action.id, output_id: output.id, vin: 0)
-      other_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action')
+      other_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
       expect { described_class.create(action_id: other_action.id, output_id: output.id, vin: 0) }
         .to raise_error(Sequel::UniqueConstraintViolation)
     end
