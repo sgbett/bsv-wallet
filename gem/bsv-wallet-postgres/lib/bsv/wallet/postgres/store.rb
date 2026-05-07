@@ -21,13 +21,12 @@ module BSV
 
         def create_action(action:, inputs: [])
           @db.transaction do
-            outgoing = action.fetch(:outgoing, true)
             record = Action.create(
               description: action[:description],
               broadcast:   action[:broadcast]&.to_s || 'delayed',
-              nlocktime:   outgoing ? (action[:nlocktime] || 0) : action[:nlocktime],
+              nlocktime:   action[:nlocktime],
               version:     action[:version],
-              outgoing:    outgoing,
+              outgoing:    action.fetch(:outgoing, true),
               input_beef:  action[:input_beef]
             )
 
