@@ -119,8 +119,8 @@ jobs:
         run: bundle exec rspec --tag on_chain
         working-directory: gem/bsv-wallet
         env:
-          WIF_ALICE: ${{ secrets.WIF_ALICE }}
-          WIF_BOB: ${{ secrets.WIF_BOB }}
-          FUNDING_TXID: ${{ secrets.FUNDING_TXID }}
+          BSV_WALLET_WIF_ALICE: ${{ secrets.BSV_WALLET_WIF_ALICE }}
+          BSV_WALLET_WIF_BOB: ${{ secrets.BSV_WALLET_WIF_BOB }}
+          BSV_WALLET_UTXO_ALICE: ${{ secrets.BSV_WALLET_UTXO_ALICE }}
           DATABASE_URL_ALICE: postgres://postgres:postgres@localhost:5433/bsv_wallet_alice
           DATABASE_URL_BOB: postgres://postgres:postgres@localhost:5433/bsv_wallet_bob

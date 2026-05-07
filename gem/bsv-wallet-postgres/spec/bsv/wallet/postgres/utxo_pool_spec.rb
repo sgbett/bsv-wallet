@@ -84,4 +84,69 @@ RSpec.describe BSV::Wallet::Postgres::UTXOPool do
       expect(pool.balance).to eq(500)
     end
   end
+
+  describe '#spendable_count' do
+    it 'returns count of spendable outputs' do
+      create_funded_output(satoshis: 500, vout: 0)
+      create_funded_output(satoshis: 300, vout: 1)
+
+      expect(pool.spendable_count).to eq(2)
+    end
+
+    it 'returns 0 when no spendable outputs' do
+      expect(pool.spendable_count).to eq(0)
+    end
+  end
+
+  describe '#change_output_count' do
+    it 'returns max_change_per_tx for a rich wallet with empty pool' do
+      # 1M sats, 0 UTXOs → target = min(500, 1000) = 500, deficit = 500
+      create_funded_output(satoshis: 1_000_000, vout: 0)
+
+      expect(pool.change_output_count).to eq(8)
+    end
+
+    it 'returns fewer when pool is approaching target' do
+      # 100K sats across 97 UTXOs → target = min(500, 100) = 100, deficit = 3
+      96.times { |i| create_funded_output(satoshis: 1_000, vout: i % 100) }
+      create_funded_output(satoshis: 4_000, vout: 96)
+      # 97 UTXOs, 100K sats → target 100, deficit 3
+
+      expect(pool.change_output_count).to eq(3)
+    end
+
+    it 'returns 1 when pool is at target' do
+      # 5K sats, 5 UTXOs → target = min(500, 5) = 5, deficit = 0 → clamp to 1
+      5.times { |i| create_funded_output(satoshis: 1_000, vout: i) }
+
+      expect(pool.change_output_count).to eq(1)
+    end
+
+    it 'returns 1 when pool exceeds target' do
+      # 5K sats, 10 UTXOs → target = 5, deficit = -5 → clamp to 1
+      10.times { |i| create_funded_output(satoshis: 500, vout: i) }
+
+      expect(pool.change_output_count).to eq(1)
+    end
+
+    it 'respects min_utxo_sats floor for thin wallets' do
+      # 3K sats → target = min(500, 3) = 3, not 500
+      create_funded_output(satoshis: 3_000, vout: 0)
+
+      expect(pool.change_output_count).to eq(2) # deficit = 3 - 1 = 2
+    end
+
+    it 'accepts config overrides' do
+      create_funded_output(satoshis: 100_000, vout: 0)
+
+      custom = described_class.new(
+        store: store,
+        max_utxo_count: 10,
+        min_utxo_sats: 5_000,
+        max_change_per_tx: 3
+      )
+      # target = min(10, 100000/5000) = 10, deficit = 10 - 1 = 9, clamped to 3
+      expect(custom.change_output_count).to eq(3)
+    end
+  end
 end

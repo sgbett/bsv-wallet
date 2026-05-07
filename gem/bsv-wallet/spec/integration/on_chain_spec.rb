@@ -17,14 +17,14 @@ require 'bsv-wallet-postgres'
 RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do # rubocop:disable RSpec/DescribeClass
   # --- Funding UTXO (mined, never moves) ---
 
-  let(:funding_vout)     { 0 }
-  let(:funding_satoshis) { 2000 }
+  let(:funding_vout)     { 1 }
+  let(:funding_satoshis) { 1_000_000 }
 
   # --- Environment ---
 
-  let(:funding_dtxid) { ENV.fetch('FUNDING_TXID') }
-  let(:wif_alice)     { ENV.fetch('WIF_ALICE') }
-  let(:wif_bob)       { ENV.fetch('WIF_BOB') }
+  let(:funding_dtxid) { ENV.fetch('BSV_WALLET_UTXO_ALICE') }
+  let(:wif_alice)     { ENV.fetch('BSV_WALLET_WIF_ALICE') }
+  let(:wif_bob)       { ENV.fetch('BSV_WALLET_WIF_BOB') }
   let(:db_url_alice)  { ENV.fetch('DATABASE_URL_ALICE', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_alice') }
   let(:db_url_bob)    { ENV.fetch('DATABASE_URL_BOB', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_bob') }
 
@@ -128,26 +128,26 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do # rubocop:disable RS
     expect(wtxid.bytesize).to eq(32)
     expect(result[:tx]).to be_a(String)
 
-    # Verify change outpoints were returned
+    # Verify change outpoints were returned (multiple due to pool sizing)
     expect(result[:no_send_change]).to be_an(Array)
-    expect(result[:no_send_change].length).to eq(1)
+    expect(result[:no_send_change].length).to be >= 1
 
-    # Verify BEEF is parseable — 1 input, 2 outputs (payment + change)
+    # Verify BEEF is parseable — 1 input, payment + change outputs
     parsed = BSV::Transaction::Transaction.from_beef(result[:tx])
     expect(parsed.inputs.length).to eq(1)
-    expect(parsed.outputs.length).to eq(2)
+    expect(parsed.outputs.length).to be >= 2
 
     # Verify fee is reasonable (100 sat/kB)
     total_output = parsed.outputs.sum(&:satoshis)
     fee = input_satoshis - total_output
     expect(fee).to be > 0
-    expect(fee).to be < 100
+    expect(fee).to be < 500 # more outputs = slightly larger tx
 
     # Verify Alice's change is spendable
     alice_outputs = alice_engine.list_outputs(basket: 'default')
-    expect(alice_outputs[:total_outputs]).to eq(1)
-    change_amount = alice_outputs[:outputs].first[:satoshis]
-    expect(change_amount).to eq(input_satoshis - payment_amount - fee)
+    expect(alice_outputs[:total_outputs]).to be >= 1
+    total_change = alice_outputs[:outputs].sum { |o| o[:satoshis] }
+    expect(total_change).to eq(input_satoshis - payment_amount - fee)
 
     # NOTE: Bob's internalization requires a separate process (Sequel
     # models use a global db connection — two wallets can't coexist in

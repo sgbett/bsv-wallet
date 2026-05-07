@@ -63,6 +63,13 @@ module BSV
 
         network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
 
+        limp_threshold_raw = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD)
+        begin
+          limp_threshold = Integer(limp_threshold_raw)
+        rescue ArgumentError
+          abort "LIMP_THRESHOLD must be a valid integer (got #{limp_threshold_raw.inspect})"
+        end
+
         engine = BSV::Wallet::Engine.new(
           store: store,
           utxo_pool: utxo_pool,
@@ -70,7 +77,8 @@ module BSV
           proof_store: proof_store,
           key_deriver: key_deriver,
           network_provider: network_provider,
-          network: network
+          network: network,
+          limp_threshold: limp_threshold
         )
 
         {
@@ -104,7 +112,7 @@ module BSV
       # Resolve an environment variable with optional wallet-name suffix.
       #
       # @example
-      #   env_fetch('WIF', 'alice')  # => ENV['WIF_ALICE'] || ENV['WIF'] || abort
+      #   env_fetch('WIF', 'alice')  # => ENV['BSV_WALLET_WIF_ALICE'] || ENV['WIF_ALICE'] || ENV['WIF'] || abort
       #   env_fetch('WIF', nil)      # => ENV['WIF'] || abort
       #
       # @param base_name [String] e.g. "WIF", "DATABASE_URL"
@@ -112,8 +120,9 @@ module BSV
       # @return [String]
       def env_fetch(base_name, wallet_name)
         if wallet_name
+          prefixed = "BSV_WALLET_#{base_name}_#{wallet_name.upcase}"
           suffixed = "#{base_name}_#{wallet_name.upcase}"
-          ENV.fetch(suffixed) { ENV.fetch(base_name) { abort "Set #{suffixed} or #{base_name}" } }
+          ENV.fetch(prefixed) { ENV.fetch(suffixed) { ENV.fetch(base_name) { abort "Set #{prefixed} or #{suffixed}" } } }
         else
           ENV.fetch(base_name) { abort "Set #{base_name}" }
         end
