@@ -57,6 +57,28 @@ module BSV
         def balance
           raise NotImplementedError
         end
+
+        # Number of spendable outputs currently in the pool.
+        #
+        # @return [Integer]
+        def spendable_count
+          raise NotImplementedError
+        end
+
+        # How many change outputs the next transaction should create.
+        #
+        # Uses a sizing formula to grow the pool toward a target count:
+        #   target = min(max_utxo_count, balance / min_utxo_sats)
+        #   deficit = target - spendable_count
+        #   result = clamp(deficit, 1, max_change_per_tx)
+        #
+        # Always returns at least 1 (remainder has to go somewhere).
+        # Capped per transaction to avoid bloating any single tx.
+        #
+        # @return [Integer] number of change outputs to create (>= 1)
+        def change_output_count
+          raise NotImplementedError
+        end
       end
     end
   end

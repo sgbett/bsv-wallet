@@ -10,8 +10,17 @@ module BSV
       class UTXOPool
         include BSV::Wallet::Interface::UTXOPool
 
-        def initialize(store:)
+        MAX_UTXO_COUNT    = 500
+        MIN_UTXO_SATS     = 1000
+        MAX_CHANGE_PER_TX = 8
+
+        def initialize(store:, max_utxo_count: MAX_UTXO_COUNT,
+                       min_utxo_sats: MIN_UTXO_SATS,
+                       max_change_per_tx: MAX_CHANGE_PER_TX)
           @store = store
+          @max_utxo_count    = max_utxo_count
+          @min_utxo_sats     = min_utxo_sats
+          @max_change_per_tx = max_change_per_tx
         end
 
         def select(satoshis:, exclude: [])
@@ -27,7 +36,17 @@ module BSV
         end
 
         def balance
-          Output.spendable.sum(:satoshis) || 0
+          (Output.spendable.sum(:satoshis) || 0).to_i
+        end
+
+        def spendable_count
+          Output.spendable.count
+        end
+
+        def change_output_count
+          target = [@max_utxo_count, balance / @min_utxo_sats].min
+          deficit = target - spendable_count
+          deficit.clamp(1, @max_change_per_tx)
         end
       end
     end

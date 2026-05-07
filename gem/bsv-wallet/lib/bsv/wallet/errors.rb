@@ -29,5 +29,16 @@ module BSV
         super(message, 7)
       end
     end
+
+    class LimpModeError < Error
+      attr_reader :balance, :threshold
+
+      def initialize(balance:, threshold:)
+        @balance = balance
+        @threshold = threshold
+        super("wallet is in limp mode: balance #{balance} sats is below " \
+              "operating threshold #{threshold} sats — receive funds to restore normal operations")
+      end
+    end
   end
 end

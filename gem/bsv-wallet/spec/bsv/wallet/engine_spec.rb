@@ -70,6 +70,12 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
   end
 
+  # Fund a reserve UTXO so outbound operations pass the limp mode guard.
+  # Limp mode specs manage their own funding and skip this.
+  before do |example|
+    fund_reserve unless example.metadata[:skip_reserve]
+  end
+
   # Parse Atomic BEEF and extract the subject transaction.
   # create_action and sign_action return Atomic BEEF in :tx.
   def parse_beef_tx(beef_data)
@@ -123,6 +129,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       }
     end
     store.promote_action(action_id: source_action[:id], outputs: outputs)
+  end
+
+  # Fund a reserve UTXO to keep the wallet above limp mode threshold.
+  # This is not spent by tests — it exists purely so outbound operations
+  # are permitted. Tests that specifically test limp mode fund their own wallets.
+  def fund_reserve
+    fund_wallet(satoshis: 100_000, prefix: 'limp reserve', suffix: 'reserve', basket: 'reserve')
   end
 
   describe 'construction' do
@@ -2847,14 +2860,187 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
   # --- Auto-fund createAction (#61) ---
 
-  describe 'auto-fund createAction' do
+  describe 'limp mode', :skip_reserve do
+    def fund_wallet_limp(satoshis:, count: 1)
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, 'limp test'], key_id: 'fund', counterparty: 'self'
+      )
+      script = BSV::Script::Script.p2pkh_lock(
+        BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
+      )
+      source = store.create_action(action: { description: 'limp funding', broadcast: :none, outgoing: false })
+      store.sign_action(action_id: source[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: DUMMY_RAW_TX)
+      outputs = count.times.map do |i|
+        { satoshis: satoshis, vout: i, locking_script: script.to_binary,
+          basket: 'default', derivation_prefix: 'limp test',
+          derivation_suffix: count > 1 ? "fund#{i}" : 'fund',
+          sender_identity_key: 'self' }
+      end
+      store.promote_action(action_id: source[:id], outputs: outputs)
+    end
+
+    describe '#limp_mode?' do
+      it 'returns true when balance is below threshold' do
+        fund_wallet_limp(satoshis: 49_000)
+        expect(engine_with_keys.limp_mode?).to be true
+      end
+
+      it 'returns false when balance is at threshold' do
+        fund_wallet_limp(satoshis: 50_000)
+        expect(engine_with_keys.limp_mode?).to be false
+      end
+
+      it 'returns false when balance is above threshold' do
+        fund_wallet_limp(satoshis: 100_000)
+        expect(engine_with_keys.limp_mode?).to be false
+      end
+
+      it 'returns true with no funding' do
+        expect(engine_with_keys.limp_mode?).to be true
+      end
+    end
+
+    describe '#headroom' do
+      it 'returns available spend capacity' do
+        fund_wallet_limp(satoshis: 200_000)
+        expect(engine_with_keys.headroom).to eq(150_000)
+      end
+
+      it 'returns 0 when at threshold' do
+        fund_wallet_limp(satoshis: 50_000)
+        expect(engine_with_keys.headroom).to eq(0)
+      end
+
+      it 'returns 0 when below threshold' do
+        fund_wallet_limp(satoshis: 10_000)
+        expect(engine_with_keys.headroom).to eq(0)
+      end
+    end
+
+    describe 'config' do
+      it 'rejects limp_threshold below hard floor' do
+        expect do
+          described_class.new(
+            store: store, utxo_pool: utxo_pool,
+            broadcast_queue: broadcast_queue, proof_store: proof_store,
+            limp_threshold: 5_000
+          )
+        end.to raise_error(ArgumentError, /limp_threshold/)
+      end
+
+      it 'accepts custom limp_threshold above hard floor' do
+        custom = described_class.new(
+          store: store, utxo_pool: utxo_pool,
+          broadcast_queue: broadcast_queue, proof_store: proof_store,
+          limp_threshold: 20_000
+        )
+        expect(custom.limp_threshold).to eq(20_000)
+      end
+    end
+
+    describe 'entry guard' do
+      it 'blocks auto-fund createAction when in limp mode' do
+        fund_wallet_limp(satoshis: 30_000)
+
+        expect do
+          engine_with_keys.create_action(
+            description: 'limp blocked',
+            outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }],
+            no_send: true
+          )
+        end.to raise_error(BSV::Wallet::LimpModeError) do |err|
+          expect(err.balance).to eq(30_000)
+          expect(err.threshold).to eq(50_000)
+        end
+      end
+
+      it 'blocks caller-provided-inputs createAction when in limp mode' do
+        fund_wallet_limp(satoshis: 30_000)
+        listed = engine_with_keys.list_outputs(basket: 'default')
+        output_id = listed[:outputs].first[:id]
+
+        expect do
+          engine_with_keys.create_action(
+            description: 'limp manual',
+            inputs: [{ output_id: output_id }],
+            outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25),
+                        derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                        sender_identity_key: key_deriver.identity_key }],
+            no_send: true
+          )
+        end.to raise_error(BSV::Wallet::LimpModeError)
+      end
+
+      it 'does not block internalize_action when in limp mode' do
+        # No funding — wallet is in limp mode
+        expect(engine_with_keys.limp_mode?).to be true
+
+        # internalize_action should not check limp mode. We can't easily
+        # construct valid BEEF in a unit test, but we can verify that
+        # the method fails on BEEF validation, NOT on LimpModeError.
+        expect do
+          engine_with_keys.internalize_action(
+            tx: 'invalid', description: 'limp receive',
+            outputs: [{ vout: 0, basket: 'default' }]
+          )
+        end.to raise_error(BSV::Wallet::InvalidBeefError)
+      end
+    end
+
+    describe 'headroom guard' do
+      it 'blocks auto-fund that would enter limp mode' do
+        fund_wallet_limp(satoshis: 100_000)
+        expect(engine_with_keys.limp_mode?).to be false
+
+        expect do
+          engine_with_keys.create_action(
+            description: 'limp headroom',
+            outputs: [{ satoshis: 60_000, locking_script: SecureRandom.random_bytes(25) }],
+            no_send: true
+          )
+        end.to raise_error(BSV::Wallet::LimpModeError)
+      end
+
+      it 'allows auto-fund within headroom' do
+        fund_wallet_limp(satoshis: 200_000)
+        expect(engine_with_keys.limp_mode?).to be false
+
+        result = engine_with_keys.create_action(
+          description: 'limp within headroom',
+          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
+          no_send: true
+        )
+        expect(result[:txid]).to be_a(String)
+      end
+
+      it 'blocks caller-provided-inputs that would enter limp mode' do
+        # Fund with single UTXO — locking it drops balance to 0
+        fund_wallet_limp(satoshis: 100_000)
+        listed = engine_with_keys.list_outputs(basket: 'default')
+        output_id = listed[:outputs].first[:id]
+
+        expect do
+          engine_with_keys.create_action(
+            description: 'limp postlock',
+            inputs: [{ output_id: output_id }],
+            outputs: [{ satoshis: 90_000, locking_script: SecureRandom.random_bytes(25),
+                        derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                        sender_identity_key: key_deriver.identity_key }],
+            no_send: true
+          )
+        end.to raise_error(BSV::Wallet::LimpModeError)
+      end
+    end
+  end
+
+  describe 'auto-fund createAction', :skip_reserve do
     # Reuse fund_wallet_with_keys from deferred signing context
     def p2pkh_locking_script_for(private_key)
       pubkey_hash = BSV::Primitives::Digest.hash160(private_key.public_key.compressed)
       BSV::Script::Script.p2pkh_lock(pubkey_hash)
     end
 
-    def fund_wallet_for_auto(satoshis: 10_000, count: 1,
+    def fund_wallet_for_auto(satoshis: 1_000_000, count: 1,
                              prefix: 'wallet payment', suffix: 'autofund')
       derived_key = key_deriver.derive_private_key(
         protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
@@ -2882,12 +3068,12 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
     context 'happy path' do
       it 'auto-selects UTXOs, computes fee, generates change, and signs' do
-        fund_wallet_for_auto(satoshis: 10_000)
+        fund_wallet_for_auto
 
         payment_script = SecureRandom.random_bytes(25)
         result = engine_with_keys.create_action(
           description: 'auto-fund test',
-          outputs: [{ satoshis: 1000, locking_script: payment_script }],
+          outputs: [{ satoshis: 5_000, locking_script: payment_script }],
           no_send: true
         )
 
@@ -2895,88 +3081,100 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         expect(result[:txid].bytesize).to eq(32)
         expect(result[:tx]).to be_a(String)
 
-        # Parse the transaction — should have 1 input, 2 outputs (payment + change)
+        # Parse the transaction — 1 input, payment + multiple change outputs
         parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(1)
-        expect(parsed.outputs.length).to eq(2)
+        expect(parsed.outputs.length).to be >= 2 # payment + at least 1 change
 
-        # One output is the payment (1000 sats)
+        # One output is the payment
         output_sats = parsed.outputs.map(&:satoshis).sort
-        expect(output_sats).to include(1000)
+        expect(output_sats).to include(5_000)
 
-        # Total outputs + implicit fee = total inputs (10000)
+        # Total outputs + implicit fee = total inputs (1M)
         total_output = parsed.outputs.sum(&:satoshis)
-        fee = 10_000 - total_output
+        fee = 1_000_000 - total_output
         expect(fee).to be > 0
-        expect(fee).to be < 100 # reasonable fee at 100 sat/kB
+        expect(fee).to be < 500 # reasonable fee at 100 sat/kB
+      end
+
+      it 'creates multiple change outputs to grow the pool' do
+        fund_wallet_for_auto
+
+        result = engine_with_keys.create_action(
+          description: 'auto-fund multi-change',
+          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
+          no_send: true
+        )
+
+        # With 1M sats: target = min(500, 1000) = 500, deficit = 500-1 = 499,
+        # clamped to 8 → 8 change outputs
+        expect(result[:no_send_change].length).to eq(8)
+        expect(result[:no_send_change]).to all(match(/\A[0-9a-f]{64}\.\d+\z/))
       end
 
       it 'returns change outpoints in no_send_change' do
-        fund_wallet_for_auto(satoshis: 10_000)
+        fund_wallet_for_auto
 
         result = engine_with_keys.create_action(
           description: 'auto-fund nosend',
-          outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }],
+          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
           no_send: true
         )
 
         expect(result[:no_send_change]).to be_an(Array)
-        expect(result[:no_send_change].length).to eq(1)
-        expect(result[:no_send_change].first).to match(/\A[0-9a-f]{64}\.\d+\z/)
+        expect(result[:no_send_change].length).to be >= 1
+        expect(result[:no_send_change]).to all(match(/\A[0-9a-f]{64}\.\d+\z/))
       end
 
-      it 'change output is immediately spendable' do
-        fund_wallet_for_auto(satoshis: 10_000)
+      it 'change outputs are immediately spendable' do
+        fund_wallet_for_auto
 
         engine_with_keys.create_action(
           description: 'auto-fund spend',
-          outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }],
+          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
           no_send: true
         )
 
-        # The change output should now be in the UTXO pool
+        # All change outputs should now be in the UTXO pool
         balance = utxo_pool.balance
-        change_sats = 10_000 - 1000
+        change_sats = 1_000_000 - 5_000
         # Balance should be roughly the change amount (minus fee)
         expect(balance).to be > 0
-        expect(balance).to be_within(100).of(change_sats)
+        expect(balance).to be_within(500).of(change_sats)
+
+        # Pool should have grown: more spendable UTXOs than we started with (1)
+        expect(utxo_pool.spendable_count).to be > 1
       end
     end
 
     context 'dust change removal' do
-      it 'produces no change output when outputs consume nearly all input' do
-        # Fee at 100 sat/kB for 226-byte tx (1 in, 2 out) = ceil(22.6) = 23 sats.
-        # Fund 5000, spend 4977. Selection: 4977+23=5000 ≤ 5000 ✓
-        # Available change: 5000-4977-23 = 0 → SDK removes change output.
-        fund_wallet_for_auto(satoshis: 5000)
+      it 'headroom guard prevents spending down to dust' do
+        # Limp mode prevents the degenerate case where spending nearly
+        # everything leaves dust change. The headroom guard blocks any
+        # transaction that would leave balance below the limp threshold.
+        fund_wallet_for_auto
 
-        result = engine_with_keys.create_action(
-          description: 'auto-fund dust',
-          outputs: [{ satoshis: 4977, locking_script: SecureRandom.random_bytes(25) }],
-          no_send: true
-        )
-
-        parsed = parse_beef_tx(result[:tx])
-        # SDK removes change output when available <= 0
-        expect(parsed.outputs.length).to eq(1)
-        expect(parsed.outputs[0].satoshis).to eq(4977)
-
-        # No change outpoints
-        expect(result[:no_send_change]).to be_empty
+        expect do
+          engine_with_keys.create_action(
+            description: 'auto-fund dust',
+            outputs: [{ satoshis: 960_000, locking_script: SecureRandom.random_bytes(25) }],
+            no_send: true
+          )
+        end.to raise_error(BSV::Wallet::LimpModeError)
       end
     end
 
     context 'insufficient funds' do
-      it 'raises PoolDepletedError when pool cannot cover outputs' do
-        fund_wallet_for_auto(satoshis: 100)
+      it 'raises LimpModeError when spend would exceed headroom' do
+        fund_wallet_for_auto
 
         expect do
           engine_with_keys.create_action(
             description: 'auto-fund broke',
-            outputs: [{ satoshis: 50_000, locking_script: SecureRandom.random_bytes(25) }],
+            outputs: [{ satoshis: 960_000, locking_script: SecureRandom.random_bytes(25) }],
             no_send: true
           )
-        end.to raise_error(BSV::Wallet::PoolDepletedError)
+        end.to raise_error(BSV::Wallet::LimpModeError)
       end
     end
 
@@ -3005,7 +3203,8 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
     context 'backward compatibility' do
       it 'caller-provided inputs still work unchanged' do
-        fund_wallet_for_auto(satoshis: 5000)
+        # Fund with 2 UTXOs so locking 1 leaves balance above limp threshold
+        fund_wallet_for_auto(satoshis: 100_000, count: 2)
 
         listed = engine_with_keys.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
@@ -3030,7 +3229,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       end
 
       it 'explicit empty inputs (OP_RETURN) still work' do
-        result = engine.create_action(
+        # Fund wallet above limp threshold for outbound permission
+        fund_wallet_for_auto
+
+        result = engine_with_keys.create_action(
           description: 'opret test12345',
           inputs: [],
           outputs: [{ satoshis: 0, locking_script: "\x00\x6a\x04test".b }]

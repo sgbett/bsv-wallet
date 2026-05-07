@@ -25,9 +25,18 @@ module BSV
       ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK MINED ACCEPTED_BY_NETWORK IMMUTABLE].freeze
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
+      LIMP_THRESHOLD     = 50_000  # default: 50K sats
+      LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
+
+      attr_reader :limp_threshold
+
       def initialize(store:, utxo_pool:, broadcast_queue:, proof_store:,
                      key_deriver: nil, chain_tracker: nil, network_provider: nil,
-                     network: :mainnet)
+                     network: :mainnet, limp_threshold: LIMP_THRESHOLD)
+        if limp_threshold < LIMP_THRESHOLD_MIN
+          raise ArgumentError, "limp_threshold must be >= #{LIMP_THRESHOLD_MIN}"
+        end
+
         @store = store
         @utxo_pool = utxo_pool
         @broadcast_queue = broadcast_queue
@@ -36,6 +45,18 @@ module BSV
         @chain_tracker = chain_tracker
         @network_provider = network_provider
         @network_name = network
+        @limp_threshold = limp_threshold
+      end
+
+      # Is the wallet in limp mode? When true, all outbound operations
+      # are blocked. The wallet can still receive to restore normal operations.
+      def limp_mode?
+        @utxo_pool.balance < @limp_threshold
+      end
+
+      # How many sats can be spent before hitting the limp threshold.
+      def headroom
+        [@utxo_pool.balance - @limp_threshold, 0].max
       end
 
       # --- Transaction Operations (codes 1-7) ---
@@ -59,6 +80,7 @@ module BSV
             )
           end
           require_key_deriver!
+          enforce_limp_mode!
           return auto_fund_action(
             description: description, outputs: outputs,
             lock_time: lock_time, version: version,
@@ -70,6 +92,7 @@ module BSV
         end
 
         broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
+        enforce_limp_mode!
 
         # Phase 1: Lock
         input_specs = build_input_specs(inputs)
@@ -82,6 +105,11 @@ module BSV
           inputs: input_specs
         )
         raise BSV::Wallet::InsufficientFundsError if action_result.nil?
+
+        # Post-lock headroom guard: inputs are now excluded from spendable.
+        # If remaining balance is below limp threshold, this tx would put
+        # the wallet in limp mode. CASCADE cleans up the locked inputs.
+        enforce_limp_mode!
 
         attach_labels(action_result[:id], labels)
 
@@ -1096,6 +1124,22 @@ module BSV
         raise BSV::Wallet::Error.new('wallet has no key deriver configured', 2) unless @key_deriver
       end
 
+      def enforce_limp_mode!
+        return unless limp_mode?
+
+        raise BSV::Wallet::LimpModeError.new(
+          balance: @utxo_pool.balance, threshold: @limp_threshold
+        )
+      end
+
+      def enforce_headroom!(spending)
+        return unless @utxo_pool.balance - spending < @limp_threshold
+
+        raise BSV::Wallet::LimpModeError.new(
+          balance: @utxo_pool.balance, threshold: @limp_threshold
+        )
+      end
+
       def secure_compare(a, b)
         return false unless a.bytesize == b.bytesize
 
@@ -1327,8 +1371,13 @@ module BSV
         # own satoshis (always >> 15), so the estimate is safe. The SDK
         # computes the real fee from actual tx size regardless.
         output_total = outputs.sum { |o| o[:satoshis] || 0 }
-        estimated_size = 10 + 148 + ((outputs.length + 1) * 34)
+        estimated_change_count = @utxo_pool.change_output_count
+        estimated_size = 10 + 148 + ((outputs.length + estimated_change_count) * 34)
         fee_margin = (estimated_size / 1000.0 * 100).ceil
+
+        # Headroom guard: ensure post-tx balance stays above limp threshold
+        enforce_headroom!(output_total + fee_margin)
+
         candidates = @utxo_pool.select(satoshis: output_total + fee_margin)
 
         # Phase 1: Lock inputs (reversible via CASCADE)
@@ -1349,7 +1398,8 @@ module BSV
         # reaper cleans them up via CASCADE delete.
         wtxid, raw_tx, vout_mapping, change_outputs = build_funded_transaction(
           action_id: action_result[:id], caller_outputs: outputs,
-          lock_time: lock_time, version: version, randomize: randomize_outputs
+          lock_time: lock_time, version: version, randomize: randomize_outputs,
+          change_count: estimated_change_count
         )
 
         # Phase 2b: Atomic sign + change output creation
@@ -1410,40 +1460,48 @@ module BSV
       # @return [Array(String, String, Hash, Array<Hash>)]
       #   wtxid, raw_tx, vout_mapping (caller only), change_output_specs
       def build_funded_transaction(action_id:, caller_outputs:,
-                                   lock_time:, version:, randomize:)
+                                   lock_time:, version:, randomize:,
+                                   change_count:)
         # A. Resolve inputs + derive signing keys
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
         tx_inputs, signing_keys = build_inputs(resolved_inputs, nil)
 
-        # B. Derive change output key (BRC-42 self-payment)
-        change_prefix = SecureRandom.uuid
-        change_suffix = '1'
-        change_pub = @key_deriver.derive_public_key(
-          protocol_id: [2, change_prefix], key_id: change_suffix, counterparty: 'self'
-        )
-        change_script = BSV::Script::Script.p2pkh_lock(
-          BSV::Primitives::Digest.hash160(change_pub)
-        )
+        # B. Derive change output keys (BRC-42 self-payments)
+        # change_count is pre-computed by caller before inputs are locked,
+        # since locking removes UTXOs from the spendable set.
+        change_keys = change_count.times.map do |i|
+          prefix = SecureRandom.uuid
+          suffix = (i + 1).to_s
+          pub = @key_deriver.derive_public_key(
+            protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
+          )
+          script = BSV::Script::Script.p2pkh_lock(
+            BSV::Primitives::Digest.hash160(pub)
+          )
+          { prefix: prefix, suffix: suffix, script: script }
+        end
 
-        # C. Build all outputs (caller + change), shuffle together
+        # C. Build all outputs (caller + change)
         caller_tx_outputs = caller_outputs.map do |out|
           BSV::Transaction::TransactionOutput.new(
             satoshis: out[:satoshis] || 0,
             locking_script: resolve_locking_script(out[:locking_script])
           )
         end
-        change_tx_output = BSV::Transaction::TransactionOutput.new(
-          satoshis: 0, locking_script: change_script, change: true
-        )
+        change_tx_outputs = change_keys.map do |ck|
+          BSV::Transaction::TransactionOutput.new(
+            satoshis: 0, locking_script: ck[:script], change: true
+          )
+        end
 
-        # C2. Assemble transaction — change output last so Benford's
-        # remainder assignment targets it (SDK uses @outputs.last).
+        # C2. Assemble transaction — change outputs last so SDK's
+        # distribute_change targets them all.
         tx = BSV::Transaction::Transaction.new(
           version: version || 1, lock_time: lock_time || 0
         )
         tx_inputs.each { |inp| tx.add_input(inp) }
         caller_tx_outputs.each { |out| tx.add_output(out) }
-        tx.add_output(change_tx_output)
+        change_tx_outputs.each { |co| tx.add_output(co) }
 
         # D. Attach P2PKH templates for fee estimation
         signing_keys.each do |idx, key|
@@ -1454,12 +1512,14 @@ module BSV
         fee_model = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
         tx.fee(fee_model, change_distribution: :random)
 
-        # F. Detect change survival
-        change_survived = tx.outputs.include?(change_tx_output)
+        # F. Detect which change outputs survived (SDK removes all if
+        # insufficient change to cover them).
+        surviving_change = change_tx_outputs.select { |co| tx.outputs.include?(co) }
 
         # G. Shuffle outputs AFTER fee — fee computation doesn't depend on
-        # order, but Benford's remainder targets @outputs.last so change
-        # must be last during tx.fee. Shuffle now for privacy before signing.
+        # order, but SDK distributes change across all change-flagged outputs
+        # so they must be present during tx.fee. Shuffle now for privacy
+        # before signing.
         tx.outputs.shuffle! if randomize && tx.outputs.length > 1
 
         # H. Compute final vout positions (post-shuffle)
@@ -1471,15 +1531,15 @@ module BSV
         # I. Sign (AFTER fee and shuffle — sighash commits to final output values+positions)
         signing_keys.each { |idx, key| tx.sign(idx, key) }
 
-        # J. Build change_outputs spec for atomic store write
-        change_output_specs = []
-        if change_survived
-          change_output_specs << {
-            satoshis: change_tx_output.satoshis,
-            vout: tx.outputs.index(change_tx_output),
-            locking_script: change_script.to_binary,
-            derivation_prefix: change_prefix,
-            derivation_suffix: change_suffix,
+        # J. Build change_outputs specs for atomic store write
+        change_output_specs = surviving_change.map do |co|
+          ck = change_keys[change_tx_outputs.index(co)]
+          {
+            satoshis: co.satoshis,
+            vout: tx.outputs.index(co),
+            locking_script: ck[:script].to_binary,
+            derivation_prefix: ck[:prefix],
+            derivation_suffix: ck[:suffix],
             sender_identity_key: @key_deriver.identity_key
           }
         end
