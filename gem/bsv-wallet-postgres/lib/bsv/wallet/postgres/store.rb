@@ -88,7 +88,7 @@ module BSV
 
         def promote_action(action_id:, outputs:)
           @db.transaction do
-            outputs.each do |out|
+            outputs.map do |out|
               output = Output.create(
                 action_id:           action_id,
                 satoshis:            out[:satoshis],
@@ -127,6 +127,8 @@ module BSV
                 tag_ids = find_or_create_tags(names: out[:tags])
                 tag_ids.each { |tid| OutputTag.create(output_id: output.id, tag_id: tid) }
               end
+
+              output.id
             end
           end
         end

@@ -33,7 +33,10 @@ module BSV
         require 'bsv-wallet'
         require 'bsv-wallet-postgres'
 
-        BSV.logger ||= Logger.new($stderr, level: Logger::DEBUG)
+        unless BSV.logger
+          BSV.logger = Logger.new($stderr)
+          BSV.logger.level = Logger::DEBUG
+        end
 
         wif = env_fetch('WIF', wallet_name)
         db_url = env_fetch('DATABASE_URL', wallet_name)

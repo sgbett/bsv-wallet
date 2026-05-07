@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require 'securerandom'
+require 'set'
+
 module BSV
   module Wallet
     # Layer 3 — BRC-100 business process orchestration.
@@ -293,8 +296,9 @@ module BSV
       # or bootstrap from a non-BRC-100 source). Fetches the transaction and
       # merkle proof from the network provider, verifies the output is P2PKH to
       # the wallet's root key, imports it, then immediately spends it to a
-      # BRC-42 derived self-address. The root UTXO never persists as a spendable
-      # entry — only the derived output is spendable.
+      # BRC-42 derived self-address. The root UTXO is promoted as spendable
+      # briefly, then consumed by the self-payment — only the derived output
+      # remains spendable after completion.
       #
       # @param dtxid [String] 64-char hex transaction ID (display order)
       # @param vout [Integer] output index (default: 0)
@@ -312,14 +316,15 @@ module BSV
         tx = BSV::Transaction::Transaction.from_binary(raw_tx)
 
         # Verify output exists and is P2PKH to our root key
-        raise BSV::Wallet::InvalidParameterError.new('vout', "out of range (#{tx.outputs.length} outputs)") if vout >= tx.outputs.length
+        unless vout.is_a?(Integer) && vout >= 0 && vout < tx.outputs.length
+          raise BSV::Wallet::InvalidParameterError.new('vout', "out of range (#{tx.outputs.length} outputs)")
+        end
 
         output = tx.outputs[vout]
         locking_script = output.locking_script
         root_hash = @key_deriver.root_private_key.public_key.hash160
-        chunks = locking_script.chunks
 
-        unless chunks.length == 5 && chunks[2].data == root_hash
+        unless locking_script.p2pkh? && locking_script.chunks[2].data == root_hash
           raise BSV::Wallet::InvalidParameterError.new('vout', 'output is not P2PKH to the wallet root key')
         end
 
@@ -350,10 +355,11 @@ module BSV
           action: { description: 'imported UTXO', broadcast: :none, outgoing: false }
         )
         @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
-        @store.promote_action(
+        output_ids = @store.promote_action(
           action_id: import_action[:id],
           outputs: [{ satoshis: satoshis, vout: vout, locking_script: locking_script.to_binary, output_type: 'root' }]
         )
+        imported_output_id = output_ids.first
 
         # Store proof and link
         proof = { raw_tx: raw_tx, merkle_path: merkle_path, height: block_height }.compact
@@ -363,9 +369,6 @@ module BSV
         end
 
         # Phase 2: Self-payment to derived address
-        imported_outputs = @store.query_outputs(basket: 'default', limit: 10)
-        imported_output = imported_outputs[:outputs].find { |o| o[:satoshis] == satoshis }
-        raise BSV::Wallet::Error, 'imported output not found for self-payment' unless imported_output
 
         derivation_prefix = SecureRandom.uuid
         derivation_suffix = '1'
@@ -382,7 +385,7 @@ module BSV
 
         create_action(
           description: 'import self-payment',
-          inputs: [{ output_id: imported_output[:id] }],
+          inputs: [{ output_id: imported_output_id }],
           outputs: [{
             satoshis: self_payment_sats, locking_script: derived_script,
             derivation_prefix: derivation_prefix, derivation_suffix: derivation_suffix,
@@ -630,8 +633,8 @@ module BSV
 
       # Validate output_type declarations against locking scripts.
       #
-      # If output_type is set, the locking script must be P2PKH.
-      # If output_type is 'root', the script must be P2PKH to the identity key.
+      # If output_type is 'root', the locking script must be P2PKH to the
+      # wallet's identity key. Other output_type values are not validated here.
       def validate_output_ownership!(outputs)
         return unless outputs && @key_deriver
 

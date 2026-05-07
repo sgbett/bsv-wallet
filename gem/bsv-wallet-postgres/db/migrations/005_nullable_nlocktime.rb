@@ -6,7 +6,7 @@ Sequel.migration do
       drop_constraint :nlocktime_range
       set_column_allow_null :nlocktime
       set_column_default :nlocktime, nil
-      add_constraint(:nlocktime_range, 'NOT outgoing OR nlocktime >= 0')
+      add_constraint(:nlocktime_range, 'NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)')
     end
   end
 
