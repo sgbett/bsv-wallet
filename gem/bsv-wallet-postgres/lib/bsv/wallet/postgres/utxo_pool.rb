@@ -17,6 +17,7 @@ module BSV
         def initialize(store:, max_utxo_count: MAX_UTXO_COUNT,
                        min_utxo_sats: MIN_UTXO_SATS,
                        max_change_per_tx: MAX_CHANGE_PER_TX)
+          raise ArgumentError, 'max_utxo_count must be >= 1' unless max_utxo_count >= 1
           raise ArgumentError, 'min_utxo_sats must be positive' unless min_utxo_sats.positive?
           raise ArgumentError, 'max_change_per_tx must be >= 1' unless max_change_per_tx >= 1
 

@@ -63,7 +63,12 @@ module BSV
 
         network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
 
-        limp_threshold = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD).to_i
+        limp_threshold_raw = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD)
+        begin
+          limp_threshold = Integer(limp_threshold_raw)
+        rescue ArgumentError
+          abort "LIMP_THRESHOLD must be a valid integer (got #{limp_threshold_raw.inspect})"
+        end
 
         engine = BSV::Wallet::Engine.new(
           store: store,
