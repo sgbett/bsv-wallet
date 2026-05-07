@@ -37,4 +37,5 @@ Gemfile.lock
 
 # Claude
 .claude/settings.local.json
+.claude/prompt/
 coverage/
