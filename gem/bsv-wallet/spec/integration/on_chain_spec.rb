@@ -132,8 +132,6 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do # rubocop:disable RS
     expect(result[:no_send_change]).to be_an(Array)
     expect(result[:no_send_change].length).to eq(1)
 
-    wtxid.reverse.unpack1('H*')
-
     # Verify BEEF is parseable — 1 input, 2 outputs (payment + change)
     parsed = BSV::Transaction::Transaction.from_beef(result[:tx])
     expect(parsed.inputs.length).to eq(1)

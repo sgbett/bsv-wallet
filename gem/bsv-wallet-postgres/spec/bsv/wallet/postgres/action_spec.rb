@@ -6,7 +6,7 @@ RSpec.describe BSV::Wallet::Postgres::Action do
 
   describe 'creation' do
     it 'creates with minimal fields' do
-      action = described_class.create(outgoing: true, description: 'test action')
+      action = described_class.create(outgoing: false, description: 'test action')
       expect(action.id).to be_a(Integer)
       expect(action.reference).to be_a(String)
       expect(action.values[:broadcast]).to eq('delayed')

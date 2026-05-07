@@ -94,7 +94,7 @@ module BSV
       # @return [Array(String, Array<String>)] [wallet_name_or_nil, remaining_args]
       def extract_wallet_name(argv)
         first = argv.first
-        if first && !first.start_with?('-') && first.match?(/\A[a-zA-Z]\w*\z/)
+        if first && !first.start_with?('-') && first.match?(/\A[a-zA-Z]\w{0,31}\z/)
           [first, argv[1..]]
         else
           [nil, argv.dup]
