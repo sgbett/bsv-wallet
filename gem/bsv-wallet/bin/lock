@@ -19,9 +19,7 @@ require 'optparse'
 options = {}
 # Pre-scan ARGV for wallet name (before OptionParser consumes flags)
 first = ARGV.first
-wallet_name = if first && !first.start_with?('-') && first.match?(/\A[a-zA-Z]\w*\z/)
-                ARGV.shift
-              end
+wallet_name = (ARGV.shift if first && !first.start_with?('-') && first.match?(/\A[a-zA-Z]\w*\z/))
 
 OptionParser.new do |opts|
   opts.banner = 'Usage: bin/lock [wallet] --to <identity_key_hex> [--prefix <prefix>] [--suffix <suffix>]'
@@ -32,9 +30,7 @@ OptionParser.new do |opts|
   opts.on('-o FILE', 'Write to file') { |v| options[:output_file] = v }
 end.parse!
 
-unless options[:to]&.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
-  abort 'Missing or invalid --to (expected 66-char compressed public key hex)'
-end
+abort 'Missing or invalid --to (expected 66-char compressed public key hex)' unless options[:to]&.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
 
 # Read prefix/suffix from stdin if not provided via flags and stdin is not a TTY
 if options[:prefix].nil? && options[:suffix].nil? && !$stdin.tty?
@@ -71,9 +67,9 @@ script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
 # Output
 require_relative '../lib/bsv/wallet/cli' unless defined?(BSV::Wallet::CLI)
 BSV::Wallet::CLI::Output.write_binary(script,
-  output_file: options[:output_file],
-  binary: options[:binary])
+                                      output_file: options[:output_file],
+                                      binary: options[:binary])
 
-$stderr.puts "script: #{script.bytesize} bytes (P2PKH)"
-$stderr.puts "hash160: #{pubkey_hash.unpack1('H*')}"
-$stderr.puts "derived: #{derived ? 'yes' : 'no (root key)'}"
+warn "script: #{script.bytesize} bytes (P2PKH)"
+warn "hash160: #{pubkey_hash.unpack1('H*')}"
+warn "derived: #{derived ? 'yes' : 'no (root key)'}"

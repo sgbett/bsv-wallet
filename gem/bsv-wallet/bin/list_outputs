@@ -40,7 +40,7 @@ BSV::Wallet::CLI::Output.write_json(
   { total: listed[:total_outputs], outputs: outputs }
 )
 
-$stderr.puts "wallet:  #{wallet_name || '(default)'}"
-$stderr.puts "basket:  #{options[:basket]}"
-$stderr.puts "outputs: #{listed[:total_outputs]}"
-$stderr.puts "total:   #{outputs.sum { |o| o[:satoshis] }} sats"
+warn "wallet:  #{wallet_name || '(default)'}"
+warn "basket:  #{options[:basket]}"
+warn "outputs: #{listed[:total_outputs]}"
+warn "total:   #{outputs.sum { |o| o[:satoshis] }} sats"

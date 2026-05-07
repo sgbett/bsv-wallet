@@ -36,3 +36,23 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 ### Source
 
 `Transaction#wtxid` returns wire order (SDK v0.17.0+). `Transaction#txid` returns display order — a convenience method, never used in the data path. The `DisplayTxid` module provides `dtxid` on Sequel models.
+
+## Running Specs
+
+Each gem has its own Gemfile, spec_helper, and `.rspec` — specs must run from the gem's directory, not the repo root.
+
+```bash
+# Wallet specs (excludes on_chain by default)
+cd gem/bsv-wallet && bundle exec rspec
+
+# Postgres specs
+cd gem/bsv-wallet-postgres && bundle exec rspec
+
+# RuboCop (wallet gem only in CI)
+cd gem/bsv-wallet && bundle exec rubocop
+
+# Integration specs (requires WIF_ALICE, WIF_BOB, FUNDING_TXID, DATABASE_URL_ALICE/BOB)
+cd gem/bsv-wallet && bundle exec rspec --tag on_chain
+```
+
+Running `bundle exec rspec gem/bsv-wallet-postgres/spec/` from the repo root will fail — the postgres spec_helper won't load, so model constants are uninitialized.

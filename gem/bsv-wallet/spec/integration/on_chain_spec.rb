@@ -14,11 +14,11 @@ require 'sequel'
 require 'bsv-wallet'
 require 'bsv-wallet-postgres'
 
-RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
+RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do # rubocop:disable RSpec/DescribeClass
   # --- Funding UTXO (mined, never moves) ---
 
-  FUNDING_VOUT     = 0
-  FUNDING_SATOSHIS = 2000
+  let(:funding_vout)     { 0 }
+  let(:funding_satoshis) { 2000 }
 
   # --- Environment ---
 
@@ -99,10 +99,9 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
 
   it 'Alice pays Bob via auto-funded create_action with no_send' do
     # Import the funding UTXO (fetches tx from network, self-payment to derived address)
-    import = alice_engine.import_utxo(dtxid: funding_dtxid, vout: FUNDING_VOUT)
+    import = alice_engine.import_utxo(dtxid: funding_dtxid, vout: funding_vout)
     expect(import[:imported]).to be true
     input_satoshis = import[:satoshis]
-    puts "\n  Imported #{input_satoshis} sats from funding UTXO"
 
     listed = alice_engine.list_outputs(basket: 'default')
     expect(listed[:total_outputs]).to eq(1)
@@ -133,10 +132,7 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
     expect(result[:no_send_change]).to be_an(Array)
     expect(result[:no_send_change].length).to eq(1)
 
-    dtxid_hex = wtxid.reverse.unpack1('H*')
-    puts "  Created dtxid: #{dtxid_hex}"
-    puts "  Payment: #{payment_amount} sats to Bob"
-    puts "  Change outpoint: #{result[:no_send_change].first}"
+    wtxid.reverse.unpack1('H*')
 
     # Verify BEEF is parseable — 1 input, 2 outputs (payment + change)
     parsed = BSV::Transaction::Transaction.from_beef(result[:tx])
@@ -148,14 +144,12 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do
     fee = input_satoshis - total_output
     expect(fee).to be > 0
     expect(fee).to be < 100
-    puts "  Fee: #{fee} sats (auto-computed)"
 
     # Verify Alice's change is spendable
     alice_outputs = alice_engine.list_outputs(basket: 'default')
     expect(alice_outputs[:total_outputs]).to eq(1)
     change_amount = alice_outputs[:outputs].first[:satoshis]
     expect(change_amount).to eq(input_satoshis - payment_amount - fee)
-    puts "  Alice change: #{change_amount} sats (spendable)"
 
     # NOTE: Bob's internalization requires a separate process (Sequel
     # models use a global db connection — two wallets can't coexist in

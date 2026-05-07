@@ -35,7 +35,7 @@ BSV::Wallet::CLI::Output.write_json(outputs)
 
 total = candidates.sum { |c| c[:satoshis] }
 surplus = total - options[:sats]
-$stderr.puts "selected: #{candidates.length} output(s)"
-$stderr.puts "total:    #{total} sats"
-$stderr.puts "target:   #{options[:sats]} sats"
-$stderr.puts "surplus:  #{surplus} sats"
+warn "selected: #{candidates.length} output(s)"
+warn "total:    #{total} sats"
+warn "target:   #{options[:sats]} sats"
+warn "surplus:  #{surplus} sats"

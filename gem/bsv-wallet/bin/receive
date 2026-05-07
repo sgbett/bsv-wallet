@@ -62,5 +62,5 @@ engine.internalize_action(
 )
 
 pay_outputs.each do |out|
-  $stderr.puts "received: #{out[:satoshis]} sats (vout #{out[:vout]})"
+  warn "received: #{out[:satoshis]} sats (vout #{out[:vout]})"
 end

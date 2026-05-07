@@ -52,9 +52,7 @@ spec = JSON.parse($stdin.read, symbolize_names: true)
 inputs = spec[:inputs] || []
 outputs = (spec[:outputs] || []).map do |out|
   out = out.dup
-  if out[:locking_script].is_a?(String) && out[:locking_script].match?(/\A[0-9a-fA-F]+\z/)
-    out[:locking_script] = [out[:locking_script]].pack('H*')
-  end
+  out[:locking_script] = [out[:locking_script]].pack('H*') if out[:locking_script].is_a?(String) && out[:locking_script].match?(/\A[0-9a-fA-F]+\z/)
   out
 end
 
@@ -72,12 +70,12 @@ result = engine.create_action(
 
 # Output BEEF
 BSV::Wallet::CLI::Output.write_binary(result[:tx],
-  output_file: options[:output_file],
-  binary: options[:binary])
+                                      output_file: options[:output_file],
+                                      binary: options[:binary])
 
 # Summary to stderr
 dtxid = result[:txid].reverse.unpack1('H*')
-$stderr.puts "dtxid:   #{dtxid}"
-$stderr.puts "inputs:  #{inputs.length}"
-$stderr.puts "outputs: #{outputs.length}"
-$stderr.puts "no_send: #{options[:no_send]}"
+warn "dtxid:   #{dtxid}"
+warn "inputs:  #{inputs.length}"
+warn "outputs: #{outputs.length}"
+warn "no_send: #{options[:no_send]}"

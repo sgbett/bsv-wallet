@@ -23,4 +23,11 @@ RSpec.configure do |config|
   config.disable_monkey_patching!
   config.order = :random
   Kernel.srand config.seed
+
+  # Clean slate when a test database is available (engine specs use Postgres)
+  config.before(:suite) do
+    if defined?(ENGINE_DB)
+      ENGINE_DB.tables.each { |t| ENGINE_DB[t].truncate(cascade: true) unless t == :schema_info }
+    end
+  end
 end

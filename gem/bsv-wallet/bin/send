@@ -29,9 +29,7 @@ OptionParser.new do |opts|
   opts.on('--fee N', Integer, 'Fee in satoshis (default: 1)') { |v| options[:fee] = v }
 end.parse!(args)
 
-unless options[:to]&.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
-  abort 'Missing or invalid --to (expected 66-char compressed public key hex)'
-end
+abort 'Missing or invalid --to (expected 66-char compressed public key hex)' unless options[:to]&.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
 abort 'Missing --sats' unless options[:sats]&.positive?
 
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
@@ -100,7 +98,7 @@ envelope = {
 BSV::Wallet::CLI::Output.write_json(envelope)
 
 dtxid = result[:txid].reverse.unpack1('H*')
-$stderr.puts "dtxid:  #{dtxid}"
-$stderr.puts "sent:   #{payment} sats to #{options[:to][0..15]}..."
-$stderr.puts "change: #{change} sats"
-$stderr.puts "fee:    #{fee} sats"
+warn "dtxid:  #{dtxid}"
+warn "sent:   #{payment} sats to #{options[:to][0..15]}..."
+warn "change: #{change} sats"
+warn "fee:    #{fee} sats"

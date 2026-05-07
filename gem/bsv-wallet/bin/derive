@@ -44,7 +44,7 @@ derived_pub = ctx[:key_deriver].derive_public_key(
 $stdout.puts prefix
 $stdout.puts suffix
 
-$stderr.puts "prefix:      #{prefix}"
-$stderr.puts "suffix:      #{suffix}"
-$stderr.puts "counterparty: #{options[:counterparty][0..15]}..."
-$stderr.puts "derived_pub:  #{derived_pub.unpack1('H*')[0..15]}..."
+warn "prefix:      #{prefix}"
+warn "suffix:      #{suffix}"
+warn "counterparty: #{options[:counterparty][0..15]}..."
+warn "derived_pub:  #{derived_pub.unpack1('H*')[0..15]}..."

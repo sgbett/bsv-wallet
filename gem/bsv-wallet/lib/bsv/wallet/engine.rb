@@ -380,7 +380,7 @@ module BSV
         self_payment_sats = satoshis - fee
         raise BSV::Wallet::Error, "insufficient sats for self-payment (#{satoshis} - #{fee} fee)" if self_payment_sats <= 0
 
-        self_result = create_action(
+        create_action(
           description: 'import self-payment',
           inputs: [{ output_id: imported_output[:id] }],
           outputs: [{

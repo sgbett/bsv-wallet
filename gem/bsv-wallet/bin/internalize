@@ -29,7 +29,7 @@ abort 'Missing --description' unless options[:description]
 abort 'Missing --output (at least one required)' if options[:outputs].empty?
 
 # Parse output specs
-output_specs = options[:outputs].map do |spec|
+output_specs = options[:outputs].map do |spec| # rubocop:disable Metrics/BlockLength
   parts = spec.split(':')
   vout = parts[0].to_i
   protocol = parts[1]
@@ -76,11 +76,11 @@ engine.internalize_action(
   labels: options[:labels].any? ? options[:labels] : nil
 )
 
-$stderr.puts "internalized: #{output_specs.length} output(s)"
+warn "internalized: #{output_specs.length} output(s)"
 output_specs.each do |os|
   if os[:protocol] == 'basket insertion'
-    $stderr.puts "  vout #{os[:output_index]} -> basket '#{os[:insertion_remittance][:basket]}'"
+    warn "  vout #{os[:output_index]} -> basket '#{os[:insertion_remittance][:basket]}'"
   else
-    $stderr.puts "  vout #{os[:output_index]} -> wallet payment (derived)"
+    warn "  vout #{os[:output_index]} -> wallet payment (derived)"
   end
 end

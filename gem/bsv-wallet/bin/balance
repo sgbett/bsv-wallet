@@ -30,11 +30,11 @@ total = listed[:outputs].sum { |o| o[:satoshis] }
 $stdout.puts total
 
 # Human-readable to stderr
-$stderr.puts "wallet:   #{wallet_name || '(default)'}"
-$stderr.puts "identity: #{ctx[:identity_key]}"
-$stderr.puts "basket:   #{options[:basket]}"
-$stderr.puts "outputs:  #{listed[:total_outputs]}"
-$stderr.puts "balance:  #{total} sats"
+warn "wallet:   #{wallet_name || '(default)'}"
+warn "identity: #{ctx[:identity_key]}"
+warn "basket:   #{options[:basket]}"
+warn "outputs:  #{listed[:total_outputs]}"
+warn "balance:  #{total} sats"
 listed[:outputs].each_with_index do |o, i|
-  $stderr.puts "  [#{i}] #{o[:satoshis]} sats (id: #{o[:id]})"
+  warn "  [#{i}] #{o[:satoshis]} sats (id: #{o[:id]})"
 end

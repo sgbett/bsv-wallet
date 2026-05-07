@@ -23,6 +23,6 @@ ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 result = ctx[:engine].import_utxo(dtxid: dtxid, vout: vout)
 
 listed = ctx[:engine].list_outputs(basket: 'default')
-$stderr.puts "Imported #{result[:satoshis]} sats (#{result[:dtxid]})"
-$stderr.puts "Spendable outputs: #{listed[:total_outputs]}"
-$stderr.puts "Total balance: #{listed[:outputs].sum { |o| o[:satoshis] }} sats"
+warn "Imported #{result[:satoshis]} sats (#{result[:dtxid]})"
+warn "Spendable outputs: #{listed[:total_outputs]}"
+warn "Total balance: #{listed[:outputs].sum { |o| o[:satoshis] }} sats"
