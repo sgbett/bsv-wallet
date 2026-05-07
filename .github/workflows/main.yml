@@ -124,3 +124,4 @@ jobs:
           FUNDING_TXID: ${{ secrets.FUNDING_TXID }}
           DATABASE_URL_ALICE: postgres://postgres:postgres@localhost:5433/bsv_wallet_alice
           DATABASE_URL_BOB: postgres://postgres:postgres@localhost:5433/bsv_wallet_bob
+          LIMP_THRESHOLD: 10000

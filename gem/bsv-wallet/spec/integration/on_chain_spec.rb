@@ -71,7 +71,8 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do # rubocop:disable RS
       proof_store: BSV::Wallet::Postgres::ProofStore.new(db: db_alice),
       key_deriver: alice_key_deriver,
       network_provider: network_provider,
-      network: :mainnet
+      network: :mainnet,
+      limp_threshold: BSV::Wallet::Engine::LIMP_THRESHOLD_MIN # CI wallets are thinly funded
     )
   end
 

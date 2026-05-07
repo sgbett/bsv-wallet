@@ -63,6 +63,8 @@ module BSV
 
         network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
 
+        limp_threshold = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD).to_i
+
         engine = BSV::Wallet::Engine.new(
           store: store,
           utxo_pool: utxo_pool,
@@ -70,7 +72,8 @@ module BSV
           proof_store: proof_store,
           key_deriver: key_deriver,
           network_provider: network_provider,
-          network: network
+          network: network,
+          limp_threshold: limp_threshold
         )
 
         {
