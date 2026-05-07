@@ -12,6 +12,7 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastCallback do
     BSV::Wallet::Postgres::Action.create(
       outgoing: true,
       description: 'test action',
+      nlocktime: 0,
       wtxid: SecureRandom.random_bytes(32),
       raw_tx: SecureRandom.random_bytes(100)
     )

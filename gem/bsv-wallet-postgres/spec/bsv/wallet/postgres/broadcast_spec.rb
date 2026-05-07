@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 RSpec.describe BSV::Wallet::Postgres::Broadcast do
-  let(:action) { BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
+  let(:action) { BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
 
   it 'creates a broadcast record for an action' do
     broadcast = described_class.create(action_id: action.id)
