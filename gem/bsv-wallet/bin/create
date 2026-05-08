@@ -1,0 +1,59 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Create a BRC-100 payment (porcelain).
+#
+# Derives a BRC-42 payment key for the recipient, builds an auto-funded
+# transaction, and outputs a JSON envelope that bin/receive can consume.
+#
+# Usage:
+#   bin/create <wallet> <identity_key> <sats>
+#
+# Stdout: JSON envelope { beef: <hex>, sender_identity_key: <hex>, outputs: [...] }
+# Stderr: human-readable summary
+
+require_relative '../lib/bsv/wallet/cli'
+require 'securerandom'
+
+wallet_name = ARGV.shift
+identity_key = ARGV.shift
+sats = ARGV.shift&.to_i
+
+abort 'Usage: bin/create <wallet> <identity_key> <sats>' unless wallet_name && identity_key && sats&.positive?
+abort 'Invalid identity key (expected 66-char compressed hex)' unless identity_key.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+
+# Derive payment locking script (BRC-42: sender derives recipient's child key)
+pay_prefix = SecureRandom.uuid
+pay_suffix = '1'
+pay_pub = ctx[:key_deriver].derive_public_key(
+  protocol_id: [2, pay_prefix], key_id: pay_suffix,
+  counterparty: identity_key, for_self: true
+)
+pay_script = BSV::Script::Script.p2pkh_lock(
+  BSV::Primitives::Digest.hash160(pay_pub)
+).to_binary
+
+# Auto-fund: wallet handles UTXO selection, fee, change, signing
+result = ctx[:engine].create_action(
+  description: "send #{sats} sats",
+  outputs: [{ satoshis: sats, locking_script: pay_script }],
+  labels: ['payment'],
+  no_send: true,
+  randomize_outputs: false
+)
+
+# JSON envelope for recipient (consumed by bin/receive)
+envelope = {
+  beef: result[:tx].unpack1('H*'),
+  sender_identity_key: ctx[:identity_key],
+  outputs: [{ vout: 0, satoshis: sats,
+              derivation_prefix: pay_prefix, derivation_suffix: pay_suffix }]
+}
+BSV::Wallet::CLI::Output.write_json(envelope)
+
+dtxid = result[:txid].reverse.unpack1('H*')
+warn "dtxid:  #{dtxid}"
+warn "sent:   #{sats} sats to #{identity_key[0..15]}..."
+warn "change: #{result[:no_send_change]&.length || 0} outputs"
