@@ -1,0 +1,27 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Import all unspent outputs on the wallet's root key (porcelain).
+#
+# Scans the network for confirmed UTXOs at the root P2PKH address and
+# imports each one via the engine's import_utxo (self-payment to a
+# derived address). The user doesn't need to know specific txids.
+#
+# Usage:
+#   bin/import <wallet>
+
+require_relative '../lib/bsv/wallet/cli'
+
+wallet_name = ARGV.shift
+abort 'Usage: bin/import <wallet>' unless wallet_name
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+
+results = ctx[:engine].import_root_key
+
+if results.empty?
+  warn 'No unspent outputs found on root key address'
+else
+  total = results.sum { |r| r[:satoshis] }
+  warn "Imported #{results.length} UTXO(s), #{total} sats"
+end

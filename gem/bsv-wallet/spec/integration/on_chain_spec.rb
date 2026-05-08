@@ -15,14 +15,8 @@ require 'bsv-wallet'
 require 'bsv-wallet-postgres'
 
 RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do # rubocop:disable RSpec/DescribeClass
-  # --- Funding UTXO (mined, never moves) ---
-
-  let(:funding_vout)     { 1 }
-  let(:funding_satoshis) { 1_000_000 }
-
   # --- Environment ---
 
-  let(:funding_dtxid) { ENV.fetch('BSV_WALLET_UTXO_ALICE') }
   let(:wif_alice)     { ENV.fetch('BSV_WALLET_WIF_ALICE') }
   let(:wif_bob)       { ENV.fetch('BSV_WALLET_WIF_BOB') }
   let(:db_url_alice)  { ENV.fetch('DATABASE_URL_ALICE', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_alice') }
@@ -98,13 +92,13 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do # rubocop:disable RS
   # --- Tests ---
 
   it 'Alice pays Bob via auto-funded create_action with no_send' do
-    # Import the funding UTXO (fetches tx from network, self-payment to derived address)
-    import = alice_engine.import_utxo(dtxid: funding_dtxid, vout: funding_vout)
-    expect(import[:imported]).to be true
-    input_satoshis = import[:satoshis]
+    # Sweep root key — imports all UTXOs on Alice's root address
+    imports = alice_engine.import_root_key
+    expect(imports).not_to be_empty
+    input_satoshis = imports.sum { |r| r[:satoshis] }
 
     listed = alice_engine.list_outputs(basket: 'default')
-    expect(listed[:total_outputs]).to eq(1)
+    expect(listed[:total_outputs]).to eq(imports.length)
 
     # Bob's locking script (P2PKH to Bob's root key)
     payment_amount = 500

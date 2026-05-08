@@ -46,10 +46,8 @@ RSpec.describe 'CLI porcelain: create | receive pipeline', :on_chain do # ruboco
   end
 
   it 'Alice pays Bob via create | receive pipeline' do
-    funding_dtxid = ENV.fetch('BSV_WALLET_UTXO_ALICE')
-
-    # Import: bootstrap Alice's wallet from root UTXO (plumbing — porcelain sweep deferred)
-    _stdout, _, status = run_cli('import_root_utxo', 'alice', funding_dtxid, '1')
+    # Import: sweep Alice's root key (finds and imports all UTXOs)
+    _stdout, _, status = run_cli('import', 'alice')
     expect(status).to be_success
 
     # Balance: verify Alice has funds
