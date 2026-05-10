@@ -21,6 +21,9 @@ module BSV
     # Key derivation (BRC-42/43)
     autoload :KeyDeriver,       'bsv/wallet/key_deriver'
 
+    # Network services (porcelain routing layer over SDK providers)
+    require 'bsv/network/services'
+
     # Engine (Layer 3 — orchestration)
     autoload :Engine,           'bsv/wallet/engine'
   end
