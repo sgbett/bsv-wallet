@@ -7,16 +7,24 @@ Sequel.migration do
     # Enum: broadcast intent for actions
     create_enum(:broadcast_intent, %w[delayed inline none])
 
-    # 1. tx_proofs — merkle inclusion proofs (settlement evidence)
+    # 1. blocks — known block headers (chain tracker's local view)
+    create_table(:blocks) do
+      column :id, :bigint, primary_key: true, identity: :always
+      column :height, :integer, null: false, unique: true
+      column :merkle_root, :bytea, null: false
+      column :block_hash, :bytea
+      column :created_at, :timestamptz, null: false, default: Sequel.function(:now)
+      column :updated_at, :timestamptz, null: false, default: Sequel.function(:now)
+    end
+
+    # 2. tx_proofs — merkle inclusion proofs (settlement evidence)
     create_table(:tx_proofs) do
       column :id, :bigint, primary_key: true, identity: :always
       column :wtxid, :bytea, null: false, unique: true
-      column :height, :integer
+      foreign_key :block_id, :blocks, type: :bigint
       column :block_index, :integer
       column :merkle_path, :bytea
       column :raw_tx, :bytea
-      column :block_hash, :bytea
-      column :merkle_root, :bytea
       column :created_at, :timestamptz, null: false, default: Sequel.function(:now)
       column :updated_at, :timestamptz, null: false, default: Sequel.function(:now)
     end
@@ -245,7 +253,7 @@ Sequel.migration do
     drop_table :settings, :tx_reqs, :certificate_fields, :certificates,
                :output_tags, :tags, :action_labels, :labels, :inputs,
                :output_baskets, :output_details, :spendable, :outputs,
-               :baskets, :broadcasts, :actions, :tx_proofs
+               :baskets, :broadcasts, :actions, :tx_proofs, :blocks
 
     extension :pg_enum
     drop_enum(:broadcast_intent)

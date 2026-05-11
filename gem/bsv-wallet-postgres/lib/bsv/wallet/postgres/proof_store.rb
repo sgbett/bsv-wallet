@@ -15,12 +15,16 @@ module BSV
         def save_proof(wtxid:, proof:)
           BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'save_proof wtxid')
           BSV.logger&.debug { "[ProofStore] save_proof: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{proof[:height]}" }
+
+          block_id = find_or_create_block(proof) if proof[:height]
+
           existing = TxProof.first(wtxid: Sequel.blob(wtxid))
+          cols = proof_columns(proof).merge(block_id ? { block_id: block_id } : {})
           if existing
-            existing.update(proof_columns(proof))
+            existing.update(cols)
             existing.id
           else
-            TxProof.create({ wtxid: wtxid }.merge(proof_columns(proof))).id
+            TxProof.create({ wtxid: wtxid }.merge(cols)).id
           end
         end
 
@@ -83,26 +87,42 @@ module BSV
 
         def proof_columns(proof)
           cols = {}
-          cols[:height]      = proof[:height]      if proof.key?(:height)
-          cols[:block_index] = proof[:block_index]  if proof.key?(:block_index)
+          cols[:block_index] = proof[:block_index] if proof.key?(:block_index)
           cols[:merkle_path] = proof[:merkle_path] ? Sequel.blob(proof[:merkle_path]) : nil if proof.key?(:merkle_path)
           cols[:raw_tx]      = proof[:raw_tx]      ? Sequel.blob(proof[:raw_tx]) : nil      if proof.key?(:raw_tx)
-          cols[:block_hash]  = proof[:block_hash]  ? Sequel.blob(proof[:block_hash]) : nil  if proof.key?(:block_hash)
-          cols[:merkle_root] = proof[:merkle_root] ? Sequel.blob(proof[:merkle_root]) : nil if proof.key?(:merkle_root)
           cols
         end
 
         def proof_to_hash(record)
+          block = record.block
           {
             id:           record.id,
             wtxid:        record.wtxid,
-            height:       record.height,
+            block_id:     record.block_id,
+            height:       block&.height,
             block_index:  record.block_index,
             merkle_path:  record.merkle_path,
             raw_tx:       record.raw_tx,
-            block_hash:   record.block_hash,
-            merkle_root:  record.merkle_root
+            block_hash:   block&.block_hash,
+            merkle_root:  block&.merkle_root
           }
+        end
+
+        def find_or_create_block(proof)
+          height = proof[:height]
+          return unless height
+
+          existing = Block.first(height: height)
+          return existing.id if existing
+
+          merkle_root = proof[:merkle_root]
+          return unless merkle_root
+
+          Block.create(
+            height:      height,
+            merkle_root: merkle_root,
+            block_hash:  proof[:block_hash]
+          ).id
         end
 
         def decode_hex(hex)

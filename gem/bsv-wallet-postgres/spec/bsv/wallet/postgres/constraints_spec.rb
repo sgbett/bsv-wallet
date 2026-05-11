@@ -31,6 +31,44 @@ RSpec.describe 'Schema constraints' do
     )
   end
 
+  # --- blocks ---
+
+  describe 'blocks' do
+    it 'rejects negative height' do
+      expect {
+        db.transaction(savepoint: true) do
+          db[:blocks].insert(height: -1, merkle_root: Sequel.blob("\x00" * 32))
+        end
+      }.to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    it 'rejects merkle_root not 32 bytes' do
+      expect {
+        db.transaction(savepoint: true) do
+          db[:blocks].insert(height: 1, merkle_root: Sequel.blob("\x00" * 31))
+        end
+      }.to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    it 'rejects block_hash not 32 bytes' do
+      expect {
+        db.transaction(savepoint: true) do
+          db[:blocks].insert(height: 1, merkle_root: Sequel.blob("\x00" * 32),
+                             block_hash: Sequel.blob("\x00" * 31))
+        end
+      }.to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    it 'enforces unique height' do
+      db[:blocks].insert(height: 800_000, merkle_root: Sequel.blob("\x00" * 32))
+      expect {
+        db.transaction(savepoint: true) do
+          db[:blocks].insert(height: 800_000, merkle_root: Sequel.blob("\x01" * 32))
+        end
+      }.to raise_error(Sequel::UniqueConstraintViolation)
+    end
+  end
+
   # --- tx_proofs ---
 
   describe 'tx_proofs' do
@@ -66,46 +104,14 @@ RSpec.describe 'Schema constraints' do
       }.to raise_error(Sequel::CheckConstraintViolation)
     end
 
-    it 'rejects merkle_path without height' do
-      expect {
-        db.transaction(savepoint: true) do
-          db[:tx_proofs].insert(
-            wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx),
-            merkle_path: Sequel.blob("\x00" * 10), height: nil
-          )
-        end
-      }.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
-    it 'allows height without merkle_path' do
+    it 'allows block_id without merkle_path' do
+      block_id = db[:blocks].insert(height: 800_000, merkle_root: Sequel.blob("\x00" * 32))
       expect {
         db[:tx_proofs].insert(
           wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx),
-          height: 800_000, merkle_path: nil
+          block_id: block_id, merkle_path: nil
         )
       }.not_to raise_error
-    end
-
-    it 'rejects block_hash not 32 bytes' do
-      expect {
-        db.transaction(savepoint: true) do
-          db[:tx_proofs].insert(
-            wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx),
-            block_hash: Sequel.blob("\x00" * 31)
-          )
-        end
-      }.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
-    it 'rejects merkle_root not 32 bytes' do
-      expect {
-        db.transaction(savepoint: true) do
-          db[:tx_proofs].insert(
-            wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx),
-            merkle_root: Sequel.blob("\x00" * 31)
-          )
-        end
-      }.to raise_error(Sequel::CheckConstraintViolation)
     end
   end
 

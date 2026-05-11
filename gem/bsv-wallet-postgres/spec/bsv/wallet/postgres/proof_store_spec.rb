@@ -29,10 +29,14 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
 
     it 'upserts an existing proof' do
       id1 = proof_store.save_proof(wtxid: wtxid, proof: proof_data)
-      id2 = proof_store.save_proof(wtxid: wtxid, proof: proof_data.merge(height: 800_001))
+      new_merkle_root = SecureRandom.random_bytes(32)
+      id2 = proof_store.save_proof(wtxid: wtxid, proof: proof_data.merge(
+        height: 800_001, merkle_root: new_merkle_root
+      ))
 
       expect(id2).to eq(id1)
-      expect(BSV::Wallet::Postgres::TxProof[id1].height).to eq(800_001)
+      record = BSV::Wallet::Postgres::TxProof[id1]
+      expect(record.block.height).to eq(800_001)
     end
 
     it 'preserves binary data' do
@@ -41,7 +45,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
 
       expect(record.wtxid.encoding).to eq(Encoding::BINARY)
       expect(record.merkle_path.encoding).to eq(Encoding::BINARY)
-      expect(record.block_hash.encoding).to eq(Encoding::BINARY)
+      expect(record.block.block_hash.encoding).to eq(Encoding::BINARY)
       expect(record.merkle_path).to eq(proof_data[:merkle_path])
     end
   end

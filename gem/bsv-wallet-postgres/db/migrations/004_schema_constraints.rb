@@ -9,14 +9,18 @@ Sequel.migration do
     # others, no derivation), NULL (derived, has keys).
     create_enum(:output_type, %w[root outbound])
 
-    # --- 1. tx_proofs ---
+    # --- 1. blocks ---
+    alter_table(:blocks) do
+      add_constraint(:height_range) { height >= 0 }
+      add_constraint(:merkle_root_length) { length(merkle_root) =~ 32 }
+      add_constraint(:block_hash_length, 'block_hash IS NULL OR length(block_hash) = 32')
+    end
+
+    # --- 2. tx_proofs ---
     alter_table(:tx_proofs) do
       set_column_not_null :raw_tx
       add_constraint(:wtxid_length)       { length(wtxid) =~ 32 }
       add_constraint(:raw_tx_min_length)  { length(raw_tx) >= 20 }
-      add_constraint(:merkle_path_needs_height, 'merkle_path IS NULL OR height IS NOT NULL')
-      add_constraint(:block_hash_length,  'block_hash IS NULL OR length(block_hash) = 32')
-      add_constraint(:merkle_root_length, 'merkle_root IS NULL OR length(merkle_root) = 32')
     end
 
     # --- 2. actions ---
@@ -274,14 +278,18 @@ Sequel.migration do
       add_column :satoshis, :bigint
     end
 
-    # --- 1. tx_proofs ---
+    # --- 2. tx_proofs ---
     alter_table(:tx_proofs) do
       drop_constraint :wtxid_length
       drop_constraint :raw_tx_min_length
-      drop_constraint :merkle_path_needs_height
-      drop_constraint :block_hash_length
-      drop_constraint :merkle_root_length
       set_column_allow_null :raw_tx
+    end
+
+    # --- 1. blocks ---
+    alter_table(:blocks) do
+      drop_constraint :height_range
+      drop_constraint :merkle_root_length
+      drop_constraint :block_hash_length
     end
 
     drop_enum(:output_type)
