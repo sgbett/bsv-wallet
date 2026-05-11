@@ -39,7 +39,7 @@ Sequel.migration do
       column :satoshis, :bigint
       column :description, :text
       column :version, :integer
-      column :nlocktime, :bigint, null: false, default: 0
+      column :nlocktime, :bigint
       column :broadcast, :broadcast_intent, null: false, default: 'delayed'
       column :raw_tx, :bytea
       column :input_beef, :bytea

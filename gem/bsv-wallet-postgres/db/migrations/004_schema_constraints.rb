@@ -29,7 +29,7 @@ Sequel.migration do
       set_column_not_null :description
       add_constraint(:wtxid_length, 'wtxid IS NULL OR length(wtxid) = 32')
       add_constraint(:description_length, 'length(description) BETWEEN 5 AND 50')
-      add_constraint(:nlocktime_range)    { nlocktime >= 0 }
+      add_constraint(:nlocktime_range, 'NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)')
       add_constraint(:wtxid_raw_tx_parity, '(wtxid IS NULL) = (raw_tx IS NULL)')
     end
 
