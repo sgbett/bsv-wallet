@@ -9,7 +9,7 @@
 5. **The spendable table is the UTXO set.** A row in `spendable` means "this output can be spent." Pure set membership: `{id, output_id, action_id}` — no data columns. The presence of a row IS the spendable state. DELETE = spent or relinquished. The hot-path query scans this tiny table, then PK-joins to outputs for data.
 6. **Display metadata is vertically partitioned.** Application metadata lives in `output_details` (including the cosmetic `change` flag). Basket membership lives in `output_baskets`.
 7. **BRC-100 drives the vocabulary.** Transactions are called "actions" (BRC-100 term). The 28 wallet methods define what the storage must serve.
-8. **Proofs are settlement receipts.** A merkle proof proves an action's transaction is in a block. `action.tx_proof_id IS NOT NULL` means settled.
+8. **Proofs are settlement receipts.** A merkle proof proves an action's transaction is in a block. `action.tx_proof_id IS NOT NULL` means settled. Block-level data (height, merkle root, block hash) is normalized into the `blocks` table — one row per known block height, shared across all proofs from that block.
 9. **No user table.** The wallet is an engine, not a user-facing service. Identity and authentication are layers above. The wallet knows who it is because it was constructed with a key — that's a runtime parameter, not a database row. Multi-tenant hosting (many users, one database) is a separate concern that can be added via a user-centric schema above the core wallet tables.
 10. **Binary data is bytea.** Transaction IDs, block hashes, merkle paths, raw transactions, and locking scripts are stored as `bytea`. Sequel models return binary strings (Ruby `Encoding::BINARY`). The entire internal stack — database, models, wallet code, SDK primitives — works with binary. Hex conversion is a presentation concern at the BRC-100 API boundary, not a storage or model concern. No relationships JOIN on txid — all FKs use surrogate bigint PKs.
 11. **The database is the last line of defense.** Every invariant enforced in code must be backed by a database constraint. Code can be bypassed, refactored, or have bugs. The schema cannot be bypassed. NOT NULL is the default stance; a column should be nullable only with an explicit reason. CHECK constraints encode cross-column invariants, binary field sizes, and range validity.
@@ -39,38 +39,60 @@ Tables listed in FK-dependency order — this is the creation sequence.
 
 ---
 
-## 1. Tx Proofs
+## 1. Blocks
 
-Merkle inclusion proof — evidence that a transaction is in a block. Independent of whether a wallet action references it (ancestor proofs exist for BEEF construction).
+Known block headers — the wallet's local view of the chain. One row per block height. Populated as a write-through cache: the chain tracker checks here first, fetches from the network on miss, and inserts the result. The `blocks` table is the single source of truth for "what is the merkle root at height N?"
+
+| col | type | attributes |
+| --- | --- | --- |
+| id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
+| height | integer | NOT NULL UNIQUE |
+| merkle_root | bytea | NOT NULL |
+| block_hash | bytea | |
+| created_at | timestamptz | NOT NULL DEFAULT now() |
+| updated_at | timestamptz | NOT NULL DEFAULT now() |
+
+**Constraints:**
+- `CHECK height >= 0`
+- `CHECK length(merkle_root) = 32`
+- `CHECK block_hash IS NULL OR length(block_hash) = 32`
+
+```ruby
+class Wallet::Block < Sequel::Model
+  one_to_many :tx_proofs
+end
+```
+
+---
+
+## 2. Tx Proofs
+
+Merkle inclusion proof — evidence that a transaction is in a block. Independent of whether a wallet action references it (ancestor proofs exist for BEEF construction). Block-level data (height, merkle root, block hash) lives in the `blocks` table; the proof references it via `block_id`.
 
 | col | type | attributes |
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
 | wtxid | bytea | NOT NULL UNIQUE |
-| height | integer | |
+| block_id | bigint | REFERENCES blocks (id) |
 | block_index | integer | |
 | merkle_path | bytea | |
 | raw_tx | bytea | NOT NULL |
-| block_hash | bytea | |
-| merkle_root | bytea | |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
 
 **Constraints:**
 - `CHECK length(wtxid) = 32` — wtxid is always 32 bytes
 - `CHECK length(raw_tx) >= 20` — minimum valid transaction size (version + input_count + output_count + amount + script_len + OP_1 + locktime)
-- `CHECK merkle_path IS NULL OR height IS NOT NULL` — a proof without a block height is nonsensical
-- `CHECK block_hash IS NULL OR length(block_hash) = 32`
-- `CHECK merkle_root IS NULL OR length(merkle_root) = 32`
 
 ```ruby
 class Wallet::TxProof < Sequel::Model
+  many_to_one :block
 end
 ```
 
 ---
 
-## 2. Actions
+## 3. Actions
 
 A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from conception to settlement. The wallet's audit log of "what happened and why."
 
@@ -83,7 +105,7 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | outgoing | bool | NOT NULL DEFAULT true |
 | description | text | NOT NULL |
 | version | integer | |
-| nlocktime | bigint | NOT NULL DEFAULT 0 |
+| nlocktime | bigint | |
 | broadcast | broadcast_intent | NOT NULL DEFAULT 'delayed' |
 | raw_tx | bytea | |
 | input_beef | bytea | |
@@ -93,7 +115,7 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 **Constraints:**
 - `CHECK wtxid IS NULL OR length(wtxid) = 32`
 - `CHECK length(description) BETWEEN 5 AND 50`
-- `CHECK nlocktime >= 0`
+- `CHECK NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)` — outgoing actions require nlocktime; incoming actions may omit it
 - `CHECK (wtxid IS NULL) = (raw_tx IS NULL)` — an action is either unsigned (both NULL) or signed (both set)
 
 **Indexes:**
@@ -131,7 +153,7 @@ class Wallet::Action < Sequel::Model
 end
 ```
 
-## 3. Broadcasts
+## 4. Broadcasts
 
 Evidence that a broadcast has been initiated. One row per action. The broadcast record and the network call are tightly coupled — the `BroadcastQueue` model owns both the row and the POST to ARC. The action doesn't know or care about broadcast mechanics.
 
@@ -243,7 +265,9 @@ BEGIN
   INSERT INTO output_baskets (output_id, basket_id, action_id)
   INSERT INTO output_details (output_id, action_id, change, description, ...)
   -- If ARC returned MINED + merklePath:
-  INSERT INTO tx_proofs (wtxid, height, block_index, merkle_path, block_hash, merkle_root, raw_tx)
+  INSERT INTO blocks (height, merkle_root, block_hash)
+    VALUES (?, ?, ?) ON CONFLICT (height) DO NOTHING
+  INSERT INTO tx_proofs (wtxid, block_id, block_index, merkle_path, raw_tx)
     ON CONFLICT (wtxid) DO UPDATE SET ...
   UPDATE actions SET tx_proof_id = ? WHERE id = ?
 COMMIT
@@ -318,7 +342,9 @@ WHERE NOT EXISTS (SELECT 1 FROM outputs o WHERE o.action_id = a.id)
 
 ```
 BEGIN
-  INSERT INTO tx_proofs (wtxid, height, block_index, merkle_path, block_hash, merkle_root, raw_tx)
+  INSERT INTO blocks (height, merkle_root, block_hash)
+    VALUES (?, ?, ?) ON CONFLICT (height) DO NOTHING
+  INSERT INTO tx_proofs (wtxid, block_id, block_index, merkle_path, raw_tx)
     ON CONFLICT (wtxid) DO UPDATE SET ...
   UPDATE actions SET tx_proof_id = ? WHERE wtxid = ?
   UPDATE broadcasts SET tx_status = 'MINED', block_hash = ?, block_height = ? WHERE action_id = ?
@@ -422,7 +448,9 @@ Output rows remain in the immutable log — orphaned but harmless. They have no 
 
 ```
 BEGIN
-  INSERT INTO tx_proofs (wtxid, height, ...) ON CONFLICT DO UPDATE ...
+  INSERT INTO blocks (height, merkle_root, block_hash)
+    VALUES (?, ?, ?) ON CONFLICT (height) DO NOTHING
+  INSERT INTO tx_proofs (wtxid, block_id, ...) ON CONFLICT DO UPDATE ...
   INSERT INTO actions (tx_proof_id, wtxid, outgoing: false, broadcast: 'none', ...)
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,
                        output_type, derivation_prefix, derivation_suffix, sender_identity_key)
@@ -449,6 +477,7 @@ The output row stays in the log. The wallet forgets about it — no spendable en
 
 | Table | INSERT | UPDATE | DELETE | Character |
 |-------|--------|--------|--------|-----------|
+| **blocks** | proof arrival / internalize / chain tracker | never | never | Append-only — known block headers |
 | **actions** | createAction | wtxid (sign), tx_proof_id (proof) | abort, reaper | Mutable — the lifecycle entity |
 | **inputs** | Phase 1 (lock) | never | CASCADE from action delete | Born and dies with its action |
 | **broadcasts** | Phase 3 (broadcast) | ARC response updates | CASCADE from action delete | Broadcast lifecycle |
@@ -460,7 +489,7 @@ The output row stays in the log. The wallet forgets about it — no spendable en
 
 ---
 
-## 4. Baskets
+## 5. Baskets
 
 Output grouping with replenishment policy. Baskets are entities, not just string labels.
 
@@ -489,7 +518,7 @@ end
 
 ---
 
-## 5. Outputs
+## 6. Outputs
 
 The immutable log. A permanent, append-only record of every output the wallet has ever participated in — both wallet-owned outputs (with derivation data) and outbound payments (with `output_type = 'outbound'`). **Immutable** — never UPDATE'd, never DELETE'd. Provenance survives in history until cold partitions are archived.
 
@@ -502,7 +531,7 @@ At scale, partition by id range. Old partitions where all outputs have been spen
 | col | type | attributes |
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| action_id | bigint | NOT NULL REFERENCES actions (id) |
+| action_id | bigint | REFERENCES actions (id) ON DELETE SET NULL |
 | satoshis | bigint | NOT NULL |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | locking_script | bytea | NOT NULL |
@@ -525,6 +554,8 @@ At scale, partition by id range. Old partitions where all outputs have been spen
   - `CHECK output_type IS NOT NULL OR derivation_prefix IS NOT NULL`
   - `CHECK output_type IS NOT NULL OR derivation_suffix IS NOT NULL`
   - `CHECK output_type IS NOT NULL OR sender_identity_key IS NOT NULL`
+
+**Cascade:** `action_id ON DELETE SET NULL` — deleting an action (abort, reaper) orphans output rows rather than cascading the delete. Outputs are the immutable log; orphaned rows have NULL action_id, no spendable entry, and are invisible to the wallet.
 
 **Note:** No `updated_at` — immutable rows have no updates. No `basket_id` — basket membership is in `output_baskets`. No `wtxid` — derived via `output.action.wtxid`. Column order optimized for alignment: 8-byte columns first, then variable-width, with 4-byte `vout` tucked after `locking_script` to reduce padding.
 
@@ -579,7 +610,7 @@ end
 
 ---
 
-## 6. Spendable
+## 7. Spendable
 
 The wallet. Pure set membership — each row says "this output is available to spend." The presence of a row IS the spendable state. No data columns beyond the keys. DELETE = spent or relinquished. ~28 bytes per row. At a typical UTXO pool the entire table fits in PostgreSQL's buffer cache permanently.
 
@@ -609,7 +640,7 @@ end
 
 ---
 
-## 7. Output Details
+## 8. Output Details
 
 Display and application metadata. Never queried in the UTXO selection hot path. One-to-one with outputs.
 
@@ -642,7 +673,7 @@ end
 
 ---
 
-## 8. Output Baskets
+## 9. Output Baskets
 
 Basket membership for outputs. An output belongs to at most one basket at a time. Moving an output between baskets = UPDATE `basket_id`. Relinquishing = DELETE the row. The outputs table is never touched.
 
@@ -673,7 +704,7 @@ end
 
 ---
 
-## 9. Inputs
+## 10. Inputs
 
 The consumption relationship. The lock mechanism. Each row says "this output is being used as input N of this action." The UNIQUE constraint on `output_id` enforces single-spend. `ON DELETE CASCADE` from actions means aborting an action automatically releases all its claimed outputs.
 
@@ -706,7 +737,7 @@ end
 
 ---
 
-## 10. Labels
+## 11. Labels
 
 Label definitions for categorizing actions. Normalized — the label string is stored once, then referenced via a join table.
 
@@ -729,7 +760,7 @@ end
 
 ---
 
-## 11. Action Labels
+## 12. Action Labels
 
 Join table: actions to labels (many-to-many).
 
@@ -756,7 +787,7 @@ end
 
 ---
 
-## 12. Tags
+## 13. Tags
 
 Tag definitions for categorizing outputs. Same normalization pattern as labels.
 
@@ -779,7 +810,7 @@ end
 
 ---
 
-## 13. Output Tags
+## 14. Output Tags
 
 Join table: outputs to tags (many-to-many).
 
@@ -806,7 +837,7 @@ end
 
 ---
 
-## 14. Certificates
+## 15. Certificates
 
 Identity certificate headers (BRC-52). Per-field encryption keys live in the fields table.
 
@@ -838,7 +869,7 @@ end
 
 ---
 
-## 15. Certificate Fields
+## 16. Certificate Fields
 
 Per-field storage for certificates. Each field has its own `master_key` for field-level encryption, enabling selective revelation (BRC-52).
 
@@ -863,7 +894,7 @@ end
 
 ---
 
-## 16. Tx Reqs
+## 17. Tx Reqs
 
 Proof request lifecycle. Tracks "I need a proof for this txid" — a work queue for the proof-harvesting worker.
 
@@ -899,7 +930,7 @@ end
 
 ---
 
-## 17. Settings
+## 18. Settings
 
 Key-value wallet configuration.
 

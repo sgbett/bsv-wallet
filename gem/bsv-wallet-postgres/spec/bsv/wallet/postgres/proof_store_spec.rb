@@ -29,10 +29,14 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
 
     it 'upserts an existing proof' do
       id1 = proof_store.save_proof(wtxid: wtxid, proof: proof_data)
-      id2 = proof_store.save_proof(wtxid: wtxid, proof: proof_data.merge(height: 800_001))
+      new_merkle_root = SecureRandom.random_bytes(32)
+      id2 = proof_store.save_proof(wtxid: wtxid, proof: proof_data.merge(
+        height: 800_001, merkle_root: new_merkle_root
+      ))
 
       expect(id2).to eq(id1)
-      expect(BSV::Wallet::Postgres::TxProof[id1].height).to eq(800_001)
+      record = BSV::Wallet::Postgres::TxProof[id1]
+      expect(record.block.height).to eq(800_001)
     end
 
     it 'preserves binary data' do
@@ -41,8 +45,29 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
 
       expect(record.wtxid.encoding).to eq(Encoding::BINARY)
       expect(record.merkle_path.encoding).to eq(Encoding::BINARY)
-      expect(record.block_hash.encoding).to eq(Encoding::BINARY)
+      expect(record.block.block_hash.encoding).to eq(Encoding::BINARY)
       expect(record.merkle_path).to eq(proof_data[:merkle_path])
+    end
+
+    it 'reuses an existing block for proofs at the same height' do
+      wtxid2 = SecureRandom.random_bytes(32)
+      id1 = proof_store.save_proof(wtxid: wtxid, proof: proof_data)
+      id2 = proof_store.save_proof(wtxid: wtxid2, proof: proof_data.merge(
+        raw_tx: SecureRandom.random_bytes(100)
+      ))
+
+      proof1 = BSV::Wallet::Postgres::TxProof[id1]
+      proof2 = BSV::Wallet::Postgres::TxProof[id2]
+      expect(proof1.block_id).to eq(proof2.block_id)
+      expect(BSV::Wallet::Postgres::Block.where(height: 800_000).count).to eq(1)
+    end
+
+    it 'saves proof without block when merkle_root is absent' do
+      proof_without_root = proof_data.reject { |k, _| %i[merkle_root block_hash].include?(k) }
+      id = proof_store.save_proof(wtxid: wtxid, proof: proof_without_root)
+
+      record = BSV::Wallet::Postgres::TxProof[id]
+      expect(record.block_id).to be_nil
     end
   end
 

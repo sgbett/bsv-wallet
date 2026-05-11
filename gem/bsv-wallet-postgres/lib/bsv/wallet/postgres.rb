@@ -21,6 +21,7 @@ module BSV
       require_relative 'postgres/display_txid'
 
       # Models (Layer 2b — atomic services)
+      autoload :Block,            'bsv/wallet/postgres/block'
       autoload :TxProof,          'bsv/wallet/postgres/tx_proof'
       autoload :Action,           'bsv/wallet/postgres/action'
       autoload :Broadcast,        'bsv/wallet/postgres/broadcast'
