@@ -208,13 +208,19 @@ module BSV
 
       # --- Broadcast Affinity ---
 
+      MAX_AFFINITY_ENTRIES = 1000
+      private_constant :MAX_AFFINITY_ENTRIES
+
       def record_affinity(command, provider, result)
         return unless command == :broadcast && result.success?
 
         txid = result.data[:txid]
         return unless txid
 
-        @mutex.synchronize { @broadcast_affinity[txid.to_s] = provider }
+        @mutex.synchronize do
+          @broadcast_affinity.shift if @broadcast_affinity.size >= MAX_AFFINITY_ENTRIES
+          @broadcast_affinity[txid.to_s] = provider
+        end
       end
 
       # --- Token Bucket ---
