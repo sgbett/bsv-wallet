@@ -105,7 +105,7 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | outgoing | bool | NOT NULL DEFAULT true |
 | description | text | NOT NULL |
 | version | integer | |
-| nlocktime | bigint | DEFAULT 0 |
+| nlocktime | bigint | |
 | broadcast | broadcast_intent | NOT NULL DEFAULT 'delayed' |
 | raw_tx | bytea | |
 | input_beef | bytea | |

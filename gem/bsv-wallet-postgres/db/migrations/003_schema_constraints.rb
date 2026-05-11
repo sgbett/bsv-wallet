@@ -23,7 +23,7 @@ Sequel.migration do
       add_constraint(:raw_tx_min_length)  { length(raw_tx) >= 20 }
     end
 
-    # --- 2. actions ---
+    # --- 3. actions ---
     alter_table(:actions) do
       drop_column :satoshis
       set_column_not_null :description
@@ -266,7 +266,7 @@ Sequel.migration do
       drop_constraint :block_height_range
     end
 
-    # --- 2. actions ---
+    # --- 3. actions ---
     run "ALTER TABLE actions ALTER COLUMN reference TYPE text USING reference::text"
     run "ALTER TABLE actions ALTER COLUMN reference DROP NOT NULL"
     alter_table(:actions) do
