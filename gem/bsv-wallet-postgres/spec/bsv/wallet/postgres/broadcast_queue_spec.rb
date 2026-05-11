@@ -30,7 +30,7 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
 
     context 'with arc_client' do
       let(:arc_response) do
-        double('Result', success?: true, data: {
+        double('Result', http_success?: true, data: {
           txStatus: 'SEEN_ON_NETWORK',
           status: 200,
           blockHash: nil,
@@ -116,7 +116,7 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
 
   describe '#process_pending' do
     let(:arc_response) do
-      double('Result', success?: true, data: {
+      double('Result', http_success?: true, data: {
         txStatus: 'MINED',
         status: 200,
         blockHash: SecureRandom.random_bytes(32).unpack1('H*'),

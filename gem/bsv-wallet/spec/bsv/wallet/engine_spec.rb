@@ -264,7 +264,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
     context 'with inline broadcast' do
       let(:arc_response) do
-        double('Result', success?: true, data: {
+        double('Result', http_success?: true, data: {
                  txStatus: 'SEEN_ON_NETWORK', status: 200,
                  blockHash: nil, blockHeight: nil, merklePath: nil
                })

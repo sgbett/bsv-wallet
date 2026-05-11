@@ -331,7 +331,7 @@ module BSV
         # Fetch transaction from network
         BSV.logger&.debug { "[Engine] import_utxo: fetching #{dtxid} from network" }
         result = @network_provider.call(:get_tx, txid: dtxid)
-        raise BSV::Wallet::Error, "failed to fetch tx #{dtxid}" unless result.success?
+        raise BSV::Wallet::Error, "failed to fetch tx #{dtxid}" unless result.http_success?
 
         raw_tx = [result.data.strip].pack('H*')
         tx = BSV::Transaction::Transaction.from_binary(raw_tx)
@@ -356,10 +356,10 @@ module BSV
         merkle_path = nil
         block_height = nil
         details_result = @network_provider.call(:get_tx_details, txid: dtxid)
-        if details_result.success? && details_result.data['blockheight']
+        if details_result.http_success? && details_result.data['blockheight']
           block_height = details_result.data['blockheight']
           proof_result = @network_provider.call(:get_merkle_path, txid: dtxid)
-          if proof_result.success? && proof_result.data.is_a?(Array) && proof_result.data.any?
+          if proof_result.http_success? && proof_result.data.is_a?(Array) && proof_result.data.any?
             tsc = proof_result.data.first
             mp = BSV::Transaction::MerklePath.from_tsc(
               dtxid_hex: tsc['txOrId'], index: tsc['index'],
