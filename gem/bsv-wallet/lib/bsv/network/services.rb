@@ -44,7 +44,7 @@ module BSV
         memo_result = check_sibling_memo(sym, args, kwargs)
         return memo_result if memo_result
 
-        candidates = candidates_for(sym)
+        candidates = candidates_for(sym, args, kwargs)
         return no_provider_error(sym) if candidates.empty?
 
         last_error = nil
@@ -88,11 +88,12 @@ module BSV
 
       # Build the ordered candidate list for a command.
       # For :get_tx_status, broadcast affinity moves the preferred provider to front.
-      def candidates_for(command)
+      def candidates_for(command, args = [], kwargs = {})
         capable = @providers.select { |p| p.commands.include?(command) }
 
         if command == :get_tx_status
-          affinity = @mutex.synchronize { @broadcast_affinity.values.last }
+          txid = (kwargs[:txid] || args.first).to_s
+          affinity = @mutex.synchronize { @broadcast_affinity[txid] }
           capable = [affinity] + (capable - [affinity]) if affinity && capable.include?(affinity)
         end
 
@@ -219,9 +220,11 @@ module BSV
       # --- Token Bucket ---
 
       # Simple token bucket rate limiter. One per provider.
-      # Refills at +rate+ tokens per second, capacity of 1 burst.
+      # Refills at +rate+ tokens per second with burst capacity equal to rate.
       class TokenBucket
         def initialize(rate)
+          raise ArgumentError, 'rate must be positive' unless rate.to_f.positive?
+
           @rate = rate.to_f
           @tokens = @rate
           @last_refill = Time.now

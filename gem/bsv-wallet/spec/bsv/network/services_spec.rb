@@ -37,7 +37,7 @@ RSpec.describe BSV::Network::Services do
       expect { described_class.new(providers: []) }.to raise_error(ArgumentError)
     end
 
-    it 'accepts nil check' do
+    it 'rejects nil providers' do
       expect { described_class.new(providers: nil) }.to raise_error(ArgumentError)
     end
   end
