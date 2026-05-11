@@ -109,9 +109,8 @@ module BSV
         end
 
         # Returns block ID if a block can be found or created, nil otherwise.
-        # When merkle_root is absent (e.g. ARC response without it), returns
-        # nil — the proof is saved without a block association, and the chain
-        # tracker fills it in later.
+        # Derives merkle_root from merkle_path when not provided explicitly.
+        # Returns nil only when neither merkle_root nor merkle_path is available.
         def find_or_create_block(proof)
           height = proof[:height]
           return unless height
@@ -119,7 +118,7 @@ module BSV
           existing = Block.first(height: height)
           return existing.id if existing
 
-          merkle_root = proof[:merkle_root]
+          merkle_root = proof[:merkle_root] || derive_merkle_root(proof[:merkle_path])
           return unless merkle_root
 
           Block.create(
@@ -129,6 +128,16 @@ module BSV
           ).id
         rescue Sequel::UniqueConstraintViolation
           Block.first!(height: height).id
+        end
+
+        def derive_merkle_root(merkle_path_binary)
+          return unless merkle_path_binary
+
+          paths = BSV::Transaction::MerklePath.from_binary(merkle_path_binary)
+          mp = paths.is_a?(Array) ? paths.first : paths
+          mp&.compute_root
+        rescue StandardError
+          nil
         end
 
         def decode_hex(hex)
