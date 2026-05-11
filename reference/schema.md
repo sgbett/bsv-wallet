@@ -83,7 +83,7 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | outgoing | bool | NOT NULL DEFAULT true |
 | description | text | NOT NULL |
 | version | integer | |
-| nlocktime | bigint | NOT NULL DEFAULT 0 |
+| nlocktime | bigint | DEFAULT 0 |
 | broadcast | broadcast_intent | NOT NULL DEFAULT 'delayed' |
 | raw_tx | bytea | |
 | input_beef | bytea | |
@@ -93,7 +93,7 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 **Constraints:**
 - `CHECK wtxid IS NULL OR length(wtxid) = 32`
 - `CHECK length(description) BETWEEN 5 AND 50`
-- `CHECK nlocktime >= 0`
+- `CHECK NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)` — outgoing actions require nlocktime; incoming actions may omit it
 - `CHECK (wtxid IS NULL) = (raw_tx IS NULL)` — an action is either unsigned (both NULL) or signed (both set)
 
 **Indexes:**
@@ -502,7 +502,7 @@ At scale, partition by id range. Old partitions where all outputs have been spen
 | col | type | attributes |
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| action_id | bigint | NOT NULL REFERENCES actions (id) |
+| action_id | bigint | REFERENCES actions (id) ON DELETE SET NULL |
 | satoshis | bigint | NOT NULL |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | locking_script | bytea | NOT NULL |
@@ -525,6 +525,8 @@ At scale, partition by id range. Old partitions where all outputs have been spen
   - `CHECK output_type IS NOT NULL OR derivation_prefix IS NOT NULL`
   - `CHECK output_type IS NOT NULL OR derivation_suffix IS NOT NULL`
   - `CHECK output_type IS NOT NULL OR sender_identity_key IS NOT NULL`
+
+**Cascade:** `action_id ON DELETE SET NULL` — deleting an action (abort, reaper) orphans output rows rather than cascading the delete. Outputs are the immutable log; orphaned rows have NULL action_id, no spendable entry, and are invisible to the wallet.
 
 **Note:** No `updated_at` — immutable rows have no updates. No `basket_id` — basket membership is in `output_baskets`. No `wtxid` — derived via `output.action.wtxid`. Column order optimized for alignment: 8-byte columns first, then variable-width, with 4-byte `vout` tucked after `locking_script` to reduce padding.
 
