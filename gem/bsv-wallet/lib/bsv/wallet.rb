@@ -22,7 +22,7 @@ module BSV
     autoload :KeyDeriver, 'bsv/wallet/key_deriver'
 
     # Network services (porcelain routing layer over SDK providers)
-    require 'bsv/network/services'
+    require_relative 'network/services'
 
     # Engine (Layer 3 — orchestration)
     autoload :Engine, 'bsv/wallet/engine'
