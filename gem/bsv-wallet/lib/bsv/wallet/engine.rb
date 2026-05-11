@@ -1002,11 +1002,13 @@ module BSV
         subject_proof_id = nil
 
         beef.transactions.each do |beef_tx|
+          next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
           next unless beef_tx.transaction
 
           wtxid = beef_tx.transaction.wtxid
           merkle_path = beef_tx.transaction.merkle_path ||
-                        (beef_tx.bump_index && beef.bumps[beef_tx.bump_index])
+                        (beef_tx.respond_to?(:bump_index) && beef_tx.bump_index &&
+                         beef.bumps[beef_tx.bump_index])
 
           proof = { raw_tx: beef_tx.transaction.to_binary }
           if merkle_path
@@ -1054,7 +1056,7 @@ module BSV
         beef.transactions.each do |beef_tx|
           wtxid = beef_tx.wtxid
           next if wtxid == subject_wtxid
-          next if beef_tx.format == BSV::Transaction::Beef::FORMAT_TXID_ONLY
+          next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
 
           next unless known_set.include?(wtxid) || @proof_store.proof_exists?(wtxid: wtxid)
 

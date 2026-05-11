@@ -831,7 +831,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       # Parse to get ancestor txids
       beef = BSV::Transaction::Beef.from_binary(beef_data)
       ancestor_wtxids = beef.transactions
-                            .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                            .select { |bt| bt.is_a?(BSV::Transaction::Beef::ProvenTxEntry) }
                             .map(&:wtxid)
 
       engine.internalize_action(
@@ -1167,7 +1167,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         # Pre-populate ProofStore with proofs for all ancestors
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         beef.transactions
-            .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+            .select { |bt| bt.is_a?(BSV::Transaction::Beef::ProvenTxEntry) }
             .each do |bt|
           proof_store.save_proof(
             wtxid: bt.wtxid,
@@ -1194,7 +1194,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         # Only populate ProofStore for the first ancestor
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         first_ancestor = beef.transactions
-                             .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                             .select { |bt| bt.is_a?(BSV::Transaction::Beef::ProvenTxEntry) }
                              .first
 
         proof_store.save_proof(
@@ -1254,7 +1254,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         # Get the ancestor wtxid but do NOT put it in ProofStore
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         ancestor_wtxid = beef.transactions
-                             .find { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                             .find { |bt| bt.is_a?(BSV::Transaction::Beef::ProvenTxEntry) }
                              &.wtxid
 
         result = engine.internalize_action(
@@ -1277,7 +1277,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         # Pre-populate ProofStore — but since trust_self is nil, full validation runs
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         beef.transactions
-            .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+            .select { |bt| bt.is_a?(BSV::Transaction::Beef::ProvenTxEntry) }
             .each do |bt|
           proof_store.save_proof(
             wtxid: bt.wtxid,
@@ -1308,7 +1308,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         ancestor_wtxids = beef.transactions
-                              .select { |bt| bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP }
+                              .select { |bt| bt.is_a?(BSV::Transaction::Beef::ProvenTxEntry) }
                               .map(&:wtxid)
 
         engine.internalize_action(
@@ -1338,7 +1338,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
 
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         ancestor_bt = beef.transactions.find do |bt|
-          bt.format == BSV::Transaction::Beef::FORMAT_RAW_TX_AND_BUMP
+          bt.is_a?(BSV::Transaction::Beef::ProvenTxEntry)
         end
         ancestor_txid = ancestor_bt.wtxid
 
