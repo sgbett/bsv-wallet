@@ -36,7 +36,7 @@ module BSV
       # @param command [Symbol] SDK command name
       # @param args    [Array]  positional arguments forwarded to the provider
       # @param kwargs  [Hash]   keyword arguments forwarded to the provider
-      # @return [Result::Success, Result::Error, Result::NotFound]
+      # @return [BSV::Network::ProtocolResponse]
       def call(command, *args, **kwargs)
         sym = command.to_sym
 
@@ -45,7 +45,7 @@ module BSV
         return memo_result if memo_result
 
         candidates = candidates_for(sym, args, kwargs)
-        return no_provider_error(sym) if candidates.empty?
+        return no_provider_response(sym) if candidates.empty?
 
         last_error = nil
 
@@ -54,17 +54,17 @@ module BSV
 
           result = provider.call(sym, *args, **kwargs)
 
-          if result.success?
+          if result.http_success?
             stash_siblings(sym, result, args, kwargs)
             normalized = normalize(sym, result)
             record_affinity(sym, provider, normalized)
             return normalized
           end
 
-          return result if result.not_found?
+          return result if result.http_not_found?
 
           last_error = result
-          break unless result.respond_to?(:retryable?) && result.retryable?
+          break unless result.retryable?
         end
 
         last_error
@@ -100,8 +100,11 @@ module BSV
         capable
       end
 
-      def no_provider_error(command)
-        Result::Error.new(message: "no provider serves :#{command}", retryable: false)
+      # Synthetic error response when no provider serves a command.
+      # No real HTTP response — construct with nil and override success.
+      def no_provider_response(command)
+        ProtocolResponse.new(nil, http_success: false,
+                                  error_message: "no provider serves :#{command}")
       end
 
       # --- Rate Limiting ---
@@ -128,7 +131,7 @@ module BSV
             normalize_get_tx(data)
           end
 
-        Result::Success.new(data: normalized_data, metadata: result.metadata)
+        result.with(data: normalized_data)
       end
 
       # Canonical broadcast/tx_status response: symbol keys, consistent field names.
@@ -173,7 +176,7 @@ module BSV
       # so a subsequent :get_merkle_path can serve it without a network call.
       # Called with the raw (pre-normalization) result.
       def stash_siblings(command, result, args, kwargs)
-        return unless command == :get_tx && result.success?
+        return unless command == :get_tx && result.http_success?
 
         data = result.data
         return unless data.is_a?(Hash) && data['merkle_proof'] && !data['merkle_proof'].empty?
@@ -200,10 +203,7 @@ module BSV
         return unless entry
         return if Time.now - entry[:stashed_at] > MEMO_TTL
 
-        # Return the base64-encoded merkle proof as the raw data.
-        # The caller handles decoding — this matches what a direct
-        # JungleBus get_merkle_path would return.
-        Result::Success.new(data: entry[:data])
+        ProtocolResponse.new(nil, data: entry[:data], http_success: true)
       end
 
       # --- Broadcast Affinity ---
@@ -212,7 +212,7 @@ module BSV
       private_constant :MAX_AFFINITY_ENTRIES
 
       def record_affinity(command, provider, result)
-        return unless command == :broadcast && result.success?
+        return unless command == :broadcast && result.http_success?
 
         txid = result.data[:txid]
         return unless txid

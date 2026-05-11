@@ -18,16 +18,30 @@ RSpec.describe BSV::Network::Services do
     provider
   end
 
-  def success(data, metadata: {})
-    BSV::Network::Result::Success.new(data: data, metadata: metadata)
+  def success(data)
+    BSV::Network::ProtocolResponse.new(nil, data: data, http_success: true)
   end
 
   def error(message, retryable: false)
-    BSV::Network::Result::Error.new(message: message, retryable: retryable)
+    http_resp = instance_double(Net::HTTPResponse).tap do |r|
+      allow(r).to receive(:is_a?).and_return(false)
+      allow(r).to receive(:is_a?).with(Net::HTTPSuccess).and_return(false)
+      allow(r).to receive(:is_a?).with(Net::HTTPNotFound).and_return(false)
+      allow(r).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(retryable)
+      allow(r).to receive(:is_a?).with(Net::HTTPServerError).and_return(false)
+    end
+    BSV::Network::ProtocolResponse.new(http_resp, http_success: false, error_message: message)
   end
 
   def not_found(message = 'not found')
-    BSV::Network::Result::NotFound.new(message: message)
+    http_resp = instance_double(Net::HTTPResponse).tap do |r|
+      allow(r).to receive(:is_a?).and_return(false)
+      allow(r).to receive(:is_a?).with(Net::HTTPSuccess).and_return(false)
+      allow(r).to receive(:is_a?).with(Net::HTTPNotFound).and_return(true)
+      allow(r).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(false)
+      allow(r).to receive(:is_a?).with(Net::HTTPServerError).and_return(false)
+    end
+    BSV::Network::ProtocolResponse.new(http_resp, http_success: false, error_message: message)
   end
 
   # --- Construction ---
@@ -50,7 +64,7 @@ RSpec.describe BSV::Network::Services do
       services = described_class.new(providers: [provider])
 
       result = services.call(:get_tx, 'abc123')
-      expect(result.success?).to be true
+      expect(result.http_success?).to be true
     end
 
     it 'skips providers that do not serve the command' do
@@ -59,7 +73,7 @@ RSpec.describe BSV::Network::Services do
       services = described_class.new(providers: [arc, woc])
 
       result = services.call(:get_utxos, 'addr')
-      expect(result.success?).to be true
+      expect(result.http_success?).to be true
       expect(result.data).to be_a(Array)
     end
 
@@ -69,7 +83,6 @@ RSpec.describe BSV::Network::Services do
       services = described_class.new(providers: [p1, p2])
 
       result = services.call(:get_tx, 'txid')
-      # get_tx normalizes — both are hex strings, first wins
       expect(result.data).to eq('from_p1')
     end
   end
@@ -83,7 +96,7 @@ RSpec.describe BSV::Network::Services do
       services = described_class.new(providers: [failing, working])
 
       result = services.call(:get_tx, 'txid')
-      expect(result.success?).to be true
+      expect(result.http_success?).to be true
       expect(result.data).to eq('from_p2')
     end
 
@@ -93,8 +106,8 @@ RSpec.describe BSV::Network::Services do
       services = described_class.new(providers: [failing, working])
 
       result = services.call(:get_tx, 'txid')
-      expect(result.error?).to be true
-      expect(result.message).to eq('bad request')
+      expect(result.http_success?).to be false
+      expect(result.error_message).to eq('bad request')
     end
 
     it 'treats NotFound as terminal' do
@@ -103,7 +116,7 @@ RSpec.describe BSV::Network::Services do
       services = described_class.new(providers: [nf, working])
 
       result = services.call(:get_tx, 'txid')
-      expect(result.not_found?).to be true
+      expect(result.http_not_found?).to be true
     end
 
     it 'returns last error when all providers fail' do
@@ -112,8 +125,8 @@ RSpec.describe BSV::Network::Services do
       services = described_class.new(providers: [p1, p2])
 
       result = services.call(:get_tx, 'txid')
-      expect(result.error?).to be true
-      expect(result.message).to eq('p2 down')
+      expect(result.http_success?).to be false
+      expect(result.error_message).to eq('p2 down')
     end
 
     it 'returns error when no provider serves the command' do
@@ -121,8 +134,8 @@ RSpec.describe BSV::Network::Services do
       services = described_class.new(providers: [provider])
 
       result = services.call(:get_utxos, 'addr')
-      expect(result.error?).to be true
-      expect(result.message).to match(/no provider/)
+      expect(result.http_success?).to be false
+      expect(result.error_message).to match(/no provider/)
     end
   end
 
@@ -230,12 +243,10 @@ RSpec.describe BSV::Network::Services do
                                })
       services = described_class.new(providers: [provider])
 
-      # Trigger stash
       services.call(:get_tx, 'abc123')
 
-      # Serve from memo — no network call needed
       result = services.call(:get_merkle_path, txid: 'abc123')
-      expect(result.success?).to be true
+      expect(result.http_success?).to be true
       expect(result.data).to eq(proof_b64)
     end
 
@@ -247,10 +258,10 @@ RSpec.describe BSV::Network::Services do
       services = described_class.new(providers: [provider])
 
       services.call(:get_tx, 'abc123')
-      services.call(:get_merkle_path, txid: 'abc123') # consumes
+      services.call(:get_merkle_path, txid: 'abc123')
 
       result = services.call(:get_merkle_path, txid: 'abc123')
-      expect(result.error?).to be true
+      expect(result.http_success?).to be false
     end
 
     it 'expires after TTL' do
@@ -261,12 +272,10 @@ RSpec.describe BSV::Network::Services do
       services = described_class.new(providers: [provider])
 
       services.call(:get_tx, 'abc123')
-
-      # Simulate TTL expiry by manipulating the stash
       services.instance_variable_get(:@sibling_memo)['abc123'][:stashed_at] = Time.now - 10
 
       result = services.call(:get_merkle_path, txid: 'abc123')
-      expect(result.error?).to be true
+      expect(result.http_success?).to be false
     end
 
     it 'does not stash when merkle_proof is empty' do
@@ -278,7 +287,7 @@ RSpec.describe BSV::Network::Services do
 
       services.call(:get_tx, 'abc123')
       result = services.call(:get_merkle_path, txid: 'abc123')
-      expect(result.error?).to be true
+      expect(result.http_success?).to be false
     end
   end
 
@@ -294,12 +303,10 @@ RSpec.describe BSV::Network::Services do
                             get_tx_status: success({ 'txid' => 'abc', 'txStatus' => 'UNKNOWN' })
                           })
 
-      # WoC first in priority, but ARC broadcast creates affinity
       services = described_class.new(providers: [woc, arc])
       services.call(:broadcast, 'rawtx')
 
       result = services.call(:get_tx_status, txid: 'abc')
-      # ARC should be preferred due to affinity — returns MINED, not UNKNOWN
       expect(result.data[:tx_status]).to eq('MINED')
     end
   end
@@ -350,11 +357,19 @@ RSpec.describe BSV::Network::Services do
 
   describe BSV::Network::Services::TokenBucket do
     it 'allows immediate acquisition when tokens are available' do
-      bucket = described_class.new(10) # 10/sec
+      bucket = described_class.new(10)
       start = Time.now
       bucket.acquire!
       elapsed = Time.now - start
       expect(elapsed).to be < 0.1
+    end
+
+    it 'rejects zero rate' do
+      expect { described_class.new(0) }.to raise_error(ArgumentError, /positive/)
+    end
+
+    it 'rejects negative rate' do
+      expect { described_class.new(-1) }.to raise_error(ArgumentError, /positive/)
     end
   end
 end
