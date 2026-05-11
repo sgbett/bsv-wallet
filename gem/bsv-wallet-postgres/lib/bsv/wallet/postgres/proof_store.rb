@@ -62,7 +62,7 @@ module BSV
             next unless @arc_client
 
             result = @arc_client.call(:get_tx_status, txid: req.dtxid)
-            next unless result.success?
+            next unless result.http_success?
 
             data = result.data
             tx_status = data[:txStatus] || data[:tx_status]
