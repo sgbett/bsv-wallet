@@ -22,7 +22,7 @@ module BSV
       def initialize(providers:)
         raise ArgumentError, 'at least one provider is required' if providers.nil? || providers.empty?
 
-        @providers = providers.freeze
+        @providers = providers.dup.freeze
         @buckets = providers.each_with_object({}) do |p, h|
           h[p] = TokenBucket.new(p.rate_limit) if p.rate_limit
         end
@@ -170,7 +170,8 @@ module BSV
       # --- Sibling Memo ---
 
       MEMO_TTL = 5
-      private_constant :MEMO_TTL
+      MAX_MEMO_ENTRIES = 100
+      private_constant :MEMO_TTL, :MAX_MEMO_ENTRIES
 
       # When :get_tx returns JungleBus data with a merkle_proof, stash it
       # so a subsequent :get_merkle_path can serve it without a network call.
@@ -185,6 +186,7 @@ module BSV
         return unless txid
 
         @mutex.synchronize do
+          @sibling_memo.shift if @sibling_memo.size >= MAX_MEMO_ENTRIES
           @sibling_memo[txid.to_s] = {
             data: data['merkle_proof'],
             stashed_at: Time.now
@@ -226,13 +228,15 @@ module BSV
       # --- Token Bucket ---
 
       # Simple token bucket rate limiter. One per provider.
-      # Refills at +rate+ tokens per second with burst capacity equal to rate.
+      # Refills at +rate+ tokens per second. Burst capacity is max(rate, 1)
+      # so that sub-1 rates (e.g. 0.5 req/sec) can still acquire a token.
       class TokenBucket
         def initialize(rate)
           raise ArgumentError, 'rate must be positive' unless rate.to_f.positive?
 
           @rate = rate.to_f
-          @tokens = @rate
+          @capacity = [@rate, 1.0].max
+          @tokens = @capacity
           @last_refill = Time.now
           @mutex = Mutex.new
         end
@@ -256,7 +260,7 @@ module BSV
         def refill
           now = Time.now
           elapsed = now - @last_refill
-          @tokens = [@tokens + (elapsed * @rate), @rate].min
+          @tokens = [@tokens + (elapsed * @rate), @capacity].min
           @last_refill = now
         end
       end
