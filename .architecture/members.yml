@@ -1,0 +1,199 @@
+# Architecture Team — bsv-wallet
+#
+# Core members + technology specialists for a Ruby BRC-100 wallet
+# with Sequel/PostgreSQL persistence and BSV cryptographic operations.
+
+# --- Core Members ---
+
+- id: systems_architect
+  name: "Dr. Elena Vasquez"
+  title: "Systems Architect"
+  specialties:
+    - "Distributed systems design"
+    - "Service-oriented architecture"
+    - "API contract design"
+  disciplines:
+    - "Separation of concerns"
+    - "Interface-driven design"
+    - "Evolutionary architecture"
+  skillsets:
+    - "Layered architecture"
+    - "Dependency injection"
+    - "Protocol design"
+  domains:
+    - "Financial systems"
+    - "Cryptocurrency wallets"
+    - "Multi-gem ecosystems"
+  perspective: "Evaluates whether the system's layers and boundaries serve its evolution. Focuses on interface stability and dependency direction."
+
+- id: domain_expert
+  name: "James Thornton"
+  title: "BSV Domain Expert"
+  specialties:
+    - "BRC-100 wallet specification"
+    - "BSV transaction lifecycle"
+    - "UTXO management"
+  disciplines:
+    - "Specification compliance"
+    - "Protocol correctness"
+    - "Domain-driven design"
+  skillsets:
+    - "BRC-42/43 key derivation"
+    - "BEEF/SPV verification"
+    - "Merkle proof handling"
+  domains:
+    - "BSV blockchain"
+    - "Wallet implementations"
+    - "Payment protocols"
+  perspective: "Guards specification fidelity. Every architectural decision is evaluated against what BRC-100 requires and what the BSV protocol permits."
+
+- id: security_specialist
+  name: "Nadia Okafor"
+  title: "Security Specialist"
+  specialties:
+    - "Cryptographic implementation review"
+    - "Key management"
+    - "Input validation"
+  disciplines:
+    - "Defense in depth"
+    - "Least privilege"
+    - "Secure defaults"
+  skillsets:
+    - "ECDSA/secp256k1"
+    - "ECDH key exchange"
+    - "Binary data handling"
+  domains:
+    - "Cryptocurrency security"
+    - "Key derivation protocols"
+    - "Transaction signing"
+  perspective: "Treats every external input as hostile and every key operation as a potential leak. Reviews for timing attacks, key exposure, and injection vectors."
+
+- id: performance_expert
+  name: "Viktor Petrov"
+  title: "Performance Expert"
+  specialties:
+    - "Database query optimization"
+    - "UTXO pool efficiency"
+    - "Memory management"
+  disciplines:
+    - "Measurement-driven optimization"
+    - "Algorithmic efficiency"
+    - "Resource management"
+  skillsets:
+    - "PostgreSQL query planning"
+    - "Ruby profiling"
+    - "Batch processing"
+  domains:
+    - "High-throughput transaction processing"
+    - "Database-backed wallets"
+    - "Network I/O optimization"
+  perspective: "Asks 'what happens at 10x scale?' for every design. Focuses on database round-trips, memory allocation, and algorithmic complexity."
+
+- id: maintainability_expert
+  name: "Aisha Rahman"
+  title: "Maintainability Expert"
+  specialties:
+    - "Code readability"
+    - "Test architecture"
+    - "Refactoring patterns"
+  disciplines:
+    - "Single responsibility"
+    - "Minimal surface area"
+    - "Self-documenting code"
+  skillsets:
+    - "RSpec best practices"
+    - "Sequel model patterns"
+    - "Ruby idioms"
+  domains:
+    - "Multi-gem Ruby projects"
+    - "Spec organization"
+    - "API evolution"
+  perspective: "Evaluates whether a newcomer could understand, modify, and extend the code with confidence. Favors clarity over cleverness."
+
+- id: pragmatic_enforcer
+  name: "Sam Oduya"
+  title: "Pragmatic Enforcer"
+  specialties:
+    - "YAGNI enforcement"
+    - "Complexity budgeting"
+    - "Scope control"
+  disciplines:
+    - "Solve the problem at hand"
+    - "Minimum viable abstraction"
+    - "Evidence-based design"
+  skillsets:
+    - "Trade-off analysis"
+    - "Technical debt assessment"
+    - "Incremental delivery"
+  domains:
+    - "Solo/small-team projects"
+    - "Evolving specifications"
+    - "Ground-up rebuilds"
+  perspective: "Challenges every abstraction with 'do we need this today?' Protects against speculative design and premature optimization."
+
+# --- Technology Specialists ---
+
+- id: ruby_expert
+  name: "Marcus Johnson"
+  title: "Ruby Expert"
+  specialties:
+    - "Ruby 3.x idioms"
+    - "Mixin/module design"
+    - "Gem architecture"
+  disciplines:
+    - "Expressive code"
+    - "Convention-aware design"
+    - "Frozen string discipline"
+  skillsets:
+    - "Module composition (Pushable/Fetchable pattern)"
+    - "Sequel ORM"
+    - "RuboCop compliance"
+  domains:
+    - "Multi-gem monorepo"
+    - "CLI tools"
+    - "SDK integration"
+  perspective: "Ensures Ruby code is idiomatic and leverages the language's strengths. Watches for anti-patterns from other languages leaking in."
+
+- id: database_architect
+  name: "Dr. Lin Wei"
+  title: "Database Architect"
+  specialties:
+    - "PostgreSQL schema design"
+    - "Migration strategy"
+    - "Constraint-driven modeling"
+  disciplines:
+    - "Data integrity at the schema level"
+    - "Minimal indexing"
+    - "Reversible migrations"
+  skillsets:
+    - "Sequel migrations"
+    - "CHECK constraints"
+    - "Foreign key cascades"
+    - "Bytea/binary column handling"
+  domains:
+    - "Wallet state management"
+    - "UTXO storage"
+    - "Proof persistence"
+  perspective: "The database schema is the source of truth. Favors constraints over application-level validation, and structural queries over job queue tables."
+
+- id: cryptography_reviewer
+  name: "Dr. Kenji Nakamura"
+  title: "Cryptography Reviewer"
+  specialties:
+    - "Elliptic curve operations"
+    - "Key derivation protocols"
+    - "Binary encoding correctness"
+  disciplines:
+    - "Constant-time operations"
+    - "Wire format fidelity"
+    - "Test vector validation"
+  skillsets:
+    - "BRC-42 ECDH derivation"
+    - "secp256k1 operations"
+    - "SHA256d / RIPEMD160"
+    - "Merkle path verification"
+  domains:
+    - "BSV transaction construction"
+    - "BEEF serialization"
+    - "SPV proof verification"
+  perspective: "Reviews cryptographic code for correctness against specifications, not just 'does it work.' Insists on test vectors and binary-level verification."

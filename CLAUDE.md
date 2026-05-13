@@ -51,8 +51,20 @@ cd gem/bsv-wallet-postgres && bundle exec rspec
 # RuboCop (wallet gem only in CI)
 cd gem/bsv-wallet && bundle exec rubocop
 
-# Integration specs (requires WIF_ALICE, WIF_BOB, FUNDING_TXID, DATABASE_URL_ALICE/BOB)
+# Integration specs (requires BSV_WALLET_WIF_ALICE/BOB, DATABASE_URL_ALICE/BOB)
 cd gem/bsv-wallet && bundle exec rspec --tag on_chain
 ```
 
 Running `bundle exec rspec gem/bsv-wallet-postgres/spec/` from the repo root will fail — the postgres spec_helper won't load, so model constants are uninitialized.
+
+## Architecture Framework
+
+The `.architecture/` directory contains the AI Software Architect framework:
+
+- **`members.yml`** — architecture team roster (10 specialists)
+- **`principles.md`** — architectural principles governing design decisions
+- **`decisions/adrs/`** — Architectural Decision Records
+- **`reviews/`** — architecture reviews and system analyses
+- **`config.yml`** — framework configuration
+
+Commands: `architecture-status`, `create-adr`, `specialist-review`, `architecture-review`, `list-members`

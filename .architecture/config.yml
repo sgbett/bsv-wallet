@@ -1,0 +1,18 @@
+# AI Software Architect Framework Configuration
+# Project: bsv-wallet
+
+project:
+  name: bsv-wallet
+  type: ruby-gem
+  description: BRC-100 compliant BSV wallet — Ruby implementation
+
+settings:
+  pragmatic_mode: true
+  review_depth: thorough
+  adr_numbering: sequential
+  auto_detect_changes: true
+
+review:
+  default_scope: full
+  include_security: true
+  include_performance: true
