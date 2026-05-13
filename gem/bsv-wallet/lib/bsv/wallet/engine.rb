@@ -426,6 +426,50 @@ module BSV
         { imported: true, satoshis: self_payment_sats, dtxid: dtxid }
       end
 
+      # --- Porcelain ---
+
+      # Send a BRC-42 derived payment to a recipient.
+      #
+      # Generates derivation parameters, derives a P2PKH locking script for
+      # the recipient via BRC-42, and calls create_action with auto-fund to
+      # handle UTXO selection, fees, and change.
+      #
+      # @param recipient [String] 66-char compressed public key hex (02/03 prefix)
+      # @param satoshis [Integer] amount to send
+      # @return [Hash] { beef:, sender_identity_key:, outputs: [{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }] }
+      def send_payment(recipient:, satoshis:)
+        require_key_deriver!
+        validate_recipient_key!(recipient)
+
+        derivation_prefix = SecureRandom.uuid
+        derivation_suffix = '1'
+
+        derived_pub = @key_deriver.derive_public_key(
+          protocol_id: [2, derivation_prefix], key_id: derivation_suffix,
+          counterparty: recipient, for_self: true
+        )
+        locking_script = BSV::Script::Script.p2pkh_lock(
+          BSV::Primitives::Digest.hash160(derived_pub)
+        ).to_binary
+
+        result = create_action(
+          description: "send #{satoshis} sats",
+          outputs: [{ satoshis: satoshis, locking_script: locking_script }],
+          no_send: true, randomize_outputs: false
+        )
+
+        {
+          beef: result[:tx],
+          sender_identity_key: @key_deriver.identity_key,
+          outputs: [{
+            vout: 0,
+            satoshis: satoshis,
+            derivation_prefix: derivation_prefix,
+            derivation_suffix: derivation_suffix
+          }]
+        }
+      end
+
       # --- Public Key Management (codes 8-10) ---
 
       def get_public_key(identity_key: false, protocol_id: nil, key_id: nil,
@@ -1114,6 +1158,12 @@ module BSV
         end
 
         spec
+      end
+
+      def validate_recipient_key!(key)
+        return if key.is_a?(String) && key.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
+
+        raise ArgumentError, "invalid recipient key: expected 66-char compressed public key hex, got #{key.inspect}"
       end
 
       def validate_reference!(reference)
