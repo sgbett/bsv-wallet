@@ -246,9 +246,7 @@ module BSV
         # NOT invalidate in-memory source_transaction pointers wired by from_binary.
         # Transaction#verify walks via input.source_transaction, not the BEEF list,
         # so verification succeeds on the original object graph.
-        if trust_self == 'known'
-          replace_known_ancestors!(beef, subject_tx.wtxid, known_txids)
-        end
+        replace_known_ancestors!(beef, subject_tx.wtxid, known_txids) if trust_self == 'known'
 
         # Full SPV verification: scripts, merkle proofs, and fee adequacy
         # (output <= input). Replaces the former validate_beef! +
