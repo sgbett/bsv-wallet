@@ -3,13 +3,12 @@
 module BSV
   module Wallet
     module Postgres
-      # Merkle proof manager backed by tx_proofs and tx_reqs tables.
+      # Merkle proof manager backed by tx_proofs table.
       class ProofStore
         include BSV::Wallet::Interface::ProofStore
 
-        def initialize(db: nil, arc_client: nil)
+        def initialize(db: nil)
           @db = db || BSV::Wallet::Postgres.db
-          @arc_client = arc_client
         end
 
         def save_proof(wtxid:, proof:)
@@ -39,48 +38,6 @@ module BSV
         def proof_exists?(wtxid:)
           BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'proof_exists? wtxid')
           TxProof.where(wtxid: Sequel.blob(wtxid)).any?
-        end
-
-        def request_proof(wtxid:, raw_tx:, input_beef: nil)
-          BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'request_proof wtxid')
-          @db[:tx_reqs].insert_conflict(target: :wtxid).insert(
-            wtxid:      Sequel.blob(wtxid),
-            raw_tx:     raw_tx ? Sequel.blob(raw_tx) : nil,
-            input_beef: input_beef ? Sequel.blob(input_beef) : nil
-          )
-        end
-
-        def process_pending(limit: 100)
-          pending = TxReq
-            .where(status: 'unmined')
-            .where(tx_proof_id: nil)
-            .order(:created_at)
-            .limit(limit)
-            .all
-
-          pending.filter_map do |req|
-            next unless @arc_client
-
-            result = @arc_client.call(:get_tx_status, txid: req.dtxid)
-            next unless result.http_success?
-
-            data = result.data
-            tx_status = data[:txStatus] || data[:tx_status]
-
-            if tx_status == 'MINED'
-              proof_id = save_proof(wtxid: req.wtxid, proof: {
-                height:      data[:blockHeight] || data[:block_height],
-                block_hash:  decode_hex(data[:blockHash] || data[:block_hash]),
-                merkle_path: decode_hex(data[:merklePath] || data[:merkle_path]),
-                raw_tx:      req.raw_tx
-              })
-              req.update(tx_proof_id: proof_id, status: 'completed')
-              { wtxid: req.wtxid, tx_proof_id: proof_id }
-            else
-              req.update(attempts: req.attempts + 1)
-              nil
-            end
-          end
         end
 
         private

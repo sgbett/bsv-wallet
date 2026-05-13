@@ -5,6 +5,8 @@ module BSV
     module Postgres
       class Action < Sequel::Model
         include DisplayTxid
+        include BSV::Wallet::Fetchable
+
         plugin :timestamps, update_on_create: true
 
         many_to_one  :tx_proof, class: 'BSV::Wallet::Postgres::TxProof'
@@ -27,6 +29,47 @@ module BSV
           return :failed     if broadcast_entry&.tx_status == 'REJECTED'
           return :sending    if broadcast_entry
           :unprocessed
+        end
+
+        # -- Fetchable contract --
+
+        def fetch_command
+          :get_tx_status
+        end
+
+        def fetch_args
+          { txid: dtxid }
+        end
+
+        def needs_fetch?
+          outgoing && !wtxid.nil? && tx_proof_id.nil?
+        end
+
+        # Create a TxProof from the network response when proof data is present.
+        # No-op when the transaction is not yet mined (no merkle_path/block_height).
+        def write!(response)
+          return unless response[:merkle_path] && response[:block_height]
+
+          proof_store = ProofStore.new
+          proof_id = proof_store.save_proof(
+            wtxid: wtxid,
+            proof: {
+              height: response[:block_height],
+              block_hash: decode_hex(response[:block_hash]),
+              merkle_path: decode_hex(response[:merkle_path]),
+              raw_tx: raw_tx
+            }
+          )
+          update(tx_proof_id: proof_id)
+        end
+
+        private
+
+        def decode_hex(hex)
+          return unless hex
+          return hex if hex.encoding == Encoding::BINARY
+
+          [hex].pack('H*')
         end
       end
     end
