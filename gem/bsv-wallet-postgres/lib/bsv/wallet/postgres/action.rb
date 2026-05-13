@@ -47,16 +47,19 @@ module BSV
 
         # Create a TxProof from the network response when proof data is present.
         # No-op when the transaction is not yet mined (no merkle_path/block_height).
+        #
+        # @param response [BSV::Network::ProtocolResponse] normalized response
         def write!(response)
-          return unless response[:merkle_path] && response[:block_height]
+          data = response.data
+          return unless data.is_a?(Hash) && data[:merkle_path] && data[:block_height]
 
           proof_store = ProofStore.new
           proof_id = proof_store.save_proof(
             wtxid: wtxid,
             proof: {
-              height: response[:block_height],
-              block_hash: decode_hex(response[:block_hash]),
-              merkle_path: decode_hex(response[:merkle_path]),
+              height: data[:block_height],
+              block_hash: decode_hex(data[:block_hash]),
+              merkle_path: decode_hex(data[:merkle_path]),
               raw_tx: raw_tx
             }
           )

@@ -157,7 +157,7 @@ RSpec.describe BSV::Wallet::Postgres::Action do
         described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: wtxid, raw_tx: raw_tx)
       end
 
-      let(:mined_response) do
+      let(:mined_data) do
         {
           merkle_path: SecureRandom.random_bytes(64).unpack1('H*'),
           block_height: 800_000,
@@ -165,8 +165,12 @@ RSpec.describe BSV::Wallet::Postgres::Action do
         }
       end
 
+      def make_response(data)
+        double('ProtocolResponse', data: data)
+      end
+
       it 'creates TxProof and links to action when response has proof data' do
-        action.write!(mined_response)
+        action.write!(make_response(mined_data))
         action.reload
 
         expect(action.tx_proof_id).not_to be_nil
@@ -176,41 +180,42 @@ RSpec.describe BSV::Wallet::Postgres::Action do
       end
 
       it 'does not create proof when merkle_path is nil' do
-        action.write!({ block_height: 800_000, merkle_path: nil })
+        action.write!(make_response({ block_height: 800_000, merkle_path: nil }))
         expect(action.reload.tx_proof_id).to be_nil
       end
 
       it 'does not create proof when block_height is nil' do
-        action.write!({ merkle_path: 'abcd', block_height: nil })
+        action.write!(make_response({ merkle_path: 'abcd', block_height: nil }))
         expect(action.reload.tx_proof_id).to be_nil
       end
 
       it 'does not create proof for non-MINED response (no proof fields)' do
-        action.write!({ tx_status: 'SEEN_ON_NETWORK' })
+        action.write!(make_response({ tx_status: 'SEEN_ON_NETWORK' }))
         expect(action.reload.tx_proof_id).to be_nil
       end
 
       it 'is idempotent — calling write! twice does not duplicate proofs' do
-        action.write!(mined_response)
+        response = make_response(mined_data)
+        action.write!(response)
         first_proof_id = action.reload.tx_proof_id
 
-        action.write!(mined_response)
+        action.write!(response)
         expect(action.reload.tx_proof_id).to eq(first_proof_id)
         expect(BSV::Wallet::Postgres::TxProof.where(wtxid: Sequel.blob(wtxid)).count).to eq(1)
       end
 
       it 'handles binary merkle_path and block_hash directly' do
-        binary_response = {
+        binary_data = {
           merkle_path: SecureRandom.random_bytes(64),
           block_height: 800_000,
           block_hash: SecureRandom.random_bytes(32)
         }
-        action.write!(binary_response)
+        action.write!(make_response(binary_data))
         action.reload
 
         expect(action.tx_proof_id).not_to be_nil
         proof = BSV::Wallet::Postgres::TxProof[action.tx_proof_id]
-        expect(proof.merkle_path).to eq(binary_response[:merkle_path])
+        expect(proof.merkle_path).to eq(binary_data[:merkle_path])
       end
     end
   end
