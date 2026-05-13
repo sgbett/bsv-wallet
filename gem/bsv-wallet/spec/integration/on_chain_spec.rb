@@ -67,7 +67,7 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do # rubocop:disable RS
     BSV::Wallet::Engine.new(
       store: store,
       utxo_pool: BSV::Wallet::Postgres::UTXOPool.new(store: store),
-      broadcast_queue: BSV::Wallet::Postgres::BroadcastQueue.new(db: db_alice, arc_client: arc_adapter),
+      broadcast_queue: BSV::Wallet::Postgres::BroadcastQueue.new(db: db_alice),
       proof_store: BSV::Wallet::Postgres::ProofStore.new(db: db_alice),
       key_deriver: alice_key_deriver,
       network_provider: network_provider,

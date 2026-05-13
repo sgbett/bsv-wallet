@@ -77,6 +77,48 @@ module BSV
         @providers.reduce(Set.new) { |acc, p| acc | p.commands }
       end
 
+      # Push an entity to the network.
+      #
+      # Calls +entity.push_command+ and +entity.push_payload+, dispatches
+      # through the routing layer, and writes the response back on success.
+      #
+      # @param entity [#push_command, #push_payload, #write!] a Pushable entity
+      # @return [BSV::Network::ProtocolResponse]
+      def push!(entity)
+        command = entity.push_command
+        payload = entity.push_payload
+        response = call(command, payload)
+
+        if response.http_success?
+          entity.write!(response)
+        else
+          BSV.logger&.warn { "[Services] push! failed: #{response.error_message}" }
+        end
+
+        response
+      end
+
+      # Fetch state from the network into an entity.
+      #
+      # Calls +entity.fetch_command+ and +entity.fetch_args+, dispatches
+      # through the routing layer, and writes the response back on success.
+      #
+      # @param entity [#fetch_command, #fetch_args, #write!] a Fetchable entity
+      # @return [BSV::Network::ProtocolResponse]
+      def fetch!(entity)
+        command = entity.fetch_command
+        args = entity.fetch_args
+        response = call(command, **args)
+
+        if response.http_success?
+          entity.write!(response)
+        else
+          BSV.logger&.warn { "[Services] fetch! failed: #{response.error_message}" }
+        end
+
+        response
+      end
+
       # Returns the registered providers (frozen at construction time).
       #
       # @return [Array<BSV::Network::Provider>]

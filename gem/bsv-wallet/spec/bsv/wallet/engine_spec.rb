@@ -263,14 +263,20 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
 
     context 'with inline broadcast' do
-      let(:arc_response) do
-        double('Result', http_success?: true, data: {
-                 txStatus: 'SEEN_ON_NETWORK', status: 200,
-                 blockHash: nil, blockHeight: nil, merklePath: nil
+      let(:push_response) do
+        double('ProtocolResponse', http_success?: true, data: {
+                 tx_status: 'SEEN_ON_NETWORK', status: 200
                })
       end
-      let(:arc_client) { double('ARC', call: arc_response) }
-      let(:broadcast_queue) { BSV::Wallet::Postgres::BroadcastQueue.new(arc_client: arc_client) }
+      let(:services) do
+        svc = double('Services')
+        allow(svc).to receive(:push!) do |broadcast|
+          broadcast.write!(push_response)
+          push_response
+        end
+        svc
+      end
+      let(:broadcast_queue) { BSV::Wallet::Postgres::BroadcastQueue.new(services: services) }
 
       it 'broadcasts inline and promotes on acceptance' do
         result = engine.create_action(
@@ -284,7 +290,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         )
 
         expect(result[:txid]).not_to be_nil
-        expect(arc_client).to have_received(:call).with(:broadcast, anything)
+        expect(services).to have_received(:push!)
 
         # Verify outputs were promoted
         listed = engine.list_outputs(basket: 'payments')

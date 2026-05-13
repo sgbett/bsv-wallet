@@ -478,31 +478,4 @@ RSpec.describe 'Schema constraints' do
     end
   end
 
-  # --- tx_reqs ---
-
-  describe 'tx_reqs' do
-    it 'rejects wtxid not 32 bytes' do
-      expect {
-        db.transaction(savepoint: true) do
-          db[:tx_reqs].insert(wtxid: Sequel.blob("\x00" * 31))
-        end
-      }.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
-    it 'rejects invalid status' do
-      expect {
-        db.transaction(savepoint: true) do
-          db[:tx_reqs].insert(wtxid: Sequel.blob(valid_wtxid), status: 'invalid')
-        end
-      }.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
-    it 'rejects negative attempts' do
-      expect {
-        db.transaction(savepoint: true) do
-          db[:tx_reqs].insert(wtxid: Sequel.blob(valid_wtxid), attempts: -1)
-        end
-      }.to raise_error(Sequel::CheckConstraintViolation)
-    end
-  end
 end

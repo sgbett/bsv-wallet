@@ -43,25 +43,6 @@ module BSV
         def proof_exists?(wtxid:)
           raise NotImplementedError
         end
-
-        # Request a proof for a transaction that doesn't have one yet.
-        # Adds to the proof-harvesting work queue (tx_reqs).
-        #
-        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
-        # @param raw_tx [String] binary transaction (required — tx_proofs.raw_tx is NOT NULL)
-        # @param input_beef [String, nil] binary BEEF for context
-        def request_proof(wtxid:, raw_tx:, input_beef: nil)
-          raise NotImplementedError
-        end
-
-        # Process pending proof requests.
-        # Polls or queries for proofs that haven't arrived yet.
-        #
-        # @param limit [Integer] maximum number to process
-        # @return [Array<Hash>] resolved proofs: :wtxid, :tx_proof_id
-        def process_pending(limit: 100)
-          raise NotImplementedError
-        end
       end
     end
   end
