@@ -29,7 +29,7 @@ module BSV
 
       # Update self from the network response after a successful push.
       #
-      # @param response [Hash] normalized response data
+      # @param response [BSV::Network::ProtocolResponse] normalized response
       def write!(response)
         raise NotImplementedError, "#{self.class}#write! not implemented"
       end
