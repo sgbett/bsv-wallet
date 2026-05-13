@@ -68,6 +68,23 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       expect(result[:txid].length).to eq(32)
     end
 
+    it 'saves raw_tx to ProofStore at sign time' do
+      result = engine.create_action(
+        description: 'proof store test',
+        inputs: [],
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+        ]
+      )
+
+      wtxid = result[:txid]
+      proof = proof_store.find_proof(wtxid: wtxid)
+      expect(proof).not_to be_nil
+      expect(proof[:raw_tx]).to be_a(String)
+      expect(proof[:raw_tx].bytesize).to be >= 10
+    end
+
     it 'creates a deferred signing action with outputs promoted immediately' do
       result = engine.create_action(
         description: 'deferred action',

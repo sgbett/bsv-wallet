@@ -120,6 +120,7 @@ module BSV
           # Outputs are fully known at createAction time — the deferral is about
           # inputs (waiting for caller-provided unlocking scripts), not outputs.
           @store.sign_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
+          @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           return {
             signable_transaction: {
@@ -130,6 +131,7 @@ module BSV
         end
 
         @store.sign_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
+        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         BSV.logger&.debug { "[Engine] create_action: dtxid=#{wtxid.reverse.unpack1('H*')} outputs=#{outputs&.length || 0}" }
 
         # Build Atomic BEEF envelope for the :tx return value
@@ -174,6 +176,7 @@ module BSV
         # remaining P2PKH inputs, and updates the action with signed raw_tx + wtxid.
         wtxid, raw_tx = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: raw_tx)
+        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
 
         # Build Atomic BEEF envelope for the :tx return value
         atomic_beef = build_atomic_beef(raw_tx, action[:id])
@@ -259,6 +262,7 @@ module BSV
           wtxid: subject_tx.wtxid,
           raw_tx: subject_tx.to_binary
         )
+        @proof_store.save_proof(wtxid: subject_tx.wtxid, proof: { raw_tx: subject_tx.to_binary })
         BSV.logger&.debug { "[Engine] internalize_action: subject=#{subject_tx.dtxid}" }
 
         attach_labels(action_result[:id], labels)
@@ -376,6 +380,7 @@ module BSV
           action: { description: 'imported UTXO', broadcast: :none, outgoing: false }
         )
         @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
+        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         output_ids = @store.promote_action(
           action_id: import_action[:id],
           outputs: [{ satoshis: satoshis, vout: vout, locking_script: locking_script.to_binary, output_type: 'root' }]
@@ -1493,6 +1498,7 @@ module BSV
           action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
           change_outputs: change_outputs
         )
+        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         BSV.logger&.debug do
           "[Engine] auto_fund_action: dtxid=#{wtxid.reverse.unpack1('H*')} " \
             "outputs=#{outputs.length} change=#{change_outputs.length}"
