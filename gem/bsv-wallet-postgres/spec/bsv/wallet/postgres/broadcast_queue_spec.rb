@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
-  let(:arc_client) { nil }
-  subject(:queue) { described_class.new(arc_client: arc_client) }
+  let(:services) { nil }
+  subject(:queue) { described_class.new(services: services) }
 
   let(:action) do
     BSV::Wallet::Postgres::Action.create(
@@ -28,28 +28,32 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
       expect(result[:broadcast_at]).to be_nil
     end
 
-    context 'with arc_client' do
-      let(:arc_response) do
-        double('Result', http_success?: true, data: {
-          txStatus: 'SEEN_ON_NETWORK',
-          status: 200,
-          blockHash: nil,
-          blockHeight: nil,
-          merklePath: nil
+    context 'with services' do
+      let(:push_response) do
+        double('ProtocolResponse', http_success?: true, data: {
+          tx_status: 'SEEN_ON_NETWORK',
+          status: 200
         })
       end
-      let(:arc_client) { double('ARC', call: arc_response) }
+      let(:services) { double('Services') }
 
-      it 'posts immediately and updates the record' do
+      before do
+        allow(services).to receive(:push!) do |broadcast|
+          broadcast.write!(push_response)
+          push_response
+        end
+      end
+
+      it 'pushes immediately through services' do
         result = queue.submit(action_id: action.id, raw_tx: action.raw_tx, immediate: true)
         expect(result[:tx_status]).to eq('SEEN_ON_NETWORK')
         expect(result[:broadcast_at]).not_to be_nil
-        expect(arc_client).to have_received(:call).with(:broadcast, action.raw_tx)
+        expect(services).to have_received(:push!)
       end
     end
 
-    context 'without arc_client (immediate)' do
-      it 'creates the record but does not post' do
+    context 'without services (immediate)' do
+      it 'creates the record but does not push' do
         result = queue.submit(action_id: action.id, raw_tx: action.raw_tx, immediate: true)
         expect(result[:action_id]).to eq(action.id)
         expect(result[:tx_status]).to be_nil
@@ -115,29 +119,36 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
   end
 
   describe '#process_pending' do
-    let(:arc_response) do
-      double('Result', http_success?: true, data: {
-        txStatus: 'MINED',
+    let(:fetch_response) do
+      double('ProtocolResponse', http_success?: true, data: {
+        tx_status: 'MINED',
         status: 200,
-        blockHash: SecureRandom.random_bytes(32).unpack1('H*'),
-        blockHeight: 800_000,
-        merklePath: nil
+        block_hash: SecureRandom.random_bytes(32).unpack1('H*'),
+        block_height: 800_000,
+        merkle_path: nil
       })
     end
-    let(:arc_client) { double('ARC', call: arc_response) }
+    let(:services) { double('Services') }
 
-    it 'polls ARC for stale broadcasts and updates them' do
-      # Action must have wtxid for process_pending to poll ARC
+    before do
+      allow(services).to receive(:fetch!) do |broadcast|
+        broadcast.write!(fetch_response)
+        fetch_response
+      end
+    end
+
+    it 'fetches status for stale broadcasts through services' do
       action.update(wtxid: Sequel.blob(SecureRandom.random_bytes(32))) unless action.wtxid
 
-      broadcast = BSV::Wallet::Postgres::Broadcast.create(
+      BSV::Wallet::Postgres::Broadcast.create(
         action_id: action.id,
-        broadcast_at: Time.now - 60 # stale
+        broadcast_at: Time.now - 60
       )
 
       results = queue.process_pending(limit: 10)
       expect(results.size).to eq(1)
       expect(results.first[:tx_status]).to eq('MINED')
+      expect(services).to have_received(:fetch!)
     end
 
     it 'skips broadcasts with terminal status' do
@@ -148,6 +159,17 @@ RSpec.describe BSV::Wallet::Postgres::BroadcastQueue do
       )
 
       results = queue.process_pending(limit: 10)
+      expect(results).to be_empty
+    end
+
+    it 'skips broadcasts without services' do
+      no_services_queue = described_class.new
+      BSV::Wallet::Postgres::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now - 60
+      )
+
+      results = no_services_queue.process_pending(limit: 10)
       expect(results).to be_empty
     end
   end
