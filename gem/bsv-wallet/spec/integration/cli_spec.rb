@@ -8,7 +8,6 @@
 #
 # Environment variables (set in shell profile or CI):
 #   BSV_WALLET_WIF_ALICE/BOB  — wallet private keys
-#   BSV_WALLET_UTXO_ALICE     — dtxid hex of Alice's mined P2PKH UTXO
 #   DATABASE_URL_ALICE/BOB    — optional, defaults to localhost:5433
 #
 # Run:
@@ -19,7 +18,6 @@ require 'sequel'
 
 RSpec.describe 'CLI porcelain: create | receive pipeline', :on_chain do # rubocop:disable RSpec/DescribeClass
   let(:bin_dir) { File.expand_path('../../bin', __dir__) }
-  let(:funding_dtxid) { ENV.fetch('BSV_WALLET_UTXO_ALICE') }
   let(:bob_identity_key) do
     require 'bsv-wallet'
     pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('BSV_WALLET_WIF_BOB'))
@@ -47,8 +45,8 @@ RSpec.describe 'CLI porcelain: create | receive pipeline', :on_chain do # ruboco
   end
 
   it 'Alice pays Bob via create | receive pipeline' do
-    # Import: Alice's funding UTXO by txid and vout
-    _stdout, _, status = run_cli('import', 'alice', funding_dtxid, '0')
+    # Import: scan Alice's root key address for UTXOs
+    _stdout, _, status = run_cli('import', 'alice')
     expect(status).to be_success
 
     # Balance: verify Alice has funds

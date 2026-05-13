@@ -428,6 +428,36 @@ module BSV
 
       # --- Porcelain ---
 
+      # Scan the root key's address for unspent outputs and import each one.
+      #
+      # Derives the P2PKH address from the wallet's root key, queries the
+      # network for UTXOs, and calls import_utxo for each. This is the
+      # bootstrap path — how a wallet gets its initial funding.
+      #
+      # @return [Hash] { imported: Integer, utxos: Array<Hash> }
+      def import_wallet
+        require_key_deriver!
+        raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
+
+        address = @key_deriver.root_private_key.public_key.address
+        BSV.logger&.debug { "[Engine] import_wallet: scanning #{address}" }
+
+        result = @network_provider.call(:get_utxos, address)
+        raise BSV::Wallet::Error, "failed to fetch UTXOs for #{address}" unless result.http_success?
+
+        utxos = result.data
+        return { imported: 0, utxos: [] } if utxos.nil? || utxos.empty?
+
+        imported = utxos.filter_map do |utxo|
+          import_utxo(dtxid: utxo['tx_hash'], vout: utxo['tx_pos'])
+        rescue BSV::Wallet::Error => e
+          BSV.logger&.warn { "[Engine] import_wallet: skipping #{utxo['tx_hash']}:#{utxo['tx_pos']} — #{e.message}" }
+          nil
+        end
+
+        { imported: imported.length, utxos: imported }
+      end
+
       # Send a BRC-42 derived payment to a recipient.
       #
       # Generates derivation parameters, derives a P2PKH locking script for

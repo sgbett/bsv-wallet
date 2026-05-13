@@ -76,34 +76,6 @@ RSpec.describe 'Porcelain CLI tools' do # rubocop:disable RSpec/DescribeClass
       expect(stderr).to include('Usage:')
       expect(stdout).to be_empty
     end
-
-    it 'shows usage when only wallet is provided' do
-      _stdout, stderr, status = run_tool('import', 'alice')
-
-      expect(status.exitstatus).to eq(1)
-      expect(stderr).to include('Usage:')
-    end
-
-    it 'shows usage when dtxid is missing' do
-      _stdout, stderr, status = run_tool('import', 'alice', 'ab' * 32)
-
-      expect(status.exitstatus).to eq(1)
-      expect(stderr).to include('Usage:')
-    end
-
-    it 'rejects invalid dtxid (not 64 hex chars)' do
-      _stdout, stderr, status = run_tool('import', 'alice', 'not-a-txid', '0')
-
-      expect(status.exitstatus).to eq(1)
-      expect(stderr).to include('Usage:')
-    end
-
-    it 'rejects non-numeric vout' do
-      _stdout, stderr, status = run_tool('import', 'alice', 'ab' * 32, 'xyz')
-
-      expect(status.exitstatus).to eq(1)
-      expect(stderr).to include('Usage:')
-    end
   end
 
   # --- bin/balance ---

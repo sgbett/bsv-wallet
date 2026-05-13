@@ -92,13 +92,13 @@ RSpec.describe 'On-chain: Alice sends to Bob', :on_chain do # rubocop:disable RS
   # --- Tests ---
 
   it 'Alice pays Bob via auto-funded create_action with no_send' do
-    # Import the funding UTXO on Alice's root address
-    funding_dtxid = ENV.fetch('BSV_WALLET_UTXO_ALICE')
-    result = alice_engine.import_utxo(dtxid: funding_dtxid, vout: 0)
-    input_satoshis = result[:satoshis]
+    # Scan Alice's root key address and import all UTXOs
+    import_result = alice_engine.import_wallet
+    expect(import_result[:imported]).to be >= 1
+    input_satoshis = import_result[:utxos].sum { |u| u[:satoshis] }
 
     listed = alice_engine.list_outputs(basket: 'default')
-    expect(listed[:total_outputs]).to eq(1)
+    expect(listed[:total_outputs]).to eq(import_result[:imported])
 
     # Bob's locking script (P2PKH to Bob's root key)
     payment_amount = 500
