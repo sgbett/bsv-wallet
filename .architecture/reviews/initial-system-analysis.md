@@ -141,10 +141,9 @@ The recent Pushable/Fetchable layer is architecturally sound. Entities own their
    - **Why It Matters**: At 1,708 lines, it is the highest-coupling point in the system. Adding new functionality (e.g., multi-input auto-fund, output grouping) requires modifying the file that orchestrates everything else. The surface area for introducing regressions is large.
    - **Recommendation**: Extract TransactionBuilder, BeefAssembler, and MerklePathNormalizer as Layer 2a helpers. Engine delegates to them. Each has focused specs.
 
-2. **Services is in the wrong namespace** (Impact: Medium)
-   - **Issue**: `BSV::Network::Services` lives in the wallet gem but acts as a general-purpose provider routing layer. The project memory notes this: "BSV::Network::Services belongs in SDK, current BSV::Wallet::Services is wrong namespace."
-   - **Why It Matters**: If other consumers (non-wallet) want provider routing, they must depend on the wallet gem. This is an inverted dependency.
-   - **Recommendation**: This is a known deferred item. When the SDK interface settles, move Services to the SDK gem. Until then, the cost of the wrong namespace is low.
+2. **~~Services is in the wrong namespace~~** (Impact: N/A — Resolved as intentional)
+   - **Issue**: `BSV::Network::Services` lives in the wallet gem but uses the SDK's `BSV::Network::` namespace.
+   - **Resolution**: The shared namespace is intentional. The SDK declares *what* transactions need (scripts, signatures, protocol types); the wallet implements the imperative *how* — routing, broadcasting, proof acquisition, retry logic. These are fundamentally wallet operations. Network functions without a wallet are inert declarations. In practice, most BSV consumers include the wallet gem and pick up the SDK as a transitive dependency. Moving Services to the SDK would force declarative protocol code to know about operational concerns (ARC lifecycle, broadcast queues, proof harvesting). The current arrangement follows the same pattern as Rails engines adding classes to `ActiveRecord::` namespace without living in the activerecord gem.
 
 3. **Circular potential in Broadcast/Action Fetchable** (Impact: Low)
    - **Issue**: Both `Broadcast` and `Action` implement Fetchable for `:get_tx_status`. The Daemon queries for each separately (`stale_fetches` and `pending_proofs`). The difference is in lifecycle: Broadcast tracks broadcast status, Action acquires proofs. But both fetch from the same ARC endpoint.
@@ -651,7 +650,7 @@ BEEF validation (`validate_beef!`) checks structural integrity and optionally ve
 **Challenges**:
 - Engine.rb is the primary maintenance burden -- modifications require understanding the full 1,700-line context
 - Engine spec at 2,743 lines is daunting for targeted debugging
-- The wallet gem contains Services (SDK concern) which may require coordination across repos
+- ~~The wallet gem contains Services (SDK concern)~~ — resolved: Services is intentionally a wallet concern, SDK namespace shared by design
 
 ---
 
@@ -678,7 +677,7 @@ BEEF validation (`validate_beef!`) checks structural integrity and optionally ve
 
 ### Low Priority Debt
 
-1. **Services namespace**: Currently in wallet gem, belongs in SDK. Deferred until SDK interface settles.
+1. ~~**Services namespace**~~: Resolved — stays in wallet gem intentionally. Network operations are wallet concerns; shared `BSV::Network::` namespace is by design.
 2. **Certificate field column types**: May need migration from text to bytea depending on actual data format.
 3. **Output type inference**: `promote_with_outputs` infers 'outbound' from field absence rather than explicit declaration.
 
@@ -774,12 +773,7 @@ BEEF validation (`validate_beef!`) checks structural integrity and optionally ve
    - **Success Criteria**: Full certificate lifecycle (issuance, storage, revelation, relinquishment) working end-to-end
    - **Effort**: 2-4 weeks
 
-3. **Move Services to SDK**
-   - **Why**: BSV::Network::Services is a general-purpose routing layer, not wallet-specific
-   - **How**: Coordinate with SDK repo, move Services + Provider + ProtocolResponse, update wallet to import from SDK
-   - **Owner**: Solo developer
-   - **Success Criteria**: Services lives in bsv-sdk, wallet depends on it via gem dependency
-   - **Effort**: 1-2 weeks (mostly coordination)
+3. ~~**Move Services to SDK**~~ — **Resolved: Services stays in wallet gem intentionally.** Network operations are imperative wallet concerns; the SDK remains purely declarative. The `BSV::Network::` namespace is shared by design (wallet augments SDK namespace, same pattern as Rails engines).
 
 ---
 

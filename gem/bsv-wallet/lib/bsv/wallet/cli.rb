@@ -62,6 +62,8 @@ module BSV
         utxo_pool = BSV::Wallet::Postgres::UTXOPool.new(store: store)
 
         network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
+        services = BSV::Network::Services.new(providers: [network_provider])
+        chain_tracker = BSV::Network::ChainTracker.new(db: db, services: services)
 
         limp_threshold_raw = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD)
         begin
@@ -76,6 +78,7 @@ module BSV
           broadcast_queue: BSV::Wallet::Postgres::BroadcastQueue.new(db: db),
           proof_store: proof_store,
           key_deriver: key_deriver,
+          chain_tracker: chain_tracker,
           network_provider: network_provider,
           network: network,
           limp_threshold: limp_threshold
