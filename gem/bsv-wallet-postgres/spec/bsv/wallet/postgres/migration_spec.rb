@@ -12,11 +12,11 @@ RSpec.describe 'Schema migration' do
       %i[
         tx_proofs actions broadcasts baskets outputs spendable
         output_details output_baskets inputs labels action_labels
-        tags output_tags certificates certificate_fields tx_reqs settings
+        tags output_tags certificates certificate_fields settings
       ]
     end
 
-    it 'creates all 17 tables' do
+    it 'creates all 16 tables' do
       expected_tables.each do |table|
         expect(db.table_exists?(table)).to be(true), "expected table #{table} to exist"
       end

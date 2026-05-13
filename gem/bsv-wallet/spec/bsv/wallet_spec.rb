@@ -122,7 +122,7 @@ RSpec.describe BSV::Wallet do
     end
 
     it 'defines proof storage methods' do
-      %i[save_proof find_proof proof_exists? request_proof process_pending].each do |method|
+      %i[save_proof find_proof proof_exists?].each do |method|
         expect(subject).to respond_to(method),
                            "expected proof store to respond to ##{method}"
       end

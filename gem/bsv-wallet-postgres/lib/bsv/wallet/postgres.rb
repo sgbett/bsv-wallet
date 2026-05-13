@@ -37,7 +37,7 @@ module BSV
       autoload :OutputTag,        'bsv/wallet/postgres/output_tag'
       autoload :Certificate,      'bsv/wallet/postgres/certificate'
       autoload :CertificateField, 'bsv/wallet/postgres/certificate_field'
-      autoload :TxReq,            'bsv/wallet/postgres/tx_req'
+
       autoload :Setting,          'bsv/wallet/postgres/setting'
 
       class << self
