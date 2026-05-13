@@ -19,6 +19,7 @@ require 'sequel'
 
 RSpec.describe 'CLI porcelain: create | receive pipeline', :on_chain do # rubocop:disable RSpec/DescribeClass
   let(:bin_dir) { File.expand_path('../../bin', __dir__) }
+  let(:funding_dtxid) { ENV.fetch('BSV_WALLET_UTXO_ALICE') }
   let(:bob_identity_key) do
     require 'bsv-wallet'
     pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('BSV_WALLET_WIF_BOB'))
@@ -46,8 +47,8 @@ RSpec.describe 'CLI porcelain: create | receive pipeline', :on_chain do # ruboco
   end
 
   it 'Alice pays Bob via create | receive pipeline' do
-    # Import: sweep Alice's root key (finds and imports all UTXOs)
-    _stdout, _, status = run_cli('import', 'alice')
+    # Import: Alice's funding UTXO by txid and vout
+    _stdout, _, status = run_cli('import', 'alice', funding_dtxid, '0')
     expect(status).to be_success
 
     # Balance: verify Alice has funds

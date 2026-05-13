@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Porcelain engine specs — tests for the user-facing wallet methods:
-# send_payment, import_root_key, and the auto-fund path that underlies them.
+# send_payment, import_utxo, and the auto-fund path that underlies them.
 
 require_relative 'shared_context'
 
