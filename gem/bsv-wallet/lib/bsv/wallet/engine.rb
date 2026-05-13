@@ -452,6 +452,8 @@ module BSV
           BSV::Primitives::Digest.hash160(derived_pub)
         ).to_binary
 
+        # randomize_outputs: false guarantees the payment output stays at
+        # index 0.  Auto-fund change outputs are appended after caller outputs.
         result = create_action(
           description: "send #{satoshis} sats",
           outputs: [{ satoshis: satoshis, locking_script: locking_script }],
@@ -462,7 +464,7 @@ module BSV
           beef: result[:tx],
           sender_identity_key: @key_deriver.identity_key,
           outputs: [{
-            vout: 0,
+            vout: 0, # relies on randomize_outputs: false — see above
             satoshis: satoshis,
             derivation_prefix: derivation_prefix,
             derivation_suffix: derivation_suffix
