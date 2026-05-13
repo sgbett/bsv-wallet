@@ -373,4 +373,136 @@ RSpec.describe BSV::Network::Services do
       expect { described_class.new(-1) }.to raise_error(ArgumentError, /positive/)
     end
   end
+
+  # --- push! ---
+
+  describe '#push!' do
+    let(:provider) do
+      stub_provider('ARC', { broadcast: success({ 'txid' => 'abc', 'txStatus' => 'SEEN_ON_NETWORK' }) })
+    end
+    let(:services) { described_class.new(providers: [provider]) }
+
+    def pushable_entity(command: :broadcast, payload: 'rawtx_bytes')
+      double('PushableEntity',
+             push_command: command,
+             push_payload: payload,
+             write!: nil)
+    end
+
+    it 'calls write! on success and returns the response' do
+      entity = pushable_entity
+      result = services.push!(entity)
+
+      expect(entity).to have_received(:write!).with(result)
+      expect(result.http_success?).to be true
+      expect(result.data[:txid]).to eq('abc')
+    end
+
+    it 'does not call write! on failure and returns the error response' do
+      failing = stub_provider('ARC', { broadcast: error('rejected') })
+      svc = described_class.new(providers: [failing])
+      entity = pushable_entity
+
+      result = svc.push!(entity)
+
+      expect(entity).not_to have_received(:write!)
+      expect(result.http_success?).to be false
+      expect(result.error_message).to eq('rejected')
+    end
+
+    it 'does not call write! on 404' do
+      nf_provider = stub_provider('ARC', { broadcast: not_found })
+      svc = described_class.new(providers: [nf_provider])
+      entity = pushable_entity
+
+      result = svc.push!(entity)
+
+      expect(entity).not_to have_received(:write!)
+      expect(result.http_not_found?).to be true
+    end
+
+    it 'lets write! exceptions propagate' do
+      entity = pushable_entity
+      allow(entity).to receive(:write!).and_raise(RuntimeError, 'DB error')
+
+      expect { services.push!(entity) }.to raise_error(RuntimeError, 'DB error')
+    end
+
+    it 'routes through the correct provider' do
+      result = services.push!(pushable_entity)
+      expect(provider).to have_received(:call).with(:broadcast, 'rawtx_bytes')
+      expect(result.data[:txid]).to eq('abc')
+    end
+
+    it 'returns the ProtocolResponse' do
+      result = services.push!(pushable_entity)
+      expect(result).to be_a(BSV::Network::ProtocolResponse)
+    end
+  end
+
+  # --- fetch! ---
+
+  describe '#fetch!' do
+    let(:provider) do
+      stub_provider('ARC', {
+                      get_tx_status: success({ 'txid' => 'abc', 'txStatus' => 'MINED', 'blockHeight' => 800_000 })
+                    })
+    end
+    let(:services) { described_class.new(providers: [provider]) }
+
+    def fetchable_entity(command: :get_tx_status, args: { txid: 'abc' })
+      double('FetchableEntity',
+             fetch_command: command,
+             fetch_args: args,
+             write!: nil)
+    end
+
+    it 'calls write! on success and returns the response' do
+      entity = fetchable_entity
+      result = services.fetch!(entity)
+
+      expect(entity).to have_received(:write!).with(result)
+      expect(result.http_success?).to be true
+      expect(result.data[:tx_status]).to eq('MINED')
+    end
+
+    it 'does not call write! on failure and returns the error response' do
+      failing = stub_provider('ARC', { get_tx_status: error('server error') })
+      svc = described_class.new(providers: [failing])
+      entity = fetchable_entity
+
+      result = svc.fetch!(entity)
+
+      expect(entity).not_to have_received(:write!)
+      expect(result.http_success?).to be false
+    end
+
+    it 'does not call write! on 404' do
+      nf_provider = stub_provider('ARC', { get_tx_status: not_found })
+      svc = described_class.new(providers: [nf_provider])
+      entity = fetchable_entity
+
+      result = svc.fetch!(entity)
+
+      expect(entity).not_to have_received(:write!)
+      expect(result.http_not_found?).to be true
+    end
+
+    it 'lets write! exceptions propagate' do
+      entity = fetchable_entity
+      allow(entity).to receive(:write!).and_raise(RuntimeError, 'DB error')
+
+      expect { services.fetch!(entity) }.to raise_error(RuntimeError, 'DB error')
+    end
+
+    it 'passes keyword args through to call' do
+      services.fetch!(fetchable_entity(args: { txid: 'abc' }))
+      expect(provider).to have_received(:call).with(:get_tx_status, txid: 'abc')
+    end
+
+    it 'returns the ProtocolResponse' do
+      result = services.fetch!(fetchable_entity)
+      expect(result).to be_a(BSV::Network::ProtocolResponse)
+    end
+  end
 end
