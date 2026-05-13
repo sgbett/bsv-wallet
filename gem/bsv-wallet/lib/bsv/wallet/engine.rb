@@ -331,7 +331,7 @@ module BSV
         # Fetch transaction from network
         BSV.logger&.debug { "[Engine] import_utxo: fetching #{dtxid} from network" }
         result = @network_provider.call(:get_tx, txid: dtxid)
-        raise BSV::Wallet::Error, "failed to fetch tx #{dtxid}" unless result.success?
+        raise BSV::Wallet::Error, "failed to fetch tx #{dtxid}" unless result.http_success?
 
         raw_tx = [result.data.strip].pack('H*')
         tx = BSV::Transaction::Transaction.from_binary(raw_tx)
@@ -356,10 +356,10 @@ module BSV
         merkle_path = nil
         block_height = nil
         details_result = @network_provider.call(:get_tx_details, txid: dtxid)
-        if details_result.success? && details_result.data['blockheight']
+        if details_result.http_success? && details_result.data['blockheight']
           block_height = details_result.data['blockheight']
           proof_result = @network_provider.call(:get_merkle_path, txid: dtxid)
-          if proof_result.success? && proof_result.data.is_a?(Array) && proof_result.data.any?
+          if proof_result.http_success? && proof_result.data.is_a?(Array) && proof_result.data.any?
             tsc = proof_result.data.first
             mp = BSV::Transaction::MerklePath.from_tsc(
               dtxid_hex: tsc['txOrId'], index: tsc['index'],
@@ -1002,11 +1002,13 @@ module BSV
         subject_proof_id = nil
 
         beef.transactions.each do |beef_tx|
+          next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
           next unless beef_tx.transaction
 
           wtxid = beef_tx.transaction.wtxid
           merkle_path = beef_tx.transaction.merkle_path ||
-                        (beef_tx.bump_index && beef.bumps[beef_tx.bump_index])
+                        (beef_tx.respond_to?(:bump_index) && beef_tx.bump_index &&
+                         beef.bumps[beef_tx.bump_index])
 
           proof = { raw_tx: beef_tx.transaction.to_binary }
           if merkle_path
@@ -1054,7 +1056,7 @@ module BSV
         beef.transactions.each do |beef_tx|
           wtxid = beef_tx.wtxid
           next if wtxid == subject_wtxid
-          next if beef_tx.format == BSV::Transaction::Beef::FORMAT_TXID_ONLY
+          next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
 
           next unless known_set.include?(wtxid) || @proof_store.proof_exists?(wtxid: wtxid)
 

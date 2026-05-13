@@ -45,7 +45,7 @@ module BSV
             next unless action&.wtxid && @arc_client
 
             result = @arc_client.call(:get_tx_status, txid: action.dtxid)
-            next unless result.success?
+            next unless result.http_success?
 
             update_from_response!(broadcast, result.data)
             broadcast_to_hash(broadcast)
@@ -92,7 +92,7 @@ module BSV
         def post_and_update!(broadcast, raw_tx)
           broadcast.update(broadcast_at: Time.now)
           result = @arc_client.call(:broadcast, raw_tx)
-          return unless result.success?
+          return unless result.http_success?
 
           update_from_response!(broadcast, result.data)
         end

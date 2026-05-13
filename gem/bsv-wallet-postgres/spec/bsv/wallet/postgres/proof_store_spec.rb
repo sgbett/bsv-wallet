@@ -135,7 +135,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
 
     context 'with arc_client' do
       let(:arc_client) do
-        double('ARC', call: double('Result', success?: true, data: {
+        double('ARC', call: double('Result', http_success?: true, data: {
           txStatus: 'MINED',
           blockHash: SecureRandom.random_bytes(32).unpack1('H*'),
           blockHeight: 800_000,
@@ -162,7 +162,7 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
 
     context 'when ARC returns non-MINED status' do
       let(:arc_client) do
-        double('ARC', call: double('Result', success?: true, data: {
+        double('ARC', call: double('Result', http_success?: true, data: {
           txStatus: 'SEEN_ON_NETWORK'
         }))
       end
