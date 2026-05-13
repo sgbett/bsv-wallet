@@ -21,11 +21,13 @@ RSpec.describe BSV::Network::ChainTracker do
     BSV::Network::ProtocolResponse.new(http_resp, http_success: false, error_message: message)
   end
 
-  # Hex merkle root and its binary equivalent
-  let(:merkle_root_hex) { 'a' * 64 }
+  # Non-palindromic hex fixtures — reversing byte order produces a different
+  # value, which catches byte-order bugs that palindromic strings (e.g. 'aa...')
+  # would miss.
+  let(:merkle_root_hex) { '0123456789abcdef' * 4 }
   let(:merkle_root_bin) { [merkle_root_hex].pack('H*') }
-  let(:wrong_root_hex) { 'b' * 64 }
-  let(:block_hash_hex) { 'c' * 64 }
+  let(:wrong_root_hex) { 'fedcba9876543210' * 4 }
+  let(:block_hash_hex) { 'abcdef0123456789' * 4 }
   let(:height) { 800_000 }
 
   let(:services) { instance_double(BSV::Network::Services, call: nil) }

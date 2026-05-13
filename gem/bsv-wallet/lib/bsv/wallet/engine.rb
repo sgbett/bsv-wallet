@@ -241,13 +241,6 @@ module BSV
         # Parse tx: as Atomic BEEF (BRC-95)
         beef, subject_tx = parse_beef(tx)
 
-        # trustSelf: replace known ancestors with TXID-only entries before verification.
-        # make_txid_only replaces entries in the BEEF's @transactions list but does
-        # NOT invalidate in-memory source_transaction pointers wired by from_binary.
-        # Transaction#verify walks via input.source_transaction, not the BEEF list,
-        # so verification succeeds on the original object graph.
-        replace_known_ancestors!(beef, subject_tx.wtxid, known_txids) if trust_self == 'known'
-
         # Full SPV verification: scripts, merkle proofs, and fee adequacy
         # (output <= input). Replaces the former validate_beef! +
         # validate_fee_adequacy! two-step.
@@ -269,8 +262,19 @@ module BSV
 
         attach_labels(action_result[:id], labels)
 
-        # Save ancestor proofs and link subject proof
+        # Save ancestor proofs BEFORE replacing known ancestors with TXID-only.
+        # save_beef_proofs iterates beef.transactions and skips TxidOnlyEntry —
+        # if we replaced first, ancestors listed in known_txids but not yet in
+        # ProofStore would be converted to TXID-only and their proofs lost.
         save_beef_proofs(beef, subject_tx.wtxid, action_result[:id])
+
+        # trustSelf: replace known ancestors with TXID-only entries.
+        # This runs AFTER save_beef_proofs so no proof data is lost, and
+        # AFTER verify so the full graph was already validated.
+        # make_txid_only replaces entries in the BEEF's @transactions list but
+        # does NOT invalidate in-memory source_transaction pointers wired by
+        # from_binary — verify already walked those pointers successfully above.
+        replace_known_ancestors!(beef, subject_tx.wtxid, known_txids) if trust_self == 'known'
 
         output_specs = outputs.map do |out|
           spec = resolve_internalize_output(out)
