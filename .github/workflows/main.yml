@@ -121,5 +121,6 @@ jobs:
         env:
           BSV_WALLET_WIF_ALICE: ${{ secrets.BSV_WALLET_WIF_ALICE }}
           BSV_WALLET_WIF_BOB: ${{ secrets.BSV_WALLET_WIF_BOB }}
+          BSV_WALLET_UTXO_ALICE: ${{ secrets.BSV_WALLET_UTXO_ALICE }}
           DATABASE_URL_ALICE: postgres://postgres:postgres@localhost:5433/bsv_wallet_alice
           DATABASE_URL_BOB: postgres://postgres:postgres@localhost:5433/bsv_wallet_bob
