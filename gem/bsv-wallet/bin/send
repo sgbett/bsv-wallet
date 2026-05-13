@@ -1,7 +1,9 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Send a BRC-100 payment with BRC-42 derived keys (porcelain).
+warn '[DEPRECATED] bin/send is deprecated — use bin/create instead'
+
+# Send a BRC-100 payment with BRC-42 derived keys (plumbing).
 #
 # Generates derivation parameters for both the payment and change outputs,
 # derives P2PKH locking scripts via BRC-42, calls create_action, and

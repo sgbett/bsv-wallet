@@ -426,6 +426,82 @@ module BSV
         { imported: true, satoshis: self_payment_sats, dtxid: dtxid }
       end
 
+      # --- Porcelain ---
+
+      # Scan the root key's address for unspent outputs and import each one.
+      #
+      # Derives the P2PKH address from the wallet's root key, queries the
+      # network for UTXOs, and calls import_utxo for each. This is the
+      # bootstrap path — how a wallet gets its initial funding.
+      #
+      # @return [Hash] { imported: Integer, utxos: Array<Hash> }
+      def import_wallet
+        require_key_deriver!
+        raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
+
+        address = @key_deriver.root_private_key.public_key.address
+        BSV.logger&.debug { "[Engine] import_wallet: scanning #{address}" }
+
+        result = @network_provider.call(:get_utxos, address)
+        raise BSV::Wallet::Error, "failed to fetch UTXOs for #{address}" unless result.http_success?
+
+        utxos = result.data
+        return { imported: 0, utxos: [] } if utxos.nil? || utxos.empty?
+
+        imported = utxos.filter_map do |utxo|
+          import_utxo(dtxid: utxo['tx_hash'], vout: utxo['tx_pos'])
+        rescue BSV::Wallet::Error => e
+          BSV.logger&.warn { "[Engine] import_wallet: skipping #{utxo['tx_hash']}:#{utxo['tx_pos']} — #{e.message}" }
+          nil
+        end
+
+        { imported: imported.length, utxos: imported }
+      end
+
+      # Send a BRC-42 derived payment to a recipient.
+      #
+      # Generates derivation parameters, derives a P2PKH locking script for
+      # the recipient via BRC-42, and calls create_action with auto-fund to
+      # handle UTXO selection, fees, and change.
+      #
+      # @param recipient [String] 66-char compressed public key hex (02/03 prefix)
+      # @param satoshis [Integer] amount to send
+      # @return [Hash] { beef:, sender_identity_key:, outputs: [{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }] }
+      def send_payment(recipient:, satoshis:)
+        require_key_deriver!
+        validate_recipient_key!(recipient)
+
+        derivation_prefix = SecureRandom.uuid
+        derivation_suffix = '1'
+
+        derived_pub = @key_deriver.derive_public_key(
+          protocol_id: [2, derivation_prefix], key_id: derivation_suffix,
+          counterparty: recipient, for_self: true
+        )
+        locking_script = BSV::Script::Script.p2pkh_lock(
+          BSV::Primitives::Digest.hash160(derived_pub)
+        ).to_binary
+
+        # randomize_outputs: false guarantees the payment output stays at
+        # index 0.  Auto-fund change outputs are appended after caller outputs.
+        result = create_action(
+          description: "send #{satoshis} sats",
+          outputs: [{ satoshis: satoshis, locking_script: locking_script }],
+          no_send: true, randomize_outputs: false
+        )
+
+        {
+          beef: result[:tx],
+          sender_identity_key: @key_deriver.identity_key,
+          outputs: [{
+            vout: 0, # relies on randomize_outputs: false — see above
+            satoshis: satoshis,
+            derivation_prefix: derivation_prefix,
+            derivation_suffix: derivation_suffix
+          }]
+        }
+      end
+
       # --- Public Key Management (codes 8-10) ---
 
       def get_public_key(identity_key: false, protocol_id: nil, key_id: nil,
@@ -1114,6 +1190,12 @@ module BSV
         end
 
         spec
+      end
+
+      def validate_recipient_key!(key)
+        return if key.is_a?(String) && key.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
+
+        raise ArgumentError, "invalid recipient key: expected 66-char compressed public key hex, got #{key.inspect}"
       end
 
       def validate_reference!(reference)

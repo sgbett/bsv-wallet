@@ -1,0 +1,29 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Create a payment (porcelain).
+#
+# Usage:
+#   bin/create <wallet> <identity_key> <sats>
+#
+# Stdout: JSON envelope { beef: <hex>, sender_identity_key: <hex>, outputs: [...] }
+# Stderr: human-readable summary
+
+require_relative '../lib/bsv/wallet/cli'
+
+wallet_name = ARGV.shift
+identity_key = ARGV.shift
+sats = ARGV.shift&.to_i
+
+abort 'Usage: bin/create <wallet> <identity_key> <sats>' unless wallet_name && identity_key && sats&.positive?
+abort 'Invalid identity key (expected 66-char compressed hex)' unless identity_key.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+
+result = ctx[:engine].send_payment(recipient: identity_key, satoshis: sats)
+
+# Hex-encode BEEF for JSON transport
+envelope = result.merge(beef: result[:beef].unpack1('H*'))
+BSV::Wallet::CLI::Output.write_json(envelope)
+
+warn "sent: #{sats} sats to #{identity_key[0..15]}..."

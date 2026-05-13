@@ -1,13 +1,13 @@
 # frozen_string_literal: true
 
-# CLI integration tests: Alice sends BSV to Bob via separate processes.
+# CLI integration tests: porcelain pipeline.
 #
+# Tests the unix wallet workflow: import → create → receive → balance.
 # Each CLI tool runs in its own OS process, so the global Sequel::Model.db
 # is scoped per-wallet — no multi-tenant issues.
 #
 # Environment variables (set in shell profile or CI):
-#   WIF_ALICE, WIF_BOB       — wallet private keys
-#   FUNDING_TXID              — dtxid hex of Alice's mined P2PKH UTXO
+#   BSV_WALLET_WIF_ALICE/BOB  — wallet private keys
 #   DATABASE_URL_ALICE/BOB    — optional, defaults to localhost:5433
 #
 # Run:
@@ -16,9 +16,8 @@
 require 'open3'
 require 'sequel'
 
-RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do # rubocop:disable RSpec/DescribeClass
+RSpec.describe 'CLI porcelain: create | receive pipeline', :on_chain do # rubocop:disable RSpec/DescribeClass
   let(:bin_dir) { File.expand_path('../../bin', __dir__) }
-  # Derive Bob's identity key from WIF without a database connection
   let(:bob_identity_key) do
     require 'bsv-wallet'
     pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('BSV_WALLET_WIF_BOB'))
@@ -37,8 +36,7 @@ RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do # rubocop:dis
 
   def run_cli(tool, *args, stdin_data: nil)
     cmd = [File.join(bin_dir, tool)] + args
-    env = {} # inherits parent env
-    stdout, stderr, status = Open3.capture3(env, *cmd, stdin_data: stdin_data, binmode: true)
+    stdout, stderr, status = Open3.capture3({}, *cmd, stdin_data: stdin_data, binmode: true)
     unless status.success?
       warn "  [#{tool}] failed (exit #{status.exitstatus}):"
       warn stderr.gsub(/^/, '    ')
@@ -46,39 +44,37 @@ RSpec.describe 'CLI integration: Alice sends to Bob', :on_chain do # rubocop:dis
     [stdout, stderr, status]
   end
 
-  it 'Alice pays Bob via CLI pipeline' do
-    # 0. Import the funding UTXO
-    funding_dtxid = ENV.fetch('BSV_WALLET_UTXO_ALICE')
-    _stdout, _, status = run_cli('import_root_utxo', 'alice', funding_dtxid, '1')
+  it 'Alice pays Bob via create | receive pipeline' do
+    # Import: scan Alice's root key address for UTXOs
+    _stdout, _, status = run_cli('import', 'alice')
     expect(status).to be_success
 
-    # 1. Verify Alice has funds
+    # Balance: verify Alice has funds
     stdout, _stderr, status = run_cli('balance', 'alice')
     expect(status).to be_success
     alice_balance = stdout.strip.to_i
     expect(alice_balance).to be > 0
 
-    # 2. Alice sends 500 sats to Bob (no_send — outputs BEEF to stdout)
-    beef_stdout, _, status = run_cli(
-      'send', 'alice', '--to', bob_identity_key, '--sats', '500'
-    )
+    # Create: Alice pays Bob 5000 sats (outputs JSON envelope)
+    envelope_stdout, _, status = run_cli('create', 'alice', bob_identity_key, '5000')
     expect(status).to be_success
-    expect(beef_stdout.bytesize).to be > 0
+    expect(envelope_stdout.bytesize).to be > 0
 
-    # 3. Bob receives the BEEF into 'received' basket
-    _stdout, _, status = run_cli('receive', 'bob', '--basket', 'received', stdin_data: beef_stdout)
+    # Receive: Bob internalizes the payment
+    _stdout, _, status = run_cli('receive', 'bob', '--basket', 'received', stdin_data: envelope_stdout)
     expect(status).to be_success
 
-    # 4. Verify Bob's balance in 'received' basket
+    # Balance: verify Bob received 5000 sats
     stdout, _stderr, status = run_cli('balance', 'bob', '--basket', 'received')
     expect(status).to be_success
-    bob_balance = stdout.strip.to_i
-    expect(bob_balance).to eq(500)
+    expect(stdout.strip.to_i).to eq(5000)
 
-    # 5. Verify Alice's change returned
+    # Balance: verify Alice's balance decreased
     stdout, _stderr, status = run_cli('balance', 'alice')
     expect(status).to be_success
     new_alice_balance = stdout.strip.to_i
-    expect(new_alice_balance).to eq(alice_balance - 500 - 1) # bin/send defaults to 1-sat fee
+    # Auto-fund computes the real fee; change is returned across multiple outputs
+    expect(new_alice_balance).to be < alice_balance
+    expect(new_alice_balance).to be > alice_balance - 5000 - 500 # fee is well under 500
   end
 end
