@@ -241,6 +241,11 @@ module BSV
         # Parse tx: as Atomic BEEF (BRC-95)
         beef, subject_tx = parse_beef(tx)
 
+        # trustSelf: the sender may have included TXID-only entries for ancestors
+        # they know we have. from_binary can't wire those (no Transaction object),
+        # so hydrate any unresolved inputs from our ProofStore before verification.
+        hydrate_known_sources!(subject_tx) if trust_self == 'known'
+
         # Full SPV verification: scripts, merkle proofs, and fee adequacy
         # (output <= input). Replaces the former validate_beef! +
         # validate_fee_adequacy! two-step.
@@ -996,6 +1001,21 @@ module BSV
         end
 
         tx
+      end
+
+      # Hydrate inputs whose source_transaction is nil from ProofStore.
+      #
+      # Used by trustSelf: the sender may include TXID-only entries for ancestors
+      # they know we have. from_binary can't wire those (no Transaction object).
+      # This fills the gaps from local storage so verify can walk the full graph.
+      #
+      # @param tx [BSV::Transaction::Transaction] transaction to hydrate
+      def hydrate_known_sources!(tx)
+        tx.inputs.each do |input|
+          next if input.source_transaction
+
+          input.source_transaction = wire_ancestor(input.prev_wtxid)
+        end
       end
 
       # Parse the tx: parameter as BEEF and extract the subject transaction.

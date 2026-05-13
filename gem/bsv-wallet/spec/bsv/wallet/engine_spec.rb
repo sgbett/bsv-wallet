@@ -2771,18 +2771,21 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
 
     it 'terminates on circular references via visited set' do
-      # Two transactions referencing each other (pathological case)
-      tx_a = make_fake_tx(satoshis: 500)
-      tx_b = make_fake_tx(satoshis: 500, inputs: [{ prev_wtxid: tx_a.wtxid }])
+      # Real Bitcoin transactions can't form cycles (wtxid depends on content),
+      # but ProofStore entries can. Use fixed wtxids and store transactions
+      # whose inputs reference each other's key.
+      wtxid_a = ("\x01" * 32).b
+      wtxid_b = ("\x02" * 32).b
 
-      # Manually rebuild tx_a with an input pointing to tx_b
-      tx_a_circular = make_fake_tx(satoshis: 500, inputs: [{ prev_wtxid: tx_b.wtxid }])
+      tx_a = make_fake_tx(satoshis: 500, inputs: [{ prev_wtxid: wtxid_b }])
+      tx_b = make_fake_tx(satoshis: 500, inputs: [{ prev_wtxid: wtxid_a }])
 
-      proof_store.save_proof(wtxid: tx_a_circular.wtxid, proof: { raw_tx: tx_a_circular.to_binary })
-      proof_store.save_proof(wtxid: tx_b.wtxid, proof: { raw_tx: tx_b.to_binary })
+      proof_store.save_proof(wtxid: wtxid_a, proof: { raw_tx: tx_a.to_binary })
+      proof_store.save_proof(wtxid: wtxid_b, proof: { raw_tx: tx_b.to_binary })
 
-      # Should not raise or infinite loop
-      result = engine_with_keys.send(:wire_ancestor, tx_a_circular.wtxid)
+      # Walk from wtxid_a → loads tx_a → input references wtxid_b →
+      # loads tx_b → input references wtxid_a → ALREADY VISITED → stops.
+      result = engine_with_keys.send(:wire_ancestor, wtxid_a)
       expect(result).to be_a(BSV::Transaction::Transaction)
     end
 

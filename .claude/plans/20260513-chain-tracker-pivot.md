@@ -200,9 +200,10 @@ end
 
 The `internalize_action` flow (line 231) becomes:
 1. `parse_beef(tx)` — SDK auto-wires `source_transaction` links within the BEEF
-2. `replace_known_ancestors!` — replaces known txs in BEEF list (in-memory graph unaffected — `source_transaction` pointers stay valid because `make_txid_only` only replaces the BeefTx entry in `@transactions`, not the Transaction objects in memory)
+2. `hydrate_known_sources!(subject_tx)` (if `trust_self == 'known'`) — for inputs whose `source_transaction` is nil (sender sent TXID-only entries), wire from local ProofStore via `wire_ancestor`
 3. `verify_incoming_transaction!(subject_tx)` — SDK walks in-memory graph, validates scripts + merkle proofs + fee adequacy
-4. `save_beef_proofs` / create action / promote — unchanged
+4. `save_beef_proofs` — persist ancestor proofs BEFORE replacing known ancestors
+5. `replace_known_ancestors!` (if `trust_self == 'known'`) — replaces known txs in BEEF list (runs after save so no proof data is lost; runs after verify so the graph was already validated)
 
 **What Transaction#verify gives us (that we didn't have):**
 - Script verification on every input
