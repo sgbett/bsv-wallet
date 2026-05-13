@@ -241,15 +241,19 @@ module BSV
         # Parse tx: as Atomic BEEF (BRC-95)
         beef, subject_tx = parse_beef(tx)
 
-        # trustSelf: replace known ancestors with TXID-only entries before validation
-        has_txid_only = trust_self == 'known' &&
-                        replace_known_ancestors!(beef, subject_tx.wtxid, known_txids)
+        # trustSelf: replace known ancestors with TXID-only entries before verification.
+        # make_txid_only replaces entries in the BEEF's @transactions list but does
+        # NOT invalidate in-memory source_transaction pointers wired by from_binary.
+        # Transaction#verify walks via input.source_transaction, not the BEEF list,
+        # so verification succeeds on the original object graph.
+        if trust_self == 'known'
+          replace_known_ancestors!(beef, subject_tx.wtxid, known_txids)
+        end
 
-        # SPV validation: structural integrity and optional merkle root verification
-        validate_beef!(beef, allow_txid_only: has_txid_only)
-
-        # Fee adequacy: inputs must exceed outputs (BRC-67)
-        validate_fee_adequacy!(subject_tx)
+        # Full SPV verification: scripts, merkle proofs, and fee adequacy
+        # (output <= input). Replaces the former validate_beef! +
+        # validate_fee_adequacy! two-step.
+        verify_incoming_transaction!(subject_tx)
 
         # Create action (incoming, no broadcast, already completed)
         action_result = @store.create_action(
@@ -934,38 +938,10 @@ module BSV
         ).to_binary
       end
 
-      # Collect ancestor Transaction objects for BEEF construction.
-      #
-      # For each input of the action, finds the source transaction's proof
-      # in ProofStore, reconstructs an SDK Transaction object with its
-      # merkle_path wired, and returns the list. These ancestor objects are
-      # ready to be passed to Transaction#to_beef or merged into a Beef.
-      #
-      # @param action_id [Integer] the action whose inputs to resolve
-      # @return [Array<BSV::Transaction::Transaction>] ancestor transactions
-      #   with merkle_path set for proven ancestors
-      def collect_input_ancestry(action_id)
-        resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
-
-        resolved_inputs.filter_map do |resolved|
-          source_wtxid = resolved[:source_wtxid]
-          proof = @proof_store.find_proof(wtxid: source_wtxid)
-
-          next unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
-
-          source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
-
-          source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first if proof[:merkle_path]
-
-          source_tx
-        end
-      end
-
       # Build an Atomic BEEF (BRC-95) envelope for a signed transaction.
       #
-      # For each input, looks up the ancestor proof from ProofStore.
-      # Proven ancestors get their merkle_path wired; unproven ancestors
-      # are included as raw transactions without a BUMP.
+      # Outgoing BEEF: constructed from our own ProofStore — verification is
+      # for incoming untrusted data only (see verify_incoming_transaction!).
       #
       # @param raw_tx [String] signed transaction binary (wire format)
       # @param action_id [Integer] action whose inputs to resolve for ancestry
@@ -974,17 +950,11 @@ module BSV
         tx = BSV::Transaction::Transaction.from_binary(raw_tx)
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
 
-        # Wire source_transaction and merkle_path on each input.
-        # For unconfirmed ancestors, recursively wire their ancestry
-        # so the BEEF contains the full chain back to mined transactions.
         resolved_inputs.each_with_index do |resolved, idx|
           input = tx.inputs[idx]
           next unless input
 
-          source_tx = resolve_ancestor(resolved[:source_wtxid])
-          next unless source_tx
-
-          input.source_transaction = source_tx
+          input.source_transaction = wire_ancestor(resolved[:source_wtxid])
         end
 
         beef = BSV::Transaction::Beef.new
@@ -992,59 +962,38 @@ module BSV
         beef.to_atomic_binary(tx.wtxid)
       end
 
-      # Recursively resolve an ancestor transaction with its full proof chain.
+      # Load an ancestor transaction from ProofStore and recursively wire
+      # its source_transaction graph for BEEF construction.
       #
-      # If the ancestor is mined (has merkle_path), wires the BUMP and returns.
-      # If unconfirmed, finds the ancestor's own action, resolves ITS inputs
-      # recursively, and wires them as source_transactions so the SDK includes
-      # the full chain in the BEEF.
+      # Proven ancestors (with merkle_path) are terminal — no recursion needed.
+      # Unconfirmed ancestors recurse into each input's prev_wtxid.
+      # Uses ProofStore only — zero Store dependencies.
       #
       # @param wtxid [String] 32-byte wire-order wtxid
       # @param visited [Set] prevents infinite loops on circular references
       # @return [BSV::Transaction::Transaction, nil]
-      def resolve_ancestor(wtxid, visited: Set.new)
+      def wire_ancestor(wtxid, visited: Set.new)
         return if visited.include?(wtxid)
 
         visited.add(wtxid)
 
         proof = @proof_store.find_proof(wtxid: wtxid)
-        unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
-          BSV.logger&.debug { "[Engine] resolve_ancestor: #{wtxid.reverse.unpack1('H*')} proof=missing" }
-          return
-        end
+        return unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
 
-        source_tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
+        tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
 
         if proof[:merkle_path]
-          source_tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
-          BSV.logger&.debug { "[Engine] resolve_ancestor: #{wtxid.reverse.unpack1('H*')} proof=bump" }
-          return source_tx
+          tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
+          return tx # Proven terminal — no need to recurse
         end
 
-        # Unconfirmed: resolve each input's ancestor recursively.
-        # For outgoing actions with inputs, use the action's input rows.
-        # Otherwise (internalized actions or bare proofs from BEEF), parse
-        # the raw_tx and resolve each input's prev_wtxid from ProofStore.
-        action = @store.find_action(wtxid: wtxid)
-        parent_inputs = action ? @store.resolve_inputs_for_signing(action_id: action[:id]) : []
-
-        if parent_inputs.any?
-          parent_inputs.each_with_index do |parent_resolved, idx|
-            parent_input = source_tx.inputs[idx]
-            next unless parent_input
-
-            grandparent = resolve_ancestor(parent_resolved[:source_wtxid], visited: visited)
-            parent_input.source_transaction = grandparent if grandparent
-          end
-        else
-          source_tx.inputs.each do |input|
-            grandparent = resolve_ancestor(input.prev_wtxid, visited: visited)
-            input.source_transaction = grandparent if grandparent
-          end
+        # Unconfirmed: wire each input's source recursively
+        tx.inputs.each do |input|
+          ancestor = wire_ancestor(input.prev_wtxid, visited: visited)
+          input.source_transaction = ancestor if ancestor
         end
 
-        BSV.logger&.debug { "[Engine] resolve_ancestor: #{wtxid.reverse.unpack1('H*')} proof=raw_tx (recursive)" }
-        source_tx
+        tx
       end
 
       # Parse the tx: parameter as BEEF and extract the subject transaction.
@@ -1104,20 +1053,20 @@ module BSV
         @store.link_proof(action_id: action_id, tx_proof_id: subject_proof_id) if subject_proof_id
       end
 
-      # Validate structural integrity and optionally verify merkle roots
-      # against a chain tracker.
+      # Full SPV verification of an incoming transaction via the SDK.
       #
-      # @param beef [BSV::Transaction::Beef] parsed BEEF bundle
-      # @param allow_txid_only [Boolean] accept TXID-only entries (trustSelf)
-      # @raise [InvalidBeefError] if validation fails
-      def validate_beef!(beef, allow_txid_only: false)
-        raise BSV::Wallet::InvalidBeefError, 'BEEF failed structural validation' unless beef.valid?(allow_txid_only: allow_txid_only)
+      # Replaces validate_beef! + validate_fee_adequacy! with a single
+      # Transaction#verify call that checks scripts, merkle proofs, and
+      # fee adequacy (output <= input).
+      #
+      # @param subject_tx [BSV::Transaction::Transaction]
+      # @raise [InvalidBeefError] wrapping SDK VerificationError
+      def verify_incoming_transaction!(subject_tx)
+        raise BSV::Wallet::InvalidBeefError, 'chain_tracker required for SPV verification' unless @chain_tracker
 
-        return unless @chain_tracker
-
-        return if beef.verify(@chain_tracker, allow_txid_only: allow_txid_only)
-
-        raise BSV::Wallet::InvalidBeefError, 'BEEF failed merkle root verification'
+        subject_tx.verify(chain_tracker: @chain_tracker)
+      rescue BSV::Transaction::VerificationError => e
+        raise BSV::Wallet::InvalidBeefError, "SPV verification failed: #{e.message} (#{e.code})"
       end
 
       # Replace known ancestor transactions with TXID-only entries in the BEEF.
@@ -1148,28 +1097,6 @@ module BSV
 
         BSV.logger&.debug { "[Engine] replace_known_ancestors!: replaced_count=#{replaced_count}" }
         replaced_count.positive?
-      end
-
-      # Check that the subject transaction's input satoshis exceed output satoshis (BRC-67).
-      #
-      # Inputs without wired source transactions (i.e. missing satoshi data)
-      # are skipped — the structural BEEF validation already ensures ancestry
-      # is complete. Transactions with no wired inputs (e.g. coinbase) are also skipped.
-      #
-      # @param subject_tx [BSV::Transaction::Transaction]
-      # @raise [InvalidBeefError] if outputs exceed inputs
-      def validate_fee_adequacy!(subject_tx)
-        sourced = subject_tx.inputs.select(&:source_transaction)
-        return if sourced.empty?
-
-        input_sats = sourced.sum do |input|
-          input.source_transaction.outputs[input.prev_tx_out_index]&.satoshis || 0
-        end
-        output_sats = subject_tx.outputs.sum(&:satoshis)
-        return if input_sats > output_sats
-
-        raise BSV::Wallet::InvalidBeefError,
-              "inadequate fee: inputs #{input_sats} must exceed outputs #{output_sats}"
       end
 
       def resolve_internalize_output(out)

@@ -2615,141 +2615,105 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
     end
   end
 
-  # --- Ancestor proof chain storage (#33) ---
+  # --- wire_ancestor / BEEF construction (#98) ---
 
-  describe '#collect_input_ancestry (private)' do
-    def p2pkh_locking_script_for(private_key)
-      pubkey_hash = BSV::Primitives::Digest.hash160(private_key.public_key.compressed)
-      BSV::Script::Script.p2pkh_lock(pubkey_hash)
+  describe '#wire_ancestor (private)' do
+    def make_fake_tx(satoshis:, inputs: [])
+      tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      inputs.each do |inp|
+        tx.add_input(BSV::Transaction::TransactionInput.new(
+                       prev_wtxid: inp[:prev_wtxid],
+                       prev_tx_out_index: 0,
+                       unlocking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                     ))
+      end
+      tx.add_output(BSV::Transaction::TransactionOutput.new(
+                      satoshis: satoshis,
+                      locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                    ))
+      tx
     end
 
-    def derive_key(prefix: 'wallet payment', suffix: 'suffix', counterparty: 'self')
-      key_deriver.derive_private_key(
-        protocol_id: [2, prefix], key_id: suffix, counterparty: counterparty
-      )
-    end
-
-    it 'returns unproven ancestors without merkle_path' do
-      fund_wallet(satoshis: 1000)
-      listed = engine_with_keys.list_outputs(basket: 'default')
-      output_id = listed[:outputs].first[:id]
-
-      result = engine_with_keys.create_action(
-        description: 'no ancestors test',
-        no_send: true,
-        inputs: [{ output_id: output_id }],
-        outputs: [{ satoshis: 900, locking_script: OP_TRUE }]
-      )
-
-      action = store.find_action(wtxid: result[:txid])
-      ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
-      expect(ancestry.length).to eq(1)
-      expect(ancestry.first.merkle_path).to be_nil
-    end
-
-    it 'returns ancestor transactions with merkle_path for proven inputs' do
-      fund_wallet(satoshis: 1000)
-      listed = engine_with_keys.list_outputs(basket: 'default')
-      output_id = listed[:outputs].first[:id]
-
-      result = engine_with_keys.create_action(
-        description: 'proven ancestry test',
-        no_send: true,
-        inputs: [{ output_id: output_id }],
-        outputs: [{ satoshis: 900, locking_script: OP_TRUE }]
-      )
-
-      # Simulate a proof arriving for the source transaction
-      source_action = store.find_action(wtxid: result[:txid])
-      resolved = store.resolve_inputs_for_signing(action_id: source_action[:id])
-      source_wtxid = resolved.first[:source_wtxid]
-
-      # Build a fake source raw_tx and merkle proof
-      fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
-      fake_tx.add_output(BSV::Transaction::TransactionOutput.new(
-                           satoshis: 1000,
-                           locking_script: BSV::Script::Script.from_binary(OP_TRUE)
-                         ))
-      fake_raw_tx = fake_tx.to_binary
-
-      # wtxid is already wire order — use directly as merkle path hash
+    def make_merkle_path(wtxid:, height: 800_000)
       sibling_hash = SecureRandom.random_bytes(32)
-      mp = BSV::Transaction::MerklePath.new(
-        block_height: 800_000,
+      BSV::Transaction::MerklePath.new(
+        block_height: height,
         path: [[
-          BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: source_wtxid, txid: true),
+          BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid, txid: true),
           BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
         ]]
       )
-
-      proof_store.save_proof(
-        wtxid: source_wtxid,
-        proof: { height: 800_000, merkle_path: mp.to_binary, raw_tx: fake_raw_tx }
-      )
-
-      ancestry = engine_with_keys.send(:collect_input_ancestry, source_action[:id])
-      expect(ancestry.length).to eq(1)
-      expect(ancestry.first).to be_a(BSV::Transaction::Transaction)
-      expect(ancestry.first.merkle_path).to be_a(BSV::Transaction::MerklePath)
-      expect(ancestry.first.merkle_path.block_height).to eq(800_000)
     end
 
-    it 'collects ancestry for multi-input transactions' do
-      fund_wallet(satoshis: 500, suffix: 'anc0')
-      fund_wallet(satoshis: 500, suffix: 'anc1')
-      fund_wallet(satoshis: 500, suffix: 'anc2')
+    it 'returns a proven ancestor with merkle_path set (no recursion)' do
+      fake_tx = make_fake_tx(satoshis: 1000)
+      raw_tx = fake_tx.to_binary
+      wtxid = fake_tx.wtxid
+      mp = make_merkle_path(wtxid: wtxid)
 
-      listed = engine_with_keys.list_outputs(basket: 'default')
-      output_ids = listed[:outputs].sort_by { |o| o[:id] }.map { |o| o[:id] }
-
-      result = engine_with_keys.create_action(
-        description: 'multi anc test 33',
-        no_send: true,
-        inputs: output_ids.each_with_index.map { |id, i| { output_id: id, vin: i } },
-        outputs: [{ satoshis: 1400, locking_script: OP_TRUE }]
+      proof_store.save_proof(
+        wtxid: wtxid,
+        proof: { height: 800_000, merkle_path: mp.to_binary, raw_tx: raw_tx }
       )
 
-      action = store.find_action(wtxid: result[:txid])
-      resolved = store.resolve_inputs_for_signing(action_id: action[:id])
+      result = engine_with_keys.send(:wire_ancestor, wtxid)
+      expect(result).to be_a(BSV::Transaction::Transaction)
+      expect(result.merkle_path).to be_a(BSV::Transaction::MerklePath)
+      expect(result.merkle_path.block_height).to eq(800_000)
+    end
 
-      # Add proofs for 2 of 3 inputs (different block heights)
-      proven_count = 0
-      resolved.each_with_index do |r, i|
-        next if i == 2 # leave the third without proof
+    it 'recursively wires source_transactions for unconfirmed ancestors' do
+      # Grandparent: proven (has merkle_path)
+      grandparent_tx = make_fake_tx(satoshis: 2000)
+      gp_raw = grandparent_tx.to_binary
+      gp_wtxid = grandparent_tx.wtxid
+      gp_mp = make_merkle_path(wtxid: gp_wtxid, height: 799_000)
 
-        fake_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
-        fake_tx.add_output(BSV::Transaction::TransactionOutput.new(
-                             satoshis: 500,
-                             locking_script: BSV::Script::Script.from_binary(OP_TRUE)
-                           ))
+      proof_store.save_proof(
+        wtxid: gp_wtxid,
+        proof: { height: 799_000, merkle_path: gp_mp.to_binary, raw_tx: gp_raw }
+      )
 
-        # wtxid is already wire order — use directly as merkle path hash
-        sibling_hash = SecureRandom.random_bytes(32)
-        mp = BSV::Transaction::MerklePath.new(
-          block_height: 800_000 + i,
-          path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: r[:source_wtxid], txid: true),
-            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
-          ]]
-        )
+      # Parent: unconfirmed (no merkle_path), spends grandparent
+      parent_tx = make_fake_tx(satoshis: 1500, inputs: [{ prev_wtxid: gp_wtxid }])
+      parent_raw = parent_tx.to_binary
+      parent_wtxid = parent_tx.wtxid
 
-        proof_store.save_proof(
-          wtxid: r[:source_wtxid],
-          proof: { height: 800_000 + i, merkle_path: mp.to_binary, raw_tx: fake_tx.to_binary }
-        )
-        proven_count += 1
-      end
+      proof_store.save_proof(
+        wtxid: parent_wtxid,
+        proof: { raw_tx: parent_raw }
+      )
 
-      ancestry = engine_with_keys.send(:collect_input_ancestry, action[:id])
-      expect(ancestry.length).to eq(3)
+      result = engine_with_keys.send(:wire_ancestor, parent_wtxid)
+      expect(result).to be_a(BSV::Transaction::Transaction)
+      expect(result.merkle_path).to be_nil
 
-      proven = ancestry.select(&:merkle_path)
-      expect(proven.length).to eq(proven_count)
-      block_heights = proven.map { |tx| tx.merkle_path.block_height }
-      expect(block_heights).to contain_exactly(800_000, 800_001)
+      # The input's source_transaction should be wired to the grandparent
+      expect(result.inputs.first.source_transaction).to be_a(BSV::Transaction::Transaction)
+      expect(result.inputs.first.source_transaction.merkle_path).to be_a(BSV::Transaction::MerklePath)
+      expect(result.inputs.first.source_transaction.merkle_path.block_height).to eq(799_000)
+    end
 
-      unproven = ancestry.reject(&:merkle_path)
-      expect(unproven.length).to eq(1)
+    it 'terminates on circular references via visited set' do
+      # Two transactions referencing each other (pathological case)
+      tx_a = make_fake_tx(satoshis: 500)
+      tx_b = make_fake_tx(satoshis: 500, inputs: [{ prev_wtxid: tx_a.wtxid }])
+
+      # Manually rebuild tx_a with an input pointing to tx_b
+      tx_a_circular = make_fake_tx(satoshis: 500, inputs: [{ prev_wtxid: tx_b.wtxid }])
+
+      proof_store.save_proof(wtxid: tx_a_circular.wtxid, proof: { raw_tx: tx_a_circular.to_binary })
+      proof_store.save_proof(wtxid: tx_b.wtxid, proof: { raw_tx: tx_b.to_binary })
+
+      # Should not raise or infinite loop
+      result = engine_with_keys.send(:wire_ancestor, tx_a_circular.wtxid)
+      expect(result).to be_a(BSV::Transaction::Transaction)
+    end
+
+    it 'returns nil for missing proofs' do
+      missing_wtxid = SecureRandom.random_bytes(32)
+      result = engine_with_keys.send(:wire_ancestor, missing_wtxid)
+      expect(result).to be_nil
     end
   end
 
