@@ -474,6 +474,42 @@ module BSV
         { imported: imported.length, utxos: imported }
       end
 
+      # Generate a legacy P2PKH receive address using the WBIKD pattern.
+      #
+      # Finds or creates a pre-funded UTXO slot in basket 'p wbikd', locks it
+      # with a zero-output no-send action, then derives a BRC-42 address from
+      # the locking action's reference and slot output ID. The address is
+      # deterministic and can be re-derived from the returned prefix/suffix.
+      #
+      # @return [Hash] { address:, derivation_prefix:, derivation_suffix: }
+      def generate_receive_address
+        require_key_deriver!
+
+        slot = find_or_create_wbikd_slot
+
+        # Lock the slot with a no-send zero-output action.
+        # Uses @store.create_action directly — this is an internal operation
+        # that should not enforce limp mode.
+        locking_action = @store.create_action(
+          action: { description: 'wbikd address lock', broadcast: :none, nlocktime: 0, outgoing: true },
+          inputs: [{ output_id: slot[:id], vin: 0 }]
+        )
+        wtxid, raw_tx, = build_transaction(locking_action[:id], [{ output_id: slot[:id] }], [], nil, nil, false)
+        @store.sign_action(action_id: locking_action[:id], wtxid: wtxid, raw_tx: raw_tx)
+        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+        attach_labels(locking_action[:id], ['wbikd'])
+
+        # Derive address from deterministic params
+        derivation_prefix = locking_action[:reference].to_s
+        derivation_suffix = slot[:id].to_s
+        derived_pub = @key_deriver.derive_public_key(
+          protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
+        )
+        address = BSV::Primitives::PublicKey.from_bytes(derived_pub).address(network: @network_name)
+
+        { address: address, derivation_prefix: derivation_prefix, derivation_suffix: derivation_suffix }
+      end
+
       # Send a BRC-42 derived payment to a recipient.
       #
       # Generates derivation parameters, derives a P2PKH locking script for
@@ -1178,6 +1214,45 @@ module BSV
         raise BSV::Wallet::LimpModeError.new(
           balance: projected, threshold: @limp_threshold
         )
+      end
+
+      # Find an available WBIKD slot or create one via self-payment.
+      #
+      # Queries basket 'p wbikd' for a spendable (unlocked) output. If none
+      # exists, creates a self-payment with random satoshis (100-1000) to
+      # fund a new slot. The self-payment goes through public create_action
+      # so limp mode is enforced.
+      #
+      # @return [Hash] the slot output hash with :id, :satoshis, etc.
+      def find_or_create_wbikd_slot
+        result = @store.query_outputs(basket: 'p wbikd', limit: 1)
+        return result[:outputs].first if result[:total].positive?
+
+        # Create a slot via self-payment (broadcast, random sats for privacy)
+        prefix = SecureRandom.uuid
+        suffix = '1'
+        derived_pub = @key_deriver.derive_public_key(
+          protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
+        )
+        script = BSV::Script::Script.p2pkh_lock(
+          BSV::Primitives::Digest.hash160(derived_pub)
+        ).to_binary
+
+        slot_sats = rand(100..1000)
+        create_action(
+          description: 'wbikd slot creation',
+          outputs: [{
+            satoshis: slot_sats, locking_script: script,
+            basket: 'p wbikd',
+            derivation_prefix: prefix, derivation_suffix: suffix,
+            sender_identity_key: @key_deriver.identity_key
+          }],
+          no_send: true, randomize_outputs: false
+        )
+
+        # Re-query for the newly created slot
+        result = @store.query_outputs(basket: 'p wbikd', limit: 1)
+        result[:outputs].first
       end
 
       def secure_compare(a, b)
