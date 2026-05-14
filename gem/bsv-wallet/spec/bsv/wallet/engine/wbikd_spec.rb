@@ -7,6 +7,15 @@ require_relative 'shared_context'
 RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable RSpec/SpecFilePathFormat
   include_context 'engine setup'
 
+  # Pre-fund the wbikd basket so generate_receive_address finds a slot
+  # without needing to broadcast a self-payment (which requires network
+  # acceptance in the auto-fund path).
+  def prefund_wbikd_slots(count: 3)
+    count.times { |i| fund_wallet(satoshis: rand(100..1000), basket: 'p wbikd', suffix: "wbikd#{i}") }
+  end
+
+  before { prefund_wbikd_slots }
+
   describe '#list_receive_addresses' do
     it 'returns empty array when no addresses have been generated' do
       result = engine_with_keys.list_receive_addresses
@@ -189,9 +198,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable 
         suffix = addr_result[:derivation_suffix]
         address = addr_result[:address]
 
-        # Before scan: slot is locked (consumed as input), so p wbikd is empty
+        # Before scan: one slot locked, others still available
         slots_before = engine_net.list_outputs(basket: 'p wbikd')
-        expect(slots_before[:total_outputs]).to eq(0)
+        locked_count = slots_before[:total_outputs]
 
         # Build tx
         derived_pub = key_deriver.derive_public_key(
@@ -219,9 +228,9 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable 
 
         engine_net.scan_receive_addresses
 
-        # After scan: locking action aborted, slot output is spendable again
+        # After scan: locking action aborted, slot recycled — one more than before
         slots_after = engine_net.list_outputs(basket: 'p wbikd')
-        expect(slots_after[:total_outputs]).to eq(1)
+        expect(slots_after[:total_outputs]).to eq(locked_count + 1)
       end
 
       it 'the address disappears from list_receive_addresses after internalization' do
@@ -298,44 +307,13 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable 
       expect(result[:derivation_suffix]).to match(/\A\d+\z/)
     end
 
-    it 'creates a slot in basket p wbikd when none exists' do
+    it 'uses a pre-funded slot from basket p wbikd' do
+      # prefund_wbikd_slots already created slots in before block
       engine_with_keys.generate_receive_address
 
-      # The slot was created — but it's now locked (consumed as input),
-      # so query_outputs won't find it. Verify via the wbikd label.
+      # Slot was consumed — locking action created with wbikd label
       actions = engine_with_keys.list_actions(labels: ['wbikd'])
       expect(actions[:total_actions]).to eq(1)
-    end
-
-    it 'reuses an existing unlocked slot from basket p wbikd' do
-      # Pre-fund a slot directly
-      prefix = SecureRandom.uuid
-      suffix = '1'
-      derived_pub = key_deriver.derive_public_key(
-        protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
-      )
-      script = BSV::Script::Script.p2pkh_lock(
-        BSV::Primitives::Digest.hash160(derived_pub)
-      ).to_binary
-
-      source_action = store.create_action(
-        action: { description: 'slot source action', broadcast: :none, outgoing: false }
-      )
-      store.sign_action(action_id: source_action[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: dummy_raw_tx)
-      store.promote_action(
-        action_id: source_action[:id],
-        outputs: [{
-          satoshis: 500, vout: 0, locking_script: script,
-          basket: 'p wbikd',
-          derivation_prefix: prefix, derivation_suffix: suffix,
-          sender_identity_key: key_deriver.identity_key
-        }]
-      )
-
-      # Should use the pre-funded slot, not create a new one via create_action
-      result = engine_with_keys.generate_receive_address
-      expect(result[:address]).to be_a(String)
-      expect(result[:address]).to start_with('1')
     end
 
     it 'creates separate addresses for consecutive calls' do

@@ -1266,16 +1266,18 @@ module BSV
       # Find an available WBIKD slot or create one via self-payment.
       #
       # Queries basket 'p wbikd' for a spendable (unlocked) output. If none
-      # exists, creates a self-payment with random satoshis (100-1000) to
-      # fund a new slot. The self-payment goes through public create_action
-      # so limp mode is enforced.
+      # exists, creates a broadcast self-payment with random satoshis (100-1000).
+      # Broadcasting is essential — auto-fund locks UTXOs and creates change.
+      # Without broadcast, those funding UTXOs stay locked and change never
+      # becomes spendable. The random amount also provides privacy (slots are
+      # indistinguishable from normal wallet activity on-chain).
       #
       # @return [Hash] the slot output hash with :id, :satoshis, etc.
       def find_or_create_wbikd_slot
         result = @store.query_outputs(basket: 'p wbikd', limit: 1)
         return result[:outputs].first if result[:total].positive?
 
-        # Create a slot via self-payment (broadcast, random sats for privacy)
+        # Create a slot via broadcast self-payment
         prefix = SecureRandom.uuid
         suffix = '1'
         derived_pub = @key_deriver.derive_public_key(
@@ -1294,7 +1296,7 @@ module BSV
             derivation_prefix: prefix, derivation_suffix: suffix,
             sender_identity_key: @key_deriver.identity_key
           }],
-          no_send: true, randomize_outputs: false
+          randomize_outputs: false
         )
 
         # Re-query for the newly created slot
