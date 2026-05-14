@@ -51,9 +51,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable 
       expect(entry).to have_key(:action_reference)
       expect(entry).to have_key(:created_at)
       expect(entry[:address]).to start_with('1')
-      # Derivation params are base64-encoded int64 values (12 chars with padding)
-      expect(entry[:derivation_prefix]).to match(%r{\A[A-Za-z0-9+/]+=*\z})
-      expect(entry[:derivation_suffix]).to match(%r{\A[A-Za-z0-9+/]+=*\z})
+      # Derivation prefix is display-order txid (64-char hex)
+      expect(entry[:derivation_prefix]).to match(/\A[0-9a-f]{64}\z/)
+      # Derivation suffix is vout as decimal string
+      expect(entry[:derivation_suffix]).to match(/\A\d+\z/)
     end
 
     it 'excludes aborted actions' do
@@ -305,9 +306,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable 
 
       expect(result[:address]).to be_a(String)
       expect(result[:address]).to start_with('1')
-      # Derivation params are base64-encoded int64 values
-      expect(result[:derivation_prefix]).to match(%r{\A[A-Za-z0-9+/]+=*\z})
-      expect(result[:derivation_suffix]).to match(%r{\A[A-Za-z0-9+/]+=*\z})
+      # Derivation prefix is display-order txid (64-char hex)
+      expect(result[:derivation_prefix]).to match(/\A[0-9a-f]{64}\z/)
+      # Derivation suffix is vout as decimal string
+      expect(result[:derivation_suffix]).to match(/\A\d+\z/)
     end
 
     it 'uses a pre-funded slot from basket p wbikd' do

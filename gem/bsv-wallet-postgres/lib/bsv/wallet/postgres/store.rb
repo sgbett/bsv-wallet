@@ -548,9 +548,10 @@ module BSV
                            include_custom_instructions: false,
                            include_tags: false, include_labels: false, **)
           h = {
-            id:       record.id,
-            satoshis: record.satoshis,
-            vout:     record.vout,
+            id:        record.id,
+            action_id: record.action_id,
+            satoshis:  record.satoshis,
+            vout:      record.vout,
             spendable: true
           }
 
