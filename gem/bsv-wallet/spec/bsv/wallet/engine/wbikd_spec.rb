@@ -366,4 +366,42 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable 
       expect(locking_action[:status]).to eq(:nosend)
     end
   end
+
+  describe 'KeyDeriver#root_private_key_bytes' do
+    it 'returns 32-byte binary scalar' do
+      bytes = key_deriver.root_private_key_bytes
+
+      expect(bytes).to be_a(String)
+      expect(bytes.encoding).to eq(Encoding::BINARY)
+      expect(bytes.bytesize).to eq(32)
+    end
+
+    it 'is deterministic' do
+      first = key_deriver.root_private_key_bytes
+      second = key_deriver.root_private_key_bytes
+      expect(first).to eq(second)
+    end
+  end
+
+  describe 'compute_wbikd_marker (private)' do
+    it 'returns 32-byte HMAC-SHA256 marker' do
+      marker = engine_with_keys.send(:compute_wbikd_marker, 500)
+
+      expect(marker).to be_a(String)
+      expect(marker.bytesize).to eq(32)
+    end
+
+    it 'produces different markers for different satoshi amounts' do
+      marker_a = engine_with_keys.send(:compute_wbikd_marker, 100)
+      marker_b = engine_with_keys.send(:compute_wbikd_marker, 101)
+
+      expect(marker_a).not_to eq(marker_b)
+    end
+
+    it 'is deterministic for the same amount' do
+      first = engine_with_keys.send(:compute_wbikd_marker, 500)
+      second = engine_with_keys.send(:compute_wbikd_marker, 500)
+      expect(first).to eq(second)
+    end
+  end
 end

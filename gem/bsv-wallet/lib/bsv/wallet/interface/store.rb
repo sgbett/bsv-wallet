@@ -106,6 +106,8 @@ module BSV
 
         # Query spendable outputs in a basket with optional tag filtering.
         #
+        # Each output hash includes :id, :action_id, :satoshis, :vout, :spendable.
+        #
         # @return [Hash] :total, :outputs
         def query_outputs(basket:, tags: nil, tag_query_mode: :any,
                           limit: 10, offset: 0,
