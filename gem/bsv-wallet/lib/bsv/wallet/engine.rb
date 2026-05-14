@@ -480,6 +480,9 @@ module BSV
           action: { description: 'wbikd address lock', broadcast: :none, nlocktime: 0, outgoing: true },
           inputs: [{ output_id: slot[:id], vin: 0 }]
         )
+        # Slot may have been locked by a concurrent caller — retry with a different slot
+        return generate_receive_address unless locking_action
+
         wtxid, raw_tx, = build_transaction(locking_action[:id], [{ output_id: slot[:id] }], [], nil, nil, false)
         @store.sign_action(action_id: locking_action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
@@ -507,7 +510,7 @@ module BSV
       def list_receive_addresses
         require_key_deriver!
 
-        result = list_actions(labels: ['wbikd'], include_inputs: true)
+        result = list_actions(labels: ['wbikd'], include_inputs: true, limit: 10_000)
         result[:actions].filter_map do |action|
           next unless action[:status] == :nosend
 
@@ -557,8 +560,10 @@ module BSV
             )
             found_count += 1
           rescue StandardError => e
-            BSV.logger&.error { "[Engine] wbikd scan: #{e.message}" }
+            BSV.logger&.error { "[Engine] wbikd internalize: #{e.message}" }
           end
+        rescue StandardError => e
+          BSV.logger&.error { "[Engine] wbikd scan for #{addr_info[:address]}: #{e.message}" }
         end
 
         { scanned: addresses.length, found: found_count }
@@ -1297,6 +1302,7 @@ module BSV
         slot_sats = rand(100..1000)
         create_action(
           description: 'wbikd slot creation',
+          accept_delayed_broadcast: false,
           outputs: [{
             satoshis: slot_sats, locking_script: script,
             basket: 'p wbikd',
@@ -1368,8 +1374,12 @@ module BSV
           }]
         )
 
-        # 5. Fetch and link merkle proof if mined
-        fetch_and_link_proof(import_action[:id], wtxid, dtxid, raw_tx)
+        # 5. Fetch and link merkle proof if mined (best-effort — must not block slot recycling)
+        begin
+          fetch_and_link_proof(import_action[:id], wtxid, dtxid, raw_tx)
+        rescue StandardError => e
+          BSV.logger&.warn { "[Engine] wbikd proof fetch failed: #{e.message}" }
+        end
 
         # 6. Abort the locking action — CASCADE releases slot back to p wbikd basket
         abort_action(reference: action_reference)

@@ -27,6 +27,7 @@ module BSV
       # @param pending_pushes [#call] returns entities needing push
       # @param stale_fetches [#call] returns entities needing fetch (broadcast status)
       # @param pending_proofs [#call] returns entities needing fetch (proof acquisition)
+      # @param pending_scans [#call, nil] callable invoked each cycle for address scanning (e.g., WBIKD)
       # @param interval [Numeric] seconds to sleep between cycles
       def initialize(services:, pending_pushes: -> { [] }, stale_fetches: -> { [] },
                      pending_proofs: -> { [] }, pending_scans: nil, interval: 30)
