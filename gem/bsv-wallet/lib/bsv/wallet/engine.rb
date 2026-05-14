@@ -457,8 +457,15 @@ module BSV
       #
       # Finds or creates a pre-funded UTXO slot in basket 'p wbikd', locks it
       # with a zero-output no-send action, then derives a BRC-42 address from
-      # the locking action's reference and slot output ID. The address is
-      # deterministic and can be re-derived from the returned prefix/suffix.
+      # the locking action's ID and slot output ID.
+      #
+      # Derivation params are base64-encoded big-endian int64 values of the
+      # database IDs. This is intentionally deterministic — if the wallet
+      # database is lost but the identity key is retained, funds can be
+      # recovered by enumerating (action_id, output_id) combinations and
+      # checking each derived address for UTXOs. Security as an economic
+      # function: cost of recovery scales with the number of addresses
+      # ever generated.
       #
       # @return [Hash] { address:, derivation_prefix:, derivation_suffix: }
       def generate_receive_address
@@ -478,9 +485,9 @@ module BSV
         @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         attach_labels(locking_action[:id], ['wbikd'])
 
-        # Derive address from deterministic params
-        derivation_prefix = locking_action[:reference].to_s
-        derivation_suffix = slot[:id].to_s
+        # Derive address from deterministic integer-based params
+        derivation_prefix = encode_int64(locking_action[:id])
+        derivation_suffix = encode_int64(slot[:id])
         derived_pub = @key_deriver.derive_public_key(
           protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
         )
@@ -493,7 +500,7 @@ module BSV
       #
       # Queries actions with the 'wbikd' label, filters for :nosend status
       # (active locks), and re-derives the P2PKH address from each action's
-      # reference and input output_id.
+      # ID and input output_id.
       #
       # @return [Array<Hash>] each with :address, :derivation_prefix,
       #   :derivation_suffix, :action_reference, :created_at
@@ -507,8 +514,8 @@ module BSV
           input = action[:inputs]&.first
           next unless input
 
-          derivation_prefix = action[:reference].to_s
-          derivation_suffix = input[:output_id].to_s
+          derivation_prefix = encode_int64(action[:id])
+          derivation_suffix = encode_int64(input[:output_id])
           derived_pub = @key_deriver.derive_public_key(
             protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
           )
@@ -1397,6 +1404,12 @@ module BSV
 
         proof_id = @proof_store.save_proof(wtxid: wtxid, proof: proof)
         @store.link_proof(action_id: action_id, tx_proof_id: proof_id)
+      end
+
+      # Encode an integer as base64 big-endian int64.
+      # Used for WBIKD derivation params — deterministic, enumerable.
+      def encode_int64(int)
+        [int].pack('q>').then { |b| [b].pack('m0') }
       end
 
       def secure_compare(a, b)
