@@ -1353,7 +1353,9 @@ module BSV
         @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
 
-        # 4. Promote with BRC-42 derivation params (output is immediately spendable)
+        # 4. Promote with BRC-42 derivation params (output is immediately spendable).
+        # Tag with 'wbikd' so future sweeps can re-derive and re-scan the address
+        # even after the locking action is aborted and the slot recycled.
         @store.promote_action(
           action_id: import_action[:id],
           outputs: [{
@@ -1361,7 +1363,8 @@ module BSV
             locking_script: output.locking_script.to_binary,
             derivation_prefix: derivation_prefix,
             derivation_suffix: derivation_suffix,
-            sender_identity_key: @key_deriver.identity_key
+            sender_identity_key: @key_deriver.identity_key,
+            tags: ['wbikd']
           }]
         )
 
