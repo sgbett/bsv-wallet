@@ -29,11 +29,12 @@ module BSV
       # @param pending_proofs [#call] returns entities needing fetch (proof acquisition)
       # @param interval [Numeric] seconds to sleep between cycles
       def initialize(services:, pending_pushes: -> { [] }, stale_fetches: -> { [] },
-                     pending_proofs: -> { [] }, interval: 30)
+                     pending_proofs: -> { [] }, pending_scans: nil, interval: 30)
         @services = services
         @pending_pushes = pending_pushes
         @stale_fetches = stale_fetches
         @pending_proofs = pending_proofs
+        @pending_scans = pending_scans
         @interval = interval
         @running = false
       end
@@ -59,6 +60,7 @@ module BSV
         push_pending
         fetch_stale
         fetch_proofs
+        run_scans if @pending_scans
         sleep @interval
       rescue StandardError => e
         BSV.logger&.error { "[Daemon] cycle error: #{e.class}: #{e.message}" }
@@ -88,6 +90,12 @@ module BSV
         rescue StandardError => e
           BSV.logger&.error { "[Daemon] proof fetch error: #{e.class}: #{e.message}" }
         end
+      end
+
+      def run_scans
+        @pending_scans.call
+      rescue StandardError => e
+        BSV.logger&.error { "[Daemon] scan error: #{e.class}: #{e.message}" }
       end
     end
   end
