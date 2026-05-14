@@ -367,24 +367,7 @@ module BSV
         satoshis = output.satoshis
         wtxid = tx.wtxid
 
-        # Fetch merkle proof if mined
-        merkle_path = nil
-        block_height = nil
-        details_result = @network_provider.call(:get_tx_details, txid: dtxid)
-        if details_result.http_success? && details_result.data['blockheight']
-          block_height = details_result.data['blockheight']
-          proof_result = @network_provider.call(:get_merkle_path, txid: dtxid)
-          if proof_result.http_success? && proof_result.data.is_a?(Array) && proof_result.data.any?
-            tsc = proof_result.data.first
-            mp = BSV::Transaction::MerklePath.from_tsc(
-              dtxid_hex: tsc['txOrId'], index: tsc['index'],
-              nodes: tsc['nodes'], block_height: block_height
-            )
-            merkle_path = mp.to_binary
-          end
-        end
-
-        BSV.logger&.debug { "[Engine] import_utxo: #{satoshis} sats at vout #{vout}, height=#{block_height || 'unconfirmed'}" }
+        BSV.logger&.debug { "[Engine] import_utxo: #{satoshis} sats at vout #{vout}" }
 
         # Phase 1: Record the root-key UTXO
         import_action = @store.create_action(
@@ -398,12 +381,8 @@ module BSV
         )
         imported_output_id = output_ids.first
 
-        # Store proof and link
-        proof = { raw_tx: raw_tx, merkle_path: merkle_path, height: block_height }.compact
-        if proof.any?
-          proof_id = @proof_store.save_proof(wtxid: wtxid, proof: proof)
-          @store.link_proof(action_id: import_action[:id], tx_proof_id: proof_id)
-        end
+        # Fetch and link merkle proof if mined
+        fetch_and_link_proof(import_action[:id], wtxid, dtxid, raw_tx)
 
         # Phase 2: Self-payment to derived address
 
@@ -472,6 +451,122 @@ module BSV
         end
 
         { imported: imported.length, utxos: imported }
+      end
+
+      # Generate a legacy P2PKH receive address using the WBIKD pattern.
+      #
+      # Finds or creates a pre-funded UTXO slot in basket 'p wbikd', locks it
+      # with a zero-output no-send action, then derives a BRC-42 address from
+      # the locking action's ID and slot output ID.
+      #
+      # Derivation params are base64-encoded big-endian int64 values of the
+      # database IDs. This is intentionally deterministic — if the wallet
+      # database is lost but the identity key is retained, funds can be
+      # recovered by enumerating (action_id, output_id) combinations and
+      # checking each derived address for UTXOs. Security as an economic
+      # function: cost of recovery scales with the number of addresses
+      # ever generated.
+      #
+      # @return [Hash] { address:, derivation_prefix:, derivation_suffix: }
+      def generate_receive_address
+        require_key_deriver!
+
+        slot = find_or_create_wbikd_slot
+
+        # Lock the slot with a no-send zero-output action.
+        # Uses @store.create_action directly — this is an internal operation
+        # that should not enforce limp mode.
+        locking_action = @store.create_action(
+          action: { description: 'wbikd address lock', broadcast: :none, nlocktime: 0, outgoing: true },
+          inputs: [{ output_id: slot[:id], vin: 0 }]
+        )
+        # Slot may have been locked by a concurrent caller — retry with a different slot
+        return generate_receive_address unless locking_action
+
+        wtxid, raw_tx, = build_transaction(locking_action[:id], [{ output_id: slot[:id] }], [], nil, nil, false)
+        @store.sign_action(action_id: locking_action[:id], wtxid: wtxid, raw_tx: raw_tx)
+        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+        attach_labels(locking_action[:id], ['wbikd'])
+
+        # Derive address from deterministic integer-based params
+        derivation_prefix = encode_int64(locking_action[:id])
+        derivation_suffix = encode_int64(slot[:id])
+        derived_pub = @key_deriver.derive_public_key(
+          protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
+        )
+        address = BSV::Primitives::PublicKey.from_bytes(derived_pub).address(network: @network_name)
+
+        { address: address, derivation_prefix: derivation_prefix, derivation_suffix: derivation_suffix }
+      end
+
+      # List outstanding (pending) WBIKD receive addresses.
+      #
+      # Queries actions with the 'wbikd' label, filters for :nosend status
+      # (active locks), and re-derives the P2PKH address from each action's
+      # ID and input output_id.
+      #
+      # @return [Array<Hash>] each with :address, :derivation_prefix,
+      #   :derivation_suffix, :action_reference, :created_at
+      def list_receive_addresses
+        require_key_deriver!
+
+        result = list_actions(labels: ['wbikd'], include_inputs: true, limit: 10_000)
+        result[:actions].filter_map do |action|
+          next unless action[:status] == :nosend
+
+          input = action[:inputs]&.first
+          next unless input
+
+          derivation_prefix = encode_int64(action[:id])
+          derivation_suffix = encode_int64(input[:output_id])
+          derived_pub = @key_deriver.derive_public_key(
+            protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
+          )
+          address = BSV::Primitives::PublicKey.from_bytes(derived_pub).address(network: @network_name)
+
+          { address: address, derivation_prefix: derivation_prefix,
+            derivation_suffix: derivation_suffix,
+            action_reference: action[:reference], created_at: action[:created_at] }
+        end
+      end
+
+      # Scan outstanding WBIKD receive addresses for incoming UTXOs.
+      #
+      # Queries the network for UTXOs at each outstanding address. When
+      # funds are found, internalizes each UTXO with BRC-42 derivation
+      # params and recycles the slot by aborting the locking action.
+      #
+      # @return [Hash] { scanned:, found: } counts
+      def scan_receive_addresses
+        return { scanned: 0, found: 0 } unless @key_deriver && @network_provider
+
+        addresses = list_receive_addresses
+        return { scanned: 0, found: 0 } if addresses.empty?
+
+        found_count = 0
+        addresses.each do |addr_info|
+          result = @network_provider.call(:get_utxos, addr_info[:address])
+          next unless result.respond_to?(:http_success?) && result.http_success?
+
+          utxos = result.data
+          next if utxos.nil? || utxos.empty?
+
+          utxos.each do |utxo|
+            internalize_wbikd_utxo(
+              dtxid: utxo['tx_hash'], vout: utxo['tx_pos'],
+              derivation_prefix: addr_info[:derivation_prefix],
+              derivation_suffix: addr_info[:derivation_suffix],
+              action_reference: addr_info[:action_reference]
+            )
+            found_count += 1
+          rescue StandardError => e
+            BSV.logger&.error { "[Engine] wbikd internalize: #{e.message}" }
+          end
+        rescue StandardError => e
+          BSV.logger&.error { "[Engine] wbikd scan for #{addr_info[:address]}: #{e.message}" }
+        end
+
+        { scanned: addresses.length, found: found_count }
       end
 
       # Send a BRC-42 derived payment to a recipient.
@@ -1178,6 +1273,156 @@ module BSV
         raise BSV::Wallet::LimpModeError.new(
           balance: projected, threshold: @limp_threshold
         )
+      end
+
+      # Find an available WBIKD slot or create one via self-payment.
+      #
+      # Queries basket 'p wbikd' for a spendable (unlocked) output. If none
+      # exists, creates a broadcast self-payment with random satoshis (100-1000).
+      # Broadcasting is essential — auto-fund locks UTXOs and creates change.
+      # Without broadcast, those funding UTXOs stay locked and change never
+      # becomes spendable. The random amount also provides privacy (slots are
+      # indistinguishable from normal wallet activity on-chain).
+      #
+      # @return [Hash] the slot output hash with :id, :satoshis, etc.
+      def find_or_create_wbikd_slot
+        result = @store.query_outputs(basket: 'p wbikd', limit: 1)
+        return result[:outputs].first if result[:total].positive?
+
+        # Create a slot via broadcast self-payment
+        prefix = SecureRandom.uuid
+        suffix = '1'
+        derived_pub = @key_deriver.derive_public_key(
+          protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
+        )
+        script = BSV::Script::Script.p2pkh_lock(
+          BSV::Primitives::Digest.hash160(derived_pub)
+        ).to_binary
+
+        slot_sats = rand(100..1000)
+        create_action(
+          description: 'wbikd slot creation',
+          accept_delayed_broadcast: false,
+          outputs: [{
+            satoshis: slot_sats, locking_script: script,
+            basket: 'p wbikd',
+            derivation_prefix: prefix, derivation_suffix: suffix,
+            sender_identity_key: @key_deriver.identity_key
+          }],
+          randomize_outputs: false
+        )
+
+        # Re-query for the newly created slot
+        result = @store.query_outputs(basket: 'p wbikd', limit: 1)
+        result[:outputs].first
+      end
+
+      # Internalize a UTXO found at a WBIKD receive address.
+      #
+      # Fetches the transaction from the network, verifies the output
+      # matches the derived address, creates an incoming action with
+      # BRC-42 derivation params (immediately spendable), fetches any
+      # available merkle proof, then aborts the locking action to
+      # recycle the slot back to basket 'p wbikd'.
+      #
+      # Unlike import_utxo, no self-payment step is needed — the output
+      # already has BRC-42 derivation params for the wallet to spend.
+      #
+      # @param dtxid [String] 64-char hex transaction ID (display order)
+      # @param vout [Integer] output index
+      # @param derivation_prefix [String] BRC-42 derivation prefix
+      # @param derivation_suffix [String] BRC-42 derivation suffix
+      # @param action_reference [String] UUID reference of the locking action to abort
+      def internalize_wbikd_utxo(dtxid:, vout:, derivation_prefix:, derivation_suffix:, action_reference:)
+        # 1. Fetch raw tx from network
+        result = @network_provider.call(:get_tx, txid: dtxid)
+        return unless result.respond_to?(:http_success?) && result.http_success?
+
+        raw_tx = [result.data.strip].pack('H*')
+        tx = BSV::Transaction::Transaction.from_binary(raw_tx)
+        output = tx.outputs[vout]
+        return unless output
+
+        # 2. Verify output matches our derived address
+        derived_pub = @key_deriver.derive_public_key(
+          protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
+        )
+        expected_hash = BSV::Primitives::Digest.hash160(derived_pub)
+        return unless output.locking_script.p2pkh? &&
+                      output.locking_script.chunks[2].data == expected_hash
+
+        # 3. Create incoming action (same pattern as import_utxo)
+        wtxid = tx.wtxid
+        import_action = @store.create_action(
+          action: { description: 'wbikd received funds', broadcast: :none, outgoing: false }
+        )
+        @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
+        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+
+        # 4. Promote with BRC-42 derivation params (output is immediately spendable).
+        # Tag with 'wbikd' so future sweeps can re-derive and re-scan the address
+        # even after the locking action is aborted and the slot recycled.
+        @store.promote_action(
+          action_id: import_action[:id],
+          outputs: [{
+            satoshis: output.satoshis, vout: vout,
+            locking_script: output.locking_script.to_binary,
+            derivation_prefix: derivation_prefix,
+            derivation_suffix: derivation_suffix,
+            sender_identity_key: @key_deriver.identity_key,
+            tags: ['wbikd']
+          }]
+        )
+
+        # 5. Fetch and link merkle proof if mined (best-effort — must not block slot recycling)
+        begin
+          fetch_and_link_proof(import_action[:id], wtxid, dtxid, raw_tx)
+        rescue StandardError => e
+          BSV.logger&.warn { "[Engine] wbikd proof fetch failed: #{e.message}" }
+        end
+
+        # 6. Abort the locking action — CASCADE releases slot back to p wbikd basket
+        abort_action(reference: action_reference)
+      end
+
+      # Fetch merkle proof from the network and link it to an action.
+      #
+      # Queries :get_tx_details for block height, then :get_merkle_path
+      # for the TSC merkle proof. Saves the proof to ProofStore and links
+      # it to the action. No-op if the transaction is unconfirmed.
+      #
+      # @param action_id [Integer] the action to link the proof to
+      # @param wtxid [String] 32-byte wire-order wtxid
+      # @param dtxid [String] 64-char hex transaction ID (display order)
+      # @param raw_tx [String] raw transaction binary
+      def fetch_and_link_proof(action_id, wtxid, dtxid, raw_tx)
+        details_result = @network_provider.call(:get_tx_details, txid: dtxid)
+        return unless details_result.http_success? && details_result.data['blockheight']
+
+        block_height = details_result.data['blockheight']
+        merkle_path = nil
+
+        proof_result = @network_provider.call(:get_merkle_path, txid: dtxid)
+        if proof_result.http_success? && proof_result.data.is_a?(Array) && proof_result.data.any?
+          tsc = proof_result.data.first
+          mp = BSV::Transaction::MerklePath.from_tsc(
+            dtxid_hex: tsc['txOrId'], index: tsc['index'],
+            nodes: tsc['nodes'], block_height: block_height
+          )
+          merkle_path = mp.to_binary
+        end
+
+        proof = { raw_tx: raw_tx, merkle_path: merkle_path, height: block_height }.compact
+        return unless proof.any?
+
+        proof_id = @proof_store.save_proof(wtxid: wtxid, proof: proof)
+        @store.link_proof(action_id: action_id, tx_proof_id: proof_id)
+      end
+
+      # Encode an integer as base64 big-endian int64.
+      # Used for WBIKD derivation params — deterministic, enumerable.
+      def encode_int64(int)
+        [int].pack('q>').then { |b| [b].pack('m0') }
       end
 
       def secure_compare(a, b)

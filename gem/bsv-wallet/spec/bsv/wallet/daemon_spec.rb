@@ -166,4 +166,42 @@ RSpec.describe BSV::Wallet::Daemon do
       expect { broken_daemon.run_cycle }.not_to raise_error
     end
   end
+
+  describe 'pending_scans' do
+    it 'is backward-compatible without pending_scans parameter' do
+      d = described_class.new(services: services, interval: 0)
+      expect { d.run_cycle }.not_to raise_error
+    end
+
+    it 'invokes the pending_scans callable each cycle' do
+      scan_count = 0
+      d = described_class.new(
+        services: services,
+        pending_scans: -> { scan_count += 1 },
+        interval: 0
+      )
+
+      d.run_cycle
+      d.run_cycle
+
+      expect(scan_count).to eq(2)
+    end
+
+    it 'does not call pending_scans when nil' do
+      d = described_class.new(services: services, pending_scans: nil, interval: 0)
+
+      # No error — run_scans is skipped entirely
+      expect { d.run_cycle }.not_to raise_error
+    end
+
+    it 'does not crash the cycle when scan raises' do
+      d = described_class.new(
+        services: services,
+        pending_scans: -> { raise StandardError, 'scan failed' },
+        interval: 0
+      )
+
+      expect { d.run_cycle }.not_to raise_error
+    end
+  end
 end
