@@ -85,6 +85,14 @@ module BSV
           raise NotImplementedError
         end
 
+        # Find an output by id.
+        #
+        # @param id [Integer]
+        # @return [Hash, nil] output data including :id, :action_id, :satoshis, :vout, etc.
+        def find_output(id:)
+          raise NotImplementedError
+        end
+
         # Query actions by labels with pagination.
         #
         # @return [Hash] :total, :actions
@@ -97,6 +105,8 @@ module BSV
         end
 
         # Query spendable outputs in a basket with optional tag filtering.
+        #
+        # Each output hash includes :id, :action_id, :satoshis, :vout, :spendable.
         #
         # @return [Hash] :total, :outputs
         def query_outputs(basket:, tags: nil, tag_query_mode: :any,

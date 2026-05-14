@@ -29,6 +29,12 @@ module BSV
         @root_key
       end
 
+      # The 32-byte raw scalar of the root private key.
+      # Used for HMAC computations (e.g., WBIKD recovery markers).
+      def root_private_key_bytes
+        @root_key.to_bytes
+      end
+
       # Returns the compressed public key hex of the everyday key.
       #
       # @return [String] 66-character hex-encoded compressed public key

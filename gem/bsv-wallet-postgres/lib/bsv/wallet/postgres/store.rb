@@ -151,6 +151,21 @@ module BSV
 
         # --- Queries ---
 
+        def find_output(id:)
+          record = Output[id]
+          return unless record
+
+          {
+            id: record.id, action_id: record.action_id,
+            satoshis: record.satoshis, vout: record.vout,
+            locking_script: record.locking_script,
+            output_type: record.output_type,
+            derivation_prefix: record.derivation_prefix,
+            derivation_suffix: record.derivation_suffix,
+            sender_identity_key: record.sender_identity_key
+          }
+        end
+
         def find_action(id: nil, wtxid: nil, reference: nil)
           BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'find_action wtxid') if wtxid
           record = if id then Action[id]
@@ -533,9 +548,10 @@ module BSV
                            include_custom_instructions: false,
                            include_tags: false, include_labels: false, **)
           h = {
-            id:       record.id,
-            satoshis: record.satoshis,
-            vout:     record.vout,
+            id:        record.id,
+            action_id: record.action_id,
+            satoshis:  record.satoshis,
+            vout:      record.vout,
             spendable: true
           }
 

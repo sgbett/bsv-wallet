@@ -471,7 +471,8 @@ module BSV
       def generate_receive_address
         require_key_deriver!
 
-        slot = find_or_create_wbikd_slot
+        slot_info = find_or_create_wbikd_slot
+        slot = slot_info[:slot]
 
         # Lock the slot with a no-send zero-output action.
         # Uses @store.create_action directly — this is an internal operation
@@ -488,9 +489,10 @@ module BSV
         @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         attach_labels(locking_action[:id], ['wbikd'])
 
-        # Derive address from deterministic integer-based params
-        derivation_prefix = encode_int64(locking_action[:id])
-        derivation_suffix = encode_int64(slot[:id])
+        # Derive from on-chain data: slot's source txid + vout.
+        # These are deterministic from the blockchain — no database ID dependency.
+        derivation_prefix = slot_info[:dtxid]
+        derivation_suffix = slot_info[:vout].to_s
         derived_pub = @key_deriver.derive_public_key(
           protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
         )
@@ -502,8 +504,8 @@ module BSV
       # List outstanding (pending) WBIKD receive addresses.
       #
       # Queries actions with the 'wbikd' label, filters for :nosend status
-      # (active locks), and re-derives the P2PKH address from each action's
-      # ID and input output_id.
+      # (active locks), and re-derives the P2PKH address from each slot's
+      # source transaction ID and output index (on-chain data).
       #
       # @return [Array<Hash>] each with :address, :derivation_prefix,
       #   :derivation_suffix, :action_reference, :created_at
@@ -517,8 +519,16 @@ module BSV
           input = action[:inputs]&.first
           next unless input
 
-          derivation_prefix = encode_int64(action[:id])
-          derivation_suffix = encode_int64(input[:output_id])
+          # Look up slot output's source txid + vout for on-chain derivation
+          slot_output = @store.find_output(id: input[:output_id])
+          next unless slot_output
+
+          source_action = @store.find_action(id: slot_output[:action_id])
+          next unless source_action&.dig(:wtxid)
+
+          derivation_prefix = source_action[:wtxid].reverse.unpack1('H*')
+          derivation_suffix = slot_output[:vout].to_s
+
           derived_pub = @key_deriver.derive_public_key(
             protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
           )
@@ -1278,19 +1288,27 @@ module BSV
       # Find an available WBIKD slot or create one via self-payment.
       #
       # Queries basket 'p wbikd' for a spendable (unlocked) output. If none
-      # exists, creates a broadcast self-payment with random satoshis (100-1000).
+      # exists, creates a broadcast self-payment with random satoshis (100-1000)
+      # and an OP_RETURN recovery marker.
+      #
       # Broadcasting is essential — auto-fund locks UTXOs and creates change.
       # Without broadcast, those funding UTXOs stay locked and change never
-      # becomes spendable. The random amount also provides privacy (slots are
-      # indistinguishable from normal wallet activity on-chain).
+      # becomes spendable. The random amount provides privacy (slots are
+      # indistinguishable from normal wallet activity on-chain). The OP_RETURN
+      # marker enables address recovery from the identity key alone.
       #
-      # @return [Hash] the slot output hash with :id, :satoshis, etc.
+      # @return [Hash] { slot:, dtxid:, vout: } — slot output hash + on-chain derivation data
       def find_or_create_wbikd_slot
         result = @store.query_outputs(basket: 'p wbikd', limit: 1)
-        return result[:outputs].first if result[:total].positive?
+        if result[:total].positive?
+          slot = result[:outputs].first
+          source_action = @store.find_action(id: slot[:action_id])
+          dtxid = source_action[:wtxid].reverse.unpack1('H*')
+          return { slot: slot, dtxid: dtxid, vout: slot[:vout] }
+        end
 
-        # Create a slot via broadcast self-payment
-        prefix = SecureRandom.uuid
+        # Create a slot via broadcast self-payment with OP_RETURN recovery marker
+        prefix = SecureRandom.uuid # TODO: random_derivation (#107)
         suffix = '1'
         derived_pub = @key_deriver.derive_public_key(
           protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
@@ -1300,21 +1318,40 @@ module BSV
         ).to_binary
 
         slot_sats = rand(100..1000)
-        create_action(
+        marker = compute_wbikd_marker(slot_sats)
+        op_return_script = BSV::Script::Script.op_return(marker).to_binary
+
+        create_result = create_action(
           description: 'wbikd slot creation',
           accept_delayed_broadcast: false,
-          outputs: [{
-            satoshis: slot_sats, locking_script: script,
-            basket: 'p wbikd',
-            derivation_prefix: prefix, derivation_suffix: suffix,
-            sender_identity_key: @key_deriver.identity_key
-          }],
+          outputs: [
+            { satoshis: slot_sats, locking_script: script,
+              basket: 'p wbikd',
+              derivation_prefix: prefix, derivation_suffix: suffix,
+              sender_identity_key: @key_deriver.identity_key },
+            { satoshis: 0, locking_script: op_return_script }
+          ],
           randomize_outputs: false
         )
 
+        # txid from create_action is wire-order wtxid
+        dtxid = create_result[:txid].reverse.unpack1('H*')
+
         # Re-query for the newly created slot
         result = @store.query_outputs(basket: 'p wbikd', limit: 1)
-        result[:outputs].first
+        { slot: result[:outputs].first, dtxid: dtxid, vout: 0 }
+      end
+
+      # Compute the WBIKD recovery marker for a slot with the given satoshi amount.
+      # HMAC-SHA256(identity_private_key, satoshi_amount_string)
+      #
+      # @param satoshis [Integer]
+      # @return [String] 32-byte binary marker
+      def compute_wbikd_marker(satoshis)
+        BSV::Primitives::Digest.hmac_sha256(
+          @key_deriver.root_private_key_bytes,
+          satoshis.to_s
+        )
       end
 
       # Internalize a UTXO found at a WBIKD receive address.
@@ -1417,12 +1454,6 @@ module BSV
 
         proof_id = @proof_store.save_proof(wtxid: wtxid, proof: proof)
         @store.link_proof(action_id: action_id, tx_proof_id: proof_id)
-      end
-
-      # Encode an integer as base64 big-endian int64.
-      # Used for WBIKD derivation params — deterministic, enumerable.
-      def encode_int64(int)
-        [int].pack('q>').then { |b| [b].pack('m0') }
       end
 
       def secure_compare(a, b)

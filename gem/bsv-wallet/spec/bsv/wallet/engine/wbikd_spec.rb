@@ -51,9 +51,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable 
       expect(entry).to have_key(:action_reference)
       expect(entry).to have_key(:created_at)
       expect(entry[:address]).to start_with('1')
-      # Derivation params are base64-encoded int64 values (12 chars with padding)
-      expect(entry[:derivation_prefix]).to match(%r{\A[A-Za-z0-9+/]+=*\z})
-      expect(entry[:derivation_suffix]).to match(%r{\A[A-Za-z0-9+/]+=*\z})
+      # Derivation prefix is display-order txid (64-char hex)
+      expect(entry[:derivation_prefix]).to match(/\A[0-9a-f]{64}\z/)
+      # Derivation suffix is vout as decimal string
+      expect(entry[:derivation_suffix]).to match(/\A\d+\z/)
     end
 
     it 'excludes aborted actions' do
@@ -305,9 +306,10 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable 
 
       expect(result[:address]).to be_a(String)
       expect(result[:address]).to start_with('1')
-      # Derivation params are base64-encoded int64 values
-      expect(result[:derivation_prefix]).to match(%r{\A[A-Za-z0-9+/]+=*\z})
-      expect(result[:derivation_suffix]).to match(%r{\A[A-Za-z0-9+/]+=*\z})
+      # Derivation prefix is display-order txid (64-char hex)
+      expect(result[:derivation_prefix]).to match(/\A[0-9a-f]{64}\z/)
+      # Derivation suffix is vout as decimal string
+      expect(result[:derivation_suffix]).to match(/\A\d+\z/)
     end
 
     it 'uses a pre-funded slot from basket p wbikd' do
@@ -362,6 +364,44 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable 
       actions = engine_with_keys.list_actions(labels: ['wbikd'])
       locking_action = actions[:actions].first
       expect(locking_action[:status]).to eq(:nosend)
+    end
+  end
+
+  describe 'KeyDeriver#root_private_key_bytes' do
+    it 'returns 32-byte binary scalar' do
+      bytes = key_deriver.root_private_key_bytes
+
+      expect(bytes).to be_a(String)
+      expect(bytes.encoding).to eq(Encoding::BINARY)
+      expect(bytes.bytesize).to eq(32)
+    end
+
+    it 'is deterministic' do
+      first = key_deriver.root_private_key_bytes
+      second = key_deriver.root_private_key_bytes
+      expect(first).to eq(second)
+    end
+  end
+
+  describe 'compute_wbikd_marker (private)' do
+    it 'returns 32-byte HMAC-SHA256 marker' do
+      marker = engine_with_keys.send(:compute_wbikd_marker, 500)
+
+      expect(marker).to be_a(String)
+      expect(marker.bytesize).to eq(32)
+    end
+
+    it 'produces different markers for different satoshi amounts' do
+      marker_a = engine_with_keys.send(:compute_wbikd_marker, 100)
+      marker_b = engine_with_keys.send(:compute_wbikd_marker, 101)
+
+      expect(marker_a).not_to eq(marker_b)
+    end
+
+    it 'is deterministic for the same amount' do
+      first = engine_with_keys.send(:compute_wbikd_marker, 500)
+      second = engine_with_keys.send(:compute_wbikd_marker, 500)
+      expect(first).to eq(second)
     end
   end
 end

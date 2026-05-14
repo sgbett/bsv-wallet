@@ -248,6 +248,31 @@ RSpec.describe BSV::Wallet::Postgres::Store do
     end
   end
 
+  describe '#find_output' do
+    it 'returns output hash with action_id, vout, and satoshis' do
+      action = store.create_action(action: { description: 'output source', nlocktime: 0 })
+      wtxid = SecureRandom.random_bytes(32)
+      store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
+      output_ids = store.promote_action(
+        action_id: action[:id],
+        outputs: [{ satoshis: 500, vout: 0, locking_script: "\x51".b,
+                    derivation_prefix: 'test', derivation_suffix: '1',
+                    sender_identity_key: 'self' }]
+      )
+
+      found = store.find_output(id: output_ids.first)
+
+      expect(found[:id]).to eq(output_ids.first)
+      expect(found[:action_id]).to eq(action[:id])
+      expect(found[:satoshis]).to eq(500)
+      expect(found[:vout]).to eq(0)
+    end
+
+    it 'returns nil when not found' do
+      expect(store.find_output(id: 999_999)).to be_nil
+    end
+  end
+
   describe '#query_actions' do
     before do
       # Create 3 actions with different label combos
