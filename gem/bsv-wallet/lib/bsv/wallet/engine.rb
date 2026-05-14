@@ -510,6 +510,37 @@ module BSV
         { address: address, derivation_prefix: derivation_prefix, derivation_suffix: derivation_suffix }
       end
 
+      # List outstanding (pending) WBIKD receive addresses.
+      #
+      # Queries actions with the 'wbikd' label, filters for :nosend status
+      # (active locks), and re-derives the P2PKH address from each action's
+      # reference and input output_id.
+      #
+      # @return [Array<Hash>] each with :address, :derivation_prefix,
+      #   :derivation_suffix, :action_reference, :created_at
+      def list_receive_addresses
+        require_key_deriver!
+
+        result = list_actions(labels: ['wbikd'], include_inputs: true)
+        result[:actions].filter_map do |action|
+          next unless action[:status] == :nosend
+
+          input = action[:inputs]&.first
+          next unless input
+
+          derivation_prefix = action[:reference].to_s
+          derivation_suffix = input[:output_id].to_s
+          derived_pub = @key_deriver.derive_public_key(
+            protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
+          )
+          address = BSV::Primitives::PublicKey.from_bytes(derived_pub).address(network: @network_name)
+
+          { address: address, derivation_prefix: derivation_prefix,
+            derivation_suffix: derivation_suffix,
+            action_reference: action[:reference], created_at: action[:created_at] }
+        end
+      end
+
       # Send a BRC-42 derived payment to a recipient.
       #
       # Generates derivation parameters, derives a P2PKH locking script for

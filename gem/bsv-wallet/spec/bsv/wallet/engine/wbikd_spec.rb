@@ -1,11 +1,68 @@
 # frozen_string_literal: true
 
-# WBIKD specs — generate_receive_address and the slot mechanism.
+# WBIKD specs — generate_receive_address, list_receive_addresses, and the slot mechanism.
 
 require_relative 'shared_context'
 
 RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable RSpec/SpecFilePathFormat
   include_context 'engine setup'
+
+  describe '#list_receive_addresses' do
+    it 'returns empty array when no addresses have been generated' do
+      result = engine_with_keys.list_receive_addresses
+
+      expect(result).to eq([])
+    end
+
+    it 'returns one entry after one generate_receive_address call' do
+      generated = engine_with_keys.generate_receive_address
+      listed = engine_with_keys.list_receive_addresses
+
+      expect(listed.length).to eq(1)
+      expect(listed.first[:address]).to eq(generated[:address])
+    end
+
+    it 'returns multiple entries after multiple generate_receive_address calls' do
+      first = engine_with_keys.generate_receive_address
+      second = engine_with_keys.generate_receive_address
+      listed = engine_with_keys.list_receive_addresses
+
+      expect(listed.length).to eq(2)
+      addresses = listed.map { |e| e[:address] }
+      expect(addresses).to contain_exactly(first[:address], second[:address])
+    end
+
+    it 'includes all expected fields in each entry' do
+      engine_with_keys.generate_receive_address
+      entry = engine_with_keys.list_receive_addresses.first
+
+      expect(entry).to have_key(:address)
+      expect(entry).to have_key(:derivation_prefix)
+      expect(entry).to have_key(:derivation_suffix)
+      expect(entry).to have_key(:action_reference)
+      expect(entry).to have_key(:created_at)
+      expect(entry[:address]).to start_with('1')
+      expect(entry[:derivation_prefix]).to match(BSV::Wallet::Engine::UUID_RE)
+    end
+
+    it 'excludes aborted actions' do
+      engine_with_keys.generate_receive_address
+      listed_before = engine_with_keys.list_receive_addresses
+      expect(listed_before.length).to eq(1)
+
+      # Abort the locking action — the address should disappear
+      engine_with_keys.abort_action(reference: listed_before.first[:action_reference])
+      listed_after = engine_with_keys.list_receive_addresses
+
+      expect(listed_after).to eq([])
+    end
+
+    it 'raises without key_deriver' do
+      expect do
+        engine.list_receive_addresses
+      end.to raise_error(BSV::Wallet::Error, /key deriver/)
+    end
+  end
 
   describe '#generate_receive_address' do
     it 'returns an address string and derivation params' do
