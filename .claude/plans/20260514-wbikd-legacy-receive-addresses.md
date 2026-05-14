@@ -9,8 +9,51 @@ BRC-29 payments require both parties to have BRC-100 wallets. Legacy senders (ex
 ## How It Works
 
 1. **Basket `p wbikd`** holds pre-funded UTXOs as "address slots"
-2. **Generate address:** lock a slot with a no-send zero-output action, derive BRC-42 address from action.reference + output.id
-3. **Monitor:** daemon scans outstanding addresses for UTXOs, internalizes funds, aborts the lock to recycle the slot
+2. **Generate address:** lock a slot with a no-send zero-output action, derive BRC-42 address from `encode_int64(action.id)` + `encode_int64(output.id)`
+3. **Monitor:** daemon scans outstanding addresses for UTXOs, internalizes funds (tagging with `wbikd`), aborts the lock to recycle the slot
+4. **Sweep:** future intermittent scan of all `wbikd`-tagged outputs re-derives addresses and checks for additional payments
+
+---
+
+## Key Design Decisions
+
+### Derivation params are base64-encoded integer IDs, NOT UUIDs
+
+```ruby
+derivation_prefix = [action.id].pack('q>').then { |b| [b].pack('m0') }
+derivation_suffix = [output.id].pack('q>').then { |b| [b].pack('m0') }
+```
+
+**Why integers, not UUIDs:** Recoverability. If the wallet database is lost but the identity key is retained, funds can be recovered by enumerating all `(action_id, output_id)` combinations, deriving the BRC-42 key for each, and checking the resulting address for UTXOs. With UUIDs (128-bit random), enumeration is impossible. With sequential integer IDs, the search space is bounded: `max(action_id) × max(output_id)`. This is security as an economic function — if the lost funds are large enough, the enumeration cost is justified.
+
+The database column type for derivation_prefix/suffix is `text` — these fields accept any string. The reference wallets use base64-encoded 8 random bytes (12-char strings). Our WBIKD encoding produces the same format (base64 of 8 bytes).
+
+### Slot creation MUST broadcast
+
+```ruby
+create_action(description: 'wbikd slot creation', outputs: [...], randomize_outputs: false)
+# No no_send: true — this broadcasts
+```
+
+**Why broadcast:** Auto-fund selects UTXOs and creates change outputs. Without broadcast, those funding UTXOs stay locked indefinitely and change never becomes spendable. The wallet's effective balance shrinks each time an address is generated. Broadcasting releases the change immediately. The random satoshi amount (100-1000) also provides privacy — slots are indistinguishable from normal wallet activity on-chain.
+
+### Locking action is a hypothesis; internalized output is evidence
+
+The locking action says "someone might pay to this address." It exists solely to:
+- Lock the slot (prevent reuse via UNIQUE constraint on `inputs.output_id`)
+- Provide the action.id for deterministic derivation
+- Be discoverable via the `wbikd` label for scanning
+
+When funds arrive, `internalize_wbikd_utxo` crystallizes the derivation params onto the internalized output row (permanent, immutable). The locking action is then aborted — the hypothesis is discarded once evidence exists. The slot returns to `p wbikd` for reuse.
+
+### Tag internalized outputs for sweep scanning
+
+Internalized outputs are tagged `wbikd`. This enables future sweep tools to:
+1. `list_outputs(tags: ['wbikd'])` — find every address ever used
+2. Re-derive each address from the stored `derivation_prefix`/`derivation_suffix`
+3. Check for additional payments (someone re-sending to a previously used address)
+
+The tag survives output spending (output rows are immutable), so the sweep can always find historical addresses even after the locking action is long gone and the funds have been spent.
 
 ---
 
@@ -24,19 +67,21 @@ def generate_receive_address
 
   slot = find_or_create_wbikd_slot
 
-  # Lock the slot with a no-send zero-output action
+  # Lock the slot with a no-send zero-output action.
+  # Uses @store.create_action directly — internal operation,
+  # should not enforce limp mode.
   locking_action = @store.create_action(
-    action: { description: 'wbikd address lock', broadcast: :none, outgoing: true },
+    action: { description: 'wbikd address lock', broadcast: :none, nlocktime: 0, outgoing: true },
     inputs: [{ output_id: slot[:id], vin: 0 }]
   )
-  wtxid, raw_tx, _ = build_transaction(locking_action[:id], [{ output_id: slot[:id] }], [], nil, nil, false)
+  wtxid, raw_tx, = build_transaction(locking_action[:id], [{ output_id: slot[:id] }], [], nil, nil, false)
   @store.sign_action(action_id: locking_action[:id], wtxid: wtxid, raw_tx: raw_tx)
   @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
   attach_labels(locking_action[:id], ['wbikd'])
 
-  # Derive address from deterministic params
-  derivation_prefix = locking_action[:reference].to_s
-  derivation_suffix = slot[:id].to_s
+  # Derive address from deterministic integer-based params
+  derivation_prefix = encode_int64(locking_action[:id])
+  derivation_suffix = encode_int64(slot[:id])
   derived_pub = @key_deriver.derive_public_key(
     protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
   )
@@ -46,232 +91,57 @@ def generate_receive_address
 end
 ```
 
-**Private helper — slot creation:**
+**Private helpers:**
 
 ```ruby
 def find_or_create_wbikd_slot
   result = @store.query_outputs(basket: 'p wbikd', limit: 1)
-  return result[:outputs].first if result[:total_outputs] > 0
+  return result[:outputs].first if result[:total].positive?
 
-  # Create a slot via self-payment (broadcast, random sats for privacy)
-  prefix = SecureRandom.uuid
+  # Broadcast self-payment — releases change back to wallet
+  prefix = SecureRandom.uuid  # TODO: replace with random_derivation (#107)
   suffix = '1'
-  derived_pub = @key_deriver.derive_public_key(
-    protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
-  )
-  script = BSV::Script::Script.p2pkh_lock(
-    BSV::Primitives::Digest.hash160(derived_pub)
-  ).to_binary
+  # ... derive key, build script, create_action with broadcast ...
+end
 
-  slot_sats = rand(100..1000)  # Random amount — indistinguishable from normal activity
-  create_action(
-    description: 'wbikd slot creation',
-    outputs: [{
-      satoshis: slot_sats, locking_script: script,
-      basket: 'p wbikd',
-      derivation_prefix: prefix, derivation_suffix: suffix,
-      sender_identity_key: @key_deriver.identity_key
-    }],
-    randomize_outputs: false
-  )
-
-  # Re-query for the newly created slot
-  result = @store.query_outputs(basket: 'p wbikd', limit: 1)
-  result[:outputs].first
+def encode_int64(int)
+  [int].pack('q>').then { |b| [b].pack('m0') }
 end
 ```
-
-**Why broadcast the slot creation:** The slot is a real on-chain self-payment with random satoshis — indistinguishable from normal wallet activity. Privacy by default.
-
-**Why the locking action bypasses public `create_action`:** It calls `@store.create_action` + `build_transaction` directly because it's an internal operation (doesn't spend wallet funds, shouldn't enforce limp mode). The slot creation goes through public `create_action` (auto-funded, does enforce limp mode).
 
 ---
 
 ## Phase 2: `Engine#list_receive_addresses`
 
-**File:** `gem/bsv-wallet/lib/bsv/wallet/engine.rb`
-
-```ruby
-def list_receive_addresses
-  require_key_deriver!
-
-  result = list_actions(labels: ['wbikd'], include_inputs: true)
-  result[:actions].filter_map do |action|
-    next unless action[:status] == :nosend
-
-    input = action[:inputs]&.first
-    next unless input
-
-    derivation_prefix = action[:reference].to_s
-    derivation_suffix = input[:output_id].to_s
-    derived_pub = @key_deriver.derive_public_key(
-      protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
-    )
-    address = BSV::Primitives::PublicKey.from_bytes(derived_pub).address(network: @network_name)
-
-    { address: address, derivation_prefix: derivation_prefix,
-      derivation_suffix: derivation_suffix,
-      action_reference: action[:reference], created_at: action[:created_at] }
-  end
-end
-```
-
-Uses `list_actions(labels: ['wbikd'], include_inputs: true)` — no new store methods needed. The `wbikd` label is attached during `generate_receive_address`.
+Uses `list_actions(labels: ['wbikd'], include_inputs: true)` — no new store methods. Re-derives addresses from `encode_int64(action[:id])` and `encode_int64(input[:output_id])`.
 
 ---
 
 ## Phase 3: Daemon integration
 
-**File:** `gem/bsv-wallet/lib/bsv/wallet/daemon.rb`
-
-Add optional `pending_scans:` parameter (backward-compatible):
-
-```ruby
-def initialize(services:, pending_pushes: -> { [] }, stale_fetches: -> { [] },
-               pending_proofs: -> { [] }, pending_scans: nil, interval: 30)
-  @pending_scans = pending_scans
-end
-```
-
-Add `run_scans` to the polling cycle:
-
-```ruby
-def run_cycle
-  push_pending
-  fetch_stale
-  fetch_proofs
-  run_scans if @pending_scans
-end
-
-def run_scans
-  @pending_scans.call
-rescue StandardError => e
-  BSV.logger&.error { "[Daemon] scan error: #{e.class}: #{e.message}" }
-end
-```
-
-The callable is wired at boot time:
-
-```ruby
-# In CLI.boot or application setup:
-pending_scans = -> { engine.scan_receive_addresses }
-```
+Add `pending_scans: nil` to `Daemon.initialize` (backward-compatible). Calls `@pending_scans.call` each cycle if set.
 
 ---
 
 ## Phase 4: `Engine#scan_receive_addresses`
 
-**File:** `gem/bsv-wallet/lib/bsv/wallet/engine.rb`
-
-```ruby
-def scan_receive_addresses
-  return { scanned: 0, found: 0 } unless @key_deriver && @network_provider
-
-  addresses = list_receive_addresses
-  return { scanned: 0, found: 0 } if addresses.empty?
-
-  found_count = 0
-  addresses.each do |addr_info|
-    result = @network_provider.call(:get_utxos, addr_info[:address])
-    next unless result.respond_to?(:http_success?) && result.http_success?
-
-    utxos = result.data
-    next if utxos.nil? || utxos.empty?
-
-    utxos.each do |utxo|
-      internalize_wbikd_utxo(
-        dtxid: utxo['tx_hash'], vout: utxo['tx_pos'],
-        derivation_prefix: addr_info[:derivation_prefix],
-        derivation_suffix: addr_info[:derivation_suffix],
-        action_reference: addr_info[:action_reference]
-      )
-      found_count += 1
-    rescue StandardError => e
-      BSV.logger&.error { "[Engine] wbikd scan: #{e.message}" }
-    end
-  end
-
-  { scanned: addresses.length, found: found_count }
-end
-```
+Scans outstanding addresses via `:get_utxos`. For each found UTXO, calls `internalize_wbikd_utxo`.
 
 ---
 
 ## Phase 5: Fund internalization + slot recycling
 
-**File:** `gem/bsv-wallet/lib/bsv/wallet/engine.rb`
-
-Private method modeled on `import_utxo` (engine.rb:342):
-
-```ruby
-def internalize_wbikd_utxo(dtxid:, vout:, derivation_prefix:, derivation_suffix:, action_reference:)
-  # 1. Fetch raw tx from network
-  result = @network_provider.call(:get_tx, txid: dtxid)
-  return unless result.respond_to?(:http_success?) && result.http_success?
-
-  raw_tx = parse_raw_tx(result.data)
-  tx = BSV::Transaction::Transaction.from_binary(raw_tx)
-  output = tx.outputs[vout]
-  return unless output
-
-  # 2. Verify output matches our derived address
-  derived_pub = @key_deriver.derive_public_key(
-    protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
-  )
-  expected_hash = BSV::Primitives::Digest.hash160(derived_pub)
-  return unless output.locking_script.p2pkh? &&
-                output.locking_script.chunks[2].data == expected_hash
-
-  # 3. Create incoming action (same pattern as import_utxo)
-  wtxid = tx.wtxid
-  import_action = @store.create_action(
-    action: { description: 'wbikd received funds', broadcast: :none, outgoing: false }
-  )
-  @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
-  @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-
-  # 4. Promote with BRC-42 derivation params (output is immediately spendable)
-  @store.promote_action(
-    action_id: import_action[:id],
-    outputs: [{
-      satoshis: output.satoshis, vout: vout,
-      locking_script: output.locking_script.to_binary,
-      derivation_prefix: derivation_prefix,
-      derivation_suffix: derivation_suffix,
-      sender_identity_key: @key_deriver.identity_key
-    }]
-  )
-
-  # 5. Fetch and link merkle proof if mined
-  fetch_and_link_proof(import_action[:id], wtxid, dtxid)
-
-  # 6. Abort the locking action — CASCADE releases slot back to p wbikd basket
-  abort_action(reference: action_reference)
-end
-```
-
-**No self-payment step needed** (unlike `import_utxo`): the internalized output already has BRC-42 derivation params, so the wallet can spend it directly with `derive_signing_key`. Root-key UTXOs need a self-payment because they lack derivation — WBIKD outputs don't.
-
-**Slot recycling:** `abort_action` CASCADE-deletes the locking action's input row → slot output becomes spendable again → back in basket `p wbikd` → available for next `generate_receive_address`.
+`internalize_wbikd_utxo`:
+1. Fetch raw tx, verify P2PKH output matches derived address
+2. Create incoming action, promote with derivation params + `tags: ['wbikd']`
+3. Fetch and link merkle proof if mined
+4. Abort the locking action → slot recycled to `p wbikd`
 
 ---
 
-## Refactor: Extract `fetch_and_link_proof`
+## Related Issues
 
-**File:** `gem/bsv-wallet/lib/bsv/wallet/engine.rb`
-
-Extract the merkle proof fetching from `import_utxo` (lines ~370-390) into a reusable private method, shared by both `import_utxo` and `internalize_wbikd_utxo`:
-
-```ruby
-def fetch_and_link_proof(action_id, wtxid, dtxid)
-  # Try get_tx_details for proof data
-  detail_result = @network_provider.call(:get_tx_details, txid: dtxid)
-  if detail_result.respond_to?(:http_success?) && detail_result.http_success?
-    # ... extract height, block_hash, merkle_path
-    # ... save proof and link to action
-  end
-end
-```
+- **#107** — Replace `SecureRandom.uuid` with `random_derivation` helper across all derivation sites
 
 ---
 
@@ -279,20 +149,10 @@ end
 
 | File | Change |
 |---|---|
-| `gem/bsv-wallet/lib/bsv/wallet/engine.rb` | Add `generate_receive_address`, `list_receive_addresses`, `scan_receive_addresses` (public); `find_or_create_wbikd_slot`, `internalize_wbikd_utxo`, `fetch_and_link_proof` (private); refactor proof fetching out of `import_utxo` |
+| `gem/bsv-wallet/lib/bsv/wallet/engine.rb` | Add `generate_receive_address`, `list_receive_addresses`, `scan_receive_addresses` (public); `find_or_create_wbikd_slot`, `internalize_wbikd_utxo`, `fetch_and_link_proof`, `encode_int64` (private); refactor proof fetching out of `import_utxo` |
 | `gem/bsv-wallet/lib/bsv/wallet/daemon.rb` | Add `pending_scans:` parameter and `run_scans` call |
-| `gem/bsv-wallet/spec/bsv/wallet/engine_spec.rb` | WBIKD specs |
+| `gem/bsv-wallet/spec/bsv/wallet/engine/wbikd_spec.rb` | WBIKD specs |
 | `gem/bsv-wallet/spec/bsv/wallet/daemon_spec.rb` | Scan cycle specs |
-
----
-
-## Testing Strategy
-
-1. **generate_receive_address** — returns valid P2PKH address + derivation params; creates slot when none available; reuses existing unlocked slot; deterministic re-derivation from same params
-2. **list_receive_addresses** — empty when no addresses; lists outstanding; absent after abort
-3. **scan_receive_addresses** — no-op without key_deriver/network; no-op with no outstanding addresses; happy path with mock UTXO response
-4. **internalize_wbikd_utxo** — creates incoming action with correct derivation params; output is spendable; slot recycled after abort; proof linked if mined
-5. **daemon** — backward-compatible without pending_scans; scan callable invoked each cycle; error handling
 
 ---
 
