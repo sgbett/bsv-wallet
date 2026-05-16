@@ -19,7 +19,9 @@ Style/NumericPredicate:
 
 Metrics/BlockLength:
   Exclude:
+    - 'gem/*/lib/**/*'
     - 'gem/*/spec/**/*'
+    - 'gem/*/db/**/*'
 
 Naming/FileName:
   Exclude:
@@ -42,6 +44,7 @@ Naming/MethodParameterName:
 Lint/UnusedMethodArgument:
   Exclude:
     - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
+    - 'gem/bsv-wallet/lib/bsv/wallet/store/**/*'
 
 # Wallet orchestration and store operations are inherently complex;
 # splitting into tiny methods would harm readability and auditability.
@@ -134,10 +137,17 @@ Naming/VariableNumber:
   Exclude:
     - 'gem/*/spec/**/*'
 
-# Engine spec and migration spec use string descriptions for integration suites.
+# Schema and migration specs use string descriptions for integration suites.
 RSpec/DescribeClass:
   Exclude:
     - 'gem/bsv-wallet-postgres/spec/bsv/wallet/postgres/migration_spec.rb'
+    - 'gem/bsv-wallet/spec/bsv/wallet/store/migration_spec.rb'
+    - 'gem/bsv-wallet/spec/bsv/wallet/store/constraints_spec.rb'
+
+# Store models live in a models/ subdirectory by design — path != namespace.
+RSpec/SpecFilePathFormat:
+  Exclude:
+    - 'gem/bsv-wallet/spec/bsv/wallet/store/**/*'
 
 # Engine spec defines TEST_DB_URL and ENGINE_DB at spec scope for shared infrastructure.
 Lint/ConstantDefinitionInBlock:

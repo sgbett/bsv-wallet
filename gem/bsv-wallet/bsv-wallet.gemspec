@@ -24,9 +24,11 @@ Gem::Specification.new do |spec|
   }
 
   spec.files = Dir.chdir(__dir__) do
-    Dir.glob('lib/**/*')
+    Dir.glob('lib/**/*') + Dir.glob('db/**/*')
   end + %w[LICENSE CHANGELOG.md]
   spec.require_paths = ['lib']
 
   spec.add_dependency 'bsv-sdk'
+  spec.add_dependency 'sequel', '~> 5.0'
+  spec.add_dependency 'sqlite3'
 end

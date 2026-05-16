@@ -29,6 +29,9 @@ module BSV
     require_relative 'network/services'
     require_relative 'network/chain_tracker'
 
+    # Default store (SQLite-backed persistence)
+    autoload :Store, 'bsv/wallet/store'
+
     # Background polling loop
     autoload :Daemon, 'bsv/wallet/daemon'
 
