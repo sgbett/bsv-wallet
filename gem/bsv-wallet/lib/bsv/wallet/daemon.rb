@@ -8,10 +8,11 @@ module BSV
     # and dispatches them through Services. Each entity is processed
     # independently -- one failure does not block others.
     #
-    # The daemon does not import postgres models directly. Instead, it
+    # The daemon does not import backend models directly. Instead, it
     # accepts callable query objects (lambdas, procs, or anything
     # responding to +call+) that return arrays of Pushable/Fetchable
-    # entities. This keeps the wallet gem free of postgres dependencies.
+    # entities. The callables close over whichever backend the caller
+    # chose at boot time (see BSV::Wallet::CLI.boot for auto-discovery).
     #
     # @example
     #   daemon = BSV::Wallet::Daemon.new(

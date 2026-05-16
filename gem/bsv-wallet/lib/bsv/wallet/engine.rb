@@ -11,12 +11,16 @@ module BSV
     # them to fulfill the 28 BRC-100 methods. Contains no SQL, no ARC
     # calls, no thread management. Pure orchestration.
     #
-    # @example
+    # @example Via the CLI's auto-discovery (recommended for typical use)
+    #   ctx = BSV::Wallet::CLI.boot(wallet_name: 'alice')
+    #   engine = ctx[:engine]
+    #
+    # @example Direct injection (any backend; pass any objects implementing the interfaces)
+    #   services = BSV::Wallet::Store.bootstrap(db: db)
     #   engine = BSV::Wallet::Engine.new(
-    #     store:           PostgresStore.new(db),
-    #     utxo_pool:       SimplePool.new(store),
-    #     broadcast_queue: ArcBroadcast.new(arc_client),
-    #     proof_store:     PostgresProofStore.new(db)
+    #     **services,
+    #     key_deriver:   key_deriver,
+    #     chain_tracker: chain_tracker
     #   )
     #   engine.create_action(description: 'payment', outputs: [...])
     class Engine

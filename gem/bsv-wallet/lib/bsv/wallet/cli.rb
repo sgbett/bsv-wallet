@@ -7,6 +7,13 @@ module BSV
     # Each bin/ tool runs in its own OS process, so the global
     # Sequel::Model.db is safe — only one wallet per process.
     #
+    # Backend selection:
+    #   - If DATABASE_URL is set, its scheme picks the backend
+    #     (postgres:// or postgresql:// → Postgres, anything else → SQLite).
+    #   - If DATABASE_URL is unset, the backend is determined by gem
+    #     presence: if bsv-wallet-postgres is in the bundle, Postgres is
+    #     used; otherwise the default SQLite store is used.
+    #
     # @example
     #   wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
     #   ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
@@ -16,8 +23,8 @@ module BSV
 
       # Boot a wallet engine for the named wallet.
       #
-      # Connects to the database, runs migrations, and constructs
-      # all Layer 2a components + the Engine.
+      # Auto-discovers the store backend, runs migrations, and
+      # constructs all Layer 2a components + the Engine.
       #
       # @param wallet_name [String, nil] e.g. "alice", "bob", or nil for default
       # @param network [Symbol] :mainnet or :testnet
@@ -31,7 +38,6 @@ module BSV
         require 'sequel'
         require 'logger'
         require 'bsv-wallet'
-        require 'bsv-wallet-postgres'
 
         unless BSV.logger
           BSV.logger = Logger.new($stderr)
@@ -39,32 +45,24 @@ module BSV
         end
 
         wif = env_fetch('WIF', wallet_name)
-        db_url = env_fetch('DATABASE_URL', wallet_name)
+        db_url = env_fetch_optional('DATABASE_URL', wallet_name)
 
-        db = Sequel.connect(db_url)
-        db.extension :pg_enum
-        db.extension :pg_array
-        db.extension :pg_json
-        BSV::Wallet::Postgres::Store::Connection.connect(db)
+        backend = pick_backend(db_url)
+        db_url ||= default_url_for(backend, wallet_name)
 
-        Sequel.extension :migration
-        migrations_path = File.join(
-          Gem::Specification.find_by_name('bsv-wallet-postgres').gem_dir,
-          'db', 'migrations'
-        )
-        Sequel::Migrator.run(db, migrations_path)
-        BSV::Wallet::Postgres::Store::Connection.bind_models!
+        backend::Store::Connection.connect(db_url)
+        backend::Store::Connection.migrate!
+        backend::Store::Connection.bind_models!
+        db = backend::Store::Connection.db
+
+        services = backend::Store.bootstrap(db: db)
 
         private_key = BSV::Primitives::PrivateKey.from_wif(wif)
         key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
 
-        store = BSV::Wallet::Postgres::Store::Postgres.new(db: db)
-        proof_store = BSV::Wallet::Postgres::Store::ProofStore.new(db: db)
-        utxo_pool = BSV::Wallet::Postgres::Store::UTXOPool.new(store: store)
-
         network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
-        services = BSV::Network::Services.new(providers: [network_provider])
-        chain_tracker = BSV::Network::ChainTracker.new(db: db, services: services)
+        network_services = BSV::Network::Services.new(providers: [network_provider])
+        chain_tracker = BSV::Network::ChainTracker.new(db: db, services: network_services)
 
         limp_threshold_raw = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD)
         begin
@@ -74,10 +72,10 @@ module BSV
         end
 
         engine = BSV::Wallet::Engine.new(
-          store: store,
-          utxo_pool: utxo_pool,
-          broadcast_queue: BSV::Wallet::Postgres::Store::BroadcastQueue.new(db: db),
-          proof_store: proof_store,
+          store: services[:store],
+          utxo_pool: services[:utxo_pool],
+          broadcast_queue: services[:broadcast_queue],
+          proof_store: services[:proof_store],
           key_deriver: key_deriver,
           chain_tracker: chain_tracker,
           network_provider: network_provider,
@@ -87,13 +85,65 @@ module BSV
 
         {
           engine: engine,
-          utxo_pool: utxo_pool,
+          utxo_pool: services[:utxo_pool],
           key_deriver: key_deriver,
-          proof_store: proof_store,
+          proof_store: services[:proof_store],
           db: db,
           identity_key: key_deriver.identity_key,
           private_key: private_key
         }
+      end
+
+      # Pick a store backend module.
+      #
+      # If db_url is set, its scheme drives the choice (explicit user
+      # intent wins). If unset, the gem-presence of bsv-wallet-postgres
+      # picks: present → Postgres, absent → SQLite default.
+      #
+      # @param db_url [String, nil]
+      # @return [Module] BSV::Wallet::Store or BSV::Wallet::Postgres
+      def pick_backend(db_url)
+        if db_url
+          if db_url.start_with?('postgres')
+            require_postgres!
+          else
+            BSV::Wallet::Store
+          end
+        else
+          begin
+            require 'bsv-wallet-postgres'
+            BSV::Wallet::Postgres
+          rescue LoadError
+            BSV::Wallet::Store
+          end
+        end
+      end
+
+      # Require the postgres backend gem, aborting with a helpful
+      # message if it isn't in the bundle.
+      def require_postgres!
+        require 'bsv-wallet-postgres'
+        BSV::Wallet::Postgres
+      rescue LoadError
+        abort 'DATABASE_URL is postgres:// but bsv-wallet-postgres is not in your bundle. ' \
+              "Add `gem 'bsv-wallet-postgres'` to your Gemfile or unset DATABASE_URL to use SQLite."
+      end
+
+      # Build the default URL for a backend when DATABASE_URL is unset.
+      #
+      # @param backend [Module] BSV::Wallet::Store or BSV::Wallet::Postgres
+      # @param wallet_name [String, nil]
+      # @return [String]
+      def default_url_for(backend, wallet_name)
+        suffix = wallet_name || 'default'
+        if backend == BSV::Wallet::Store
+          require 'fileutils'
+          path = File.expand_path("~/.bsv-wallet/#{suffix}.db")
+          FileUtils.mkdir_p(File.dirname(path))
+          "sqlite://#{path}"
+        else
+          "postgres://localhost/bsv_wallet_#{suffix}"
+        end
       end
 
       # Extract wallet name from the argument list.
@@ -129,6 +179,23 @@ module BSV
           ENV.fetch(prefixed) { ENV.fetch(suffixed) { ENV.fetch(base_name) { abort "Set #{prefixed} or #{suffixed}" } } }
         else
           ENV.fetch(base_name) { abort "Set #{base_name}" }
+        end
+      end
+
+      # Same fallback chain as env_fetch, but returns nil rather than
+      # aborting when nothing is set. Used for DATABASE_URL, which has
+      # backend-specific defaults applied downstream.
+      #
+      # @param base_name [String]
+      # @param wallet_name [String, nil]
+      # @return [String, nil]
+      def env_fetch_optional(base_name, wallet_name)
+        if wallet_name
+          prefixed = "BSV_WALLET_#{base_name}_#{wallet_name.upcase}"
+          suffixed = "#{base_name}_#{wallet_name.upcase}"
+          ENV.fetch(prefixed, nil) || ENV.fetch(suffixed, nil) || ENV.fetch(base_name, nil)
+        else
+          ENV.fetch(base_name, nil)
         end
       end
 
