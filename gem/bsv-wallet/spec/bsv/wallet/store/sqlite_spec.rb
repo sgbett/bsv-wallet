@@ -2,7 +2,7 @@
 
 require_relative 'shared_context'
 
-RSpec.describe BSV::Wallet::Store::Persistence, :store do
+RSpec.describe BSV::Wallet::Store::SQLite, :store do
   # Helpers
   def create_funded_output(satoshis: 1000, vout: 0, basket: nil)
     source = BSV::Wallet::Store::Action.create(outgoing: false, description: 'test action',

@@ -8,96 +8,70 @@
 
 The wallet gem ships with a default Store implementation backed by SQLite. This makes `bsv-wallet` standalone — install the gem and it works. No separate database, no extra gems.
 
-The default store lives in the `BSV::Wallet` namespace: `Store`, `Action`, `Output`, etc. SQLite is an implementation detail, not part of the public API. When someone adds `bsv-wallet-postgres`, that's the override with its own `BSV::Wallet::Postgres` namespace.
+Everything lives under `BSV::Wallet::Store` — a module that encapsulates connection management, Sequel models, and the service implementations. The tree depth reflects abstraction: walk down and you move from interfaces to infrastructure. Nothing outside `Store` needs to know that SQLite or Sequel exists.
 
-## What goes where
+## Architecture
+
+```
+BSV::Wallet::Store::
+  Connection          — SQLite setup, pragmas, per-model DB binding
+  SQLite         — implements Interface::Store (25 methods)
+  UTXOPool            — implements Interface::UTXOPool
+  ProofStore          — implements Interface::ProofStore
+  BroadcastQueue      — implements Interface::BroadcastQueue
+  BroadcastCallback   — Rack app for ARC webhooks
+  ArcAdapter          — bridges BroadcastQueue with SDK ARC protocol
+  Action, Output, …   — Sequel models (internal)
+```
+
+## Key design decisions
+
+**Per-model DB binding.** `Connection.bind_models` calls `model.dataset = @db[table]` on each model class, avoiding the `Sequel::Model.db` global. This allows the default store and Postgres store to coexist in the same process.
+
+**UUID generation in Ruby.** SQLite has no `gen_random_uuid()`. The `Action` model generates `reference` via `SecureRandom.uuid` in a `before_create` hook. Raw inserts (constraint specs) must provide it explicitly.
+
+**insert_conflict ownership check.** SQLite returns `last_insert_rowid` even on `ON CONFLICT DO NOTHING` (Postgres returns nil). `SQLite#create_action` verifies ownership after each insert attempt.
+
+**competing_txs as JSON text.** Postgres uses `text[]` via `pg_array`. The default store uses `JSON.generate` — write-only audit data, never queried.
+
+## File layout
 
 ```
 gem/bsv-wallet/
-  bsv-wallet.gemspec              # adds sequel + sqlite3 deps
   db/migrations/
-    001_create_schema.rb           # SQLite migration (from reference/schema.md)
-  lib/
-    bsv/wallet/database.rb         # connect/disconnect + SQLite pragmas
-    bsv/wallet/models/             # Sequel models (Action, Output, etc.)
-    bsv/wallet/store.rb            # Store implementation
-    bsv/wallet/utxo_pool.rb        # UTXOPool implementation
-    bsv/wallet/proof_store.rb      # ProofStore implementation
-    bsv/wallet/broadcast_queue.rb  # BroadcastQueue implementation
-    bsv/wallet/broadcast_callback.rb
-    bsv/wallet/arc_adapter.rb
-  spec/
-    bsv/wallet/store_spec.rb       # just store specs — no "sqlite" qualifier
-    bsv/wallet/models/             # model specs
-    ...
+    001_create_schema.rb              # SQLite schema from reference/schema.md
+  lib/bsv/wallet/
+    store.rb                          # Module entry point + autoloads
+    store/
+      connection.rb                   # Database setup, pragmas, bind_models
+      persistence.rb                  # Interface::Store implementation
+      utxo_pool.rb                    # Interface::UTXOPool
+      proof_store.rb                  # Interface::ProofStore
+      broadcast_queue.rb              # Interface::BroadcastQueue
+      broadcast_callback.rb           # Rack ARC webhook handler
+      arc_adapter.rb                  # SDK ARC bridge
+      models/
+        display_txid.rb               # Shared mixin
+        action.rb block.rb broadcast.rb …  # 17 Sequel models
+  spec/bsv/wallet/store/
+    shared_context.rb                 # In-memory SQLite, rollback isolation
+    persistence_spec.rb               # Store interface tests
+    utxo_pool_spec.rb proof_store_spec.rb …
+    migration_spec.rb constraints_spec.rb
+    models/
+      action_spec.rb broadcast_spec.rb …
 ```
 
-## Namespace
+## SQLite-specific adaptations
 
-| Class | Purpose |
-|-------|---------|
-| `BSV::Wallet::Database` | Connect/disconnect, pragmas, migrate! |
-| `BSV::Wallet::Store` | Default Store implementation |
-| `BSV::Wallet::UTXOPool` | Default UTXOPool |
-| `BSV::Wallet::ProofStore` | Default ProofStore |
-| `BSV::Wallet::BroadcastQueue` | Default BroadcastQueue |
-| `BSV::Wallet::Action` | Sequel model |
-| `BSV::Wallet::Output` | Sequel model |
-| ... | (all models in `BSV::Wallet` namespace) |
-
-The Postgres gem keeps `BSV::Wallet::Postgres::Store` etc. — it's the one with the qualifier because it's the override.
-
-## SQLite-specific adaptations (from Postgres)
-
-| Area | Change |
-|------|--------|
-| Enums | Text + CHECK constraint (no pg_enum) |
-| `competing_txs` | JSON text (no pg_array) |
-| `actions.reference` | `SecureRandom.uuid` in `before_create` (no gen_random_uuid) |
-| Primary keys | `primary_key :id` (no identity: :always) |
-| Binary columns | `:blob` (no :bytea) |
-| Timestamps | `:datetime` + `CURRENT_TIMESTAMP` |
-| Outbound trigger | SQLite `RAISE(ABORT)` syntax |
-| Foreign keys | `PRAGMA foreign_keys = ON` via `after_connect` |
-| `insert_conflict` | Verify ownership after insert (SQLite returns last_insert_rowid on DO NOTHING) |
-
-## Tasks
-
-### Task 1: Migration and Database module
-
-- `db/migrations/001_create_schema.rb` — derived from `reference/schema.md`
-- `lib/bsv/wallet/database.rb` — connect, pragmas, migrate!
-
-### Task 2: Models
-
-All in `lib/bsv/wallet/models/`:
-- Action, Broadcast, Output, Spendable, Input, Block, TxProof
-- Basket, Label, ActionLabel, Tag, OutputTag
-- OutputDetail, OutputBasket, Certificate, CertificateField, Setting
-- DisplayTxid module
-
-### Task 3: Service implementations
-
-- `lib/bsv/wallet/store.rb` — implements Interface::Store
-- `lib/bsv/wallet/utxo_pool.rb` — implements Interface::UTXOPool
-- `lib/bsv/wallet/proof_store.rb` — implements Interface::ProofStore
-- `lib/bsv/wallet/broadcast_queue.rb` — implements Interface::BroadcastQueue
-- `lib/bsv/wallet/broadcast_callback.rb`
-- `lib/bsv/wallet/arc_adapter.rb`
-
-### Task 4: Gemspec and wiring
-
-- Add `sequel` and `sqlite3` to `bsv-wallet.gemspec`
-- Wire up autoloads/requires in the wallet module
-- Include `db/**/*` in gem files
-
-### Task 5: Specs
-
-- Store, model, and service specs in `spec/bsv/wallet/`
-- Shared context for DB setup (in-memory SQLite, migrations, rollback)
-- No "sqlite" in spec names or tags
-
-### Task 6: Verify
-
-- `cd gem/bsv-wallet && bundle exec rspec` — all existing + new specs green
-- Postgres specs unaffected
+| Area | Postgres | Default Store |
+|------|----------|---------------|
+| Enums | `pg_enum` | Text + CHECK constraint |
+| `competing_txs` | `text[]` / `pg_array` | JSON text |
+| `actions.reference` | `gen_random_uuid()` | `SecureRandom.uuid` hook |
+| Primary keys | `identity: :always` | `primary_key :id` |
+| Binary columns | `:bytea` | `:blob` |
+| Outbound trigger | PL/pgSQL | SQLite `RAISE(ABORT)` |
+| Foreign keys | Always on | `PRAGMA foreign_keys = ON` per connection |
+| Model DB scope | Global `Sequel::Model.db` | Per-model `dataset=` |
+| `insert_conflict` | Returns nil on DO NOTHING | Returns last_insert_rowid — ownership verified |

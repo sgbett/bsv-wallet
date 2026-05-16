@@ -3,11 +3,11 @@
 module BSV
   module Wallet
     module Store
-      # Default implementation of Interface::Store.
+      # Default SQLite implementation of Interface::Store.
       #
       # All methods receive and return plain hashes — no Sequel::Model
       # objects leak through the interface boundary.
-      class Persistence
+      class SQLite
         include BSV::Wallet::Interface::Store
 
         def initialize(db: nil)
