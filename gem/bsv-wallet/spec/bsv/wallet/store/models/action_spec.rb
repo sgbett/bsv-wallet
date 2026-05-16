@@ -24,9 +24,9 @@ RSpec.describe BSV::Wallet::Store::Action, :store do
 
     it 'rejects corrupt wtxid (hex stored as binary) at database level' do
       hex_value = 'a' * 64 # 64 chars, not 32 bytes
-      expect {
+      expect do
         described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: Sequel.blob(hex_value), raw_tx: raw_tx)
-      }.to raise_error(Sequel::CheckConstraintViolation, /wtxid_length/)
+      end.to raise_error(Sequel::CheckConstraintViolation, /wtxid_length/)
     end
   end
 

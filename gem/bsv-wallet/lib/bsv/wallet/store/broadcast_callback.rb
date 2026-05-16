@@ -26,13 +26,13 @@ module BSV
         def decode_event(body)
           BSV::Primitives::Hex.validate_dtxid_hex!(body[:txid], name: 'ARC callback txid') if body[:txid]
           {
-            wtxid:         decode_hex(body[:txid])&.reverse,
-            tx_status:     body[:txStatus],
-            status:        body[:status],
-            block_hash:    decode_hex(body[:blockHash]),
-            block_height:  body[:blockHeight],
-            merkle_path:   decode_hex(body[:merklePath]),
-            extra_info:    body[:extraInfo],
+            wtxid: decode_hex(body[:txid])&.reverse,
+            tx_status: body[:txStatus],
+            status: body[:status],
+            block_hash: decode_hex(body[:blockHash]),
+            block_height: body[:blockHeight],
+            merkle_path: decode_hex(body[:merklePath]),
+            extra_info: body[:extraInfo],
             competing_txs: body[:competingTxs]
           }
         end

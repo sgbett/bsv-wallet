@@ -22,10 +22,10 @@ module BSV
 
         def process_pending(limit: 100)
           stale = Broadcast
-            .where { broadcast_at < Time.now - Broadcast::FETCH_STALENESS }
-            .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: Broadcast::TERMINAL_STATUSES)))
-            .limit(limit)
-            .all
+                  .where { broadcast_at < Time.now - Broadcast::FETCH_STALENESS }
+                  .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: Broadcast::TERMINAL_STATUSES)))
+                  .limit(limit)
+                  .all
 
           stale.filter_map do |broadcast|
             next unless broadcast.action&.wtxid && @services
@@ -47,12 +47,12 @@ module BSV
           broadcast ||= Broadcast.create(action_id: action.id)
 
           broadcast.update(
-            tx_status:     event[:tx_status],
-            arc_status:    event[:status],
-            block_hash:    event[:block_hash] ? Sequel.blob(event[:block_hash]) : nil,
-            block_height:  event[:block_height],
-            merkle_path:   event[:merkle_path] ? Sequel.blob(event[:merkle_path]) : nil,
-            extra_info:    event[:extra_info],
+            tx_status: event[:tx_status],
+            arc_status: event[:status],
+            block_hash: event[:block_hash] ? Sequel.blob(event[:block_hash]) : nil,
+            block_height: event[:block_height],
+            merkle_path: event[:merkle_path] ? Sequel.blob(event[:merkle_path]) : nil,
+            extra_info: event[:extra_info],
             competing_txs: event[:competing_txs] ? JSON.generate(event[:competing_txs]) : nil
           )
 

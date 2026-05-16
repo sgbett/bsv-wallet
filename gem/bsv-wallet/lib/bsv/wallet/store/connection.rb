@@ -16,12 +16,12 @@ module BSV
           # @param url_or_db [String, Sequel::Database]
           # @return [Sequel::Database]
           def connect(url_or_db)
-            if url_or_db.is_a?(Sequel::Database)
-              @db = url_or_db
-            else
-              @db = Sequel.connect(url_or_db,
+            @db = if url_or_db.is_a?(Sequel::Database)
+                    url_or_db
+                  else
+                    Sequel.connect(url_or_db,
                                    after_connect: ->(conn) { conn.execute('PRAGMA foreign_keys = ON') })
-            end
+                  end
             @db.run('PRAGMA foreign_keys = ON')
             @db.run('PRAGMA journal_mode = WAL')
             bind_models

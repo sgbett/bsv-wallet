@@ -20,9 +20,9 @@ module BSV
           # The UTXO set: outputs in the spendable table and not claimed by any input.
           def spendable
             spendable_ds = BSV::Wallet::Store::Spendable.dataset
-              .where(output_id: Sequel[:outputs][:id]).select(1)
+                                                        .where(output_id: Sequel[:outputs][:id]).select(1)
             input_ds = BSV::Wallet::Store::Input.dataset
-              .where(output_id: Sequel[:outputs][:id]).select(1)
+                                                .where(output_id: Sequel[:outputs][:id]).select(1)
 
             where(spendable_ds.exists).exclude(input_ds.exists)
           end
@@ -32,15 +32,15 @@ module BSV
           def in_basket(name)
             if name == 'default'
               basket_ds = BSV::Wallet::Store::OutputBasket.dataset
-                .where(Sequel[:output_baskets][:output_id] => Sequel[:outputs][:id])
-                .select(1)
+                                                          .where(Sequel[:output_baskets][:output_id] => Sequel[:outputs][:id])
+                                                          .select(1)
               exclude(basket_ds.exists)
             else
               basket_ds = BSV::Wallet::Store::OutputBasket.dataset
-                .join(:baskets, id: :basket_id)
-                .where(Sequel[:output_baskets][:output_id] => Sequel[:outputs][:id])
-                .where(Sequel[:baskets][:name] => name)
-                .select(1)
+                                                          .join(:baskets, id: :basket_id)
+                                                          .where(Sequel[:output_baskets][:output_id] => Sequel[:outputs][:id])
+                                                          .where(Sequel[:baskets][:name] => name)
+                                                          .select(1)
               where(basket_ds.exists)
             end
           end

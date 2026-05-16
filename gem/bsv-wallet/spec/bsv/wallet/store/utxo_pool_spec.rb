@@ -90,7 +90,7 @@ RSpec.describe BSV::Wallet::Store::UTXOPool, :store do
 
     it 'returns fewer when pool is approaching target' do
       # 100K sats across 97 UTXOs → target = min(500, 100) = 100, deficit = 3
-      96.times { |i| create_funded_output(satoshis: 1_000) }
+      96.times { |_i| create_funded_output(satoshis: 1_000) }
       create_funded_output(satoshis: 4_000)
       # 97 UTXOs, 100K sats → target 100, deficit 3
 
@@ -99,14 +99,14 @@ RSpec.describe BSV::Wallet::Store::UTXOPool, :store do
 
     it 'returns 1 when pool is at target' do
       # 5K sats, 5 UTXOs → target = min(500, 5) = 5, deficit = 0 → clamp to 1
-      5.times { |i| create_funded_output(satoshis: 1_000) }
+      5.times { |_i| create_funded_output(satoshis: 1_000) }
 
       expect(pool.change_output_count).to eq(1)
     end
 
     it 'returns 1 when pool exceeds target' do
       # 5K sats, 10 UTXOs → target = 5, deficit = -5 → clamp to 1
-      10.times { |i| create_funded_output(satoshis: 500) }
+      10.times { |_i| create_funded_output(satoshis: 500) }
 
       expect(pool.change_output_count).to eq(1)
     end

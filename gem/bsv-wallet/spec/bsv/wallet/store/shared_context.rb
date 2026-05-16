@@ -71,6 +71,7 @@ RSpec.configure do |config|
     STORE_DB.run('PRAGMA foreign_keys = OFF')
     STORE_DB.tables.each do |table|
       next if table == :schema_info
+
       STORE_DB[table].delete
     end
     STORE_DB.run('PRAGMA foreign_keys = ON')

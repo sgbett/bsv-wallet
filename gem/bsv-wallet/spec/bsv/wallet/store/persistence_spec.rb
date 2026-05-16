@@ -100,20 +100,20 @@ RSpec.describe BSV::Wallet::Store::Persistence, :store do
       result = store.create_action(action: { description: 'to promote', nlocktime: 0 })
 
       store.promote_action(action_id: result[:id], outputs: [
-        {
-          satoshis: 800, vout: 0,
-          locking_script: SecureRandom.random_bytes(25),
-          basket: 'change', tags: %w[auto], description: 'change output',
-          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-          sender_identity_key: 'self'
-        },
-        {
-          satoshis: 200, vout: 1,
-          locking_script: SecureRandom.random_bytes(25),
-          basket: 'payments', tags: %w[payment outgoing], description: 'payment',
-          output_type: 'root'
-        }
-      ])
+                             {
+                               satoshis: 800, vout: 0,
+                               locking_script: SecureRandom.random_bytes(25),
+                               basket: 'change', tags: %w[auto], description: 'change output',
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                               sender_identity_key: 'self'
+                             },
+                             {
+                               satoshis: 200, vout: 1,
+                               locking_script: SecureRandom.random_bytes(25),
+                               basket: 'payments', tags: %w[payment outgoing], description: 'payment',
+                               output_type: 'root'
+                             }
+                           ])
 
       outputs = BSV::Wallet::Store::Output.where(action_id: result[:id]).all
       expect(outputs.size).to eq(2)
@@ -137,18 +137,18 @@ RSpec.describe BSV::Wallet::Store::Persistence, :store do
       result = store.create_action(action: { description: 'with outbound', nlocktime: 0 })
 
       store.promote_action(action_id: result[:id], outputs: [
-        {
-          satoshis: 500, vout: 0,
-          locking_script: SecureRandom.random_bytes(25),
-          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-          sender_identity_key: 'self'
-        },
-        {
-          satoshis: 300, vout: 1,
-          locking_script: SecureRandom.random_bytes(25),
-          output_type: 'outbound'
-        }
-      ])
+                             {
+                               satoshis: 500, vout: 0,
+                               locking_script: SecureRandom.random_bytes(25),
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                               sender_identity_key: 'self'
+                             },
+                             {
+                               satoshis: 300, vout: 1,
+                               locking_script: SecureRandom.random_bytes(25),
+                               output_type: 'outbound'
+                             }
+                           ])
 
       outputs = BSV::Wallet::Store::Output.where(action_id: result[:id]).all
       expect(outputs.size).to eq(2)
@@ -319,13 +319,13 @@ RSpec.describe BSV::Wallet::Store::Persistence, :store do
     before do
       action = store.create_action(action: { description: 'source', nlocktime: 0 })
       store.promote_action(action_id: action[:id], outputs: [
-        { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[payment],
-          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
-        { satoshis: 300, vout: 1, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[change],
-          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
-        { satoshis: 100, vout: 2, locking_script: SecureRandom.random_bytes(25), basket: 'other',
-          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
-      ])
+                             { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[payment],
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
+                             { satoshis: 300, vout: 1, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[change],
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
+                             { satoshis: 100, vout: 2, locking_script: SecureRandom.random_bytes(25), basket: 'other',
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+                           ])
     end
 
     it 'filters by basket' do
@@ -356,9 +356,9 @@ RSpec.describe BSV::Wallet::Store::Persistence, :store do
     it 'removes from spendable and basket but keeps the output row' do
       action = store.create_action(action: { description: 'source', nlocktime: 0 })
       store.promote_action(action_id: action[:id], outputs: [
-        { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet',
-          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
-      ])
+                             { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet',
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+                           ])
       output = BSV::Wallet::Store::Output.where(action_id: action[:id]).first
 
       store.relinquish_output(output_id: output.id)
@@ -510,28 +510,28 @@ RSpec.describe BSV::Wallet::Store::Persistence, :store do
       expect(resolved.size).to eq(2)
 
       expect(resolved[0]).to eq({
-        vin: 0,
-        sequence: 4_294_967_295,
-        source_wtxid: source_wtxid_1,
-        source_vout: 0,
-        source_satoshis: 1000,
-        source_locking_script: locking_script_1,
-        derivation_prefix: 'prefix1',
-        derivation_suffix: 'suffix1',
-        sender_identity_key: 'sender_key_1'
-      })
+                                  vin: 0,
+                                  sequence: 4_294_967_295,
+                                  source_wtxid: source_wtxid_1,
+                                  source_vout: 0,
+                                  source_satoshis: 1000,
+                                  source_locking_script: locking_script_1,
+                                  derivation_prefix: 'prefix1',
+                                  derivation_suffix: 'suffix1',
+                                  sender_identity_key: 'sender_key_1'
+                                })
 
       expect(resolved[1]).to eq({
-        vin: 1,
-        sequence: 0xFFFFFFFE,
-        source_wtxid: source_wtxid_2,
-        source_vout: 3,
-        source_satoshis: 2000,
-        source_locking_script: locking_script_2,
-        derivation_prefix: 'prefix2',
-        derivation_suffix: 'suffix2',
-        sender_identity_key: 'sender_key_2'
-      })
+                                  vin: 1,
+                                  sequence: 0xFFFFFFFE,
+                                  source_wtxid: source_wtxid_2,
+                                  source_vout: 3,
+                                  source_satoshis: 2000,
+                                  source_locking_script: locking_script_2,
+                                  derivation_prefix: 'prefix2',
+                                  derivation_suffix: 'suffix2',
+                                  sender_identity_key: 'sender_key_2'
+                                })
     end
 
     it 'orders results by vin' do
@@ -591,20 +591,20 @@ RSpec.describe BSV::Wallet::Store::Persistence, :store do
         inputs: [{ output_id: output.id, vin: 0 }]
       )
 
-      expect {
+      expect do
         store.resolve_inputs_for_signing(action_id: action[:id])
-      }.to raise_error(RuntimeError, /nil wtxid/)
+      end.to raise_error(RuntimeError, /nil wtxid/)
     end
 
     it 'rejects corrupt wtxid (hex instead of binary) at database level' do
       # A 64-char hex string is 64 bytes, not 32 — the wtxid_length CHECK
       # constraint catches this before the application ever sees it.
       hex_wtxid = 'a' * 64
-      expect {
+      expect do
         BSV::Wallet::Store::Action.create(outgoing: false, description: 'test action',
                                           wtxid: Sequel.blob(hex_wtxid),
                                           raw_tx: SecureRandom.random_bytes(100))
-      }.to raise_error(Sequel::CheckConstraintViolation, /wtxid_length/)
+      end.to raise_error(Sequel::CheckConstraintViolation, /wtxid_length/)
     end
   end
 
@@ -688,9 +688,9 @@ RSpec.describe BSV::Wallet::Store::Persistence, :store do
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
       store.promote_action(action_id: result[:id], outputs: [
-        { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
-          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
-      ])
+                             { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+                           ])
       BSV::Wallet::Store::Action.where(id: result[:id]).update(created_at: Time.now - 600)
 
       store.reap_stale_actions(threshold: 300)

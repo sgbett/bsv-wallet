@@ -125,14 +125,14 @@ RSpec.describe BSV::Wallet::Store::Broadcast, :store do
 
     it 'updates all columns from normalized response' do
       broadcast.write!(make_response({
-        tx_status: 'MINED',
-        status: 200,
-        block_hash: block_hash_hex,
-        block_height: 800_000,
-        merkle_path: merkle_path_hex,
-        extra_info: 'info',
-        competing_txs: %w[abc def]
-      }))
+                                       tx_status: 'MINED',
+                                       status: 200,
+                                       block_hash: block_hash_hex,
+                                       block_height: 800_000,
+                                       merkle_path: merkle_path_hex,
+                                       extra_info: 'info',
+                                       competing_txs: %w[abc def]
+                                     }))
 
       broadcast.reload
       expect(broadcast.tx_status).to eq('MINED')

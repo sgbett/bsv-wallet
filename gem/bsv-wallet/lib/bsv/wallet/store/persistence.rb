@@ -20,29 +20,27 @@ module BSV
           @db.transaction do
             record = Action.create(
               description: action[:description],
-              broadcast:   action[:broadcast]&.to_s || 'delayed',
-              nlocktime:   action[:nlocktime],
-              version:     action[:version],
-              outgoing:    action.fetch(:outgoing, true),
-              input_beef:  action[:input_beef]
+              broadcast: action[:broadcast]&.to_s || 'delayed',
+              nlocktime: action[:nlocktime],
+              version: action[:version],
+              outgoing: action.fetch(:outgoing, true),
+              input_beef: action[:input_beef]
             )
 
             if inputs.any?
               locked = 0
               inputs.each do |inp|
                 @db[:inputs].insert_conflict(target: :output_id).insert(
-                  action_id:   record.id,
-                  output_id:   inp[:output_id],
-                  vin:         inp[:vin],
-                  nsequence:   inp[:nsequence] || 4_294_967_295,
+                  action_id: record.id,
+                  output_id: inp[:output_id],
+                  vin: inp[:vin],
+                  nsequence: inp[:nsequence] || 4_294_967_295,
                   description: inp[:description]
                 )
                 locked += 1 if @db[:inputs].where(output_id: inp[:output_id], action_id: record.id).any?
               end
 
-              if locked < inputs.size
-                raise Sequel::Rollback
-              end
+              raise Sequel::Rollback if locked < inputs.size
             end
 
             action_to_hash(record)
@@ -54,26 +52,26 @@ module BSV
           BSV.logger&.debug { "[Store] sign_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
           @db.transaction do
             Action.where(id: action_id).update(
-              wtxid:  Sequel.blob(wtxid),
+              wtxid: Sequel.blob(wtxid),
               raw_tx: Sequel.blob(raw_tx)
             )
             TxProof.dataset.insert_conflict(target: :wtxid, update: { raw_tx: Sequel.blob(raw_tx) })
-                          .insert(wtxid: Sequel.blob(wtxid), raw_tx: Sequel.blob(raw_tx))
+                   .insert(wtxid: Sequel.blob(wtxid), raw_tx: Sequel.blob(raw_tx))
 
             change_outputs.each do |chg|
               output = Output.create(
-                action_id:           action_id,
-                satoshis:            chg[:satoshis],
-                vout:                chg[:vout],
-                locking_script:      chg[:locking_script],
-                derivation_prefix:   chg[:derivation_prefix],
-                derivation_suffix:   chg[:derivation_suffix],
+                action_id: action_id,
+                satoshis: chg[:satoshis],
+                vout: chg[:vout],
+                locking_script: chg[:locking_script],
+                derivation_prefix: chg[:derivation_prefix],
+                derivation_suffix: chg[:derivation_suffix],
                 sender_identity_key: chg[:sender_identity_key]
               )
               OutputDetail.create(
-                output_id:  output.id,
-                action_id:  action_id,
-                change:     true
+                output_id: output.id,
+                action_id: action_id,
+                change: true
               )
             end
           end
@@ -83,13 +81,13 @@ module BSV
           @db.transaction do
             outputs.map do |out|
               output = Output.create(
-                action_id:           action_id,
-                satoshis:            out[:satoshis],
-                vout:                out[:vout],
-                locking_script:      out[:locking_script],
-                output_type:         out[:output_type],
-                derivation_prefix:   out[:derivation_prefix],
-                derivation_suffix:   out[:derivation_suffix],
+                action_id: action_id,
+                satoshis: out[:satoshis],
+                vout: out[:vout],
+                locking_script: out[:locking_script],
+                output_type: out[:output_type],
+                derivation_prefix: out[:derivation_prefix],
+                derivation_suffix: out[:derivation_suffix],
                 sender_identity_key: out[:sender_identity_key]
               )
 
@@ -103,9 +101,9 @@ module BSV
 
               if out[:description] || out[:custom_instructions]
                 OutputDetail.create(
-                  output_id:          output.id,
-                  action_id:          action_id,
-                  description:        out[:description],
+                  output_id: output.id,
+                  action_id: action_id,
+                  description: out[:description],
                   custom_instructions: out[:custom_instructions]
                 )
               end
@@ -168,22 +166,22 @@ module BSV
           return { total: 0, actions: [] } if label_ids.empty?
 
           base = Action
-            .join(:action_labels, action_id: :id)
-            .where(Sequel[:action_labels][:label_id] => label_ids)
-            .select_all(:actions)
+                 .join(:action_labels, action_id: :id)
+                 .where(Sequel[:action_labels][:label_id] => label_ids)
+                 .select_all(:actions)
 
-          if label_query_mode == :all
-            base = base
-              .group(Sequel[:actions][:id])
-              .having { count(Sequel.function(:distinct, Sequel[:action_labels][:label_id])) >= label_ids.size }
-          else
-            base = base.distinct
-          end
+          base = if label_query_mode == :all
+                   base
+                     .group(Sequel[:actions][:id])
+                     .having { count(Sequel.function(:distinct, Sequel[:action_labels][:label_id])) >= label_ids.size }
+                 else
+                   base.distinct
+                 end
 
           total = base.count
           records = base
-            .order(Sequel.desc(Sequel[:actions][:created_at]))
-            .limit(limit).offset(offset).all
+                    .order(Sequel.desc(Sequel[:actions][:created_at]))
+                    .limit(limit).offset(offset).all
 
           actions = records.map do |row|
             a = row.is_a?(Action) ? row : Action[row[:id]]
@@ -209,20 +207,20 @@ module BSV
             tag_ids = Tag.where(tag: tags).select_map(:id)
             unless tag_ids.empty?
               tag_ds = OutputTag.dataset
-                .where(tag_id: tag_ids)
-                .where(Sequel[:output_tags][:output_id] => Sequel[:outputs][:id])
-                .select(1)
+                                .where(tag_id: tag_ids)
+                                .where(Sequel[:output_tags][:output_id] => Sequel[:outputs][:id])
+                                .select(1)
 
-              if tag_query_mode == :all
-                base = base.where(
-                  tag_ds
-                    .group(Sequel[:output_tags][:output_id])
-                    .having { count(Sequel.function(:distinct, Sequel[:output_tags][:tag_id])) >= tag_ids.size }
-                    .exists
-                )
-              else
-                base = base.where(tag_ds.exists)
-              end
+              base = if tag_query_mode == :all
+                       base.where(
+                         tag_ds
+                           .group(Sequel[:output_tags][:output_id])
+                           .having { count(Sequel.function(:distinct, Sequel[:output_tags][:tag_id])) >= tag_ids.size }
+                           .exists
+                       )
+                     else
+                       base.where(tag_ds.exists)
+                     end
             end
           end
 
@@ -283,21 +281,21 @@ module BSV
         def save_certificate(certificate)
           @db.transaction do
             cert = Certificate.create(
-              type:                certificate[:type],
-              subject:             certificate[:subject],
-              serial_number:       certificate[:serial_number],
-              certifier:           certificate[:certifier],
-              verifier:            certificate[:verifier],
+              type: certificate[:type],
+              subject: certificate[:subject],
+              serial_number: certificate[:serial_number],
+              certifier: certificate[:certifier],
+              verifier: certificate[:verifier],
               revocation_outpoint: certificate[:revocation_outpoint],
-              signature:           certificate[:signature]
+              signature: certificate[:signature]
             )
 
             certificate[:fields]&.each do |name, value|
               CertificateField.create(
                 certificate_id: cert.id,
-                name:           name.to_s,
-                value:          value.to_s,
-                master_key:     certificate.dig(:keyring, name.to_s)
+                name: name.to_s,
+                value: value.to_s,
+                master_key: certificate.dig(:keyring, name.to_s)
               )
             end
 
@@ -330,39 +328,38 @@ module BSV
 
         def resolve_inputs_for_signing(action_id:)
           rows = @db[:inputs]
-            .join(:outputs, id: :output_id)
-            .join(Sequel[:actions].as(:source_actions), id: Sequel[:outputs][:action_id])
-            .where(Sequel[:inputs][:action_id] => action_id)
-            .order(Sequel[:inputs][:vin])
-            .select(
-              Sequel[:inputs][:vin],
-              Sequel[:inputs][:nsequence].as(:sequence),
-              Sequel[:source_actions][:wtxid].as(:source_wtxid),
-              Sequel[:outputs][:vout].as(:source_vout),
-              Sequel[:outputs][:satoshis].as(:source_satoshis),
-              Sequel[:outputs][:locking_script].as(:source_locking_script),
-              Sequel[:outputs][:derivation_prefix],
-              Sequel[:outputs][:derivation_suffix],
-              Sequel[:outputs][:sender_identity_key]
-            )
-            .all
+                 .join(:outputs, id: :output_id)
+                 .join(Sequel[:actions].as(:source_actions), id: Sequel[:outputs][:action_id])
+                 .where(Sequel[:inputs][:action_id] => action_id)
+                 .order(Sequel[:inputs][:vin])
+                 .select(
+                   Sequel[:inputs][:vin],
+                   Sequel[:inputs][:nsequence].as(:sequence),
+                   Sequel[:source_actions][:wtxid].as(:source_wtxid),
+                   Sequel[:outputs][:vout].as(:source_vout),
+                   Sequel[:outputs][:satoshis].as(:source_satoshis),
+                   Sequel[:outputs][:locking_script].as(:source_locking_script),
+                   Sequel[:outputs][:derivation_prefix],
+                   Sequel[:outputs][:derivation_suffix],
+                   Sequel[:outputs][:sender_identity_key]
+                 )
+                 .all
 
           result = rows.map do |row|
-            if row[:source_wtxid].nil?
-              raise "Source action has nil wtxid for input vin #{row[:vin]} of action #{action_id}"
-            end
+            raise "Source action has nil wtxid for input vin #{row[:vin]} of action #{action_id}" if row[:source_wtxid].nil?
+
             BSV::Primitives::Hex.validate_wtxid!(row[:source_wtxid], name: "resolve_inputs source vin=#{row[:vin]}")
 
             {
-              vin:                  row[:vin],
-              sequence:             row[:sequence],
-              source_wtxid:         row[:source_wtxid],
-              source_vout:          row[:source_vout],
-              source_satoshis:      row[:source_satoshis],
+              vin: row[:vin],
+              sequence: row[:sequence],
+              source_wtxid: row[:source_wtxid],
+              source_vout: row[:source_vout],
+              source_satoshis: row[:source_satoshis],
               source_locking_script: row[:source_locking_script],
-              derivation_prefix:    row[:derivation_prefix],
-              derivation_suffix:    row[:derivation_suffix],
-              sender_identity_key:  row[:sender_identity_key]
+              derivation_prefix: row[:derivation_prefix],
+              derivation_suffix: row[:derivation_suffix],
+              sender_identity_key: row[:sender_identity_key]
             }
           end
 

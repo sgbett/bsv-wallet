@@ -3,9 +3,9 @@
 require_relative 'shared_context'
 
 RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
-  let(:services) { nil }
   subject(:queue) { described_class.new(services: services) }
 
+  let(:services) { nil }
   let(:action) do
     BSV::Wallet::Store::Action.create(
       outgoing: true,
@@ -33,9 +33,9 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
     context 'with services' do
       let(:push_response) do
         double('ProtocolResponse', http_success?: true, data: {
-          tx_status: 'SEEN_ON_NETWORK',
-          status: 200
-        })
+                 tx_status: 'SEEN_ON_NETWORK',
+                 status: 200
+               })
       end
       let(:services) { double('Services') }
 
@@ -123,12 +123,12 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
   describe '#process_pending' do
     let(:fetch_response) do
       double('ProtocolResponse', http_success?: true, data: {
-        tx_status: 'MINED',
-        status: 200,
-        block_hash: SecureRandom.random_bytes(32).unpack1('H*'),
-        block_height: 800_000,
-        merkle_path: nil
-      })
+               tx_status: 'MINED',
+               status: 200,
+               block_hash: SecureRandom.random_bytes(32).unpack1('H*'),
+               block_height: 800_000,
+               merkle_path: nil
+             })
     end
     let(:services) { double('Services') }
 

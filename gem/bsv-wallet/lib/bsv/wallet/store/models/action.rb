@@ -35,6 +35,7 @@ module BSV
           return :unproven   unless outputs_dataset.empty?
           return :failed     if broadcast_entry&.tx_status == 'REJECTED'
           return :sending    if broadcast_entry
+
           :unprocessed
         end
 

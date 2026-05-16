@@ -21,16 +21,16 @@ RSpec.describe 'Schema migration', :store do
 
   describe 'CHECK constraints for invalid values' do
     it 'rejects invalid broadcast values' do
-      expect {
+      expect do
         db.transaction(savepoint: true) do
           db[:actions].insert(description: 'test action 12345', outgoing: true, nlocktime: 0, reference: SecureRandom.uuid, broadcast: 'bogus')
         end
-      }.to raise_error(Sequel::ConstraintViolation)
+      end.to raise_error(Sequel::ConstraintViolation)
     end
 
     it 'rejects invalid output_type values' do
       action_id = insert_action(description: 'test action 12345')
-      expect {
+      expect do
         db.transaction(savepoint: true) do
           db[:outputs].insert(
             action_id: action_id, satoshis: 1000, vout: 0,
@@ -38,7 +38,7 @@ RSpec.describe 'Schema migration', :store do
             output_type: 'bogus'
           )
         end
-      }.to raise_error(Sequel::ConstraintViolation)
+      end.to raise_error(Sequel::ConstraintViolation)
     end
   end
 
@@ -66,11 +66,11 @@ RSpec.describe 'Schema migration', :store do
   describe 'structural constraints' do
     it 'enforces UNIQUE on tx_proofs.wtxid' do
       db[:tx_proofs].insert(wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx))
-      expect {
+      expect do
         db.transaction(savepoint: true) do
           db[:tx_proofs].insert(wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx))
         end
-      }.to raise_error(Sequel::UniqueConstraintViolation)
+      end.to raise_error(Sequel::UniqueConstraintViolation)
     end
 
     it 'enforces UNIQUE on inputs.output_id (structural lock)' do
@@ -82,18 +82,18 @@ RSpec.describe 'Schema migration', :store do
       )
       action2_id = insert_action(description: 'lock test consumer')
       db[:inputs].insert(action_id: action_id, output_id: output_id, vin: 0)
-      expect {
+      expect do
         db.transaction(savepoint: true) do
           db[:inputs].insert(action_id: action2_id, output_id: output_id, vin: 0)
         end
-      }.to raise_error(Sequel::UniqueConstraintViolation)
+      end.to raise_error(Sequel::UniqueConstraintViolation)
     end
 
     it 'enforces UNIQUE on baskets.name' do
       db[:baskets].insert(name: 'test-basket')
-      expect {
+      expect do
         db.transaction(savepoint: true) { db[:baskets].insert(name: 'test-basket') }
-      }.to raise_error(Sequel::UniqueConstraintViolation)
+      end.to raise_error(Sequel::UniqueConstraintViolation)
     end
 
     it 'CASCADE deletes inputs when action is deleted' do
