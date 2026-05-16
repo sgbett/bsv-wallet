@@ -65,7 +65,7 @@ RSpec.describe BSV::Wallet::Store::ProofStore, :store do
     end
 
     it 'saves proof without block when merkle_root is absent' do
-      proof_without_root = proof_data.reject { |k, _| %i[merkle_root block_hash].include?(k) }
+      proof_without_root = proof_data.except(:merkle_root, :block_hash)
       id = proof_store.save_proof(wtxid: wtxid, proof: proof_without_root)
 
       record = BSV::Wallet::Store::TxProof[id]

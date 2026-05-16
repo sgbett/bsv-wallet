@@ -54,7 +54,7 @@ RSpec.describe BSV::Wallet::Store::Broadcast, :store do
   describe '#needs_push?' do
     it 'returns truthy for new broadcast (broadcast_at nil)' do
       broadcast = described_class.create(action_id: action.id)
-      expect(broadcast.needs_push?).to be_truthy
+      expect(broadcast).to be_needs_push
     end
 
     it 'returns false after broadcast_at is set' do
@@ -65,7 +65,7 @@ RSpec.describe BSV::Wallet::Store::Broadcast, :store do
     it 'returns false when action has no raw_tx' do
       unsigned = BSV::Wallet::Store::Action.create(outgoing: true, description: 'unsigned', nlocktime: 0)
       broadcast = described_class.create(action_id: unsigned.id)
-      expect(broadcast.needs_push?).to be_falsey
+      expect(broadcast).not_to be_needs_push
     end
   end
 

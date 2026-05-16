@@ -23,7 +23,7 @@ RSpec.shared_context 'store setup' do
   let(:valid_wtxid) { SecureRandom.random_bytes(32) }
   let(:valid_raw_tx) { SecureRandom.random_bytes(191) }
   let(:valid_locking_script) { SecureRandom.random_bytes(25) }
-  let(:valid_identity_key) { '02' + SecureRandom.hex(32) }
+  let(:valid_identity_key) { "02#{SecureRandom.hex(32)}" }
 
   def create_funded_output(satoshis: 1000, basket: nil, output_type: nil,
                            derivation_prefix: 'prefix', derivation_suffix: 'suffix',

@@ -455,10 +455,10 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
   # --- Input Resolution ---
 
   describe '#resolve_inputs_for_signing' do
-    let(:source_wtxid_1) { SecureRandom.random_bytes(32) }
-    let(:source_wtxid_2) { SecureRandom.random_bytes(32) }
-    let(:locking_script_1) { SecureRandom.random_bytes(25) }
-    let(:locking_script_2) { SecureRandom.random_bytes(25) }
+    let(:first_source_wtxid) { SecureRandom.random_bytes(32) }
+    let(:second_source_wtxid) { SecureRandom.random_bytes(32) }
+    let(:first_locking_script) { SecureRandom.random_bytes(25) }
+    let(:second_locking_script) { SecureRandom.random_bytes(25) }
 
     def create_source_output(wtxid:, satoshis:, vout:, locking_script: nil,
                              derivation_prefix: nil, derivation_suffix: nil,
@@ -485,14 +485,14 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
 
     it 'returns resolved input data for an action with inputs' do
       output1 = create_source_output(
-        wtxid: source_wtxid_1, satoshis: 1000, vout: 0,
-        locking_script: locking_script_1,
+        wtxid: first_source_wtxid, satoshis: 1000, vout: 0,
+        locking_script: first_locking_script,
         derivation_prefix: 'prefix1', derivation_suffix: 'suffix1',
         sender_identity_key: 'sender_key_1'
       )
       output2 = create_source_output(
-        wtxid: source_wtxid_2, satoshis: 2000, vout: 3,
-        locking_script: locking_script_2,
+        wtxid: second_source_wtxid, satoshis: 2000, vout: 3,
+        locking_script: second_locking_script,
         derivation_prefix: 'prefix2', derivation_suffix: 'suffix2',
         sender_identity_key: 'sender_key_2'
       )
@@ -512,10 +512,10 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
       expect(resolved[0]).to eq({
                                   vin: 0,
                                   sequence: 4_294_967_295,
-                                  source_wtxid: source_wtxid_1,
+                                  source_wtxid: first_source_wtxid,
                                   source_vout: 0,
                                   source_satoshis: 1000,
-                                  source_locking_script: locking_script_1,
+                                  source_locking_script: first_locking_script,
                                   derivation_prefix: 'prefix1',
                                   derivation_suffix: 'suffix1',
                                   sender_identity_key: 'sender_key_1'
@@ -524,10 +524,10 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
       expect(resolved[1]).to eq({
                                   vin: 1,
                                   sequence: 0xFFFFFFFE,
-                                  source_wtxid: source_wtxid_2,
+                                  source_wtxid: second_source_wtxid,
                                   source_vout: 3,
                                   source_satoshis: 2000,
-                                  source_locking_script: locking_script_2,
+                                  source_locking_script: second_locking_script,
                                   derivation_prefix: 'prefix2',
                                   derivation_suffix: 'suffix2',
                                   sender_identity_key: 'sender_key_2'
@@ -535,8 +535,8 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
     end
 
     it 'orders results by vin' do
-      output1 = create_source_output(wtxid: source_wtxid_1, satoshis: 500, vout: 0)
-      output2 = create_source_output(wtxid: source_wtxid_2, satoshis: 300, vout: 1)
+      output1 = create_source_output(wtxid: first_source_wtxid, satoshis: 500, vout: 0)
+      output2 = create_source_output(wtxid: second_source_wtxid, satoshis: 300, vout: 1)
 
       action = store.create_action(
         action: { description: 'ordering test', nlocktime: 0 },
@@ -551,7 +551,7 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
     end
 
     it 'returns source wtxid from the action that created the output' do
-      output = create_source_output(wtxid: source_wtxid_1, satoshis: 1000, vout: 7)
+      output = create_source_output(wtxid: first_source_wtxid, satoshis: 1000, vout: 7)
 
       # Create a spending action — this action's wtxid is NOT what we want
       spending_action = store.create_action(
@@ -565,7 +565,7 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
       )
 
       resolved = store.resolve_inputs_for_signing(action_id: spending_action[:id])
-      expect(resolved.first[:source_wtxid]).to eq(source_wtxid_1)
+      expect(resolved.first[:source_wtxid]).to eq(first_source_wtxid)
       expect(resolved.first[:source_vout]).to eq(7)
     end
 
