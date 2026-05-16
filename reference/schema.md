@@ -355,7 +355,7 @@ The action's derived status transitions to `completed` (tx_proof_id is now set).
 - The broadcast response itself (ARC returns MINED immediately for fast blocks)
 - ARC SSE events (`/events` endpoint — push-based)
 - Polling ARC `GET /tx/{txid}`
-- `tx_reqs` worker
+- Daemon fetch cycle (Action adopts Fetchable — structural queries find actions needing proofs)
 
 #### abortAction (before broadcast)
 
@@ -894,43 +894,7 @@ end
 
 ---
 
-## 17. Tx Reqs
-
-Proof request lifecycle. Tracks "I need a proof for this txid" — a work queue for the proof-harvesting worker.
-
-| col | type | attributes |
-| --- | --- | --- |
-| id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| tx_proof_id | bigint | REFERENCES tx_proofs (id) |
-| wtxid | bytea | NOT NULL UNIQUE |
-| status | text | NOT NULL DEFAULT 'unmined' |
-| attempts | integer | NOT NULL DEFAULT 0 |
-| notified | bool | NOT NULL DEFAULT false |
-| history | text | |
-| notify | text | |
-| batch | text | |
-| raw_tx | bytea | |
-| input_beef | bytea | |
-| created_at | timestamptz | NOT NULL DEFAULT now() |
-| updated_at | timestamptz | NOT NULL DEFAULT now() |
-
-**Constraints:**
-- `CHECK length(wtxid) = 32`
-- `CHECK status IN ('unmined', 'completed', 'failed')`
-- `CHECK attempts >= 0`
-
-**Indexes:**
-- `idx_tx_reqs_status` on `(status)` — worker polling
-
-```ruby
-class Wallet::TxReq < Sequel::Model
-  many_to_one :tx_proof
-end
-```
-
----
-
-## 18. Settings
+## 17. Settings
 
 Key-value wallet configuration.
 
