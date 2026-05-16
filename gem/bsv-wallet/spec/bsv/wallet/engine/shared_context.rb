@@ -5,33 +5,50 @@ require 'securerandom'
 # Shared setup for engine specs. Provides database connection, component
 # lets, transaction rollback, funding helpers, and common constants.
 #
+# Backend selection via BSV_WALLET_BACKEND (default: sqlite, in-memory).
+# Set BSV_WALLET_BACKEND=postgres to run against the Postgres canary —
+# both backends must stay green before push.
+#
 # Usage:
-#   RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
+#   RSpec.describe BSV::Wallet::Engine, if: ENGINE_AVAILABLE do
 #     include_context 'engine setup'
 #     ...
 #   end
 
 # Database connection — shared across all engine spec files.
 # Guard against double-definition when multiple files are loaded.
-unless defined?(POSTGRES_AVAILABLE)
+unless defined?(ENGINE_AVAILABLE)
   begin
     require 'sequel'
-    require 'bsv-wallet-postgres'
 
-    TEST_DB_URL = ENV.fetch('DATABASE_URL', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_test')
-    ENGINE_DB = Sequel.connect(TEST_DB_URL)
-    ENGINE_DB.extension :pg_enum
-    ENGINE_DB.extension :pg_array
-    ENGINE_DB.extension :pg_json
-    Sequel.extension :migration
-    migrations_path = File.expand_path('../../../../../bsv-wallet-postgres/db/migrations', __dir__)
-    Sequel::Migrator.run(ENGINE_DB, migrations_path)
-    BSV::Wallet::Postgres::Store::Connection.connect(ENGINE_DB)
-    BSV::Wallet::Postgres::Store::Connection.bind_models!
-    POSTGRES_AVAILABLE = true
+    BSV_WALLET_BACKEND = (ENV['BSV_WALLET_BACKEND'] || 'sqlite').to_sym
+    case BSV_WALLET_BACKEND
+    when :sqlite
+      # SQLite shares BSV::Wallet::Store::* model classes with the wallet
+      # gem's store specs. Sequel binds models to a database at class load,
+      # so both contexts must point at the SAME db — otherwise whichever
+      # shared_context loads last wins, breaking the other. Load the
+      # store specs' shared_context first to set up STORE_DB, then reuse it.
+      require 'bsv-wallet'
+      require_relative '../store/shared_context'
+      ENGINE_BACKEND = BSV::Wallet::Store
+      ENGINE_DB = STORE_DB
+    when :postgres
+      require 'bsv-wallet-postgres'
+      ENGINE_BACKEND = BSV::Wallet::Postgres::Store
+      TEST_DB_URL = ENV.fetch('DATABASE_URL', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_test')
+      ENGINE_BACKEND::Connection.connect(TEST_DB_URL)
+      ENGINE_BACKEND::Connection.migrate!
+      ENGINE_BACKEND::Connection.bind_models!
+      ENGINE_DB = ENGINE_BACKEND::Connection.db
+    else
+      raise "Unknown BSV_WALLET_BACKEND: #{BSV_WALLET_BACKEND.inspect} (expected :sqlite or :postgres)"
+    end
+
+    ENGINE_AVAILABLE = true
   rescue LoadError, Sequel::DatabaseConnectionError => e
     warn "Skipping engine integration specs: #{e.message}"
-    POSTGRES_AVAILABLE = false
+    ENGINE_AVAILABLE = false
   end
 end
 
@@ -56,7 +73,17 @@ RSpec.shared_context 'engine setup' do
     )
   end
 
-  let(:store) { BSV::Wallet::Postgres::Store::Postgres.new }
+  let(:engine_services) { ENGINE_BACKEND.bootstrap(db: ENGINE_DB) }
+  let(:store) { engine_services[:store] }
+  let(:utxo_pool) { engine_services[:utxo_pool] }
+  let(:proof_store) { engine_services[:proof_store] }
+  let(:broadcast_queue) { engine_services[:broadcast_queue] }
+
+  # Backend namespace — exposes Action, Output, etc. for the few specs
+  # that reach around the Store interface to verify implementation
+  # details (direct row delete, raw column read).
+  let(:models) { ENGINE_BACKEND }
+
   let(:engine_with_privileged_keys) do
     priv_deriver = BSV::Wallet::KeyDeriver.new(private_key: root_key, privileged_key: privileged_key)
     described_class.new(
@@ -79,9 +106,6 @@ RSpec.shared_context 'engine setup' do
   let(:key_deriver) { BSV::Wallet::KeyDeriver.new(private_key: root_key) }
   let(:privileged_key) { BSV::Primitives::PrivateKey.generate }
   let(:root_key) { BSV::Primitives::PrivateKey.generate }
-  let(:utxo_pool) { BSV::Wallet::Postgres::Store::UTXOPool.new(store: store) }
-  let(:broadcast_queue) { BSV::Wallet::Postgres::Store::BroadcastQueue.new }
-  let(:proof_store) { BSV::Wallet::Postgres::Store::ProofStore.new }
 
   around do |example|
     ENGINE_DB.transaction(rollback: :always, auto_savepoint: true) do

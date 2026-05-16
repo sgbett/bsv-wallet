@@ -24,10 +24,14 @@ RSpec.configure do |config|
   config.order = :random
   Kernel.srand config.seed
 
-  # Clean slate when a test database is available (engine specs use Postgres)
+  # Clean slate when a test database is available.
+  # SQLite (in-memory by default) is freshly created per process — no
+  # cleanup needed. Postgres persists, so truncate everything bar the
+  # migrator metadata.
   config.before(:suite) do
-    if defined?(ENGINE_DB)
-      ENGINE_DB.tables.each { |t| ENGINE_DB[t].truncate(cascade: true) unless t == :schema_info }
-    end
+    next unless defined?(ENGINE_DB)
+    next unless defined?(BSV_WALLET_BACKEND) && BSV_WALLET_BACKEND == :postgres
+
+    ENGINE_DB.tables.each { |t| ENGINE_DB[t].truncate(cascade: true) unless t == :schema_info }
   end
 end

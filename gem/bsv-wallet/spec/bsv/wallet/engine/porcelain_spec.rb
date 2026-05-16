@@ -5,7 +5,7 @@
 
 require_relative 'shared_context'
 
-RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable RSpec/SpecFilePathFormat
+RSpec.describe BSV::Wallet::Engine, if: ENGINE_AVAILABLE do # rubocop:disable RSpec/SpecFilePathFormat
   include_context 'engine setup'
 
   # Porcelain specs manage their own funding — skip the reserve.
