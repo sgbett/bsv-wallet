@@ -112,11 +112,11 @@ jobs:
 
       - name: Bundle install
         run: bundle install
-        working-directory: gem/bsv-wallet
+        working-directory: gem/bsv-wallet-postgres
 
       - name: Run integration specs
         run: bundle exec rspec --tag on_chain
-        working-directory: gem/bsv-wallet
+        working-directory: gem/bsv-wallet-postgres
         env:
           BSV_WALLET_WIF_ALICE: ${{ secrets.BSV_WALLET_WIF_ALICE }}
           BSV_WALLET_WIF_BOB: ${{ secrets.BSV_WALLET_WIF_BOB }}

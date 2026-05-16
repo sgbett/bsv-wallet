@@ -1,23 +1,23 @@
 # frozen_string_literal: true
 
-# CLI integration tests: porcelain pipeline.
+# On-chain CLI integration test for the postgres adapter.
 #
-# Tests the unix wallet workflow: import → create → receive → balance.
-# Each CLI tool runs in its own OS process, so the global Sequel::Model.db
-# is scoped per-wallet — no multi-tenant issues.
+# Exercises the wallet gem's bin tools (create | receive | balance |
+# import) end-to-end against postgres-backed Alice/Bob wallets, with
+# real on-chain BSV transactions.
 #
 # Environment variables (set in shell profile or CI):
 #   BSV_WALLET_WIF_ALICE/BOB  — wallet private keys
 #   DATABASE_URL_ALICE/BOB    — optional, defaults to localhost:5433
 #
 # Run:
-#   cd gem/bsv-wallet && bundle exec rspec --tag on_chain spec/integration/cli_spec.rb
+#   cd gem/bsv-wallet-postgres && bundle exec rspec --tag on_chain spec/integration/cli_spec.rb
 
 require 'open3'
 require 'sequel'
 
 RSpec.describe 'CLI porcelain: create | receive pipeline', :on_chain do # rubocop:disable RSpec/DescribeClass
-  let(:bin_dir) { File.expand_path('../../bin', __dir__) }
+  let(:bin_dir) { File.expand_path('../../../bsv-wallet/bin', __dir__) }
   let(:bob_identity_key) do
     require 'bsv-wallet'
     pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('BSV_WALLET_WIF_BOB'))
