@@ -4,13 +4,12 @@ module BSV
   module Wallet
     module Postgres
       module Store
-        # Bridges the BroadcastQueue's arc_client interface (which passes raw_tx
-        # binary) with the SDK's ARC protocol (which expects Transaction objects).
+        # Bridges the BroadcastQueue with the SDK's ARC protocol.
         #
         # @example
         #   provider = BSV::Network::Providers::GorillaPool.mainnet
         #   adapter = ArcAdapter.new(provider)
-        #   broadcast_queue = BroadcastQueue.new(db: db, arc_client: adapter)
+        #   broadcast_queue = BroadcastQueue.new(services: services)
         class ArcAdapter
           def initialize(provider)
             @provider = provider
