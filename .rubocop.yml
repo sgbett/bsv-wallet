@@ -73,6 +73,7 @@ Metrics/PerceivedComplexity:
 
 Metrics/ModuleLength:
   Exclude:
+    - 'gem/*/lib/**/*'
     - 'gem/*/spec/**/*'
 
 Metrics/ClassLength:
@@ -84,10 +85,14 @@ Metrics/ParameterLists:
     - 'gem/*/lib/**/*'
     - 'gem/*/spec/**/*'
 
-# BRC-100 interface method names are spec-mandated (e.g. proof_exists?, authenticated?)
+# BRC-100 interface method names are spec-mandated (e.g. proof_exists?, authenticated?).
+# Store adapter primitives like try_lock_input are side-effecting + boolean-returning,
+# which doesn't fit the `?` convention.
 Naming/PredicateMethod:
   Exclude:
     - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
+    - 'gem/bsv-wallet/lib/bsv/wallet/store/**/*'
+    - 'gem/bsv-wallet-postgres/lib/bsv/wallet/postgres/store/**/*'
 
 Style/SafeNavigationChainLength:
   Exclude:
