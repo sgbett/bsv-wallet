@@ -43,7 +43,15 @@ module BSV
             # other Sequel-based store (e.g. SQLite) to coexist in the
             # same process without stepping on each other.
             def bind_models
+              # Temporarily set Sequel::Model.db so that autoloaded model
+              # classes can initialize (they inherit from Sequel::Model and
+              # need a DB to resolve their dataset). Once loaded, each model
+              # gets its own dataset= pointing at our specific connection.
+              previous_db = Sequel::Model.db
+              Sequel::Model.db = @db
               Store.models.each { |m| m.dataset = @db[m.table_name] }
+            ensure
+              Sequel::Model.db = previous_db
             end
           end
         end
