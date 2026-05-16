@@ -27,6 +27,7 @@ unless defined?(POSTGRES_AVAILABLE)
     migrations_path = File.expand_path('../../../../../bsv-wallet-postgres/db/migrations', __dir__)
     Sequel::Migrator.run(ENGINE_DB, migrations_path)
     BSV::Wallet::Postgres::Store::Connection.connect(ENGINE_DB)
+    BSV::Wallet::Postgres::Store::Connection.bind_models!
     POSTGRES_AVAILABLE = true
   rescue LoadError, Sequel::DatabaseConnectionError => e
     warn "Skipping engine integration specs: #{e.message}"

@@ -53,6 +53,7 @@ module BSV
           'db', 'migrations'
         )
         Sequel::Migrator.run(db, migrations_path)
+        BSV::Wallet::Postgres::Store::Connection.bind_models!
 
         private_key = BSV::Primitives::PrivateKey.from_wif(wif)
         key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)

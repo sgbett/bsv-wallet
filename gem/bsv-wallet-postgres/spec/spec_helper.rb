@@ -19,9 +19,10 @@ DB.extension :pg_array
 Sequel.extension :migration
 Sequel::Migrator.run(DB, File.expand_path('../db/migrations', __dir__))
 
-# Load the gem (connects models to DB)
+# Load the gem (connects models to DB, then bind after migrations)
 require 'bsv-wallet-postgres'
 BSV::Wallet::Postgres::Store::Connection.connect(DB)
+BSV::Wallet::Postgres::Store::Connection.bind_models!
 
 RSpec.configure do |config|
   config.expect_with :rspec do |expectations|
