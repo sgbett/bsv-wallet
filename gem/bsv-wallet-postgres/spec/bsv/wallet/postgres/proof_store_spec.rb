@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-RSpec.describe BSV::Wallet::Postgres::ProofStore do
+RSpec.describe BSV::Wallet::Postgres::Store::ProofStore do
   subject(:proof_store) { described_class.new }
 
   let(:wtxid) { SecureRandom.random_bytes(32) }
@@ -35,13 +35,13 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
       ))
 
       expect(id2).to eq(id1)
-      record = BSV::Wallet::Postgres::TxProof[id1]
+      record = BSV::Wallet::Postgres::Store::TxProof[id1]
       expect(record.block.height).to eq(800_001)
     end
 
     it 'preserves binary data' do
       proof_store.save_proof(wtxid: wtxid, proof: proof_data)
-      record = BSV::Wallet::Postgres::TxProof.first(wtxid: Sequel.blob(wtxid))
+      record = BSV::Wallet::Postgres::Store::TxProof.first(wtxid: Sequel.blob(wtxid))
 
       expect(record.wtxid.encoding).to eq(Encoding::BINARY)
       expect(record.merkle_path.encoding).to eq(Encoding::BINARY)
@@ -56,17 +56,17 @@ RSpec.describe BSV::Wallet::Postgres::ProofStore do
         raw_tx: SecureRandom.random_bytes(100)
       ))
 
-      proof1 = BSV::Wallet::Postgres::TxProof[id1]
-      proof2 = BSV::Wallet::Postgres::TxProof[id2]
+      proof1 = BSV::Wallet::Postgres::Store::TxProof[id1]
+      proof2 = BSV::Wallet::Postgres::Store::TxProof[id2]
       expect(proof1.block_id).to eq(proof2.block_id)
-      expect(BSV::Wallet::Postgres::Block.where(height: 800_000).count).to eq(1)
+      expect(BSV::Wallet::Postgres::Store::Block.where(height: 800_000).count).to eq(1)
     end
 
     it 'saves proof without block when merkle_root is absent' do
       proof_without_root = proof_data.reject { |k, _| %i[merkle_root block_hash].include?(k) }
       id = proof_store.save_proof(wtxid: wtxid, proof: proof_without_root)
 
-      record = BSV::Wallet::Postgres::TxProof[id]
+      record = BSV::Wallet::Postgres::Store::TxProof[id]
       expect(record.block_id).to be_nil
     end
   end

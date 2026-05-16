@@ -4,7 +4,7 @@
 # Every CHECK, NOT NULL, and FK constraint from migration 004 is tested here.
 
 RSpec.describe 'Schema constraints' do
-  let(:db) { BSV::Wallet::Postgres.db }
+  let(:db) { BSV::Wallet::Postgres::Store::Connection.db }
 
   # Valid 32-byte binary for wtxid/block_hash fields
   let(:valid_wtxid) { SecureRandom.random_bytes(32) }

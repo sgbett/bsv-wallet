@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 RSpec.describe 'Schema migration' do
-  let(:db) { BSV::Wallet::Postgres.db }
+  let(:db) { BSV::Wallet::Postgres::Store::Connection.db }
 
   let(:valid_wtxid) { SecureRandom.random_bytes(32) }
   let(:valid_raw_tx) { SecureRandom.random_bytes(191) }

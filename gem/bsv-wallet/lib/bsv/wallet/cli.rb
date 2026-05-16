@@ -45,7 +45,7 @@ module BSV
         db.extension :pg_enum
         db.extension :pg_array
         db.extension :pg_json
-        BSV::Wallet::Postgres.connect(db)
+        BSV::Wallet::Postgres::Store::Connection.connect(db)
 
         Sequel.extension :migration
         migrations_path = File.join(
@@ -53,13 +53,14 @@ module BSV
           'db', 'migrations'
         )
         Sequel::Migrator.run(db, migrations_path)
+        BSV::Wallet::Postgres::Store::Connection.bind_models!
 
         private_key = BSV::Primitives::PrivateKey.from_wif(wif)
         key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
 
-        store = BSV::Wallet::Postgres::Store.new(db: db)
-        proof_store = BSV::Wallet::Postgres::ProofStore.new(db: db)
-        utxo_pool = BSV::Wallet::Postgres::UTXOPool.new(store: store)
+        store = BSV::Wallet::Postgres::Store::Postgres.new(db: db)
+        proof_store = BSV::Wallet::Postgres::Store::ProofStore.new(db: db)
+        utxo_pool = BSV::Wallet::Postgres::Store::UTXOPool.new(store: store)
 
         network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
         services = BSV::Network::Services.new(providers: [network_provider])
@@ -75,7 +76,7 @@ module BSV
         engine = BSV::Wallet::Engine.new(
           store: store,
           utxo_pool: utxo_pool,
-          broadcast_queue: BSV::Wallet::Postgres::BroadcastQueue.new(db: db),
+          broadcast_queue: BSV::Wallet::Postgres::Store::BroadcastQueue.new(db: db),
           proof_store: proof_store,
           key_deriver: key_deriver,
           chain_tracker: chain_tracker,

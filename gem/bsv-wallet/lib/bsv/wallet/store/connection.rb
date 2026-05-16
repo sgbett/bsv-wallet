@@ -24,8 +24,17 @@ module BSV
                   end
             @db.run('PRAGMA foreign_keys = ON')
             @db.run('PRAGMA journal_mode = WAL')
-            bind_models
+            # Set the global so autoloaded models can initialize.
+            # bind_models! should be called after migrations to set
+            # per-model datasets.
+            Sequel::Model.db = @db
             @db
+          end
+
+          # Bind each model to this connection's dataset. Call after
+          # migrations have run — models need their tables to exist.
+          def bind_models!
+            Store.models.each { |m| m.dataset = @db[m.table_name] }
           end
 
           def disconnect
@@ -37,16 +46,6 @@ module BSV
             Sequel.extension :migration
             migrations_path = File.expand_path('../../../../db/migrations', __dir__)
             Sequel::Migrator.run(@db, migrations_path, target: target)
-          end
-
-          private
-
-          # Bind all Store models to this connection — not the global
-          # Sequel::Model.db. This allows the default store and any
-          # other Sequel-based store (e.g. Postgres) to coexist in
-          # the same process without stepping on each other.
-          def bind_models
-            Store.models.each { |m| m.dataset = @db[m.table_name] }
           end
         end
       end

@@ -14,6 +14,7 @@ unless defined?(STORE_DB)
   Sequel::Migrator.run(STORE_DB, migrations_path)
 
   BSV::Wallet::Store::Connection.connect(STORE_DB)
+  BSV::Wallet::Store::Connection.bind_models!
 end
 
 RSpec.shared_context 'store setup' do

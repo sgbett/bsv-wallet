@@ -26,7 +26,8 @@ unless defined?(POSTGRES_AVAILABLE)
     Sequel.extension :migration
     migrations_path = File.expand_path('../../../../../bsv-wallet-postgres/db/migrations', __dir__)
     Sequel::Migrator.run(ENGINE_DB, migrations_path)
-    BSV::Wallet::Postgres.connect(ENGINE_DB)
+    BSV::Wallet::Postgres::Store::Connection.connect(ENGINE_DB)
+    BSV::Wallet::Postgres::Store::Connection.bind_models!
     POSTGRES_AVAILABLE = true
   rescue LoadError, Sequel::DatabaseConnectionError => e
     warn "Skipping engine integration specs: #{e.message}"
@@ -55,7 +56,7 @@ RSpec.shared_context 'engine setup' do
     )
   end
 
-  let(:store) { BSV::Wallet::Postgres::Store.new }
+  let(:store) { BSV::Wallet::Postgres::Store::Postgres.new }
   let(:engine_with_privileged_keys) do
     priv_deriver = BSV::Wallet::KeyDeriver.new(private_key: root_key, privileged_key: privileged_key)
     described_class.new(
@@ -78,9 +79,9 @@ RSpec.shared_context 'engine setup' do
   let(:key_deriver) { BSV::Wallet::KeyDeriver.new(private_key: root_key) }
   let(:privileged_key) { BSV::Primitives::PrivateKey.generate }
   let(:root_key) { BSV::Primitives::PrivateKey.generate }
-  let(:utxo_pool) { BSV::Wallet::Postgres::UTXOPool.new(store: store) }
-  let(:broadcast_queue) { BSV::Wallet::Postgres::BroadcastQueue.new }
-  let(:proof_store) { BSV::Wallet::Postgres::ProofStore.new }
+  let(:utxo_pool) { BSV::Wallet::Postgres::Store::UTXOPool.new(store: store) }
+  let(:broadcast_queue) { BSV::Wallet::Postgres::Store::BroadcastQueue.new }
+  let(:proof_store) { BSV::Wallet::Postgres::Store::ProofStore.new }
 
   around do |example|
     ENGINE_DB.transaction(rollback: :always, auto_savepoint: true) do

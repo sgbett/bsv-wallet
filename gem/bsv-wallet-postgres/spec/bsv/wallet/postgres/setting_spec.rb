@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-RSpec.describe BSV::Wallet::Postgres::Setting do
+RSpec.describe BSV::Wallet::Postgres::Store::Setting do
   describe '.get / .set' do
     it 'stores and retrieves a value' do
       described_class.set('network', 'mainnet')
