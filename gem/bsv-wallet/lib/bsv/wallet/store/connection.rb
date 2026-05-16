@@ -35,7 +35,7 @@ module BSV
 
           def migrate!(target: nil)
             Sequel.extension :migration
-            migrations_path = File.expand_path('../../../db/migrations', __dir__)
+            migrations_path = File.expand_path('../../../../db/migrations', __dir__)
             Sequel::Migrator.run(@db, migrations_path, target: target)
           end
 
