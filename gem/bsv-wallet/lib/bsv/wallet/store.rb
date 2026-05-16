@@ -17,6 +17,9 @@ module BSV
       # Connection (database setup, pragmas, migrations)
       autoload :Connection, 'bsv/wallet/store/connection'
 
+      # Shared orchestration (mixed into concrete Store implementations)
+      autoload :Base, 'bsv/wallet/store/base'
+
       # Service implementations
       autoload :SQLite, 'bsv/wallet/store/sqlite'
       autoload :UTXOPool,          'bsv/wallet/store/utxo_pool'
