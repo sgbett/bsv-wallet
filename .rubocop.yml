@@ -150,9 +150,11 @@ RSpec/DescribeClass:
     - 'gem/bsv-wallet/spec/bsv/wallet/store/constraints_spec.rb'
 
 # Store models live in a models/ subdirectory by design — path != namespace.
+# CLI specs cluster under a cli/ subdirectory for the same reason.
 RSpec/SpecFilePathFormat:
   Exclude:
     - 'gem/bsv-wallet/spec/bsv/wallet/store/**/*'
+    - 'gem/bsv-wallet/spec/bsv/wallet/cli/**/*'
 
 # Engine spec defines TEST_DB_URL and ENGINE_DB at spec scope for shared infrastructure.
 Lint/ConstantDefinitionInBlock:

@@ -47,15 +47,15 @@ module BSV
         wif = env_fetch('WIF', wallet_name)
         db_url = env_fetch_optional('DATABASE_URL', wallet_name)
 
-        backend = pick_backend(db_url)
-        db_url ||= default_url_for(backend, wallet_name)
+        store_module = pick_backend(db_url)
+        db_url ||= default_url_for(store_module, wallet_name)
 
-        backend::Store::Connection.connect(db_url)
-        backend::Store::Connection.migrate!
-        backend::Store::Connection.bind_models!
-        db = backend::Store::Connection.db
+        store_module::Connection.connect(db_url)
+        store_module::Connection.migrate!
+        store_module::Connection.bind_models!
+        db = store_module::Connection.db
 
-        services = backend::Store.bootstrap(db: db)
+        services = store_module.bootstrap(db: db)
 
         private_key = BSV::Primitives::PrivateKey.from_wif(wif)
         key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
@@ -94,17 +94,18 @@ module BSV
         }
       end
 
-      # Pick a store backend module.
+      # Pick a store backend module — returns the Store module itself
+      # (which exposes Connection + bootstrap), not the parent namespace.
       #
       # If db_url is set, its scheme drives the choice (explicit user
       # intent wins). If unset, the gem-presence of bsv-wallet-postgres
       # picks: present → Postgres, absent → SQLite default.
       #
       # @param db_url [String, nil]
-      # @return [Module] BSV::Wallet::Store or BSV::Wallet::Postgres
+      # @return [Module] BSV::Wallet::Store or BSV::Wallet::Postgres::Store
       def pick_backend(db_url)
         if db_url
-          if db_url.start_with?('postgres')
+          if postgres_url?(db_url)
             require_postgres!
           else
             BSV::Wallet::Store
@@ -112,31 +113,40 @@ module BSV
         else
           begin
             require 'bsv-wallet-postgres'
-            BSV::Wallet::Postgres
+            BSV::Wallet::Postgres::Store
           rescue LoadError
             BSV::Wallet::Store
           end
         end
       end
 
+      # Whether the given DB URL targets a Postgres backend. Matches the
+      # postgres:// and postgresql:// schemes case-insensitively.
+      #
+      # @param db_url [String]
+      # @return [Boolean]
+      def postgres_url?(db_url)
+        db_url.downcase.start_with?('postgres')
+      end
+
       # Require the postgres backend gem, aborting with a helpful
       # message if it isn't in the bundle.
       def require_postgres!
         require 'bsv-wallet-postgres'
-        BSV::Wallet::Postgres
+        BSV::Wallet::Postgres::Store
       rescue LoadError
         abort 'DATABASE_URL is postgres:// but bsv-wallet-postgres is not in your bundle. ' \
               "Add `gem 'bsv-wallet-postgres'` to your Gemfile or unset DATABASE_URL to use SQLite."
       end
 
-      # Build the default URL for a backend when DATABASE_URL is unset.
+      # Build the default URL for a store backend when DATABASE_URL is unset.
       #
-      # @param backend [Module] BSV::Wallet::Store or BSV::Wallet::Postgres
+      # @param store_module [Module] BSV::Wallet::Store or BSV::Wallet::Postgres::Store
       # @param wallet_name [String, nil]
       # @return [String]
-      def default_url_for(backend, wallet_name)
+      def default_url_for(store_module, wallet_name)
         suffix = wallet_name || 'default'
-        if backend == BSV::Wallet::Store
+        if store_module == BSV::Wallet::Store
           require 'fileutils'
           path = File.expand_path("~/.bsv-wallet/#{suffix}.db")
           FileUtils.mkdir_p(File.dirname(path))

@@ -173,7 +173,12 @@ About 25 lines of boot logic vs the current 50+. Critically:
 
 ### Note on namespace nesting
 
-`backend::Store::Connection` works for both backends because the wallet gem's Connection lives at `BSV::Wallet::Store::Connection` and the postgres gem's at `BSV::Wallet::Postgres::Store::Connection`. With `backend = BSV::Wallet::Store` or `BSV::Wallet::Postgres`, the `::Store::Connection` suffix is consistent. The wallet gem's `Store` is its own concept (it's the module containing both the SQLite implementation and the shared `Base`); the postgres gem's `Store` is nested inside the `Postgres` namespace. The dual-suffix `backend::Store::Connection` exploits that symmetry.
+`pick_backend` returns the **Store module itself**, not the parent gem namespace:
+
+- SQLite → `BSV::Wallet::Store`
+- Postgres → `BSV::Wallet::Postgres::Store`
+
+The CLI then calls `store_module::Connection` and `store_module.bootstrap(db: db)` — no further `::Store::` suffix. (An earlier draft of this plan asserted a `backend::Store::Connection` symmetry that doesn't actually hold: the wallet gem's Connection lives one namespace deep (`BSV::Wallet::Store::Connection`) while the postgres gem's is two deep (`BSV::Wallet::Postgres::Store::Connection`). Returning the Store module directly sidesteps that asymmetry.)
 
 ## Doc updates
 
