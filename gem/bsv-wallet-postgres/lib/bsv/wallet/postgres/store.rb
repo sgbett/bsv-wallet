@@ -56,6 +56,23 @@ module BSV
             Tag, OutputTag, Certificate, CertificateField, Setting
           ]
         end
+
+        # Construct the four wallet services wired to the given database.
+        #
+        # Used by the CLI auto-discovery boot path; callers that build
+        # their own Engine may inject service instances directly instead.
+        #
+        # @param db [Sequel::Database]
+        # @return [Hash{Symbol => Object}] :store, :proof_store, :utxo_pool, :broadcast_queue
+        def self.bootstrap(db:)
+          store = Postgres.new(db: db)
+          {
+            store: store,
+            proof_store: ProofStore.new(db: db),
+            utxo_pool: UTXOPool.new(store: store),
+            broadcast_queue: BroadcastQueue.new(db: db)
+          }
+        end
       end
     end
   end
