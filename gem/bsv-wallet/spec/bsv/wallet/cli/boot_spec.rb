@@ -3,9 +3,8 @@
 # CLI.boot smoke specs — verify the boot path works end-to-end against
 # the default SQLite store with no network dependencies.
 #
-# The end-to-end boot test runs in a subprocess to avoid contaminating
-# Sequel::Model.db for other spec files (engine specs expect Postgres).
-# The pure-function helpers (pick_backend, default_url_for) run in-process.
+# The end-to-end boot test runs in a subprocess to keep Sequel::Model.db
+# from leaking into the parent spec process.
 
 require 'open3'
 require 'tmpdir'
@@ -13,7 +12,7 @@ require 'bsv/wallet/cli'
 
 RSpec.describe BSV::Wallet::CLI do
   describe '.boot' do
-    it 'constructs an Engine against the default SQLite store without requiring postgres' do
+    it 'constructs an Engine against the default SQLite store' do
       Dir.mktmpdir do |dir|
         db_path = File.join(dir, 'smoke.db')
         wif = BSV::Primitives::PrivateKey.generate.to_wif
@@ -52,13 +51,6 @@ RSpec.describe BSV::Wallet::CLI do
       expect(backend).to respond_to(:bootstrap)
       expect(backend.const_defined?(:Connection)).to be true
     end
-
-    it 'matches postgres:// URLs case-insensitively' do
-      require 'bsv-wallet-postgres' # available in dev bundle
-      expect(described_class.pick_backend('POSTGRES://localhost/x')).to eq(BSV::Wallet::Postgres::Store)
-      expect(described_class.pick_backend('postgres://localhost/x')).to eq(BSV::Wallet::Postgres::Store)
-      expect(described_class.pick_backend('postgresql://localhost/x')).to eq(BSV::Wallet::Postgres::Store)
-    end
   end
 
   describe '.default_url_for' do
@@ -66,12 +58,6 @@ RSpec.describe BSV::Wallet::CLI do
       url = described_class.default_url_for(BSV::Wallet::Store, 'alice')
       expect(url).to start_with('sqlite://')
       expect(url).to end_with('/alice.db')
-    end
-
-    it 'produces a wallet-name-aware Postgres URL' do
-      require 'bsv-wallet-postgres'
-      url = described_class.default_url_for(BSV::Wallet::Postgres::Store, 'alice')
-      expect(url).to eq('postgres://localhost/bsv_wallet_alice')
     end
 
     it 'uses "default" suffix when wallet_name is nil' do

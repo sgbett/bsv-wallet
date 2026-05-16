@@ -15,7 +15,8 @@ group :development, :test do
   gem 'yard'
   gem 'yard-markdown'
 
-  # Integration testing — engine specs need a real Store
+  # On-chain integration test runs against the postgres adapter gem.
+  # Wallet-gem unit/spec runs are SQLite-only and do not need this.
   gem 'bsv-wallet-postgres', path: '../bsv-wallet-postgres'
   gem 'pg'
   gem 'sequel', '~> 5.0'

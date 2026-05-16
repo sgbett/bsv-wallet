@@ -32,8 +32,8 @@ RSpec.describe BSV::Network::ChainTracker do
 
   let(:services) { instance_double(BSV::Network::Services, call: nil) }
 
-  # Use plain doubles — insert_conflict is a Postgres extension method not
-  # present on Sequel::Dataset, so instance_double would reject it.
+  # Use plain doubles — insert_conflict is a chained Sequel dataset method
+  # that instance_double can't verify reliably.
   let(:blocks_dataset) { double('blocks_dataset') }
   let(:conflict_dataset) { double('conflict_dataset') }
   let(:where_dataset) { double('where_dataset') }

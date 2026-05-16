@@ -2,7 +2,7 @@
 
 require_relative 'shared_context'
 
-RSpec.describe BSV::Wallet::Engine, if: ENGINE_AVAILABLE do # rubocop:disable RSpec/SpecFilePathFormat
+RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   include_context 'engine setup'
 
   # All limp mode specs manage their own funding — skip the reserve.
