@@ -1,24 +1,24 @@
 # frozen_string_literal: true
 
-RSpec.describe BSV::Wallet::Postgres::UTXOPool do
-  let(:store) { BSV::Wallet::Postgres::Store.new }
+RSpec.describe BSV::Wallet::Postgres::Store::UTXOPool do
+  let(:store) { BSV::Wallet::Postgres::Store::Postgres.new }
   subject(:pool) { described_class.new(store: store) }
 
   def create_funded_output(satoshis: 1000, vout: 0, basket: 'default')
-    source = BSV::Wallet::Postgres::Action.create(outgoing: false, description: 'test action',
+    source = BSV::Wallet::Postgres::Store::Action.create(outgoing: false, description: 'test action',
                                                   wtxid: SecureRandom.random_bytes(32),
                                                   raw_tx: SecureRandom.random_bytes(100))
-    output = BSV::Wallet::Postgres::Output.create(
+    output = BSV::Wallet::Postgres::Store::Output.create(
       action_id: source.id, satoshis: satoshis, vout: vout,
       locking_script: SecureRandom.random_bytes(25),
       derivation_prefix: SecureRandom.uuid,
       derivation_suffix: '1',
       sender_identity_key: 'self'
     )
-    BSV::Wallet::Postgres::Spendable.create(output_id: output.id, action_id: source.id)
+    BSV::Wallet::Postgres::Store::Spendable.create(output_id: output.id, action_id: source.id)
     unless basket == 'default'
       basket_id = store.find_or_create_basket(name: basket)
-      BSV::Wallet::Postgres::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: source.id)
+      BSV::Wallet::Postgres::Store::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: source.id)
     end
     output
   end
@@ -78,8 +78,8 @@ RSpec.describe BSV::Wallet::Postgres::UTXOPool do
       output = create_funded_output(satoshis: 1000, vout: 0)
       create_funded_output(satoshis: 500, vout: 0)
 
-      lock_action = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
-      BSV::Wallet::Postgres::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
+      lock_action = BSV::Wallet::Postgres::Store::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
+      BSV::Wallet::Postgres::Store::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
       expect(pool.balance).to eq(500)
     end

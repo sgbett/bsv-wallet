@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-RSpec.describe BSV::Wallet::Postgres::Spendable do
-  let(:action) { BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
-  let(:output) { BSV::Wallet::Postgres::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root') }
+RSpec.describe BSV::Wallet::Postgres::Store::Spendable do
+  let(:action) { BSV::Wallet::Postgres::Store::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
+  let(:output) { BSV::Wallet::Postgres::Store::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root') }
 
   it 'marks an output as spendable' do
     entry = described_class.create(output_id: output.id, action_id: action.id)

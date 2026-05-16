@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-RSpec.describe BSV::Wallet::Postgres::Broadcast do
-  let(:action) { BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
+RSpec.describe BSV::Wallet::Postgres::Store::Broadcast do
+  let(:action) { BSV::Wallet::Postgres::Store::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
 
   it 'creates a broadcast record for an action' do
     broadcast = described_class.create(action_id: action.id)
@@ -61,7 +61,7 @@ RSpec.describe BSV::Wallet::Postgres::Broadcast do
     end
 
     it 'returns false when action has no raw_tx' do
-      unsigned = BSV::Wallet::Postgres::Action.create(outgoing: true, description: 'unsigned', nlocktime: 0)
+      unsigned = BSV::Wallet::Postgres::Store::Action.create(outgoing: true, description: 'unsigned', nlocktime: 0)
       broadcast = described_class.create(action_id: unsigned.id)
       expect(broadcast.needs_push?).to be_falsey
     end
