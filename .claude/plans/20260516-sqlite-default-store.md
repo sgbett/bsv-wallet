@@ -1,4 +1,4 @@
-# SQLite Default Store — Implementation Plan
+# Default Store Implementation — Plan
 
 **Issue:** #116
 **Branch:** `feat/116-sqlite-default-store`
@@ -6,146 +6,98 @@
 
 ## Overview
 
-Mechanical port of `bsv-wallet-postgres` to SQLite. Same interfaces, same hash-in/hash-out contract, different adapter. The gem structure mirrors Postgres 1:1 with namespace `BSV::Wallet::Sqlite`.
+The wallet gem ships with a default Store implementation backed by SQLite. This makes `bsv-wallet` standalone — install the gem and it works. No separate database, no extra gems.
 
-## Non-Trivial Differences from Postgres
+The default store lives in the `BSV::Wallet` namespace: `Store`, `Action`, `Output`, etc. SQLite is an implementation detail, not part of the public API. When someone adds `bsv-wallet-postgres`, that's the override with its own `BSV::Wallet::Postgres` namespace.
 
-| Area | Postgres | SQLite |
-|------|----------|--------|
-| Enums (`broadcast_intent`, `output_type`) | `pg_enum` | Text column + CHECK constraint |
-| `competing_txs` | `text[]` via `Sequel.pg_array` | JSON text column |
-| `actions.reference` default | `gen_random_uuid()` DB default | `SecureRandom.uuid` in `before_create` hook |
-| Primary keys | `identity: :always` (BIGINT) | `primary_key :id` (INTEGER autoincrement) |
-| Binary columns | `:bytea` | `:blob` |
-| Timestamps | `:timestamptz` | `:datetime` + `CURRENT_TIMESTAMP` |
-| Outbound spendable trigger | PL/pgSQL function | `BEFORE INSERT` trigger with `RAISE(ABORT, ...)` |
-| Foreign keys | Always on | Requires `PRAGMA foreign_keys = ON` per connection |
-| Journal mode | WAL by default | Requires `PRAGMA journal_mode = WAL` |
-| Extensions | `pg_enum`, `pg_array` | None needed |
-| Test cleanup | `truncate(cascade: true)` | `DELETE` with FK-aware ordering |
+## What goes where
 
-Everything else is find-and-replace `Postgres` -> `Sqlite`.
+```
+gem/bsv-wallet/
+  bsv-wallet.gemspec              # adds sequel + sqlite3 deps
+  db/migrations/
+    001_create_schema.rb           # SQLite migration (from reference/schema.md)
+  lib/
+    bsv/wallet/database.rb         # connect/disconnect + SQLite pragmas
+    bsv/wallet/models/             # Sequel models (Action, Output, etc.)
+    bsv/wallet/store.rb            # Store implementation
+    bsv/wallet/utxo_pool.rb        # UTXOPool implementation
+    bsv/wallet/proof_store.rb      # ProofStore implementation
+    bsv/wallet/broadcast_queue.rb  # BroadcastQueue implementation
+    bsv/wallet/broadcast_callback.rb
+    bsv/wallet/arc_adapter.rb
+  spec/
+    bsv/wallet/store_spec.rb       # just store specs — no "sqlite" qualifier
+    bsv/wallet/models/             # model specs
+    ...
+```
 
----
+## Namespace
+
+| Class | Purpose |
+|-------|---------|
+| `BSV::Wallet::Database` | Connect/disconnect, pragmas, migrate! |
+| `BSV::Wallet::Store` | Default Store implementation |
+| `BSV::Wallet::UTXOPool` | Default UTXOPool |
+| `BSV::Wallet::ProofStore` | Default ProofStore |
+| `BSV::Wallet::BroadcastQueue` | Default BroadcastQueue |
+| `BSV::Wallet::Action` | Sequel model |
+| `BSV::Wallet::Output` | Sequel model |
+| ... | (all models in `BSV::Wallet` namespace) |
+
+The Postgres gem keeps `BSV::Wallet::Postgres::Store` etc. — it's the one with the qualifier because it's the override.
+
+## SQLite-specific adaptations (from Postgres)
+
+| Area | Change |
+|------|--------|
+| Enums | Text + CHECK constraint (no pg_enum) |
+| `competing_txs` | JSON text (no pg_array) |
+| `actions.reference` | `SecureRandom.uuid` in `before_create` (no gen_random_uuid) |
+| Primary keys | `primary_key :id` (no identity: :always) |
+| Binary columns | `:blob` (no :bytea) |
+| Timestamps | `:datetime` + `CURRENT_TIMESTAMP` |
+| Outbound trigger | SQLite `RAISE(ABORT)` syntax |
+| Foreign keys | `PRAGMA foreign_keys = ON` via `after_connect` |
+| `insert_conflict` | Verify ownership after insert (SQLite returns last_insert_rowid on DO NOTHING) |
 
 ## Tasks
 
-### Task 1: Scaffold gem directory structure
+### Task 1: Migration and Database module
 
-Create `gem/bsv-wallet-sqlite/` mirroring the Postgres gem layout:
+- `db/migrations/001_create_schema.rb` — derived from `reference/schema.md`
+- `lib/bsv/wallet/database.rb` — connect, pragmas, migrate!
 
-```
-gem/bsv-wallet-sqlite/
-  .rspec
-  bsv-wallet-sqlite.gemspec      # sqlite3 dep instead of pg
-  CHANGELOG.md
-  LICENSE
-  Gemfile
-  Rakefile
-  db/migrations/
-    001_create_schema.rb
-  lib/
-    bsv-wallet-sqlite.rb
-    bsv/wallet/sqlite.rb          # connect/disconnect + pragmas
-    bsv/wallet/sqlite/version.rb
-    bsv/wallet/sqlite/store.rb
-    bsv/wallet/sqlite/utxo_pool.rb
-    bsv/wallet/sqlite/proof_store.rb
-    bsv/wallet/sqlite/broadcast_queue.rb
-    bsv/wallet/sqlite/broadcast_callback.rb
-    bsv/wallet/sqlite/arc_adapter.rb
-    bsv/wallet/sqlite/display_txid.rb
-    bsv/wallet/sqlite/action.rb
-    bsv/wallet/sqlite/broadcast.rb
-    bsv/wallet/sqlite/output.rb
-    bsv/wallet/sqlite/spendable.rb
-    bsv/wallet/sqlite/input.rb
-    bsv/wallet/sqlite/block.rb
-    bsv/wallet/sqlite/tx_proof.rb
-    bsv/wallet/sqlite/basket.rb
-    bsv/wallet/sqlite/label.rb
-    bsv/wallet/sqlite/action_label.rb
-    bsv/wallet/sqlite/tag.rb
-    bsv/wallet/sqlite/output_tag.rb
-    bsv/wallet/sqlite/output_basket.rb
-    bsv/wallet/sqlite/output_detail.rb
-    bsv/wallet/sqlite/certificate.rb
-    bsv/wallet/sqlite/certificate_field.rb
-    bsv/wallet/sqlite/setting.rb
-  spec/
-    spec_helper.rb
-    bsv/wallet/sqlite/
-      (mirror Postgres specs)
-```
+### Task 2: Models
 
-### Task 2: Consolidated migration
+All in `lib/bsv/wallet/models/`:
+- Action, Broadcast, Output, Spendable, Input, Block, TxProof
+- Basket, Label, ActionLabel, Tag, OutputTag
+- OutputDetail, OutputBasket, Certificate, CertificateField, Setting
+- DisplayTxid module
 
-Single `001_create_schema.rb` derived from `reference/schema.md` (the authoritative schema design), translated for SQLite. Do NOT reverse-engineer from the Postgres migrations — use the reference doc as the source of truth.
+### Task 3: Service implementations
 
-- `bytea` -> `blob`, `timestamptz` -> `datetime`, enums -> text + CHECK
-- `text[]` (competing_txs) -> text (JSON serialized)
-- `gen_random_uuid()` -> removed (handled in Ruby via `SecureRandom.uuid`)
-- `identity: :always` -> `primary_key :id`
-- Outbound spendable trigger in SQLite syntax
-- Named CHECK constraints (for spec error message matching)
-- All CHECK constraints, indexes, and FK cascades as specified in the reference doc
+- `lib/bsv/wallet/store.rb` — implements Interface::Store
+- `lib/bsv/wallet/utxo_pool.rb` — implements Interface::UTXOPool
+- `lib/bsv/wallet/proof_store.rb` — implements Interface::ProofStore
+- `lib/bsv/wallet/broadcast_queue.rb` — implements Interface::BroadcastQueue
+- `lib/bsv/wallet/broadcast_callback.rb`
+- `lib/bsv/wallet/arc_adapter.rb`
 
-### Task 3: Connect/disconnect module
+### Task 4: Gemspec and wiring
 
-`lib/bsv/wallet/sqlite.rb`:
+- Add `sequel` and `sqlite3` to `bsv-wallet.gemspec`
+- Wire up autoloads/requires in the wallet module
+- Include `db/**/*` in gem files
 
-- No PG extensions
-- `PRAGMA foreign_keys = ON` via `after_connect` proc (per-connection)
-- `PRAGMA journal_mode = WAL`
-- `Sequel::Model.db = @db`
-- Autoload declarations for all model/service classes
+### Task 5: Specs
 
-### Task 4: Port model files
+- Store, model, and service specs in `spec/bsv/wallet/`
+- Shared context for DB setup (in-memory SQLite, migrations, rollback)
+- No "sqlite" in spec names or tags
 
-Namespace rename `Postgres` -> `Sqlite` for all models. Specific changes:
+### Task 6: Verify
 
-- **`action.rb`**: Add `before_create` hook for `SecureRandom.uuid` reference default
-- **`broadcast.rb`**: `Sequel.pg_array(data[:competing_txs])` -> `JSON.generate(data[:competing_txs])`; add JSON parse on read if needed (currently write-only, low priority)
-- **All others**: Pure namespace rename
-
-### Task 5: Port service files
-
-Namespace rename for Store, UTXOPool, ProofStore, BroadcastQueue. Specific changes:
-
-- **`broadcast_queue.rb`**: `Sequel.pg_array(event[:competing_txs])` -> `event[:competing_txs]&.to_json`
-- **`store.rb`**: Verify `insert_conflict(target:)` works identically on SQLite (it does — Sequel translates to `ON CONFLICT(col) DO NOTHING`)
-- All `Sequel.blob()`, `Sequel.lit()`, `.exists` subqueries work unchanged
-
-### Task 6: Spec helper
-
-- `sqlite::memory:` connection (no external DB needed)
-- `PRAGMA foreign_keys = ON`
-- Run migrations inline
-- `DELETE` instead of `truncate(cascade: true)` for cleanup (disable FKs temporarily during suite cleanup)
-- Savepoint-based transaction rollback per example (same pattern as Postgres)
-
-### Task 7: Port spec files
-
-Namespace rename for all specs. Specific rewrites:
-
-- **`migration_spec.rb`**: Rewrite enum tests as CHECK constraint violation tests
-- **`broadcast_spec.rb`**: Rewrite `pg_array` test as JSON serialization test
-- **`constraints_spec.rb`**: Verify SQLite error classes match (may need `Sequel::ConstraintViolation` instead of subclass); verify trigger error message regex matches
-- **Other specs**: Pure namespace rename
-
-### Task 8: Verify
-
-- `cd gem/bsv-wallet-sqlite && bundle exec rspec` — full green
-- `require 'bsv-wallet-sqlite'` loads cleanly
-- `BSV::Wallet::Sqlite.connect('sqlite::memory:')` creates all tables
-
----
-
-## SQLite Gotchas to Watch
-
-1. **Boolean storage**: SQLite uses 0/1. Sequel adapter handles transparently.
-2. **Datetime storage**: Text (ISO 8601). Sequel adapter handles conversion.
-3. **BLOB comparison**: Byte-by-byte comparison works correctly for wtxid lookups.
-4. **`insert_conflict` return value**: Returns nil on DO NOTHING, same as Postgres. The `locked += 1 if result` check in `create_action` works identically.
-5. **Concurrent writes**: Serialized in SQLite. Acceptable for single-user wallet. WAL mode allows concurrent reads.
-6. **No `TRUNCATE`**: Use `DELETE FROM` for cleanup.
+- `cd gem/bsv-wallet && bundle exec rspec` — all existing + new specs green
+- Postgres specs unaffected
