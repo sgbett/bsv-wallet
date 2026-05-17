@@ -18,7 +18,7 @@ RSpec.describe BSV::Wallet::CLI do
         wif = BSV::Primitives::PrivateKey.generate.to_wif
 
         ruby_src = <<~RUBY
-          $LOAD_PATH.unshift(#{File.expand_path('../../../../lib', __dir__).inspect})
+          $LOAD_PATH.unshift(#{File.expand_path('../../lib', __dir__).inspect})
           require 'bsv-wallet'
           require 'bsv/wallet/cli'
           ctx = BSV::Wallet::CLI.boot

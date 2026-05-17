@@ -43,7 +43,7 @@ Each gem has its own Gemfile, spec_helper, and `.rspec` — specs must run from 
 
 ```bash
 # Wallet unit specs (fast, no infra)
-cd gem/bsv-wallet && bundle exec rspec spec/bsv
+cd gem/bsv-wallet && bundle exec rspec spec/bsv spec/bin
 
 # Wallet integration specs (require BSV_WALLET_WIF_ALICE/BOB + Alice funded with >= 1m sats)
 cd gem/bsv-wallet && bundle exec rspec spec/integration

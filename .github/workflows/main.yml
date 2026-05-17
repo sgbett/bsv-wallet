@@ -43,7 +43,7 @@ jobs:
         working-directory: gem/bsv-wallet
 
       - name: Run wallet specs
-        run: bundle exec rspec spec/bsv
+        run: bundle exec rspec spec/bsv spec/bin
         working-directory: gem/bsv-wallet
         env:
           COVERAGE: ${{ matrix.ruby == '3.4' && 'true' || '' }}
