@@ -43,7 +43,7 @@ jobs:
         working-directory: gem/bsv-wallet
 
       - name: Run wallet specs
-        run: bundle exec rspec --tag ~on_chain
+        run: bundle exec rspec spec/bsv
         working-directory: gem/bsv-wallet
         env:
           COVERAGE: ${{ matrix.ruby == '3.4' && 'true' || '' }}
@@ -74,8 +74,7 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    name: Integration (on-chain, no_send)
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    name: Integration (CLI porcelain pipeline)
 
     services:
       postgres:
@@ -112,11 +111,11 @@ jobs:
 
       - name: Bundle install
         run: bundle install
-        working-directory: gem/bsv-wallet-postgres
+        working-directory: gem/bsv-wallet
 
       - name: Run integration specs
-        run: bundle exec rspec --tag on_chain
-        working-directory: gem/bsv-wallet-postgres
+        run: bundle exec rspec spec/integration
+        working-directory: gem/bsv-wallet
         env:
           BSV_WALLET_WIF_ALICE: ${{ secrets.BSV_WALLET_WIF_ALICE }}
           BSV_WALLET_WIF_BOB: ${{ secrets.BSV_WALLET_WIF_BOB }}

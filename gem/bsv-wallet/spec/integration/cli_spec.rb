@@ -1,23 +1,27 @@
 # frozen_string_literal: true
 
-# On-chain CLI integration test for the postgres adapter.
+# CLI integration test for the wallet bin tools.
 #
-# Exercises the wallet gem's bin tools (create | receive | balance |
-# import) end-to-end against postgres-backed Alice/Bob wallets, with
-# real on-chain BSV transactions.
+# Exercises the porcelain pipeline (import → balance → create → receive
+# → balance) end-to-end against real wallets with real on-chain UTXOs.
+# Reads from the BSV network for UTXO discovery and merkle proof
+# verification; uses no_send throughout — nothing is broadcast.
 #
-# Environment variables (set in shell profile or CI):
-#   BSV_WALLET_WIF_ALICE/BOB  — wallet private keys
-#   DATABASE_URL_ALICE/BOB    — optional, defaults to localhost:5433
+# Required environment:
+#   BSV_WALLET_WIF_ALICE        — Alice's wallet private key (WIF)
+#   BSV_WALLET_WIF_BOB          — Bob's wallet private key (WIF)
+#   DATABASE_URL_ALICE          — Alice's database (default: postgres://...localhost:5433/bsv_wallet_alice)
+#   DATABASE_URL_BOB            — Bob's database (default: postgres://...localhost:5433/bsv_wallet_bob)
 #
-# Run:
-#   cd gem/bsv-wallet-postgres && bundle exec rspec --tag on_chain spec/integration/cli_spec.rb
+# Alice's address must hold >= 1_000_000 sats (1m sats) on chain. Top up
+# out-of-band before running for the first time; the test consumes a
+# small payment per run but uses no_send so balance shouldn't decrease.
 
 require 'open3'
 require 'sequel'
 
-RSpec.describe 'CLI porcelain: create | receive pipeline', :on_chain do # rubocop:disable RSpec/DescribeClass
-  let(:bin_dir) { File.expand_path('../../../bsv-wallet/bin', __dir__) }
+RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable RSpec/DescribeClass
+  let(:bin_dir) { File.expand_path('../../../bin', __dir__) }
   let(:bob_identity_key) do
     require 'bsv-wallet'
     pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('BSV_WALLET_WIF_BOB'))
@@ -25,6 +29,21 @@ RSpec.describe 'CLI porcelain: create | receive pipeline', :on_chain do # ruboco
   end
 
   before do
+    missing = %w[BSV_WALLET_WIF_ALICE BSV_WALLET_WIF_BOB].reject { |k| ENV.fetch(k, nil) }
+    unless missing.empty?
+      raise <<~MSG
+        Integration test setup incomplete. Missing environment variables:
+          #{missing.join("\n  ")}
+
+        Required: BSV_WALLET_WIF_ALICE, BSV_WALLET_WIF_BOB
+        Optional: DATABASE_URL_ALICE, DATABASE_URL_BOB (default to localhost:5433/bsv_wallet_alice|bob)
+
+        Alice's wallet address must hold >= 1_000_000 sats on chain
+        before this test will pass. Fund it once out-of-band — the test
+        uses no_send and shouldn't decrease the balance per run.
+      MSG
+    end
+
     # Clean slate — other specs may have used these databases
     %w[DATABASE_URL_ALICE DATABASE_URL_BOB].each do |env_key|
       url = ENV.fetch(env_key, "postgres://postgres:postgres@localhost:5433/bsv_wallet_#{env_key.split('_').last.downcase}")

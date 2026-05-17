@@ -19,7 +19,6 @@ RSpec.configure do |config|
 
   config.shared_context_metadata_behavior = :apply_to_host_groups
   config.filter_run_when_matching :focus
-  config.filter_run_excluding on_chain: true
   config.disable_monkey_patching!
   config.order = :random
   Kernel.srand config.seed
