@@ -3,25 +3,30 @@
 # CLI integration test for the wallet bin tools.
 #
 # Exercises the porcelain pipeline (import → balance → create → receive
-# → balance) end-to-end against real wallets with real on-chain UTXOs.
+# → balance) end-to-end against SQLite-backed Alice/Bob wallets with
+# real on-chain UTXOs.
+#
 # Reads from the BSV network for UTXO discovery and merkle proof
 # verification; uses no_send throughout — nothing is broadcast.
 #
 # Required environment:
-#   BSV_WALLET_WIF_ALICE        — Alice's wallet private key (WIF)
-#   BSV_WALLET_WIF_BOB          — Bob's wallet private key (WIF)
-#   DATABASE_URL_ALICE          — Alice's database (default: postgres://...localhost:5433/bsv_wallet_alice)
-#   DATABASE_URL_BOB            — Bob's database (default: postgres://...localhost:5433/bsv_wallet_bob)
+#   BSV_WALLET_WIF_ALICE  — Alice's wallet private key (WIF)
+#   BSV_WALLET_WIF_BOB    — Bob's wallet private key (WIF)
 #
-# Alice's address must hold >= 1_000_000 sats (1m sats) on chain. Top up
-# out-of-band before running for the first time; the test consumes a
-# small payment per run but uses no_send so balance shouldn't decrease.
+# Alice's address must hold >= 1_000_000 sats on chain. Top up
+# out-of-band before running for the first time; the test uses no_send
+# so balance shouldn't decrease.
 
 require 'open3'
-require 'sequel'
+require 'tmpdir'
+require 'fileutils'
+require 'securerandom'
 
 RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable RSpec/DescribeClass
   let(:bin_dir) { File.expand_path('../../../bin', __dir__) }
+  let(:tmpdir)   { Dir.mktmpdir("bsv_wallet_integration_#{SecureRandom.hex(4)}_") }
+  let(:alice_db) { File.join(tmpdir, 'alice.db') }
+  let(:bob_db)   { File.join(tmpdir, 'bob.db') }
   let(:bob_identity_key) do
     require 'bsv-wallet'
     pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('BSV_WALLET_WIF_BOB'))
@@ -36,26 +41,25 @@ RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable R
           #{missing.join("\n  ")}
 
         Required: BSV_WALLET_WIF_ALICE, BSV_WALLET_WIF_BOB
-        Optional: DATABASE_URL_ALICE, DATABASE_URL_BOB (default to localhost:5433/bsv_wallet_alice|bob)
 
         Alice's wallet address must hold >= 1_000_000 sats on chain
         before this test will pass. Fund it once out-of-band — the test
         uses no_send and shouldn't decrease the balance per run.
       MSG
     end
+  end
 
-    # Clean slate — other specs may have used these databases
-    %w[DATABASE_URL_ALICE DATABASE_URL_BOB].each do |env_key|
-      url = ENV.fetch(env_key, "postgres://postgres:postgres@localhost:5433/bsv_wallet_#{env_key.split('_').last.downcase}")
-      db = Sequel.connect(url)
-      db.tables.each { |t| db[t].truncate(cascade: true) unless t == :schema_info }
-      db.disconnect
-    end
+  after do
+    FileUtils.rm_rf(tmpdir) if File.directory?(tmpdir)
   end
 
   def run_cli(tool, *args, stdin_data: nil)
     cmd = [File.join(bin_dir, tool)] + args
-    stdout, stderr, status = Open3.capture3({}, *cmd, stdin_data: stdin_data, binmode: true)
+    env = {
+      'DATABASE_URL_ALICE' => "sqlite://#{alice_db}",
+      'DATABASE_URL_BOB' => "sqlite://#{bob_db}"
+    }
+    stdout, stderr, status = Open3.capture3(env, *cmd, stdin_data: stdin_data, binmode: true)
     unless status.success?
       warn "  [#{tool}] failed (exit #{status.exitstatus}):"
       warn stderr.gsub(/^/, '    ')
