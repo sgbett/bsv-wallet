@@ -14,13 +14,8 @@ unless defined?(STORE_DB)
     require 'bsv-wallet-postgres'
     url = ENV.fetch('DATABASE_URL', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_test')
     STORE_DB = Sequel.connect(url)
-    STORE_DB.extension :pg_enum
-    STORE_DB.extension :pg_array
-    STORE_DB.extension :pg_json
-    Sequel.extension :migration
-    migrations_path = File.expand_path('../../../../../bsv-wallet-postgres/db/migrations', __dir__)
-    Sequel::Migrator.run(STORE_DB, migrations_path)
     BSV::Wallet::Postgres::Store::Connection.connect(STORE_DB)
+    BSV::Wallet::Postgres::Store::Connection.migrate!
     BSV::Wallet::Postgres::Store::Connection.bind_models!
     STORE_BACKEND = BSV::Wallet::Postgres::Store
   else
@@ -36,6 +31,12 @@ unless defined?(STORE_DB)
 end
 
 RSpec.shared_context 'store setup' do
+  before do
+    if STORE_BACKEND != BSV::Wallet::Store
+      skip 'SQLite-only spec (BSV_WALLET_BACKEND is set to a different backend)'
+    end
+  end
+
   let(:db) { STORE_DB }
   let(:store) { BSV::Wallet::Store::SQLite.new(db: db) }
 
