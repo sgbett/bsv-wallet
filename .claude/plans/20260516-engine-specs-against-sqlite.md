@@ -81,6 +81,8 @@ cd gem/bsv-wallet && bundle exec rubocop
 - **No Postgres references in the wallet gem's spec tree.** The bsv-wallet-postgres gem has its own spec suite covering its concerns.
 - **No "canary" step.** The wallet gem is a self-contained library; CI for it tests what it ships.
 
+**Follow-up:** A separate issue will add a CI backend matrix so engine specs run against both SQLite and Postgres, confirming the Store contract holds across implementations. That work also covers moving pg/bsv-wallet-postgres to an optional Bundler group.
+
 ## Sequencing
 
 1. #116 — Default SQLite store ✅
