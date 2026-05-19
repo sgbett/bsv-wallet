@@ -23,7 +23,7 @@ require 'fileutils'
 require 'securerandom'
 
 RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable RSpec/DescribeClass
-  let(:bin_dir) { File.expand_path('../../../bin', __dir__) }
+  let(:bin_dir) { File.expand_path('../../bin', __dir__) }
   let(:tmpdir)   { Dir.mktmpdir("bsv_wallet_integration_#{SecureRandom.hex(4)}_") }
   let(:alice_db) { File.join(tmpdir, 'alice.db') }
   let(:bob_db)   { File.join(tmpdir, 'bob.db') }
