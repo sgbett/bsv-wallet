@@ -10,7 +10,7 @@ require 'open3'
 require 'json'
 
 RSpec.describe 'Porcelain CLI tools' do # rubocop:disable RSpec/DescribeClass
-  let(:bin_dir) { File.expand_path('../../../../bin', __dir__) }
+  let(:bin_dir) { File.expand_path('../../bin', __dir__) }
   let(:valid_identity_key) { "02#{'ab' * 32}" }
   let(:invalid_prefix_key) { "04#{'ab' * 32}" }
 

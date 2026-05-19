@@ -15,7 +15,8 @@ group :development, :test do
   gem 'yard'
   gem 'yard-markdown'
 
-  # Integration testing — engine specs need a real Store
+  # CLI.pick_backend needs the postgres adapter loadable so it can
+  # resolve postgres:// DATABASE_URLs. Wallet-gem specs are SQLite-only.
   gem 'bsv-wallet-postgres', path: '../bsv-wallet-postgres'
   gem 'pg'
   gem 'sequel', '~> 5.0'

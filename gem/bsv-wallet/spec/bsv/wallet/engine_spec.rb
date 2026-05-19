@@ -7,7 +7,7 @@
 
 require_relative 'engine/shared_context'
 
-RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
+RSpec.describe BSV::Wallet::Engine do
   include_context 'engine setup'
 
   describe 'construction' do
@@ -165,7 +165,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         end
         svc
       end
-      let(:broadcast_queue) { BSV::Wallet::Postgres::Store::BroadcastQueue.new(services: services) }
+      let(:broadcast_queue) { BSV::Wallet::Store::BroadcastQueue.new(services: services) }
 
       it 'broadcasts inline and promotes on acceptance' do
         result = engine.create_action(
@@ -481,7 +481,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
         action = store.find_action(reference: reference)
 
         # Delete the action directly (simulating reaper)
-        BSV::Wallet::Postgres::Store::Action.where(id: action[:id]).delete
+        BSV::Wallet::Store::Action.where(id: action[:id]).delete
 
         # Spendable entries are gone (cascade)
         listed_after = engine.list_outputs(basket: 'cascade_test')
@@ -801,7 +801,7 @@ RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do
       expect(action).not_to be_nil
 
       # Query the underlying record to check tx_proof_id
-      action_record = BSV::Wallet::Postgres::Store::Action.first(
+      action_record = BSV::Wallet::Store::Action.first(
         wtxid: Sequel.blob(subject_wtxid)
       )
       expect(action_record.tx_proof_id).to eq(proof[:id])

@@ -4,7 +4,7 @@
 
 require_relative 'shared_context'
 
-RSpec.describe BSV::Wallet::Engine, if: POSTGRES_AVAILABLE do # rubocop:disable RSpec/SpecFilePathFormat
+RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   include_context 'engine setup'
 
   # Pre-fund the wbikd basket so generate_receive_address finds a slot
