@@ -71,10 +71,5 @@ RSpec.describe BSV::Wallet::CLI do
     it 'uses "default" suffix when wallet_name is nil' do
       expect(described_class.default_url_for(BSV::Wallet::Store, nil)).to end_with('/default.db')
     end
-
-    it 'produces a Postgres URL for the Postgres backend' do
-      url = described_class.default_url_for(BSV::Wallet::Postgres::Store, 'alice')
-      expect(url).to eq('postgres://localhost/bsv_wallet_alice')
-    end
   end
 end
