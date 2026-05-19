@@ -4,11 +4,9 @@ require 'securerandom'
 
 # Shared setup for engine specs.
 #
-# The engine spec suite runs against the default wallet store (SQLite).
-# It piggybacks on the wallet gem's store shared_context for db
-# connection, schema migration, and model binding — both sets of specs
-# touch BSV::Wallet::Store::* models, so they must share the same
-# Sequel::Database instance.
+# Runs against SQLite by default; set BSV_WALLET_BACKEND=postgres to
+# run against Postgres instead. The store shared_context handles
+# connection setup and exposes STORE_DB and STORE_BACKEND.
 #
 # Usage:
 #   RSpec.describe BSV::Wallet::Engine do
@@ -40,7 +38,7 @@ RSpec.shared_context 'engine setup' do
     )
   end
 
-  let(:engine_services) { BSV::Wallet::Store.bootstrap(db: STORE_DB) }
+  let(:engine_services) { STORE_BACKEND.bootstrap(db: STORE_DB) }
   let(:store) { engine_services[:store] }
   let(:utxo_pool) { engine_services[:utxo_pool] }
   let(:proof_store) { engine_services[:proof_store] }

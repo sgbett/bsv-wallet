@@ -1,20 +1,38 @@
 # frozen_string_literal: true
 
-# Shared database setup for default store specs.
+# Shared database setup for store and engine specs.
+#
+# Backend selection: set BSV_WALLET_BACKEND=postgres to run against
+# Postgres instead of the default in-memory SQLite. Postgres requires
+# DATABASE_URL (defaults to localhost:5433/bsv_wallet_test).
 
 require 'securerandom'
 require 'sequel'
 
 unless defined?(STORE_DB)
-  STORE_DB = Sequel.sqlite
-  STORE_DB.run('PRAGMA foreign_keys = ON')
-
-  Sequel.extension :migration
-  migrations_path = File.expand_path('../../../../db/migrations', __dir__)
-  Sequel::Migrator.run(STORE_DB, migrations_path)
-
-  BSV::Wallet::Store::Connection.connect(STORE_DB)
-  BSV::Wallet::Store::Connection.bind_models!
+  if ENV['BSV_WALLET_BACKEND'] == 'postgres'
+    require 'bsv-wallet-postgres'
+    url = ENV.fetch('DATABASE_URL', 'postgres://postgres:postgres@localhost:5433/bsv_wallet_test')
+    STORE_DB = Sequel.connect(url)
+    STORE_DB.extension :pg_enum
+    STORE_DB.extension :pg_array
+    STORE_DB.extension :pg_json
+    Sequel.extension :migration
+    migrations_path = File.expand_path('../../../../../bsv-wallet-postgres/db/migrations', __dir__)
+    Sequel::Migrator.run(STORE_DB, migrations_path)
+    BSV::Wallet::Postgres::Store::Connection.connect(STORE_DB)
+    BSV::Wallet::Postgres::Store::Connection.bind_models!
+    STORE_BACKEND = BSV::Wallet::Postgres::Store
+  else
+    STORE_DB = Sequel.sqlite
+    STORE_DB.run('PRAGMA foreign_keys = ON')
+    Sequel.extension :migration
+    migrations_path = File.expand_path('../../../../db/migrations', __dir__)
+    Sequel::Migrator.run(STORE_DB, migrations_path)
+    BSV::Wallet::Store::Connection.connect(STORE_DB)
+    BSV::Wallet::Store::Connection.bind_models!
+    STORE_BACKEND = BSV::Wallet::Store
+  end
 end
 
 RSpec.shared_context 'store setup' do
@@ -69,13 +87,13 @@ RSpec.configure do |config|
   config.before(:suite) do
     next unless defined?(STORE_DB)
 
-    STORE_DB.run('PRAGMA foreign_keys = OFF')
-    STORE_DB.tables.each do |table|
-      next if table == :schema_info
-
-      STORE_DB[table].delete
+    if STORE_BACKEND == BSV::Wallet::Store
+      STORE_DB.run('PRAGMA foreign_keys = OFF')
+      STORE_DB.tables.each { |t| STORE_DB[t].delete unless t == :schema_info }
+      STORE_DB.run('PRAGMA foreign_keys = ON')
+    else
+      STORE_DB.tables.each { |t| STORE_DB[t].truncate(cascade: true) unless t == :schema_info }
     end
-    STORE_DB.run('PRAGMA foreign_keys = ON')
   end
 
   config.around(:each, :store) do |example|

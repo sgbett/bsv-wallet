@@ -43,10 +43,17 @@ jobs:
         working-directory: gem/bsv-wallet
 
       - name: Run wallet specs
-        run: bundle exec rspec spec/bsv spec/bin
+        run: bundle exec rspec
         working-directory: gem/bsv-wallet
         env:
           COVERAGE: ${{ matrix.ruby == '3.4' && 'true' || '' }}
+
+      - name: Run wallet engine specs (Postgres)
+        run: bundle exec rspec spec/bsv/wallet/engine
+        working-directory: gem/bsv-wallet
+        env:
+          BSV_WALLET_BACKEND: postgres
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/bsv_wallet_test
 
       - name: Bundle install (postgres)
         run: bundle install
