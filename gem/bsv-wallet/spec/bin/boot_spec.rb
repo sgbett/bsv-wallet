@@ -46,6 +46,14 @@ RSpec.describe BSV::Wallet::CLI do
       expect(described_class.pick_backend('sqlite:///tmp/x.db')).to eq(BSV::Wallet::Store)
     end
 
+    it 'returns BSV::Wallet::Postgres::Store for postgres:// URLs' do
+      expect(described_class.pick_backend('postgres://localhost/test')).to eq(BSV::Wallet::Postgres::Store)
+    end
+
+    it 'returns BSV::Wallet::Postgres::Store for postgresql:// URLs' do
+      expect(described_class.pick_backend('postgresql://localhost/test')).to eq(BSV::Wallet::Postgres::Store)
+    end
+
     it 'returns a module that exposes Connection and bootstrap' do
       backend = described_class.pick_backend('sqlite:///tmp/x.db')
       expect(backend).to respond_to(:bootstrap)
@@ -62,6 +70,11 @@ RSpec.describe BSV::Wallet::CLI do
 
     it 'uses "default" suffix when wallet_name is nil' do
       expect(described_class.default_url_for(BSV::Wallet::Store, nil)).to end_with('/default.db')
+    end
+
+    it 'produces a Postgres URL for the Postgres backend' do
+      url = described_class.default_url_for(BSV::Wallet::Postgres::Store, 'alice')
+      expect(url).to eq('postgres://localhost/bsv_wallet_alice')
     end
   end
 end

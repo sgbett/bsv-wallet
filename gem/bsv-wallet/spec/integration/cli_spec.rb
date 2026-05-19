@@ -34,19 +34,8 @@ RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable R
   end
 
   before do
-    missing = %w[BSV_WALLET_WIF_ALICE BSV_WALLET_WIF_BOB].reject { |k| ENV.fetch(k, nil) }
-    unless missing.empty?
-      raise <<~MSG
-        Integration test setup incomplete. Missing environment variables:
-          #{missing.join("\n  ")}
-
-        Required: BSV_WALLET_WIF_ALICE, BSV_WALLET_WIF_BOB
-
-        Alice's wallet address must hold >= 1_000_000 sats on chain
-        before this test will pass. Fund it once out-of-band — the test
-        uses no_send and shouldn't decrease the balance per run.
-      MSG
-    end
+    missing = %w[BSV_WALLET_WIF_ALICE BSV_WALLET_WIF_BOB].reject { |k| ENV[k].to_s.strip.length.positive? }
+    skip "Missing env: #{missing.join(', ')}" unless missing.empty?
   end
 
   after do

@@ -73,6 +73,7 @@ jobs:
         working-directory: gem/bsv-wallet
 
   integration:
+    if: github.event_name == 'push' || !github.event.pull_request.head.repo.fork
     runs-on: ubuntu-latest
     name: Integration (CLI porcelain pipeline)
 

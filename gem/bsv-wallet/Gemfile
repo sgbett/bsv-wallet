@@ -15,8 +15,8 @@ group :development, :test do
   gem 'yard'
   gem 'yard-markdown'
 
-  # On-chain integration test runs against the postgres adapter gem.
-  # Wallet-gem unit/spec runs are SQLite-only and do not need this.
+  # CLI.pick_backend needs the postgres adapter loadable so it can
+  # resolve postgres:// DATABASE_URLs. Wallet-gem specs are SQLite-only.
   gem 'bsv-wallet-postgres', path: '../bsv-wallet-postgres'
   gem 'pg'
   gem 'sequel', '~> 5.0'
