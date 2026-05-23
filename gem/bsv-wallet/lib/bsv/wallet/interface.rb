@@ -11,6 +11,7 @@ module BSV
       autoload :BroadcastQueue, 'bsv/wallet/interface/broadcast_queue'
       autoload :UTXOPool,       'bsv/wallet/interface/utxo_pool'
       autoload :ProofStore,     'bsv/wallet/interface/proof_store'
+      autoload :Scheduler,      'bsv/wallet/interface/scheduler'
     end
   end
 end
