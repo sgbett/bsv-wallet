@@ -346,6 +346,39 @@ module BSV
         models::Certificate.where(type: type, serial_number: serial_number, certifier: certifier).delete
       end
 
+      # --- Proofs ---
+
+      def save_proof(wtxid:, proof:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'save_proof wtxid')
+        BSV.logger&.debug { "[Store] save_proof: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{proof[:height]}" }
+
+        @db.transaction do
+          block_id = find_or_create_block(proof) if proof[:height]
+
+          existing = models::TxProof.first(wtxid: Sequel.blob(wtxid))
+          cols = proof_columns(proof).merge(block_id ? { block_id: block_id } : {})
+          if existing
+            existing.update(cols)
+            existing.id
+          else
+            models::TxProof.create({ wtxid: wtxid }.merge(cols)).id
+          end
+        end
+      end
+
+      def find_proof(wtxid:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'find_proof wtxid')
+        record = models::TxProof.first(wtxid: Sequel.blob(wtxid))
+        return unless record
+
+        proof_to_hash(record)
+      end
+
+      def proof_exists?(wtxid:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'proof_exists? wtxid')
+        models::TxProof.where(wtxid: Sequel.blob(wtxid)).any?
+      end
+
       # --- Settings ---
 
       def get_setting(key:)
@@ -486,6 +519,49 @@ module BSV
 
       def models
         BSV::Wallet::Store::Models
+      end
+
+      def proof_columns(proof)
+        cols = {}
+        cols[:block_index] = proof[:block_index] if proof.key?(:block_index)
+        cols[:merkle_path] = proof[:merkle_path] ? Sequel.blob(proof[:merkle_path]) : nil if proof.key?(:merkle_path)
+        cols[:raw_tx]      = proof[:raw_tx]      ? Sequel.blob(proof[:raw_tx]) : nil      if proof.key?(:raw_tx)
+        cols
+      end
+
+      def proof_to_hash(record)
+        block = record.block
+        {
+          id: record.id, wtxid: record.wtxid, block_id: record.block_id,
+          height: block&.height, block_index: record.block_index,
+          merkle_path: record.merkle_path, raw_tx: record.raw_tx,
+          block_hash: block&.block_hash, merkle_root: block&.merkle_root
+        }
+      end
+
+      def find_or_create_block(proof)
+        height = proof[:height]
+        return unless height
+
+        existing = models::Block.first(height: height)
+        return existing.id if existing
+
+        merkle_root = proof[:merkle_root] || derive_merkle_root(proof[:merkle_path])
+        return unless merkle_root
+
+        models::Block.create(height: height, merkle_root: merkle_root, block_hash: proof[:block_hash]).id
+      rescue Sequel::UniqueConstraintViolation
+        models::Block.first!(height: height).id
+      end
+
+      def derive_merkle_root(merkle_path_binary)
+        return unless merkle_path_binary
+
+        paths = BSV::Transaction::MerklePath.from_binary(merkle_path_binary)
+        mp = paths.is_a?(Array) ? paths.first : paths
+        mp&.compute_root
+      rescue StandardError
+        nil
       end
 
       def bind_models!
