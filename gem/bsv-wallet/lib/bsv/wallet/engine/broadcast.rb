@@ -60,7 +60,7 @@ module BSV
           self
         end
 
-        # Process a single broadcast -- look up action, call ARC, record result.
+        # Process a single action -- submit if not yet broadcast, poll status if already broadcast.
         #
         # Emits exactly one task.dispatched on entry, then exactly one of
         # task.succeeded / task.failed / task.aborted / task.skipped.
@@ -78,6 +78,24 @@ module BSV
             return
           end
 
+          status = @store.broadcast_status(action_id: action_id)
+
+          if status && status[:broadcast_at]
+            poll_status(action_id, action)
+          else
+            submit(action_id, action, started_at)
+          end
+        end
+
+        # Discovery query -- returns action IDs needing broadcast.
+        def self.pending(store, limit: 10)
+          store.pending_broadcasts(limit: limit).map { |b| b[:action_id] }
+        end
+
+        private
+
+        # Initial broadcast -- submit raw_tx to ARC.
+        def submit(action_id, action, started_at)
           response = @services.call(:broadcast, action[:raw_tx])
           latency_ms = ((Time.now - started_at) * 1000).round
 
@@ -116,12 +134,29 @@ module BSV
           @store.broadcast_status(action_id: action_id)
         end
 
-        # Discovery query -- returns action IDs needing broadcast.
-        def self.pending(store, limit: 10)
-          store.pending_broadcasts(limit: limit).map { |b| b[:action_id] }
-        end
+        # Status poll -- query ARC for current tx status.
+        def poll_status(action_id, action)
+          return @store.broadcast_status(action_id: action_id) unless action[:wtxid]
 
-        private
+          dtxid = action[:wtxid].reverse.unpack1('H*')
+          response = @services.call(:get_tx_status, txid: dtxid)
+          if response.http_success?
+            @store.record_broadcast_result(
+              action_id: action_id,
+              tx_status: response.data[:tx_status],
+              arc_status: response.data[:status],
+              block_hash: response.data[:block_hash],
+              block_height: response.data[:block_height],
+              merkle_path: response.data[:merkle_path],
+              extra_info: response.data[:extra_info],
+              competing_txs: response.data[:competing_txs]
+            )
+          else
+            BSV.logger&.warn { "[Engine::Broadcast] poll failed for action #{action_id}: #{response.error_message}" }
+          end
+
+          @store.broadcast_status(action_id: action_id)
+        end
 
         # Categorize a successful ARC txStatus into an outcome bucket.
         def categorize_outcome(tx_status)
