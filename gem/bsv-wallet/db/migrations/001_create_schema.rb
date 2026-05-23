@@ -1,148 +1,136 @@
 # frozen_string_literal: true
 
-# Default wallet schema — derived from reference/schema.md.
-# All tables, constraints, indexes, and triggers in a single migration.
+# Original Postgres schema with SQLite compatibility guards.
+#
+# Guard convention:
+#   postgres = database_type == :postgres
+#   c[:type]  — column type map (Postgres-native, SQLite equivalent)
+#   Two-line PK: Postgres BIGINT IDENTITY, SQLite autoincrement
 
 Sequel.migration do
   up do
+    postgres = database_type == :postgres
+
+    c = {}
+    c[:bytea] = postgres ? :bytea : :blob
+    c[:timestamptz] = postgres ? :timestamptz : :datetime
+    c[:broadcast_intent] = postgres ? :broadcast_intent : :text
+    c[:now] = postgres ? Sequel.function(:now) : Sequel::CURRENT_TIMESTAMP
+
+    if postgres
+      extension :pg_enum
+      create_enum(:broadcast_intent, %w[delayed inline none])
+    end
+
     # 1. blocks — known block headers (chain tracker's local view)
     create_table(:blocks) do
-      primary_key :id
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
       column :height, :integer, null: false, unique: true
-      column :merkle_root, :blob, null: false
-      column :block_hash, :blob
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-
-      constraint(:height_range) { height >= 0 }
-      constraint(:merkle_root_length) { length(merkle_root) =~ 32 }
-      constraint(:block_hash_length, 'block_hash IS NULL OR length(block_hash) = 32')
+      column :merkle_root, c[:bytea], null: false
+      column :block_hash, c[:bytea]
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
     end
 
     # 2. tx_proofs — merkle inclusion proofs (settlement evidence)
     create_table(:tx_proofs) do
-      primary_key :id
-      column :wtxid, :blob, null: false, unique: true
-      foreign_key :block_id, :blocks
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      column :wtxid, c[:bytea], null: false, unique: true
+      foreign_key :block_id, :blocks, type: :bigint
       column :block_index, :integer
-      column :merkle_path, :blob
-      column :raw_tx, :blob, null: false
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-
-      constraint(:wtxid_length) { length(wtxid) =~ 32 }
-      constraint(:raw_tx_min_length) { length(raw_tx) >= 20 }
+      column :merkle_path, c[:bytea]
+      column :raw_tx, c[:bytea]
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
     end
 
     # 3. actions — transaction lifecycle
     create_table(:actions) do
-      primary_key :id
-      foreign_key :tx_proof_id, :tx_proofs
-      column :wtxid, :blob, unique: true
-      column :reference, :text, null: false, unique: true
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :tx_proof_id, :tx_proofs, type: :bigint
+      column :wtxid, c[:bytea]
+      if postgres
+        column :reference, :text, unique: true, default: Sequel.function(:gen_random_uuid)
+      else
+        column :reference, :text, unique: true
+      end
       column :outgoing, :boolean, null: false, default: true
-      column :description, :text, null: false
+      column :satoshis, :bigint
+      column :description, :text
       column :version, :integer
-      column :nlocktime, :integer
-      column :broadcast, :text, null: false, default: 'delayed'
-      column :raw_tx, :blob
-      column :input_beef, :blob
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :nlocktime, :bigint
+      column :broadcast, c[:broadcast_intent], null: false, default: 'delayed'
+      column :raw_tx, c[:bytea]
+      column :input_beef, c[:bytea]
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
+      index :wtxid, unique: true, where: Sequel.lit('wtxid IS NOT NULL')
       index :broadcast
-
-      constraint(:wtxid_length, 'wtxid IS NULL OR length(wtxid) = 32')
-      constraint(:description_length, 'length(description) BETWEEN 5 AND 50')
-      constraint(:nlocktime_range, 'NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)')
-      constraint(:wtxid_raw_tx_parity, '(wtxid IS NULL) = (raw_tx IS NULL)')
-      constraint(:broadcast_values, "broadcast IN ('delayed', 'inline', 'none')")
     end
 
     # 4. broadcasts — ARC lifecycle
     create_table(:broadcasts) do
-      primary_key :id
-      foreign_key :action_id, :actions, null: false, unique: true
-      column :broadcast_at, :datetime
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :action_id, :actions, type: :bigint, null: false, unique: true
+      column :broadcast_at, c[:timestamptz]
       column :tx_status, :text
       column :arc_status, :integer
-      column :block_hash, :blob
+      column :block_hash, c[:bytea]
       column :block_height, :integer
-      column :merkle_path, :blob
+      column :merkle_path, c[:bytea]
       column :extra_info, :text
-      column :competing_txs, :text
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-
-      constraint(:block_hash_length, 'block_hash IS NULL OR length(block_hash) = 32')
-      constraint(:block_height_range, 'block_height IS NULL OR block_height >= 0')
+      column :competing_txs, postgres ? 'text[]' : :text
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
     end
 
     # 5. baskets — output grouping with replenishment policy
     create_table(:baskets) do
-      primary_key :id
-      column :name, :text, null: false, unique: true
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      column :name, :text, null: false
       column :target_count, :integer
       column :target_value, :integer
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
+      column :deleted_at, c[:timestamptz]
 
-      constraint(:name_length, 'length(name) BETWEEN 1 AND 300')
-      constraint(:name_not_default, "name != 'default'")
-      constraint(:target_count_range, 'target_count IS NULL OR target_count >= 0')
-      constraint(:target_value_range, 'target_value IS NULL OR target_value >= 0')
+      index :name, unique: true, where: Sequel.lit('deleted_at IS NULL')
     end
 
     # 6. outputs — immutable append-only log
     create_table(:outputs) do
-      primary_key :id
-      foreign_key :action_id, :actions, on_delete: :set_null
-      column :satoshis, :integer, null: false
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :locking_script, :blob, null: false
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :action_id, :actions, type: :bigint, null: false
+      column :satoshis, :bigint, null: false
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :locking_script, c[:bytea]
       column :vout, :integer, null: false
-      column :output_type, :text
+      column :sender_identity_key, :text
       column :derivation_prefix, :text
       column :derivation_suffix, :text
-      column :sender_identity_key, :text
 
       unique %i[action_id vout]
-
-      constraint(:satoshis_range) { satoshis >= 0 }
-      constraint(:vout_range) { vout >= 0 }
-      constraint(:locking_script_min) { length(locking_script) >= 1 }
-      constraint(:output_type_values, "output_type IS NULL OR output_type IN ('root', 'outbound')")
-      constraint(:typed_no_prefix, 'output_type IS NULL OR derivation_prefix IS NULL')
-      constraint(:typed_no_suffix, 'output_type IS NULL OR derivation_suffix IS NULL')
-      constraint(:typed_no_sender, 'output_type IS NULL OR sender_identity_key IS NULL')
-      constraint(:derived_needs_prefix, 'output_type IS NOT NULL OR derivation_prefix IS NOT NULL')
-      constraint(:derived_needs_suffix, 'output_type IS NOT NULL OR derivation_suffix IS NOT NULL')
-      constraint(:derived_needs_sender, 'output_type IS NOT NULL OR sender_identity_key IS NOT NULL')
     end
 
-    # 7. spendable — the UTXO set (pure set membership)
+    # 7. spendable — the UTXO set
     create_table(:spendable) do
-      primary_key :id
-      foreign_key :output_id, :outputs, null: false, unique: true
-      foreign_key :action_id, :actions, null: false, on_delete: :cascade
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :output_id, :outputs, type: :bigint, null: false, unique: true
     end
-
-    # Trigger: outbound outputs must never have a spendable row
-    run <<~SQL
-      CREATE TRIGGER check_outbound_spendable
-        BEFORE INSERT ON spendable
-        FOR EACH ROW
-        WHEN (SELECT output_type FROM outputs WHERE id = NEW.output_id) = 'outbound'
-      BEGIN
-        SELECT RAISE(ABORT, 'spendable row forbidden for outbound output');
-      END;
-    SQL
 
     # 8. output_details — display and application metadata
     create_table(:output_details) do
-      primary_key :id
-      foreign_key :output_id, :outputs, null: false, unique: true
-      foreign_key :action_id, :actions, null: false, on_delete: :cascade
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :output_id, :outputs, type: :bigint, null: false, unique: true
       column :change, :boolean, null: false, default: false
       column :type, :text
       column :purpose, :text
@@ -155,51 +143,53 @@ Sequel.migration do
 
     # 9. output_baskets — basket membership
     create_table(:output_baskets) do
-      primary_key :id
-      foreign_key :output_id, :outputs, null: false, unique: true
-      foreign_key :action_id, :actions, null: false, on_delete: :cascade
-      foreign_key :basket_id, :baskets, null: false
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :output_id, :outputs, type: :bigint, null: false, unique: true
+      foreign_key :basket_id, :baskets, type: :bigint, null: false
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       index :basket_id
     end
 
     # 10. inputs — structural lock mechanism
     create_table(:inputs) do
-      primary_key :id
-      foreign_key :action_id, :actions, null: false, on_delete: :cascade
-      foreign_key :output_id, :outputs, null: false
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
+      foreign_key :output_id, :outputs, type: :bigint, null: false
       column :vin, :integer, null: false
-      column :nsequence, :integer, null: false, default: 4_294_967_295
+      column :nsequence, :bigint, null: false, default: 4_294_967_295
       column :description, :text
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       unique :output_id
       unique %i[action_id vin]
-
-      constraint(:vin_range) { vin >= 0 }
-      constraint(:nsequence_range, 'nsequence BETWEEN 0 AND 4294967295')
     end
 
     # 11. labels — label definitions
     create_table(:labels) do
-      primary_key :id
-      column :label, :text, null: false, unique: true
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      column :label, :text, null: false
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
+      column :deleted_at, c[:timestamptz]
 
-      constraint(:label_length, 'length(label) BETWEEN 1 AND 300')
+      index :label, unique: true, where: Sequel.lit('deleted_at IS NULL')
     end
 
     # 12. action_labels — join table
     create_table(:action_labels) do
-      primary_key :id
-      foreign_key :action_id, :actions, null: false, on_delete: :cascade
-      foreign_key :label_id, :labels, null: false
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :action_id, :actions, type: :bigint, null: false
+      foreign_key :label_id, :labels, type: :bigint, null: false
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
+      column :deleted_at, c[:timestamptz]
 
       unique %i[action_id label_id]
       index :label_id
@@ -207,21 +197,25 @@ Sequel.migration do
 
     # 13. tags — tag definitions
     create_table(:tags) do
-      primary_key :id
-      column :tag, :text, null: false, unique: true
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      column :tag, :text, null: false
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
+      column :deleted_at, c[:timestamptz]
 
-      constraint(:tag_length, 'length(tag) BETWEEN 1 AND 300')
+      index :tag, unique: true, where: Sequel.lit('deleted_at IS NULL')
     end
 
     # 14. output_tags — join table
     create_table(:output_tags) do
-      primary_key :id
-      foreign_key :output_id, :outputs, null: false
-      foreign_key :tag_id, :tags, null: false
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :output_id, :outputs, type: :bigint, null: false
+      foreign_key :tag_id, :tags, type: :bigint, null: false
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
+      column :deleted_at, c[:timestamptz]
 
       unique %i[output_id tag_id]
       index :tag_id
@@ -229,7 +223,8 @@ Sequel.migration do
 
     # 15. certificates — identity certificates (BRC-52)
     create_table(:certificates) do
-      primary_key :id
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
       column :type, :text, null: false
       column :subject, :text
       column :serial_number, :text, null: false
@@ -237,8 +232,9 @@ Sequel.migration do
       column :verifier, :text
       column :revocation_outpoint, :text
       column :signature, :text
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
+      column :deleted_at, c[:timestamptz]
 
       unique %i[type serial_number certifier]
       index :certifier
@@ -247,31 +243,60 @@ Sequel.migration do
 
     # 16. certificate_fields — per-field encryption for selective revelation
     create_table(:certificate_fields) do
-      primary_key :id
-      foreign_key :certificate_id, :certificates, null: false, on_delete: :cascade
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :certificate_id, :certificates, type: :bigint, null: false, on_delete: :cascade
       column :name, :text, null: false
       column :value, :text
       column :master_key, :text
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       unique %i[certificate_id name]
     end
 
-    # 17. settings — key-value wallet configuration
+    # 17. tx_reqs — proof-harvesting work queue
+    create_table(:tx_reqs) do
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :tx_proof_id, :tx_proofs, type: :bigint
+      column :wtxid, c[:bytea], null: false, unique: true
+      column :status, :text, null: false, default: 'unmined'
+      column :attempts, :integer, null: false, default: 0
+      column :notified, :boolean, null: false, default: false
+      column :history, :text
+      column :notify, :text
+      column :batch, :text
+      column :raw_tx, c[:bytea]
+      column :input_beef, c[:bytea]
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
+
+      index :status
+    end
+
+    # 18. settings — key-value wallet configuration
     create_table(:settings) do
-      primary_key :id
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
       column :key, :text, null: false, unique: true
       column :value, :text
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
     end
   end
 
   down do
-    drop_table :settings, :certificate_fields, :certificates,
+    postgres = database_type == :postgres
+
+    drop_table :settings, :tx_reqs, :certificate_fields, :certificates,
                :output_tags, :tags, :action_labels, :labels, :inputs,
                :output_baskets, :output_details, :spendable, :outputs,
                :baskets, :broadcasts, :actions, :tx_proofs, :blocks
+
+    if postgres
+      extension :pg_enum
+      drop_enum(:broadcast_intent)
+    end
   end
 end

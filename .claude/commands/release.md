@@ -8,14 +8,12 @@ Guided release workflow for a single gem from this repo. Releases one gem per in
 
 ## Gem Registry
 
-| Key | Gem name | Version file | Tag prefix | Gemspec path | Downstream deps |
-|-----|----------|-------------|------------|--------------|-----------------|
-| `wallet` | `bsv-wallet` | `gem/bsv-wallet/lib/bsv/wallet/version.rb` | `v` | `gem/bsv-wallet/bsv-wallet.gemspec` | `bsv-wallet-postgres` |
-| `postgres` | `bsv-wallet-postgres` | `gem/bsv-wallet-postgres/lib/bsv/wallet/postgres/version.rb` | `postgres-v` | `gem/bsv-wallet-postgres/bsv-wallet-postgres.gemspec` | none |
+| Key | Gem name | Version file | Tag prefix | Gemspec path |
+|-----|----------|-------------|------------|--------------|
+| `wallet` | `bsv-wallet` | `gem/bsv-wallet/lib/bsv/wallet/version.rb` | `v` | `gem/bsv-wallet/bsv-wallet.gemspec` |
 
 Version constants:
 - `wallet` → `BSV::Wallet::VERSION`
-- `postgres` → `BSV::Wallet::Postgres::VERSION`
 
 ---
 
@@ -32,21 +30,19 @@ Do not proceed past this step if multiple keys are detected.
 
 ## Step 1: Select Gem
 
-If `$ARGUMENTS` is empty or not one of `wallet`, `postgres`, prompt:
+If `$ARGUMENTS` is empty or not `wallet`, prompt:
 
 ```
 Which gem do you want to release?
 
   wallet    bsv-wallet            currently 0.x.x
-  postgres  bsv-wallet-postgres   currently 0.x.x
 
-Enter one of: wallet, postgres
+Enter: wallet
 ```
 
-Read current versions by running:
+Read current version by running:
 ```bash
 grep "VERSION = " gem/bsv-wallet/lib/bsv/wallet/version.rb
-grep "VERSION = " gem/bsv-wallet-postgres/lib/bsv/wallet/postgres/version.rb
 ```
 
 Once a valid gem key is confirmed, set these variables (conceptually) for the rest of the steps:
@@ -190,51 +186,27 @@ Wait for user to confirm the suggested version or provide a custom one. Store as
 
 ---
 
-## Step 6: Downstream Dependency Checks
-
-Only run for gems with downstream dependents (`wallet`).
-
-Skip this step entirely for `postgres`.
-
-### Part A — Dependency Floor Check
-
-For **wallet** — check `bsv-wallet-postgres` floor version:
-```bash
-grep "bsv-wallet" gem/bsv-wallet-postgres/bsv-wallet-postgres.gemspec
-```
-
-Extract the floor version from the `add_dependency` line (e.g. `'>= 0.1.0'`).
-
-If the floor is lower than `$NEW_VERSION`, warn:
-```
-Warning: bsv-wallet-postgres's floor on bsv-wallet is '>= 0.1.0', which is below the new version $NEW_VERSION.
-Consider raising the floor in gem/bsv-wallet-postgres/bsv-wallet-postgres.gemspec before releasing bsv-wallet $NEW_VERSION.
-```
-
-This is a soft warning — ask the user whether to continue or pause to raise the floor first.
-
-### Part B — Interface Compliance Check (wallet only)
+## Step 6: Interface Compliance Check
 
 Extract abstract method names from Interface modules:
 ```bash
 grep -rn "def " gem/bsv-wallet/lib/bsv/wallet/interface/ | grep -v "#"
 ```
 
-Find all concrete implementations in the postgres adapter:
+Find all concrete implementations in the Store:
 ```bash
-grep -rn "def " gem/bsv-wallet-postgres/lib/ | grep -v "#"
+grep -rn "def " gem/bsv-wallet/lib/bsv/wallet/store/ | grep -v "#"
 ```
 
-Compare method names. Any method defined in the interfaces that is missing from the postgres adapter files is a compliance gap.
+Compare method names. Any method defined in the interfaces that is missing from the Store files is a compliance gap.
 
 If gaps are found:
 ```
-Interface compliance warning: the following interface methods are not implemented in bsv-wallet-postgres:
+Interface compliance warning: the following interface methods are not implemented in Store:
 
   - method_name_1
   - method_name_2
 
-This may indicate the postgres adapter is out of date.
 Abort to fix before releasing? [Y/n]
 ```
 
@@ -486,8 +458,6 @@ Release complete!
   GitHub release:  https://github.com/sgbett/bsv-wallet/releases/tag/${TAG_PREFIX}${NEW_VERSION}
 
 Next steps:
-  - If you released wallet, check whether bsv-wallet-postgres needs a matching release
-  - Update any dependent gemspec floors if you raised a compatibility requirement
   - Announce the release in the appropriate channels
 ```
 

@@ -2,79 +2,581 @@
 
 module BSV
   module Wallet
-    # Default store — SQLite-backed persistence for the wallet.
+    # SQL-backed persistence for the wallet.
     #
-    # Everything below this module is internal: Connection manages the
-    # database, models map tables to Ruby, and the service classes
-    # (Persistence, UTXOPool, ProofStore, BroadcastQueue) implement
-    # the wallet interfaces.
+    # Abstract base class. Concrete implementations (SQLite, Postgres)
+    # provide database-specific configuration and input-locking semantics.
     #
     # Usage:
-    #   BSV::Wallet::Store::Connection.connect('sqlite://wallet.db')
-    #   BSV::Wallet::Store::Connection.migrate!
-    #   store = BSV::Wallet::Store::SQLite.new
-    module Store
-      # Connection (database setup, pragmas, migrations)
-      autoload :Connection, 'bsv/wallet/store/connection'
+    #   store = BSV::Wallet::Store.connect('sqlite://wallet.db')
+    #   store.migrate!
+    #   store.create_action(action: { description: 'payment', nlocktime: 0 })
+    class Store
+      include BSV::Wallet::Interface::Store
 
-      # Shared orchestration (mixed into concrete Store implementations)
-      autoload :Base, 'bsv/wallet/store/base'
+      attr_reader :db
 
-      # Service implementations
-      autoload :SQLite, 'bsv/wallet/store/sqlite'
-      autoload :UTXOPool,          'bsv/wallet/store/utxo_pool'
-      autoload :ProofStore,        'bsv/wallet/store/proof_store'
-      autoload :BroadcastQueue,    'bsv/wallet/store/broadcast_queue'
-      autoload :BroadcastCallback, 'bsv/wallet/store/broadcast_callback'
-      autoload :ArcAdapter,        'bsv/wallet/store/arc_adapter'
-
-      # Shared model concern
-      require_relative 'store/models/display_txid'
-
-      # Models (internal — Sequel ORM layer)
-      autoload :Block,            'bsv/wallet/store/models/block'
-      autoload :TxProof,          'bsv/wallet/store/models/tx_proof'
-      autoload :Action,           'bsv/wallet/store/models/action'
-      autoload :Broadcast,        'bsv/wallet/store/models/broadcast'
-      autoload :Basket,           'bsv/wallet/store/models/basket'
-      autoload :Output,           'bsv/wallet/store/models/output'
-      autoload :Spendable,        'bsv/wallet/store/models/spendable'
-      autoload :OutputDetail,     'bsv/wallet/store/models/output_detail'
-      autoload :OutputBasket,     'bsv/wallet/store/models/output_basket'
-      autoload :Input,            'bsv/wallet/store/models/input'
-      autoload :Label,            'bsv/wallet/store/models/label'
-      autoload :ActionLabel,      'bsv/wallet/store/models/action_label'
-      autoload :Tag,              'bsv/wallet/store/models/tag'
-      autoload :OutputTag,        'bsv/wallet/store/models/output_tag'
-      autoload :Certificate,      'bsv/wallet/store/models/certificate'
-      autoload :CertificateField, 'bsv/wallet/store/models/certificate_field'
-      autoload :Setting,          'bsv/wallet/store/models/setting'
-
-      # All model classes — used by Connection to bind per-model DB.
-      def self.models
-        [
-          Block, TxProof, Action, Broadcast, Basket, Output, Spendable,
-          OutputDetail, OutputBasket, Input, Label, ActionLabel,
-          Tag, OutputTag, Certificate, CertificateField, Setting
-        ]
+      # Factory: return a SQLite or Postgres instance based on the URL.
+      #
+      # @param url [String] database URL (sqlite:// or postgres://)
+      # @return [BSV::Wallet::Store::SQLite, BSV::Wallet::Store::Postgres]
+      def self.connect(url)
+        if url.to_s.downcase.start_with?('postgres')
+          Postgres.new(url: url)
+        else
+          SQLite.new(url: url)
+        end
       end
 
-      # Construct the four wallet services wired to the given database.
-      #
-      # Used by the CLI auto-discovery boot path; callers that build
-      # their own Engine may inject service instances directly instead.
-      #
-      # @param db [Sequel::Database]
-      # @return [Hash{Symbol => Object}] :store, :proof_store, :utxo_pool, :broadcast_queue
-      def self.bootstrap(db:)
-        store = SQLite.new(db: db)
+      def initialize(url: nil, db: nil)
+        @db = db || Sequel.connect(url)
+        # Set global so Sequel::Model(:table_name) calls in model class
+        # bodies can resolve the database during autoload.
+        Sequel::Model.db = @db
+        configure_db
+      end
+
+      # Database-specific setup (PRAGMAs, extensions). Subclasses override.
+      def configure_db
+        raise NotImplementedError
+      end
+
+      def migrate!(target: nil)
+        Sequel.extension :migration
+        migrations_path = File.expand_path('../../../db/migrations', __dir__)
+        Sequel::Migrator.run(@db, migrations_path, target: target)
+        bind_models!
+      end
+
+      def disconnect
+        @db&.disconnect
+        @db = nil
+      end
+
+      # --- Action Lifecycle ---
+
+      def create_action(action:, inputs: [])
+        @db.transaction do
+          record = models::Action.create(
+            description: action[:description],
+            broadcast: action[:broadcast]&.to_s || 'delayed',
+            nlocktime: action[:nlocktime],
+            version: action[:version],
+            outgoing: action.fetch(:outgoing, true),
+            input_beef: action[:input_beef]
+          )
+
+          if inputs.any?
+            locked = 0
+            inputs.each do |inp|
+              locked += 1 if try_lock_input(record_id: record.id, inp: inp)
+            end
+
+            raise Sequel::Rollback if locked < inputs.size
+          end
+
+          action_to_hash(record)
+        end
+      end
+
+      def sign_action(action_id:, wtxid:, raw_tx:, change_outputs: [])
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'sign_action wtxid')
+        BSV.logger&.debug { "[Store] sign_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
+        @db.transaction do
+          models::Action.where(id: action_id).update(
+            wtxid: Sequel.blob(wtxid),
+            raw_tx: Sequel.blob(raw_tx)
+          )
+          models::TxProof.dataset.insert_conflict(target: :wtxid, update: { raw_tx: Sequel.blob(raw_tx) })
+                         .insert(wtxid: Sequel.blob(wtxid), raw_tx: Sequel.blob(raw_tx))
+
+          change_outputs.each do |chg|
+            output = models::Output.create(
+              action_id: action_id,
+              satoshis: chg[:satoshis],
+              vout: chg[:vout],
+              locking_script: chg[:locking_script],
+              derivation_prefix: chg[:derivation_prefix],
+              derivation_suffix: chg[:derivation_suffix],
+              sender_identity_key: chg[:sender_identity_key]
+            )
+            models::OutputDetail.create(
+              output_id: output.id,
+              action_id: action_id,
+              change: true
+            )
+          end
+        end
+      end
+
+      def promote_action(action_id:, outputs:)
+        @db.transaction do
+          outputs.map do |out|
+            output = models::Output.create(
+              action_id: action_id,
+              satoshis: out[:satoshis],
+              vout: out[:vout],
+              locking_script: out[:locking_script],
+              output_type: out[:output_type],
+              derivation_prefix: out[:derivation_prefix],
+              derivation_suffix: out[:derivation_suffix],
+              sender_identity_key: out[:sender_identity_key]
+            )
+
+            wallet_owned = out[:derivation_prefix] || out[:output_type] == 'root'
+            models::Spendable.create(output_id: output.id, action_id: action_id) if wallet_owned
+
+            if out[:basket] && out[:basket] != 'default'
+              basket_id = find_or_create_basket(name: out[:basket])
+              models::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: action_id)
+            end
+
+            if out[:description] || out[:custom_instructions]
+              models::OutputDetail.create(
+                output_id: output.id,
+                action_id: action_id,
+                description: out[:description],
+                custom_instructions: out[:custom_instructions]
+              )
+            end
+
+            if out[:tags]&.any?
+              tag_ids = find_or_create_tags(names: out[:tags])
+              tag_ids.each { |tid| models::OutputTag.create(output_id: output.id, tag_id: tid) }
+            end
+
+            output.id
+          end
+        end
+      end
+
+      def link_proof(action_id:, tx_proof_id:)
+        models::Action.where(id: action_id).update(tx_proof_id: tx_proof_id)
+      end
+
+      def abort_action(action_id:)
+        broadcast_exists = models::Broadcast.where(
+          Sequel[:broadcasts][:action_id] => Sequel[:actions][:id]
+        ).select(1)
+        models::Action.where(id: action_id).exclude(broadcast_exists.exists).delete
+      end
+
+      # --- Queries ---
+
+      def find_output(id:)
+        record = models::Output[id]
+        return unless record
+
         {
-          store: store,
-          proof_store: ProofStore.new(db: db),
-          utxo_pool: UTXOPool.new(store: store),
-          broadcast_queue: BroadcastQueue.new(db: db)
+          id: record.id, action_id: record.action_id,
+          satoshis: record.satoshis, vout: record.vout,
+          locking_script: record.locking_script,
+          output_type: record.output_type,
+          derivation_prefix: record.derivation_prefix,
+          derivation_suffix: record.derivation_suffix,
+          sender_identity_key: record.sender_identity_key
+        }
+      end
+
+      def find_action(id: nil, wtxid: nil, reference: nil)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'find_action wtxid') if wtxid
+        record = if id then models::Action[id]
+                 elsif wtxid then models::Action.first(wtxid: Sequel.blob(wtxid))
+                 elsif reference then models::Action.first(reference: reference)
+                 end
+        return unless record
+
+        action_to_hash(record)
+      end
+
+      def query_actions(labels:, label_query_mode: :any, limit: 10, offset: 0,
+                        include_labels: false, include_inputs: false,
+                        include_input_locking_scripts: false,
+                        include_input_unlocking_scripts: false, # rubocop:disable Lint/UnusedMethodArgument
+                        include_outputs: false, include_output_locking_scripts: false)
+        label_ids = models::Label.where(label: labels).select_map(:id)
+        return { total: 0, actions: [] } if label_ids.empty?
+
+        base = models::Action
+               .join(:action_labels, action_id: :id)
+               .where(Sequel[:action_labels][:label_id] => label_ids)
+               .select_all(:actions)
+
+        base = if label_query_mode == :all
+                 base
+                   .group(Sequel[:actions][:id])
+                   .having { count(Sequel.function(:distinct, Sequel[:action_labels][:label_id])) >= label_ids.size }
+               else
+                 base.distinct
+               end
+
+        total = base.count
+        records = base
+                  .order(Sequel.desc(Sequel[:actions][:created_at]))
+                  .limit(limit).offset(offset).all
+
+        actions = records.map do |row|
+          a = row.is_a?(models::Action) ? row : models::Action[row[:id]]
+          action_to_hash(a,
+                         include_labels: include_labels,
+                         include_inputs: include_inputs,
+                         include_input_locking_scripts: include_input_locking_scripts,
+                         include_outputs: include_outputs,
+                         include_output_locking_scripts: include_output_locking_scripts)
+        end
+
+        { total: total, actions: actions }
+      end
+
+      def query_outputs(basket:, tags: nil, tag_query_mode: :any,
+                        limit: 10, offset: 0,
+                        include_locking_scripts: false,
+                        include_custom_instructions: false,
+                        include_tags: false, include_labels: false)
+        base = models::Output.spendable.in_basket(basket)
+
+        if tags&.any?
+          tag_ids = models::Tag.where(tag: tags).select_map(:id)
+          unless tag_ids.empty?
+            tag_ds = models::OutputTag.dataset
+                                      .where(tag_id: tag_ids)
+                                      .where(Sequel[:output_tags][:output_id] => Sequel[:outputs][:id])
+                                      .select(1)
+
+            base = if tag_query_mode == :all
+                     base.where(
+                       tag_ds
+                         .group(Sequel[:output_tags][:output_id])
+                         .having { count(Sequel.function(:distinct, Sequel[:output_tags][:tag_id])) >= tag_ids.size }
+                         .exists
+                     )
+                   else
+                     base.where(tag_ds.exists)
+                   end
+          end
+        end
+
+        total = base.count
+        records = base.order(Sequel.desc(:created_at)).limit(limit).offset(offset).all
+
+        outputs = records.map do |o|
+          output_to_hash(o,
+                         include_locking_scripts: include_locking_scripts,
+                         include_custom_instructions: include_custom_instructions,
+                         include_tags: include_tags,
+                         include_labels: include_labels)
+        end
+
+        { total: total, outputs: outputs }
+      end
+
+      def relinquish_output(output_id:)
+        @db.transaction do
+          models::Spendable.where(output_id: output_id).delete
+          models::OutputBasket.where(output_id: output_id).delete
+        end
+      end
+
+      # --- Labels, Tags, Baskets ---
+
+      def find_or_create_labels(names:)
+        names.map do |name|
+          label = models::Label.first(label: name)
+          label ||= models::Label.create(label: name)
+          label.id
+        end
+      end
+
+      def find_or_create_tags(names:)
+        names.map do |name|
+          tag = models::Tag.first(tag: name)
+          tag ||= models::Tag.create(tag: name)
+          tag.id
+        end
+      end
+
+      def find_or_create_basket(name:)
+        basket = models::Basket.first(name: name)
+        basket ||= models::Basket.create(name: name)
+        basket.id
+      end
+
+      def label_action(action_id:, label_ids:)
+        label_ids.each do |lid|
+          existing = models::ActionLabel.first(action_id: action_id, label_id: lid)
+          models::ActionLabel.create(action_id: action_id, label_id: lid) unless existing
+        end
+      end
+
+      # --- Certificates ---
+
+      def save_certificate(certificate)
+        @db.transaction do
+          cert = models::Certificate.create(
+            type: certificate[:type],
+            subject: certificate[:subject],
+            serial_number: certificate[:serial_number],
+            certifier: certificate[:certifier],
+            verifier: certificate[:verifier],
+            revocation_outpoint: certificate[:revocation_outpoint],
+            signature: certificate[:signature]
+          )
+
+          certificate[:fields]&.each do |name, value|
+            models::CertificateField.create(
+              certificate_id: cert.id,
+              name: name.to_s,
+              value: value.to_s,
+              master_key: certificate.dig(:keyring, name.to_s)
+            )
+          end
+
+          certificate_to_hash(cert)
+        end
+      end
+
+      def query_certificates(certifiers:, types:, limit: 10, offset: 0)
+        base = models::Certificate.where(certifier: certifiers, type: types)
+        total = base.count
+        records = base.order(Sequel.desc(:created_at)).limit(limit).offset(offset).all
+        { total: total, certificates: records.map { |c| certificate_to_hash(c) } }
+      end
+
+      def delete_certificate(type:, serial_number:, certifier:)
+        models::Certificate.where(type: type, serial_number: serial_number, certifier: certifier).delete
+      end
+
+      # --- Settings ---
+
+      def get_setting(key:)
+        models::Setting.get(key)
+      end
+
+      def set_setting(key:, value:)
+        models::Setting.set(key, value)
+      end
+
+      # --- Input Resolution ---
+
+      def resolve_inputs_for_signing(action_id:)
+        rows = @db[:inputs]
+               .join(:outputs, id: :output_id)
+               .join(Sequel[:actions].as(:source_actions), id: Sequel[:outputs][:action_id])
+               .where(Sequel[:inputs][:action_id] => action_id)
+               .order(Sequel[:inputs][:vin])
+               .select(
+                 Sequel[:inputs][:vin],
+                 Sequel[:inputs][:nsequence].as(:sequence),
+                 Sequel[:source_actions][:wtxid].as(:source_wtxid),
+                 Sequel[:outputs][:vout].as(:source_vout),
+                 Sequel[:outputs][:satoshis].as(:source_satoshis),
+                 Sequel[:outputs][:locking_script].as(:source_locking_script),
+                 Sequel[:outputs][:derivation_prefix],
+                 Sequel[:outputs][:derivation_suffix],
+                 Sequel[:outputs][:sender_identity_key]
+               )
+               .all
+
+        result = rows.map do |row|
+          raise "Source action has nil wtxid for input vin #{row[:vin]} of action #{action_id}" if row[:source_wtxid].nil?
+
+          BSV::Primitives::Hex.validate_wtxid!(row[:source_wtxid], name: "resolve_inputs source vin=#{row[:vin]}")
+
+          {
+            vin: row[:vin],
+            sequence: row[:sequence],
+            source_wtxid: row[:source_wtxid],
+            source_vout: row[:source_vout],
+            source_satoshis: row[:source_satoshis],
+            source_locking_script: row[:source_locking_script],
+            derivation_prefix: row[:derivation_prefix],
+            derivation_suffix: row[:derivation_suffix],
+            sender_identity_key: row[:sender_identity_key]
+          }
+        end
+
+        BSV.logger&.debug do
+          dtxids = result.first(5).map { |r| r[:source_wtxid].reverse.unpack1('H*') }
+          suffix = result.size > 5 ? " (+#{result.size - 5} more)" : ''
+          "[Store] resolve_inputs_for_signing: action_id=#{action_id} inputs=#{result.size} sources=#{dtxids.join(',')}#{suffix}"
+        end
+
+        result
+      end
+
+      def query_change_output_vouts(action_id:)
+        models::Output.where(action_id: action_id)
+                      .where(
+                        models::OutputDetail.dataset
+                          .where(Sequel[:output_details][:output_id] => Sequel[:outputs][:id])
+                          .where(change: true)
+                          .select(1)
+                          .exists
+                      )
+                      .select_map(:vout)
+      end
+
+      def promote_change_to_spendable(action_id:)
+        change_outputs = models::Output.where(action_id: action_id)
+                                       .where(
+                                         models::OutputDetail.dataset
+                                           .where(Sequel[:output_details][:output_id] => Sequel[:outputs][:id])
+                                           .where(change: true)
+                                           .select(1)
+                                           .exists
+                                       )
+                                       .exclude(
+                                         models::Spendable.where(Sequel[:spendable][:output_id] => Sequel[:outputs][:id])
+                                                          .select(1).exists
+                                       )
+                                       .all
+        change_outputs.each do |output|
+          models::Spendable.create(output_id: output.id, action_id: action_id)
+        end
+      end
+
+      def find_spendable(satoshis:, basket: nil, exclude: [])
+        ds = models::Output.spendable
+        ds = ds.in_basket(basket) if basket
+        ds = ds.exclude(Sequel[:outputs][:id] => exclude) if exclude.any?
+        ds = ds.order(Sequel.desc(:satoshis))
+
+        candidates = []
+        total = 0
+        ds.each do |output|
+          candidates << {
+            id: output.id, satoshis: output.satoshis,
+            vout: output.vout, action_id: output.action_id,
+            locking_script: output.locking_script,
+            derivation_prefix: output.derivation_prefix,
+            derivation_suffix: output.derivation_suffix,
+            sender_identity_key: output.sender_identity_key
+          }
+          total += output.satoshis
+          break if total >= satoshis
+        end
+        candidates
+      end
+
+      def reap_stale_actions(threshold:)
+        cutoff = Time.now - threshold
+        output_exists = models::Output.where(Sequel[:outputs][:action_id] => Sequel[:actions][:id]).select(1)
+
+        models::Action
+          .where { created_at < cutoff }
+          .where(Sequel.~(broadcast: 'none'))
+          .where(Sequel.lit('wtxid IS NOT NULL'))
+          .exclude(output_exists.exists)
+          .delete
+      end
+
+      # Base try_lock_input: performs the insert. Subclasses override to
+      # add backend-specific result interpretation.
+      def try_lock_input(record_id:, inp:)
+        @db[:inputs].insert_conflict(target: :output_id).insert(
+          action_id: record_id,
+          output_id: inp[:output_id],
+          vin: inp[:vin],
+          nsequence: inp[:nsequence] || 4_294_967_295,
+          description: inp[:description]
+        )
+      end
+
+      private
+
+      def models
+        BSV::Wallet::Store::Models
+      end
+
+      def bind_models!
+        BSV::Wallet::Store::Models.constants.each do |name|
+          klass = BSV::Wallet::Store::Models.const_get(name)
+          next unless klass.is_a?(Class) && klass < Sequel::Model
+
+          klass.dataset = @db[klass.table_name]
+        end
+      end
+
+      def action_to_hash(record, include_labels: false, include_inputs: false,
+                         include_input_locking_scripts: false,
+                         include_outputs: false, include_output_locking_scripts: false, **)
+        h = {
+          id: record.id, wtxid: record.wtxid, raw_tx: record.raw_tx,
+          reference: record.reference, status: record.derived_status,
+          outgoing: record.outgoing, description: record.description,
+          version: record.version, nlocktime: record.nlocktime,
+          broadcast: record.values[:broadcast], created_at: record.created_at
+        }
+
+        h[:labels] = record.labels.map(&:label) if include_labels
+
+        if include_inputs
+          h[:inputs] = record.inputs.map do |inp|
+            ih = { output_id: inp.output_id, vin: inp.vin, nsequence: inp.nsequence, description: inp.description }
+            if include_input_locking_scripts && inp.output
+              ih[:source_locking_script] = inp.output.locking_script
+              ih[:source_satoshis] = inp.output.satoshis
+            end
+            ih
+          end
+        end
+
+        if include_outputs
+          h[:outputs] = record.outputs.map do |out|
+            oh = { id: out.id, satoshis: out.satoshis, vout: out.vout, spendable: out.spendable? }
+            oh[:locking_script] = out.locking_script if include_output_locking_scripts
+            if out.detail
+              oh[:description] = out.detail.description
+              oh[:custom_instructions] = out.detail.custom_instructions
+            end
+            oh[:basket] = out.basket&.name
+            oh[:tags] = out.tags.map(&:tag)
+            oh
+          end
+        end
+
+        h
+      end
+
+      def output_to_hash(record, include_locking_scripts: false,
+                         include_custom_instructions: false,
+                         include_tags: false, include_labels: false, **)
+        h = { id: record.id, action_id: record.action_id,
+              satoshis: record.satoshis, vout: record.vout, spendable: true }
+        h[:locking_script] = record.locking_script if include_locking_scripts
+        if include_custom_instructions && record.detail
+          h[:custom_instructions] = record.detail.custom_instructions
+          h[:description] = record.detail.description
+        end
+        h[:tags] = record.tags.map(&:tag) if include_tags
+        h[:labels] = record.action.labels.map(&:label) if include_labels && record.action
+        h[:basket] = record.basket&.name
+        h
+      end
+
+      def certificate_to_hash(record)
+        fields = {}
+        record.certificate_fields.each { |f| fields[f.name] = f.value }
+        {
+          id: record.id, type: record.type, subject: record.subject,
+          serial_number: record.serial_number, certifier: record.certifier,
+          verifier: record.verifier, revocation_outpoint: record.revocation_outpoint,
+          signature: record.signature, fields: fields
         }
       end
     end
   end
 end
+
+# Submodule autoloads (must come after class definition so `Store`
+# is already a class when these are resolved).
+require_relative 'store/models'
+require_relative 'store/sqlite'
+require_relative 'store/postgres'
+
+# Service classes (BroadcastQueue, ProofStore, UTXOPool, etc.)
+BSV::Wallet::Store.autoload :BroadcastQueue,    'bsv/wallet/store/broadcast_queue'
+BSV::Wallet::Store.autoload :BroadcastCallback, 'bsv/wallet/store/broadcast_callback'
+BSV::Wallet::Store.autoload :ArcAdapter,        'bsv/wallet/store/arc_adapter'
+BSV::Wallet::Store.autoload :ProofStore,        'bsv/wallet/store/proof_store'
+BSV::Wallet::Store.autoload :UTXOPool,          'bsv/wallet/store/utxo_pool'

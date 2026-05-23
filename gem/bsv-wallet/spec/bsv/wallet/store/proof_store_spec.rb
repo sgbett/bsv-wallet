@@ -37,13 +37,13 @@ RSpec.describe BSV::Wallet::Store::ProofStore, :store do
       ))
 
       expect(id2).to eq(id1)
-      record = BSV::Wallet::Store::TxProof[id1]
+      record = BSV::Wallet::Store::Models::TxProof[id1]
       expect(record.block.height).to eq(800_001)
     end
 
     it 'preserves binary data' do
       proof_store.save_proof(wtxid: wtxid, proof: proof_data)
-      record = BSV::Wallet::Store::TxProof.first(wtxid: Sequel.blob(wtxid))
+      record = BSV::Wallet::Store::Models::TxProof.first(wtxid: Sequel.blob(wtxid))
 
       expect(record.wtxid.encoding).to eq(Encoding::BINARY)
       expect(record.merkle_path.encoding).to eq(Encoding::BINARY)
@@ -58,17 +58,17 @@ RSpec.describe BSV::Wallet::Store::ProofStore, :store do
         raw_tx: SecureRandom.random_bytes(100)
       ))
 
-      proof1 = BSV::Wallet::Store::TxProof[id1]
-      proof2 = BSV::Wallet::Store::TxProof[id2]
+      proof1 = BSV::Wallet::Store::Models::TxProof[id1]
+      proof2 = BSV::Wallet::Store::Models::TxProof[id2]
       expect(proof1.block_id).to eq(proof2.block_id)
-      expect(BSV::Wallet::Store::Block.where(height: 800_000).count).to eq(1)
+      expect(BSV::Wallet::Store::Models::Block.where(height: 800_000).count).to eq(1)
     end
 
     it 'saves proof without block when merkle_root is absent' do
       proof_without_root = proof_data.except(:merkle_root, :block_hash)
       id = proof_store.save_proof(wtxid: wtxid, proof: proof_without_root)
 
-      record = BSV::Wallet::Store::TxProof[id]
+      record = BSV::Wallet::Store::Models::TxProof[id]
       expect(record.block_id).to be_nil
     end
   end

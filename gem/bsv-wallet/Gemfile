@@ -15,9 +15,8 @@ group :development, :test do
   gem 'yard'
   gem 'yard-markdown'
 
-  # CLI.pick_backend needs the postgres adapter loadable so it can
-  # resolve postgres:// DATABASE_URLs. Wallet-gem specs are SQLite-only.
-  gem 'bsv-wallet-postgres', path: '../bsv-wallet-postgres'
+  # Postgres backend: pg is only needed when DATABASE_URL is postgres://.
+  # Sequel loads the pg adapter lazily on connect.
   gem 'pg'
   gem 'sequel', '~> 5.0'
 end

@@ -2,10 +2,12 @@
 
 module BSV
   module Wallet
-    module Store
-      class OutputDetail < Sequel::Model
-        many_to_one :output, class: 'BSV::Wallet::Store::Output'
-        many_to_one :action, class: 'BSV::Wallet::Store::Action'
+    class Store
+      module Models
+        class OutputDetail < Sequel::Model
+          many_to_one :output, class: 'BSV::Wallet::Store::Models::Output'
+          many_to_one :action, class: 'BSV::Wallet::Store::Models::Action'
+        end
       end
     end
   end

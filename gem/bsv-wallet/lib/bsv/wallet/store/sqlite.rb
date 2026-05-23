@@ -2,41 +2,26 @@
 
 module BSV
   module Wallet
-    module Store
-      # Default SQLite implementation of Interface::Store.
+    class Store
+      # SQLite-specific store implementation.
       #
-      # Orchestration logic lives in Store::Base; this class supplies the
-      # SQLite-specific adapter primitives:
-      #
-      #   - models           — the namespace of connection-bound model classes
-      #   - try_lock_input   — input-claim detection (SQLite's insert_conflict
-      #                        returns the rowid even on DO NOTHING, so we
-      #                        re-query to detect ownership)
-      class SQLite
-        include BSV::Wallet::Interface::Store
-        include BSV::Wallet::Store::Base
+      # Applies PRAGMAs (foreign keys, WAL journal mode) and handles
+      # SQLite's insert_conflict semantics where the return value is
+      # always the last_insert_rowid, even on DO NOTHING — requiring
+      # a re-query to verify input lock ownership.
+      class SQLite < Store
+        def configure_db
+          # WAL journal mode is database-wide (persists across connections).
+          @db.run('PRAGMA journal_mode = WAL')
 
-        def self.models
-          BSV::Wallet::Store
+          # foreign_keys is per-connection — must be enabled on every
+          # connection from the pool, not just the first.
+          @db.pool.after_connect = proc { |conn| conn.execute('PRAGMA foreign_keys = ON') }
+          @db.run('PRAGMA foreign_keys = ON')
         end
 
-        def initialize(db: nil)
-          @db = db || Connection.db
-        end
-
-        private
-
-        # SQLite's insert_conflict returns last_insert_rowid even when
-        # DO NOTHING fires, so we can't trust the return value. Re-query
-        # to confirm this action owns the input row.
         def try_lock_input(record_id:, inp:)
-          @db[:inputs].insert_conflict(target: :output_id).insert(
-            action_id: record_id,
-            output_id: inp[:output_id],
-            vin: inp[:vin],
-            nsequence: inp[:nsequence] || 4_294_967_295,
-            description: inp[:description]
-          )
+          super
           @db[:inputs].where(output_id: inp[:output_id], action_id: record_id).any?
         end
       end

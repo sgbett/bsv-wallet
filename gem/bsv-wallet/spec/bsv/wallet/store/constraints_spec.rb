@@ -3,9 +3,12 @@
 require_relative 'shared_context'
 
 # Negative tests: verify the database rejects invalid data.
-# Every CHECK, NOT NULL, and FK constraint from migration 004 is tested here.
+# Every CHECK, NOT NULL, and FK constraint from the migrations is tested here.
+# Tagged :postgres because SQLite's ALTER TABLE cannot reliably add CHECK
+# constraints to existing tables — the application layer enforces these rules
+# on SQLite, the database enforces them on Postgres.
 
-RSpec.describe 'Schema constraints', :store do
+RSpec.describe 'Schema constraints', :postgres, :store do
   # Helper: create a valid output for FK references.
   # Defaults to root output (no derivation fields). Pass derivation
   # fields and output_type: nil for a derived output.

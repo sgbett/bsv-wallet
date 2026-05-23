@@ -57,20 +57,17 @@ Four-layer SOA — each layer has a single responsibility:
 
 The Engine contains no SQL, no ARC calls, no thread management. It receives Layer 2 components at construction and orchestrates them. Swap implementations by passing different objects — same interface, different backend.
 
-### Gems
+### Database Backends
 
-| Gem | Purpose |
-|-----|---------|
-| `bsv-wallet` | Core interfaces and Engine (no database dependency) |
-| `bsv-wallet-postgres` | PostgreSQL adapter implementing the interfaces via Sequel |
+The wallet supports both SQLite and PostgreSQL via Sequel. SQLite is the default; set `DATABASE_URL` to a `postgres://` URL to use PostgreSQL (requires the `pg` gem).
 
 ## Getting Started
 
 ### Requirements
 
 - Ruby >= 2.7
-- PostgreSQL (for the postgres adapter)
 - [bsv-sdk](https://github.com/sgbett/bsv-ruby-sdk) gem
+- PostgreSQL (optional — requires the `pg` gem; defaults to SQLite)
 
 ### Installation
 
@@ -78,24 +75,24 @@ Add to your Gemfile:
 
 ```ruby
 gem 'bsv-wallet'
-gem 'bsv-wallet-postgres'
+gem 'pg'  # only if using PostgreSQL
 ```
 
 ### Basic Usage
 
 ```ruby
-require 'bsv-wallet-postgres'
+require 'bsv-wallet'
 
-# Connect to PostgreSQL
-db = Sequel.connect('postgres://localhost/my_wallet')
-BSV::Wallet::Postgres.connect(db)
+# Connect — SQLite by default, or pass a postgres:// URL for PostgreSQL
+store = BSV::Wallet::Store.connect('sqlite://wallet.db')
+store.migrate!
 
 # Compose the wallet
 engine = BSV::Wallet::Engine.new(
-  store:           BSV::Wallet::Postgres::Store.new,
-  utxo_pool:       BSV::Wallet::Postgres::UTXOPool.new(store: store),
-  broadcast_queue: BSV::Wallet::Postgres::BroadcastQueue.new(arc_client: arc),
-  proof_store:     BSV::Wallet::Postgres::ProofStore.new,
+  store:           store,
+  utxo_pool:       BSV::Wallet::Store::UTXOPool.new(store: store),
+  broadcast_queue: BSV::Wallet::Store::BroadcastQueue.new(db: store.db),
+  proof_store:     BSV::Wallet::Store::ProofStore.new(db: store.db),
   key_deriver:     BSV::Wallet::KeyDeriver.new(private_key),
   network:         :mainnet
 )
@@ -141,9 +138,9 @@ The [BSV Protocol Documentation](https://hub.bsvblockchain.org/bitcoin-protocol-
 Contributions are welcome — bug reports, feature requests, and pull requests.
 
 1. **Fork & Clone** — Fork this repository and clone it locally.
-2. **Set Up** — Run `bundle install` to install dependencies. Ensure PostgreSQL is available (Docker recommended).
+2. **Set Up** — Run `bundle install` in `gem/bsv-wallet` to install dependencies. For PostgreSQL testing, ensure PostgreSQL is available (Docker recommended) and set `DATABASE_URL`.
 3. **Branch** — Create a new branch for your changes.
-4. **Test** — Ensure all specs pass with `bundle exec rspec` in both gem directories, and lint passes with `bundle exec rubocop`.
+4. **Test** — Ensure all specs pass with `cd gem/bsv-wallet && bundle exec rspec spec/bsv spec/bin`, and lint passes with `bundle exec rubocop`.
 5. **Commit** — Follow [Conventional Commits](https://www.conventionalcommits.org/) for commit messages.
 6. **Pull Request** — Open a pull request against `master`.
 

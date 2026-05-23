@@ -2,9 +2,9 @@
 
 require_relative '../shared_context'
 
-RSpec.describe BSV::Wallet::Store::Action, :store do
+RSpec.describe BSV::Wallet::Store::Models::Action, :store do
   let(:raw_tx) { SecureRandom.random_bytes(100) }
-  let(:tx_proof) { BSV::Wallet::Store::TxProof.create(wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx) }
+  let(:tx_proof) { BSV::Wallet::Store::Models::TxProof.create(wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx) }
 
   describe 'creation' do
     it 'creates with minimal fields' do
@@ -15,6 +15,17 @@ RSpec.describe BSV::Wallet::Store::Action, :store do
       expect(action.nlocktime).to be_nil
     end
 
+    it 'auto-generates a UUID reference when none provided' do
+      action = described_class.create(outgoing: false, description: 'test action')
+      expect(action.reference).to match(/\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/)
+    end
+
+    it 'preserves an explicit reference' do
+      explicit = SecureRandom.uuid
+      action = described_class.create(outgoing: false, description: 'test action', reference: explicit)
+      expect(action.reference).to eq(explicit)
+    end
+
     it 'preserves binary wtxid' do
       wtxid = SecureRandom.random_bytes(32)
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: wtxid, raw_tx: raw_tx)
@@ -22,7 +33,7 @@ RSpec.describe BSV::Wallet::Store::Action, :store do
       expect(action.wtxid).to eq(wtxid)
     end
 
-    it 'rejects corrupt wtxid (hex stored as binary) at database level' do
+    it 'rejects corrupt wtxid (hex stored as binary) at database level', :postgres do
       hex_value = 'a' * 64 # 64 chars, not 32 bytes
       expect do
         described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: Sequel.blob(hex_value), raw_tx: raw_tx)
@@ -38,29 +49,29 @@ RSpec.describe BSV::Wallet::Store::Action, :store do
 
     it 'has one broadcast_entry' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0)
-      broadcast = BSV::Wallet::Store::Broadcast.create(action_id: action.id)
+      broadcast = BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
       expect(action.reload.broadcast_entry).to eq(broadcast)
     end
 
     it 'has many outputs' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Store::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
-      BSV::Wallet::Store::Output.create(action_id: action.id, satoshis: 500, vout: 1, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      BSV::Wallet::Store::Models::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      BSV::Wallet::Store::Models::Output.create(action_id: action.id, satoshis: 500, vout: 1, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       expect(action.reload.outputs.count).to eq(2)
     end
 
     it 'has many inputs' do
       source = described_class.create(outgoing: false, description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      output = BSV::Wallet::Store::Output.create(action_id: source.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      output = BSV::Wallet::Store::Models::Output.create(action_id: source.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0)
-      BSV::Wallet::Store::Input.create(action_id: action.id, output_id: output.id, vin: 0)
+      BSV::Wallet::Store::Models::Input.create(action_id: action.id, output_id: output.id, vin: 0)
       expect(action.reload.inputs.count).to eq(1)
     end
 
     it 'has many labels via action_labels' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0)
-      label = BSV::Wallet::Store::Label.create(label: 'payment')
-      BSV::Wallet::Store::ActionLabel.create(action_id: action.id, label_id: label.id)
+      label = BSV::Wallet::Store::Models::Label.create(label: 'payment')
+      BSV::Wallet::Store::Models::ActionLabel.create(action_id: action.id, label_id: label.id)
       expect(action.reload.labels.map(&:label)).to eq(['payment'])
     end
   end
@@ -83,19 +94,19 @@ RSpec.describe BSV::Wallet::Store::Action, :store do
 
     it 'returns :unproven when outputs exist but no proof' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Store::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      BSV::Wallet::Store::Models::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
       expect(action.reload.derived_status).to eq(:unproven)
     end
 
     it 'returns :failed when broadcast status is REJECTED' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Store::Broadcast.create(action_id: action.id, tx_status: 'REJECTED')
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, tx_status: 'REJECTED')
       expect(action.reload.derived_status).to eq(:failed)
     end
 
     it 'returns :sending when broadcast exists but no outputs' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Store::Broadcast.create(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
       expect(action.reload.derived_status).to eq(:sending)
     end
 
@@ -176,7 +187,7 @@ RSpec.describe BSV::Wallet::Store::Action, :store do
         action.reload
 
         expect(action.tx_proof_id).not_to be_nil
-        proof = BSV::Wallet::Store::TxProof[action.tx_proof_id]
+        proof = BSV::Wallet::Store::Models::TxProof[action.tx_proof_id]
         expect(proof.wtxid).to eq(wtxid)
         expect(proof.raw_tx).to eq(raw_tx)
       end
@@ -203,7 +214,7 @@ RSpec.describe BSV::Wallet::Store::Action, :store do
 
         action.write!(response)
         expect(action.reload.tx_proof_id).to eq(first_proof_id)
-        expect(BSV::Wallet::Store::TxProof.where(wtxid: Sequel.blob(wtxid)).count).to eq(1)
+        expect(BSV::Wallet::Store::Models::TxProof.where(wtxid: Sequel.blob(wtxid)).count).to eq(1)
       end
 
       it 'handles binary merkle_path and block_hash directly' do
@@ -216,7 +227,7 @@ RSpec.describe BSV::Wallet::Store::Action, :store do
         action.reload
 
         expect(action.tx_proof_id).not_to be_nil
-        proof = BSV::Wallet::Store::TxProof[action.tx_proof_id]
+        proof = BSV::Wallet::Store::Models::TxProof[action.tx_proof_id]
         expect(proof.merkle_path).to eq(binary_data[:merkle_path])
       end
     end

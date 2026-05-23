@@ -4,26 +4,26 @@ require 'json'
 
 module BSV
   module Wallet
-    module Store
+    class Store
       class BroadcastQueue
         include BSV::Wallet::Interface::BroadcastQueue
 
         def initialize(db: nil, services: nil)
-          @db = db || Connection.db
+          @db = db
           @services = services
         end
 
         def submit(action_id:, raw_tx:, immediate: false)
           BSV.logger&.debug { "[BroadcastQueue] submit: action_id=#{action_id} immediate=#{immediate}" }
-          broadcast = Broadcast.create(action_id: action_id)
+          broadcast = Models::Broadcast.create(action_id: action_id)
           @services.push!(broadcast) if immediate && @services
           broadcast_to_hash(broadcast.reload)
         end
 
         def process_pending(limit: 100)
-          stale = Broadcast
-                  .where { broadcast_at < Time.now - Broadcast::FETCH_STALENESS }
-                  .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: Broadcast::TERMINAL_STATUSES)))
+          stale = Models::Broadcast
+                  .where { broadcast_at < Time.now - Models::Broadcast::FETCH_STALENESS }
+                  .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: Models::Broadcast::TERMINAL_STATUSES)))
                   .limit(limit)
                   .all
 
@@ -40,11 +40,11 @@ module BSV
         def handle_event(event)
           BSV::Primitives::Hex.validate_wtxid!(event[:wtxid], name: 'handle_event wtxid')
           BSV.logger&.debug { "[BroadcastQueue] handle_event: dtxid=#{event[:wtxid].reverse.unpack1('H*')} status=#{event[:tx_status]}" }
-          action = Action.first(wtxid: Sequel.blob(event[:wtxid]))
+          action = Models::Action.first(wtxid: Sequel.blob(event[:wtxid]))
           return unless action
 
-          broadcast = Broadcast.first(action_id: action.id)
-          broadcast ||= Broadcast.create(action_id: action.id)
+          broadcast = Models::Broadcast.first(action_id: action.id)
+          broadcast ||= Models::Broadcast.create(action_id: action.id)
 
           broadcast.update(
             tx_status: event[:tx_status],
@@ -53,7 +53,9 @@ module BSV
             block_height: event[:block_height],
             merkle_path: event[:merkle_path] ? Sequel.blob(event[:merkle_path]) : nil,
             extra_info: event[:extra_info],
-            competing_txs: event[:competing_txs] ? JSON.generate(event[:competing_txs]) : nil
+            competing_txs: if event[:competing_txs]
+                             @db&.database_type == :postgres ? Sequel.pg_array(event[:competing_txs]) : JSON.generate(event[:competing_txs])
+                           end
           )
 
           {
@@ -64,7 +66,7 @@ module BSV
         end
 
         def status(action_id:)
-          broadcast = Broadcast.first(action_id: action_id)
+          broadcast = Models::Broadcast.first(action_id: action_id)
           return unless broadcast
 
           broadcast_to_hash(broadcast)

@@ -3,7 +3,6 @@
 source 'https://rubygems.org'
 
 gemspec path: 'gem/bsv-wallet'
-gemspec path: 'gem/bsv-wallet-postgres'
 
 group :development, :test do
   gem 'rake'

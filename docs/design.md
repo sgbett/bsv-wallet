@@ -2,7 +2,7 @@
 
 **Status:** In progress
 **Source spec:** [BRC-100](https://github.com/bitcoin-sv/BRCs/blob/master/wallet/0100.md)
-**Gems:** `bsv-wallet` (core) + `bsv-wallet-postgres` (adapter) — see [Gem Structure](#gem-structure)
+**Gem:** `bsv-wallet` — supports SQLite and PostgreSQL via Sequel
 
 ---
 
@@ -103,32 +103,22 @@ wallet = BSV::Wallet::Engine.new(
 
 ### Gem Structure
 
-The wallet ships as two gems in a single repository. The split follows the dependency inversion: the core gem defines what a wallet does, the adapter gem provides the PostgreSQL implementation.
+The wallet ships as a single gem (`bsv-wallet`) supporting both SQLite and PostgreSQL backends. The backend is selected at connection time based on the `DATABASE_URL` scheme — SQLite by default, PostgreSQL when the URL starts with `postgres://`.
 
 ```
 gem/
-  bsv-wallet/              ← core gem
-  bsv-wallet-postgres/     ← adapter gem
+  bsv-wallet/              ← the wallet gem
 ```
 
-**`bsv-wallet`** (core) — zero database dependencies:
+**`bsv-wallet`** contains:
 - All interface modules (`BRC100`, `Store`, `UTXOPool`, `BroadcastQueue`, `ProofStore`)
 - The Layer 3 engine (orchestration, BRC-100 parameter validation)
-- Error classes
-- UTXOPool tier 1 default (delegates to `Store#find_spendable`)
-- In-memory store for testing (implements `Interface::Store` with hashes and arrays — test the engine without PostgreSQL)
-
-**`bsv-wallet-postgres`** (adapter) — concrete PostgreSQL implementation:
 - All Sequel models (Layer 2b — Action, Output, Input, Spendable, Broadcast, TxProof, Basket, Label, Tag, etc.)
 - Concrete `Store`, `ProofStore`, `BroadcastQueue` implementations (Layer 2a)
-- Migrations (the 17-table schema)
-- Dependencies: `sequel`, `pg`
-
-Someone building against the interfaces — say, a SQLite embedded wallet or a testing harness — only needs the core. Everyone in production uses `bsv-wallet-postgres` alongside it.
-
-This structure also leaves room for future companion gems. A `bsv-wallet-redis` adapter is plausible for a tier-3 TxCache (in-memory UTXO pool backed by Redis), though not as a full Store replacement — the structural integrity guarantees (UNIQUE constraints, CASCADE, derived status from row presence) are deeply relational and would be fragile to reimplement in application code.
-
-Both gems evolve together in the same repo — schema changes affect both, and coordinated releases are the norm. Same CI, same issue tracker.
+- Migrations (the 17-table schema, portable across both backends)
+- Error classes
+- UTXOPool tier 1 default (delegates to `Store#find_spendable`)
+- Dependencies: `sequel`, `sqlite3` (hard); `pg` (optional, loaded lazily by Sequel when connecting to PostgreSQL)
 
 ### Interface Modules
 
@@ -507,20 +497,12 @@ The database handles concurrency, not the application. Two concurrent `create_ac
 
 ## 7. Dependencies
 
-**`bsv-wallet` (core):**
-
-| Gem | Purpose |
-|-----|---------|
-| `bsv-sdk` | Low-level BSV primitives — keys, scripts, transactions, crypto, ARC protocol |
-
-**`bsv-wallet-postgres` (adapter):**
-
-| Gem | Purpose |
-|-----|---------|
-| `bsv-wallet` | Core interfaces, engine, errors |
-| `bsv-sdk` | Via `bsv-wallet` dependency |
-| `sequel` | PostgreSQL access — models, migrations, query building |
-| `pg` | PostgreSQL driver |
+| Gem | Purpose | Required |
+|-----|---------|----------|
+| `bsv-sdk` | Low-level BSV primitives — keys, scripts, transactions, crypto, ARC protocol | yes |
+| `sequel` | Database access — models, migrations, query building | yes |
+| `sqlite3` | SQLite driver (default backend) | yes |
+| `pg` | PostgreSQL driver (optional backend, loaded lazily by Sequel) | no |
 
 ---
 

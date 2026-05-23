@@ -2,12 +2,12 @@
 
 module BSV
   module Wallet
-    module Store
+    class Store
       class ProofStore
         include BSV::Wallet::Interface::ProofStore
 
         def initialize(db: nil)
-          @db = db || Connection.db
+          @db = db
         end
 
         def save_proof(wtxid:, proof:)
@@ -16,19 +16,19 @@ module BSV
 
           block_id = find_or_create_block(proof) if proof[:height]
 
-          existing = TxProof.first(wtxid: Sequel.blob(wtxid))
+          existing = Models::TxProof.first(wtxid: Sequel.blob(wtxid))
           cols = proof_columns(proof).merge(block_id ? { block_id: block_id } : {})
           if existing
             existing.update(cols)
             existing.id
           else
-            TxProof.create({ wtxid: wtxid }.merge(cols)).id
+            Models::TxProof.create({ wtxid: wtxid }.merge(cols)).id
           end
         end
 
         def find_proof(wtxid:)
           BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'find_proof wtxid')
-          record = TxProof.first(wtxid: Sequel.blob(wtxid))
+          record = Models::TxProof.first(wtxid: Sequel.blob(wtxid))
           return unless record
 
           proof_to_hash(record)
@@ -36,7 +36,7 @@ module BSV
 
         def proof_exists?(wtxid:)
           BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'proof_exists? wtxid')
-          TxProof.where(wtxid: Sequel.blob(wtxid)).any?
+          Models::TxProof.where(wtxid: Sequel.blob(wtxid)).any?
         end
 
         private
@@ -63,15 +63,15 @@ module BSV
           height = proof[:height]
           return unless height
 
-          existing = Block.first(height: height)
+          existing = Models::Block.first(height: height)
           return existing.id if existing
 
           merkle_root = proof[:merkle_root] || derive_merkle_root(proof[:merkle_path])
           return unless merkle_root
 
-          Block.create(height: height, merkle_root: merkle_root, block_hash: proof[:block_hash]).id
+          Models::Block.create(height: height, merkle_root: merkle_root, block_hash: proof[:block_hash]).id
         rescue Sequel::UniqueConstraintViolation
-          Block.first!(height: height).id
+          Models::Block.first!(height: height).id
         end
 
         def derive_merkle_root(merkle_path_binary)

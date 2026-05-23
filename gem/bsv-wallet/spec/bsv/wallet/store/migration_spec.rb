@@ -19,13 +19,13 @@ RSpec.describe 'Schema migration', :store do
     end
   end
 
-  describe 'CHECK constraints for invalid values' do
+  describe 'value restrictions', :postgres do
     it 'rejects invalid broadcast values' do
       expect do
         db.transaction(savepoint: true) do
           db[:actions].insert(description: 'test action 12345', outgoing: true, nlocktime: 0, reference: SecureRandom.uuid, broadcast: 'bogus')
         end
-      end.to raise_error(Sequel::ConstraintViolation)
+      end.to raise_error(Sequel::DatabaseError)
     end
 
     it 'rejects invalid output_type values' do
@@ -38,7 +38,23 @@ RSpec.describe 'Schema migration', :store do
             output_type: 'bogus'
           )
         end
-      end.to raise_error(Sequel::ConstraintViolation)
+      end.to raise_error(Sequel::DatabaseError)
+    end
+  end
+
+  describe 'enums', :postgres do
+    it 'broadcast_intent has the correct values' do
+      values = db.from(
+        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'broadcast_intent'")
+      ).select_map(:enumlabel)
+      expect(values).to eq(%w[delayed inline none])
+    end
+
+    it 'output_type has the correct values' do
+      values = db.from(
+        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'output_type'")
+      ).select_map(:enumlabel)
+      expect(values).to eq(%w[root outbound])
     end
   end
 
@@ -121,7 +137,7 @@ RSpec.describe 'Schema migration', :store do
     end
 
     it 'generates reference UUID by default on actions' do
-      action = BSV::Wallet::Store::Action.create(description: 'uuid test 12345', outgoing: true, nlocktime: 0)
+      action = BSV::Wallet::Store::Models::Action.create(description: 'uuid test 12345', outgoing: true, nlocktime: 0)
       expect(action.reference.to_s).to match(/\A[0-9a-f]{8}-[0-9a-f]{4}-/)
     end
 

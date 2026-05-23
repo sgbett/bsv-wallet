@@ -2,7 +2,7 @@
 
 require_relative '../shared_context'
 
-RSpec.describe BSV::Wallet::Store::Setting, :store do
+RSpec.describe BSV::Wallet::Store::Models::Setting, :store do
   describe '.get / .set' do
     it 'stores and retrieves a value' do
       described_class.set('network', 'mainnet')

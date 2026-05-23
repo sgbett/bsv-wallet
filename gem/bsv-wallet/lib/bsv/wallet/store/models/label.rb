@@ -2,13 +2,15 @@
 
 module BSV
   module Wallet
-    module Store
-      class Label < Sequel::Model
-        plugin :timestamps, update_on_create: true
+    class Store
+      module Models
+        class Label < Sequel::Model
+          plugin :timestamps, update_on_create: true
 
-        many_to_many :actions, class: 'BSV::Wallet::Store::Action',
-                               join_table: :action_labels,
-                               left_key: :label_id, right_key: :action_id
+          many_to_many :actions, class: 'BSV::Wallet::Store::Models::Action',
+                                 join_table: :action_labels,
+                                 left_key: :label_id, right_key: :action_id
+        end
       end
     end
   end

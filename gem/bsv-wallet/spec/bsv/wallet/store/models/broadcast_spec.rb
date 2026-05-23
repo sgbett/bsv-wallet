@@ -2,8 +2,8 @@
 
 require_relative '../shared_context'
 
-RSpec.describe BSV::Wallet::Store::Broadcast, :store do
-  let(:action) { BSV::Wallet::Store::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
+RSpec.describe BSV::Wallet::Store::Models::Broadcast, :store do
+  let(:action) { BSV::Wallet::Store::Models::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
 
   it 'creates a broadcast record for an action' do
     broadcast = described_class.create(action_id: action.id)
@@ -63,7 +63,7 @@ RSpec.describe BSV::Wallet::Store::Broadcast, :store do
     end
 
     it 'returns false when action has no raw_tx' do
-      unsigned = BSV::Wallet::Store::Action.create(outgoing: true, description: 'unsigned', nlocktime: 0)
+      unsigned = BSV::Wallet::Store::Models::Action.create(outgoing: true, description: 'unsigned', nlocktime: 0)
       broadcast = described_class.create(action_id: unsigned.id)
       expect(broadcast).not_to be_needs_push
     end
@@ -186,10 +186,13 @@ RSpec.describe BSV::Wallet::Store::Broadcast, :store do
       expect(broadcast.reload.block_hash).to eq(binary)
     end
 
-    it 'stores competing_txs as JSON' do
+    it 'stores competing_txs' do
       broadcast.write!(make_response({ competing_txs: %w[tx1 tx2] }))
       broadcast.reload
-      expect(JSON.parse(broadcast.competing_txs)).to eq(%w[tx1 tx2])
+      stored = broadcast.competing_txs
+      # SQLite stores as JSON string, Postgres as native array
+      parsed = stored.is_a?(String) ? JSON.parse(stored) : Array(stored)
+      expect(parsed).to eq(%w[tx1 tx2])
     end
 
     it 'does nothing for empty data hash' do

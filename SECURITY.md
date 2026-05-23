@@ -1,6 +1,6 @@
 # Security policy
 
-The `bsv-wallet` and `bsv-wallet-postgres` gems are published from this repository.
+The `bsv-wallet` gem is published from this repository.
 
 ## Reporting a vulnerability
 
@@ -24,10 +24,9 @@ version of each gem** receives security fixes. If you are pinned to an
 older version, please upgrade before reporting — the fix for most
 issues is "use the current release".
 
-| Gem                  | Latest                                                                                | Receives security fixes |
-| -------------------- | ------------------------------------------------------------------------------------- | ----------------------- |
-| `bsv-wallet`         | see [rubygems.org/gems/bsv-wallet](https://rubygems.org/gems/bsv-wallet)             | yes                     |
-| `bsv-wallet-postgres`| see [rubygems.org/gems/bsv-wallet-postgres](https://rubygems.org/gems/bsv-wallet-postgres) | yes                |
+| Gem          | Latest                                                                    | Receives security fixes |
+| ------------ | ------------------------------------------------------------------------- | ----------------------- |
+| `bsv-wallet` | see [rubygems.org/gems/bsv-wallet](https://rubygems.org/gems/bsv-wallet) | yes                     |
 
 ## What to expect
 

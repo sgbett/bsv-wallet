@@ -2,21 +2,21 @@
 
 require_relative 'shared_context'
 
-RSpec.describe BSV::Wallet::Store::SQLite, :store do
+RSpec.describe BSV::Wallet::Store, :store do
   # Helpers
   def create_funded_output(satoshis: 1000, vout: 0, basket: nil)
-    source = BSV::Wallet::Store::Action.create(outgoing: false, description: 'test action',
-                                               wtxid: SecureRandom.random_bytes(32),
-                                               raw_tx: SecureRandom.random_bytes(100))
-    output = BSV::Wallet::Store::Output.create(action_id: source.id, satoshis: satoshis, vout: vout,
-                                               locking_script: SecureRandom.random_bytes(25),
-                                               derivation_prefix: SecureRandom.uuid,
-                                               derivation_suffix: '1',
-                                               sender_identity_key: 'self')
-    BSV::Wallet::Store::Spendable.create(output_id: output.id, action_id: source.id)
+    source = BSV::Wallet::Store::Models::Action.create(outgoing: false, description: 'test action',
+                                                       wtxid: SecureRandom.random_bytes(32),
+                                                       raw_tx: SecureRandom.random_bytes(100))
+    output = BSV::Wallet::Store::Models::Output.create(action_id: source.id, satoshis: satoshis, vout: vout,
+                                                       locking_script: SecureRandom.random_bytes(25),
+                                                       derivation_prefix: SecureRandom.uuid,
+                                                       derivation_suffix: '1',
+                                                       sender_identity_key: 'self')
+    BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: source.id)
     if basket
       basket_id = store.find_or_create_basket(name: basket)
-      BSV::Wallet::Store::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: source.id)
+      BSV::Wallet::Store::Models::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: source.id)
     end
     output
   end
@@ -46,7 +46,7 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
       )
 
       expect(result).to include(:id)
-      expect(BSV::Wallet::Store::Input.where(action_id: result[:id]).count).to eq(1)
+      expect(BSV::Wallet::Store::Models::Input.where(action_id: result[:id]).count).to eq(1)
     end
 
     it 'returns nil when an input is already locked (contention)' do
@@ -74,7 +74,7 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
     it 'preserves binary input_beef' do
       beef = SecureRandom.random_bytes(100)
       result = store.create_action(action: { description: 'with beef', nlocktime: 0, input_beef: beef })
-      action = BSV::Wallet::Store::Action[result[:id]]
+      action = BSV::Wallet::Store::Models::Action[result[:id]]
       expect(action.input_beef.encoding).to eq(Encoding::BINARY)
       expect(action.input_beef).to eq(beef)
     end
@@ -88,7 +88,7 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
 
       store.sign_action(action_id: result[:id], wtxid: wtxid, raw_tx: raw_tx)
 
-      action = BSV::Wallet::Store::Action[result[:id]]
+      action = BSV::Wallet::Store::Models::Action[result[:id]]
       expect(action.wtxid).to eq(wtxid)
       expect(action.raw_tx).to eq(raw_tx)
       expect(action.derived_status).to eq(:unprocessed)
@@ -115,11 +115,11 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
                              }
                            ])
 
-      outputs = BSV::Wallet::Store::Output.where(action_id: result[:id]).all
+      outputs = BSV::Wallet::Store::Models::Output.where(action_id: result[:id]).all
       expect(outputs.size).to eq(2)
 
       # Spendable entries
-      expect(BSV::Wallet::Store::Spendable.where(output_id: outputs.map(&:id)).count).to eq(2)
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: outputs.map(&:id)).count).to eq(2)
 
       # Basket memberships
       change_output = outputs.find { |o| o.vout == 0 }
@@ -150,11 +150,11 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
                              }
                            ])
 
-      outputs = BSV::Wallet::Store::Output.where(action_id: result[:id]).all
+      outputs = BSV::Wallet::Store::Models::Output.where(action_id: result[:id]).all
       expect(outputs.size).to eq(2)
 
       # Only the derived output gets a spendable row, not the outbound one
-      spendable_ids = BSV::Wallet::Store::Spendable.where(output_id: outputs.map(&:id)).select_map(:output_id)
+      spendable_ids = BSV::Wallet::Store::Models::Spendable.where(output_id: outputs.map(&:id)).select_map(:output_id)
       derived_output = outputs.find { |o| o.vout == 0 }
       outbound_output = outputs.find { |o| o.vout == 1 }
       expect(spendable_ids).to include(derived_output.id)
@@ -168,10 +168,10 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
       wtxid = SecureRandom.random_bytes(32)
       store.sign_action(action_id: result[:id], wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
 
-      proof = BSV::Wallet::Store::TxProof.first(wtxid: Sequel.blob(wtxid))
+      proof = BSV::Wallet::Store::Models::TxProof.first(wtxid: Sequel.blob(wtxid))
       store.link_proof(action_id: result[:id], tx_proof_id: proof.id)
 
-      action = BSV::Wallet::Store::Action[result[:id]]
+      action = BSV::Wallet::Store::Models::Action[result[:id]]
       expect(action.derived_status).to eq(:completed)
     end
   end
@@ -188,7 +188,7 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
 
       store.abort_action(action_id: result[:id])
 
-      expect(BSV::Wallet::Store::Action[result[:id]]).to be_nil
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
       expect(output.reload.spendable?).to be true
     end
 
@@ -198,12 +198,12 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
                         raw_tx: SecureRandom.random_bytes(100))
 
       # Create a broadcast entry — simulates having been submitted to ARC
-      BSV::Wallet::Store::Broadcast.create(action_id: result[:id])
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: result[:id])
 
       store.abort_action(action_id: result[:id])
 
       # Action should still exist — the broadcast guard prevented deletion
-      expect(BSV::Wallet::Store::Action[result[:id]]).not_to be_nil
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
     end
 
     it 'allows aborting a signed but not-broadcast action (deferred)' do
@@ -214,7 +214,7 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
       # No broadcast entry — this is a deferred action with unsigned tx
       store.abort_action(action_id: result[:id])
 
-      expect(BSV::Wallet::Store::Action[result[:id]]).to be_nil
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
     end
   end
 
@@ -359,14 +359,14 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
                              { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet',
                                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
                            ])
-      output = BSV::Wallet::Store::Output.where(action_id: action[:id]).first
+      output = BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).first
 
       store.relinquish_output(output_id: output.id)
 
       expect(output.reload.spendable?).to be false
       expect(output.output_basket).to be_nil
       # The output row still exists (immutable log)
-      expect(BSV::Wallet::Store::Output[output.id]).not_to be_nil
+      expect(BSV::Wallet::Store::Models::Output[output.id]).not_to be_nil
     end
   end
 
@@ -390,7 +390,7 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
     it 'creates a basket and returns its ID' do
       id = store.find_or_create_basket(name: 'tokens')
       expect(id).to be_a(Integer)
-      expect(BSV::Wallet::Store::Basket[id].name).to eq('tokens')
+      expect(BSV::Wallet::Store::Models::Basket[id].name).to eq('tokens')
     end
   end
 
@@ -464,9 +464,9 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
                              derivation_prefix: nil, derivation_suffix: nil,
                              sender_identity_key: nil)
       locking_script ||= SecureRandom.random_bytes(25)
-      source_action = BSV::Wallet::Store::Action.create(outgoing: false, description: 'test action',
-                                                        wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
-      output = BSV::Wallet::Store::Output.create(
+      source_action = BSV::Wallet::Store::Models::Action.create(outgoing: false, description: 'test action',
+                                                                wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
+      output = BSV::Wallet::Store::Models::Output.create(
         action_id: source_action.id,
         satoshis: satoshis,
         vout: vout,
@@ -476,7 +476,7 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
         sender_identity_key: sender_identity_key,
         output_type: derivation_prefix ? nil : 'root'
       )
-      BSV::Wallet::Store::Spendable.create(
+      BSV::Wallet::Store::Models::Spendable.create(
         output_id: output.id,
         action_id: source_action.id
       )
@@ -578,13 +578,13 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
 
     it 'raises when source action has nil wtxid' do
       # Create a source output whose parent action has no wtxid
-      source_action = BSV::Wallet::Store::Action.create(outgoing: false, description: 'test action')
-      output = BSV::Wallet::Store::Output.create(
+      source_action = BSV::Wallet::Store::Models::Action.create(outgoing: false, description: 'test action')
+      output = BSV::Wallet::Store::Models::Output.create(
         action_id: source_action.id, satoshis: 500, vout: 0,
         locking_script: SecureRandom.random_bytes(25),
         output_type: 'root'
       )
-      BSV::Wallet::Store::Spendable.create(output_id: output.id, action_id: source_action.id)
+      BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: source_action.id)
 
       action = store.create_action(
         action: { description: 'nil wtxid source', nlocktime: 0 },
@@ -596,14 +596,14 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
       end.to raise_error(RuntimeError, /nil wtxid/)
     end
 
-    it 'rejects corrupt wtxid (hex instead of binary) at database level' do
+    it 'rejects corrupt wtxid (hex instead of binary) at database level', :postgres do
       # A 64-char hex string is 64 bytes, not 32 — the wtxid_length CHECK
       # constraint catches this before the application ever sees it.
       hex_wtxid = 'a' * 64
       expect do
-        BSV::Wallet::Store::Action.create(outgoing: false, description: 'test action',
-                                          wtxid: Sequel.blob(hex_wtxid),
-                                          raw_tx: SecureRandom.random_bytes(100))
+        BSV::Wallet::Store::Models::Action.create(outgoing: false, description: 'test action',
+                                                  wtxid: Sequel.blob(hex_wtxid),
+                                                  raw_tx: SecureRandom.random_bytes(100))
       end.to raise_error(Sequel::CheckConstraintViolation, /wtxid_length/)
     end
   end
@@ -649,8 +649,8 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
 
     it 'excludes outputs locked by inputs' do
       output = create_funded_output(satoshis: 9999, vout: 0)
-      lock_action = BSV::Wallet::Store::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
-      BSV::Wallet::Store::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
+      lock_action = BSV::Wallet::Store::Models::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
+      BSV::Wallet::Store::Models::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
       candidates = store.find_spendable(satoshis: 9999, basket: 'default')
       expect(candidates.map { |c| c[:id] }).not_to include(output.id)
@@ -666,21 +666,21 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
                         raw_tx: SecureRandom.random_bytes(100))
 
       # Backdate the action
-      BSV::Wallet::Store::Action.where(id: result[:id]).update(created_at: Time.now - 600)
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 600)
 
       count = store.reap_stale_actions(threshold: 300)
       expect(count).to eq(1)
-      expect(BSV::Wallet::Store::Action[result[:id]]).to be_nil
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
     end
 
     it 'does not reap nosend actions' do
       result = store.create_action(action: { description: 'nosend', nlocktime: 0, broadcast: :none })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
-      BSV::Wallet::Store::Action.where(id: result[:id]).update(created_at: Time.now - 600)
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 600)
 
       store.reap_stale_actions(threshold: 300)
-      expect(BSV::Wallet::Store::Action[result[:id]]).not_to be_nil
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
     end
 
     it 'does not reap actions with outputs (promoted)' do
@@ -691,10 +691,10 @@ RSpec.describe BSV::Wallet::Store::SQLite, :store do
                              { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
                                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
                            ])
-      BSV::Wallet::Store::Action.where(id: result[:id]).update(created_at: Time.now - 600)
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 600)
 
       store.reap_stale_actions(threshold: 300)
-      expect(BSV::Wallet::Store::Action[result[:id]]).not_to be_nil
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
     end
   end
 end
