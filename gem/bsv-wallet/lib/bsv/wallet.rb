@@ -33,5 +33,8 @@ module BSV
 
     # Engine (Layer 3 — orchestration)
     autoload :Engine, 'bsv/wallet/engine'
+
+    # Daemon (walletd runtime — Async reactor host)
+    autoload :Daemon, 'bsv/wallet/daemon'
   end
 end
