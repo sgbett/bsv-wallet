@@ -70,7 +70,9 @@ module BSV
           fields[:block_height] = data[:block_height] if data[:block_height]
           fields[:merkle_path] = decode_hex(data[:merkle_path]) if data[:merkle_path]
           fields[:extra_info] = data[:extra_info] if data[:extra_info]
-          fields[:competing_txs] = JSON.generate(data[:competing_txs]) if data[:competing_txs]
+          if data[:competing_txs]
+            fields[:competing_txs] = db.database_type == :postgres ? Sequel.pg_array(data[:competing_txs]) : JSON.generate(data[:competing_txs])
+          end
 
           update(fields) unless fields.empty?
         end

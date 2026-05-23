@@ -53,7 +53,9 @@ module BSV
             block_height: event[:block_height],
             merkle_path: event[:merkle_path] ? Sequel.blob(event[:merkle_path]) : nil,
             extra_info: event[:extra_info],
-            competing_txs: event[:competing_txs] ? JSON.generate(event[:competing_txs]) : nil
+            competing_txs: if event[:competing_txs]
+                             @db.database_type == :postgres ? Sequel.pg_array(event[:competing_txs]) : JSON.generate(event[:competing_txs])
+                           end
           )
 
           {
