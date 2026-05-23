@@ -32,9 +32,6 @@ module BSV
     # Default store (SQLite-backed persistence)
     autoload :Store, 'bsv/wallet/store'
 
-    # Background polling loop (legacy — see PollingScheduler)
-    autoload :Daemon, 'bsv/wallet/daemon'
-
     # Async task scheduling (default implementation of Interface::Scheduler)
     autoload :PollingScheduler, 'bsv/wallet/polling_scheduler'
 
