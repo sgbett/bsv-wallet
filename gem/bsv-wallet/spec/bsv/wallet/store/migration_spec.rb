@@ -19,13 +19,16 @@ RSpec.describe 'Schema migration', :store do
     end
   end
 
-  describe 'CHECK constraints for invalid values' do
+  describe 'value restrictions' do
+    # SQLite enforces via CHECK constraints (Sequel::ConstraintViolation).
+    # Postgres enforces via enums (Sequel::DatabaseError wrapping
+    # PG::InvalidTextRepresentation). Both are Sequel::DatabaseError.
     it 'rejects invalid broadcast values' do
       expect do
         db.transaction(savepoint: true) do
           db[:actions].insert(description: 'test action 12345', outgoing: true, nlocktime: 0, reference: SecureRandom.uuid, broadcast: 'bogus')
         end
-      end.to raise_error(Sequel::ConstraintViolation)
+      end.to raise_error(Sequel::DatabaseError)
     end
 
     it 'rejects invalid output_type values' do
@@ -38,7 +41,7 @@ RSpec.describe 'Schema migration', :store do
             output_type: 'bogus'
           )
         end
-      end.to raise_error(Sequel::ConstraintViolation)
+      end.to raise_error(Sequel::DatabaseError)
     end
   end
 

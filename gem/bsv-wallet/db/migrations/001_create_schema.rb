@@ -1,34 +1,29 @@
 # frozen_string_literal: true
 
-# Unified wallet schema — works on both SQLite and Postgres.
-# Derived from reference/schema.md.
+# Unified wallet schema — Postgres DDL with SQLite compatibility guards.
 #
-# Backend-specific differences:
-#   - Primary keys: SQLite uses autoincrement integer; Postgres uses BIGINT IDENTITY
-#   - Enums: Postgres uses pg_enum; SQLite uses CHECK constraints
-#   - Triggers: Syntax differs but enforces the same invariant
-#   - competing_txs: Postgres uses text[]; SQLite uses text (JSON)
-#   - reference default: Postgres uses gen_random_uuid(); SQLite uses Ruby before_create
+# This migration produces the same schema on both backends. The Postgres
+# DDL is the canonical reference; guards translate where SQLite needs
+# different syntax (column types, enums, triggers, primary keys).
+#
+# Derived from the original Postgres migrations (001–004) flattened
+# into a single greenfield migration.
 
 Sequel.migration do
   up do
     postgres = database_type == :postgres
 
-    # Helper: backend-appropriate primary key
-    pk = lambda { |t|
-      if postgres
-        t.column :id, :bigint, primary_key: true, identity: :always
-      else
-        t.primary_key :id
-      end
-    }
+    # Column type mapping — Postgres-native names, SQLite equivalents.
+    # Sequel passes Symbol types through as literal DDL; Postgres rejects
+    # :blob and :datetime. This hash lets column definitions read as
+    # Postgres while emitting correct types for both backends.
+    c = {}
+    c[:bytea] = postgres ? :bytea : :blob
+    c[:timestamptz] = postgres ? :timestamptz : :datetime
+    c[:broadcast_intent] = postgres ? :broadcast_intent : :text
+    c[:output_type] = postgres ? :output_type : :text
 
-    # Helper: typed foreign key (bigint on Postgres, default on SQLite)
-    fk_opts = ->(opts) { postgres ? opts.merge(type: :bigint) : opts }
-
-    # Helper: binary column type (bytea on Postgres, blob on SQLite)
-    bin = postgres ? :bytea : :blob
-
+    # Enums (Postgres only — SQLite uses CHECK constraints below)
     if postgres
       extension :pg_enum
       create_enum(:broadcast_intent, %w[delayed inline none])
@@ -37,12 +32,13 @@ Sequel.migration do
 
     # 1. blocks — known block headers (chain tracker's local view)
     create_table(:blocks) do
-      pk.call(self)
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
       column :height, :integer, null: false, unique: true
-      column :merkle_root, bin, null: false
-      column :block_hash, bin
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :merkle_root, c[:bytea], null: false
+      column :block_hash, c[:bytea]
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       constraint(:height_range) { height >= 0 }
       constraint(:merkle_root_length) { length(merkle_root) =~ 32 }
@@ -51,14 +47,15 @@ Sequel.migration do
 
     # 2. tx_proofs — merkle inclusion proofs (settlement evidence)
     create_table(:tx_proofs) do
-      pk.call(self)
-      column :wtxid, bin, null: false, unique: true
-      foreign_key :block_id, :blocks, **fk_opts.call({})
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      column :wtxid, c[:bytea], null: false, unique: true
+      foreign_key :block_id, :blocks, type: :bigint
       column :block_index, :integer
-      column :merkle_path, bin
-      column :raw_tx, bin, null: false
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :merkle_path, c[:bytea]
+      column :raw_tx, c[:bytea], null: false
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       constraint(:wtxid_length) { length(wtxid) =~ 32 }
       constraint(:raw_tx_min_length) { length(raw_tx) >= 20 }
@@ -66,9 +63,10 @@ Sequel.migration do
 
     # 3. actions — transaction lifecycle
     create_table(:actions) do
-      pk.call(self)
-      foreign_key :tx_proof_id, :tx_proofs, **fk_opts.call({})
-      column :wtxid, bin, unique: true
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      foreign_key :tx_proof_id, :tx_proofs, type: :bigint
+      column :wtxid, c[:bytea], unique: true
       if postgres
         column :reference, :uuid, null: false, unique: true, default: Sequel.function(:gen_random_uuid)
       else
@@ -77,16 +75,12 @@ Sequel.migration do
       column :outgoing, :boolean, null: false, default: true
       column :description, :text, null: false
       column :version, :integer
-      column :nlocktime, :integer
-      if postgres
-        column :broadcast, :broadcast_intent, null: false, default: 'delayed'
-      else
-        column :broadcast, :text, null: false, default: 'delayed'
-      end
-      column :raw_tx, bin
-      column :input_beef, bin
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :nlocktime, :bigint
+      column :broadcast, c[:broadcast_intent], null: false, default: 'delayed'
+      column :raw_tx, c[:bytea]
+      column :input_beef, c[:bytea]
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       index :broadcast
 
@@ -94,24 +88,24 @@ Sequel.migration do
       constraint(:description_length, 'length(description) BETWEEN 5 AND 50')
       constraint(:nlocktime_range, 'NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)')
       constraint(:wtxid_raw_tx_parity, '(wtxid IS NULL) = (raw_tx IS NULL)')
-      # SQLite needs a CHECK constraint for broadcast values; Postgres uses the enum
       constraint(:broadcast_values, "broadcast IN ('delayed', 'inline', 'none')") unless postgres
     end
 
     # 4. broadcasts — ARC lifecycle
     create_table(:broadcasts) do
-      pk.call(self)
-      foreign_key :action_id, :actions, **fk_opts.call(null: false, unique: true)
-      column :broadcast_at, :datetime
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      foreign_key :action_id, :actions, type: :bigint, null: false, unique: true
+      column :broadcast_at, c[:timestamptz]
       column :tx_status, :text
       column :arc_status, :integer
-      column :block_hash, bin
+      column :block_hash, c[:bytea]
       column :block_height, :integer
-      column :merkle_path, bin
+      column :merkle_path, c[:bytea]
       column :extra_info, :text
       column :competing_txs, postgres ? 'text[]' : :text
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       constraint(:block_hash_length, 'block_hash IS NULL OR length(block_hash) = 32')
       constraint(:block_height_range, 'block_height IS NULL OR block_height >= 0')
@@ -119,12 +113,13 @@ Sequel.migration do
 
     # 5. baskets — output grouping with replenishment policy
     create_table(:baskets) do
-      pk.call(self)
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
       column :name, :text, null: false, unique: true
       column :target_count, :integer
       column :target_value, :integer
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       constraint(:name_length, 'length(name) BETWEEN 1 AND 300')
       constraint(:name_not_default, "name != 'default'")
@@ -134,17 +129,14 @@ Sequel.migration do
 
     # 6. outputs — immutable append-only log
     create_table(:outputs) do
-      pk.call(self)
-      foreign_key :action_id, :actions, **fk_opts.call(on_delete: :set_null)
-      column :satoshis, :integer, null: false
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :locking_script, bin, null: false
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      foreign_key :action_id, :actions, type: :bigint, on_delete: :set_null
+      column :satoshis, :bigint, null: false
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :locking_script, c[:bytea], null: false
       column :vout, :integer, null: false
-      if postgres
-        column :output_type, :output_type
-      else
-        column :output_type, :text
-      end
+      column :output_type, c[:output_type]
       column :derivation_prefix, :text
       column :derivation_suffix, :text
       column :sender_identity_key, :text
@@ -160,15 +152,15 @@ Sequel.migration do
       constraint(:derived_needs_prefix, 'output_type IS NOT NULL OR derivation_prefix IS NOT NULL')
       constraint(:derived_needs_suffix, 'output_type IS NOT NULL OR derivation_suffix IS NOT NULL')
       constraint(:derived_needs_sender, 'output_type IS NOT NULL OR sender_identity_key IS NOT NULL')
-      # SQLite needs a CHECK for output_type values; Postgres uses the enum
       constraint(:output_type_values, "output_type IS NULL OR output_type IN ('root', 'outbound')") unless postgres
     end
 
     # 7. spendable — the UTXO set (pure set membership)
     create_table(:spendable) do
-      pk.call(self)
-      foreign_key :output_id, :outputs, **fk_opts.call(null: false, unique: true)
-      foreign_key :action_id, :actions, **fk_opts.call(null: false, on_delete: :cascade)
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      foreign_key :output_id, :outputs, type: :bigint, null: false, unique: true
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
     end
 
     # Trigger: outbound outputs must never have a spendable row
@@ -204,9 +196,10 @@ Sequel.migration do
 
     # 8. output_details — display and application metadata
     create_table(:output_details) do
-      pk.call(self)
-      foreign_key :output_id, :outputs, **fk_opts.call(null: false, unique: true)
-      foreign_key :action_id, :actions, **fk_opts.call(null: false, on_delete: :cascade)
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      foreign_key :output_id, :outputs, type: :bigint, null: false, unique: true
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
       column :change, :boolean, null: false, default: false
       column :type, :text
       column :purpose, :text
@@ -219,26 +212,28 @@ Sequel.migration do
 
     # 9. output_baskets — basket membership
     create_table(:output_baskets) do
-      pk.call(self)
-      foreign_key :output_id, :outputs, **fk_opts.call(null: false, unique: true)
-      foreign_key :action_id, :actions, **fk_opts.call(null: false, on_delete: :cascade)
-      foreign_key :basket_id, :baskets, **fk_opts.call(null: false)
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      foreign_key :output_id, :outputs, type: :bigint, null: false, unique: true
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
+      foreign_key :basket_id, :baskets, type: :bigint, null: false
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       index :basket_id
     end
 
     # 10. inputs — structural lock mechanism
     create_table(:inputs) do
-      pk.call(self)
-      foreign_key :action_id, :actions, **fk_opts.call(null: false, on_delete: :cascade)
-      foreign_key :output_id, :outputs, **fk_opts.call(null: false)
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
+      foreign_key :output_id, :outputs, type: :bigint, null: false
       column :vin, :integer, null: false
-      column :nsequence, :integer, null: false, default: 4_294_967_295
+      column :nsequence, :bigint, null: false, default: 4_294_967_295
       column :description, :text
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       unique :output_id
       unique %i[action_id vin]
@@ -249,21 +244,23 @@ Sequel.migration do
 
     # 11. labels — label definitions
     create_table(:labels) do
-      pk.call(self)
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
       column :label, :text, null: false, unique: true
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       constraint(:label_length, 'length(label) BETWEEN 1 AND 300')
     end
 
     # 12. action_labels — join table
     create_table(:action_labels) do
-      pk.call(self)
-      foreign_key :action_id, :actions, **fk_opts.call(null: false, on_delete: :cascade)
-      foreign_key :label_id, :labels, **fk_opts.call(null: false)
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
+      foreign_key :label_id, :labels, type: :bigint, null: false
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       unique %i[action_id label_id]
       index :label_id
@@ -271,21 +268,23 @@ Sequel.migration do
 
     # 13. tags — tag definitions
     create_table(:tags) do
-      pk.call(self)
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
       column :tag, :text, null: false, unique: true
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       constraint(:tag_length, 'length(tag) BETWEEN 1 AND 300')
     end
 
     # 14. output_tags — join table
     create_table(:output_tags) do
-      pk.call(self)
-      foreign_key :output_id, :outputs, **fk_opts.call(null: false)
-      foreign_key :tag_id, :tags, **fk_opts.call(null: false)
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      foreign_key :output_id, :outputs, type: :bigint, null: false
+      foreign_key :tag_id, :tags, type: :bigint, null: false
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       unique %i[output_id tag_id]
       index :tag_id
@@ -293,7 +292,8 @@ Sequel.migration do
 
     # 15. certificates — identity certificates (BRC-52)
     create_table(:certificates) do
-      pk.call(self)
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
       column :type, :text, null: false
       column :subject, :text
       column :serial_number, :text, null: false
@@ -301,8 +301,8 @@ Sequel.migration do
       column :verifier, :text
       column :revocation_outpoint, :text
       column :signature, :text
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       unique %i[type serial_number certifier]
       index :certifier
@@ -311,24 +311,26 @@ Sequel.migration do
 
     # 16. certificate_fields — per-field encryption for selective revelation
     create_table(:certificate_fields) do
-      pk.call(self)
-      foreign_key :certificate_id, :certificates, **fk_opts.call(null: false, on_delete: :cascade)
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
+      foreign_key :certificate_id, :certificates, type: :bigint, null: false, on_delete: :cascade
       column :name, :text, null: false
       column :value, :text
       column :master_key, :text
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
 
       unique %i[certificate_id name]
     end
 
     # 17. settings — key-value wallet configuration
     create_table(:settings) do
-      pk.call(self)
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id unless postgres
       column :key, :text, null: false, unique: true
       column :value, :text
-      column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :created_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
+      column :updated_at, c[:timestamptz], null: false, default: Sequel::CURRENT_TIMESTAMP
     end
   end
 
