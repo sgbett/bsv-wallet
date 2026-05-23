@@ -8,11 +8,11 @@ module BSV
     # Sequel::Model.db is safe — only one wallet per process.
     #
     # Backend selection:
-    #   - If DATABASE_URL is set, its scheme picks the backend
-    #     (postgres:// or postgresql:// → Postgres, anything else → SQLite).
-    #   - If DATABASE_URL is unset, the backend is determined by gem
-    #     presence: if bsv-wallet-postgres is in the bundle, Postgres is
-    #     used; otherwise the default SQLite store is used.
+    #   - If DATABASE_URL is set, its scheme determines the adapter
+    #     (postgres:// or postgresql:// → Postgres via pg gem,
+    #      anything else → SQLite).
+    #   - If DATABASE_URL is unset, defaults to SQLite at
+    #     ~/.bsv-wallet/<name>.db.
     #
     # @example
     #   wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
@@ -46,16 +46,14 @@ module BSV
 
         wif = env_fetch('WIF', wallet_name)
         db_url = env_fetch_optional('DATABASE_URL', wallet_name)
+        db_url ||= default_sqlite_url(wallet_name)
 
-        store_module = pick_backend(db_url)
-        db_url ||= default_url_for(store_module, wallet_name)
+        BSV::Wallet::Store::Connection.connect(db_url)
+        BSV::Wallet::Store::Connection.migrate!
+        BSV::Wallet::Store::Connection.bind_models!
+        db = BSV::Wallet::Store::Connection.db
 
-        store_module::Connection.connect(db_url)
-        store_module::Connection.migrate!
-        store_module::Connection.bind_models!
-        db = store_module::Connection.db
-
-        services = store_module.bootstrap(db: db)
+        services = BSV::Wallet::Store.bootstrap(db: db)
 
         private_key = BSV::Primitives::PrivateKey.from_wif(wif)
         key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
@@ -94,66 +92,16 @@ module BSV
         }
       end
 
-      # Pick a store backend module — returns the Store module itself
-      # (which exposes Connection + bootstrap), not the parent namespace.
+      # Build the default SQLite URL when DATABASE_URL is unset.
       #
-      # If db_url is set, its scheme drives the choice (explicit user
-      # intent wins). If unset, the gem-presence of bsv-wallet-postgres
-      # picks: present → Postgres, absent → SQLite default.
-      #
-      # @param db_url [String, nil]
-      # @return [Module] BSV::Wallet::Store or BSV::Wallet::Postgres::Store
-      def pick_backend(db_url)
-        if db_url
-          if postgres_url?(db_url)
-            require_postgres!
-          else
-            BSV::Wallet::Store
-          end
-        else
-          begin
-            require 'bsv-wallet-postgres'
-            BSV::Wallet::Postgres::Store
-          rescue LoadError
-            BSV::Wallet::Store
-          end
-        end
-      end
-
-      # Whether the given DB URL targets a Postgres backend. Matches the
-      # postgres:// and postgresql:// schemes case-insensitively.
-      #
-      # @param db_url [String]
-      # @return [Boolean]
-      def postgres_url?(db_url)
-        db_url.downcase.start_with?('postgres')
-      end
-
-      # Require the postgres backend gem, aborting with a helpful
-      # message if it isn't in the bundle.
-      def require_postgres!
-        require 'bsv-wallet-postgres'
-        BSV::Wallet::Postgres::Store
-      rescue LoadError
-        abort 'DATABASE_URL is postgres:// but bsv-wallet-postgres is not in your bundle. ' \
-              "Add `gem 'bsv-wallet-postgres'` to your Gemfile or unset DATABASE_URL to use SQLite."
-      end
-
-      # Build the default URL for a store backend when DATABASE_URL is unset.
-      #
-      # @param store_module [Module] BSV::Wallet::Store or BSV::Wallet::Postgres::Store
       # @param wallet_name [String, nil]
       # @return [String]
-      def default_url_for(store_module, wallet_name)
+      def default_sqlite_url(wallet_name)
+        require 'fileutils'
         suffix = wallet_name || 'default'
-        if store_module == BSV::Wallet::Store
-          require 'fileutils'
-          path = File.expand_path("~/.bsv-wallet/#{suffix}.db")
-          FileUtils.mkdir_p(File.dirname(path))
-          "sqlite://#{path}"
-        else
-          "postgres://localhost/bsv_wallet_#{suffix}"
-        end
+        path = File.expand_path("~/.bsv-wallet/#{suffix}.db")
+        FileUtils.mkdir_p(File.dirname(path))
+        "sqlite://#{path}"
       end
 
       # Extract wallet name from the argument list.

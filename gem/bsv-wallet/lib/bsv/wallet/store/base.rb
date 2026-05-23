@@ -13,10 +13,10 @@ module BSV
       # Including stores must provide:
       #
       #   - self.models      → the Module containing this backend's Sequel
-      #                        model classes (e.g. BSV::Wallet::Store or
-      #                        BSV::Wallet::Postgres::Store). Used by the
-      #                        private `models` accessor here to route lookups
-      #                        like `models::Action` to the right model.
+      #                        model classes (BSV::Wallet::Store). Used by
+      #                        the private `models` accessor here to route
+      #                        lookups like `models::Action` to the right
+      #                        model.
       #
       #   - try_lock_input(record_id:, inp:) → attempts to claim an input row;
       #                        returns truthy iff this insert won the race.
@@ -447,8 +447,8 @@ module BSV
 
         # Routes constant lookups like `models::Action` to the concrete
         # store's connection-bound model namespace. Each concrete store
-        # implements `self.models` to return its namespace (e.g.
-        # BSV::Wallet::Store or BSV::Wallet::Postgres::Store).
+        # implements `self.models` to return its namespace
+        # (BSV::Wallet::Store).
         def models
           self.class.models
         end

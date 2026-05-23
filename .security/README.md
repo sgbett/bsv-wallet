@@ -1,6 +1,6 @@
 # Security
 
-This directory holds security-related artefacts for the gems published from this repository (`bsv-wallet` and `bsv-wallet-postgres`):
+This directory holds security-related artefacts for the `bsv-wallet` gem published from this repository:
 
 - `advisories/` — draft and published security advisories. Each file corresponds to a GitHub Security Advisory (GHSA) and, where assigned, a CVE ID. Drafts live here before publication and are updated in-place when the advisory is published.
 

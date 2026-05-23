@@ -39,11 +39,14 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 
 ## Running Specs
 
-Each gem has its own Gemfile, spec_helper, and `.rspec` — specs must run from the gem's directory, not the repo root.
+Specs must run from the gem directory, not the repo root.
 
 ```bash
-# Wallet unit specs (fast, no infra)
+# Wallet unit specs (fast, SQLite, no infra)
 cd gem/bsv-wallet && bundle exec rspec spec/bsv spec/bin
+
+# Wallet unit specs against Postgres
+cd gem/bsv-wallet && DATABASE_URL=postgres://localhost/bsv_wallet_test bundle exec rspec spec/bsv spec/bin
 
 # Wallet integration specs (require BSV_WALLET_WIF_ALICE/BOB + Alice funded with >= 1m sats)
 cd gem/bsv-wallet && bundle exec rspec spec/integration
@@ -51,14 +54,9 @@ cd gem/bsv-wallet && bundle exec rspec spec/integration
 # All wallet specs (unit + integration)
 cd gem/bsv-wallet && bundle exec rspec
 
-# Postgres specs
-cd gem/bsv-wallet-postgres && bundle exec rspec
-
-# RuboCop (wallet gem only in CI)
+# RuboCop
 cd gem/bsv-wallet && bundle exec rubocop
 ```
-
-Running `bundle exec rspec gem/bsv-wallet-postgres/spec/` from the repo root will fail — the postgres spec_helper won't load, so model constants are uninitialized.
 
 ## Architecture Framework
 

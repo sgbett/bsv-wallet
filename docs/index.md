@@ -6,10 +6,7 @@ A Ruby implementation of the [BRC-100](https://github.com/bitcoin-sv/BRCs/blob/m
 
 This is a Ruby wallet, not a Ruby port of a TypeScript wallet. The BRC-100 specification defines the external contract; the implementation is idiomatic Ruby throughout.
 
-**Gems:**
-
-- `bsv-wallet` — core wallet implementing the BRC-100 interface
-- `bsv-wallet-postgres` — PostgreSQL storage adapter
+**Gem:** `bsv-wallet` — core wallet implementing the BRC-100 interface, supporting both SQLite and PostgreSQL backends.
 
 ## Key Design Principles
 
@@ -23,7 +20,7 @@ This is a Ruby wallet, not a Ruby port of a TypeScript wallet. The BRC-100 speci
 ```ruby
 # Gemfile
 gem 'bsv-wallet'
-gem 'bsv-wallet-postgres'  # or your preferred storage adapter
+gem 'pg'  # only if using PostgreSQL (defaults to SQLite)
 ```
 
 ## Documentation

@@ -26,7 +26,6 @@ Metrics/BlockLength:
 Naming/FileName:
   Exclude:
     - 'gem/bsv-wallet/lib/bsv-wallet.rb'
-    - 'gem/bsv-wallet-postgres/lib/bsv-wallet-postgres.rb'
 
 # a/b are used in secure_compare for constant-time comparison.
 # db is used throughout for Sequel database references.
@@ -92,7 +91,6 @@ Naming/PredicateMethod:
   Exclude:
     - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/store/**/*'
-    - 'gem/bsv-wallet-postgres/lib/bsv/wallet/postgres/store/**/*'
 
 Style/SafeNavigationChainLength:
   Exclude:
@@ -145,7 +143,6 @@ Naming/VariableNumber:
 # Schema and migration specs use string descriptions for integration suites.
 RSpec/DescribeClass:
   Exclude:
-    - 'gem/bsv-wallet-postgres/spec/bsv/wallet/postgres/migration_spec.rb'
     - 'gem/bsv-wallet/spec/bsv/wallet/store/migration_spec.rb'
     - 'gem/bsv-wallet/spec/bsv/wallet/store/constraints_spec.rb'
 
