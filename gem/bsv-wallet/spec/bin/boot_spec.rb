@@ -24,7 +24,7 @@ RSpec.describe BSV::Wallet::CLI do
           ctx = BSV::Wallet::CLI.boot
           raise 'engine missing' unless ctx[:engine].is_a?(BSV::Wallet::Engine)
           store_klass = ctx[:engine].instance_variable_get(:@store).class
-          raise "wrong store class \#{store_klass}" unless store_klass == BSV::Wallet::Store::SQLite
+          raise "wrong store class \#{store_klass}" unless store_klass == BSV::Wallet::Store::Persistence
           puts 'ok'
         RUBY
 

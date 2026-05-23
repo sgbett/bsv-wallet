@@ -19,7 +19,7 @@ end
 
 RSpec.shared_context 'store setup' do
   let(:db) { STORE_DB }
-  let(:store) { BSV::Wallet::Store::SQLite.new(db: db) }
+  let(:store) { BSV::Wallet::Store::Persistence.new(db: db) }
 
   let(:valid_wtxid) { SecureRandom.random_bytes(32) }
   let(:valid_raw_tx) { SecureRandom.random_bytes(191) }
