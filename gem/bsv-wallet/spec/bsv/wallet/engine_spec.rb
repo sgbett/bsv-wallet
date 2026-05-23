@@ -152,6 +152,13 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     context 'with inline broadcast' do
+      subject(:engine) do
+        described_class.new(
+          store: store, utxo_pool: utxo_pool,
+          services: services, network: :mainnet
+        )
+      end
+
       let(:broadcast_response) do
         double('ProtocolResponse', http_success?: true, data: {
                  tx_status: 'SEEN_ON_NETWORK', status: 200
@@ -161,13 +168,6 @@ RSpec.describe BSV::Wallet::Engine do
         svc = double('Services')
         allow(svc).to receive(:call).with(:broadcast, anything).and_return(broadcast_response)
         svc
-      end
-
-      subject(:engine) do
-        described_class.new(
-          store: store, utxo_pool: utxo_pool,
-          services: services, network: :mainnet
-        )
       end
 
       it 'broadcasts inline and promotes on acceptance' do
