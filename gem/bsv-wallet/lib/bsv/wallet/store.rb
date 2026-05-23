@@ -668,7 +668,10 @@ module BSV
         merkle_root = proof[:merkle_root] || derive_merkle_root(proof[:merkle_path])
         return unless merkle_root
 
-        models::Block.create(height: height, merkle_root: merkle_root, block_hash: proof[:block_hash]).id
+        root_bin = to_binary(merkle_root)
+        hash_bin = proof[:block_hash] ? to_binary(proof[:block_hash]) : nil
+
+        models::Block.create(height: height, merkle_root: root_bin, block_hash: hash_bin).id
       rescue Sequel::UniqueConstraintViolation
         models::Block.first!(height: height).id
       end

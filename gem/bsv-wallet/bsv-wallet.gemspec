@@ -24,8 +24,10 @@ Gem::Specification.new do |spec|
   }
 
   spec.files = Dir.chdir(__dir__) do
-    Dir.glob('lib/**/*') + Dir.glob('db/**/*')
+    Dir.glob('lib/**/*') + Dir.glob('db/**/*') + Dir.glob('bin/*')
   end + %w[LICENSE CHANGELOG.md]
+  spec.bindir = 'bin'
+  spec.executables = ['walletd']
   spec.require_paths = ['lib']
 
   spec.add_dependency 'async'
