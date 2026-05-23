@@ -29,8 +29,8 @@ Gem::Specification.new do |spec|
   spec.require_paths = ['lib']
 
   spec.add_dependency 'async'
-  spec.add_dependency 'logger'
   spec.add_dependency 'bsv-sdk'
+  spec.add_dependency 'logger'
   spec.add_dependency 'omq'
   spec.add_dependency 'sequel', '~> 5.0'
   spec.add_dependency 'sqlite3'
