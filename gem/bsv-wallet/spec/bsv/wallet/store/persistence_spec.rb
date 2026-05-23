@@ -991,6 +991,68 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
+  # --- Pending Proofs ---
+
+  describe '#pending_proofs' do
+    def create_signed_action(broadcast: 'delayed', outgoing: true, tx_proof_id: nil)
+      action = BSV::Wallet::Store::Models::Action.create(
+        outgoing: outgoing, description: 'test action', nlocktime: 0,
+        broadcast: broadcast,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+      action.update(tx_proof_id: tx_proof_id) if tx_proof_id
+      action
+    end
+
+    it 'returns actions that need proofs' do
+      action = create_signed_action
+      results = store.pending_proofs
+      expect(results.size).to eq(1)
+      expect(results.first[:id]).to eq(action.id)
+      expect(results.first[:wtxid]).to eq(action.wtxid)
+    end
+
+    it 'excludes actions with tx_proof_id set' do
+      action = create_signed_action
+      proof_id = store.save_proof(wtxid: action.wtxid, proof: {
+                                    height: 800_000, block_index: 1,
+                                    merkle_path: SecureRandom.random_bytes(64),
+                                    raw_tx: action.raw_tx,
+                                    merkle_root: SecureRandom.random_bytes(32)
+                                  })
+      store.link_proof(action_id: action.id, tx_proof_id: proof_id)
+      expect(store.pending_proofs).to be_empty
+    end
+
+    it 'excludes actions with broadcast none' do
+      create_signed_action(broadcast: 'none')
+      expect(store.pending_proofs).to be_empty
+    end
+
+    it 'excludes non-outgoing actions' do
+      create_signed_action(outgoing: false)
+      expect(store.pending_proofs).to be_empty
+    end
+
+    it 'excludes unsigned actions (no wtxid)' do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'unsigned', nlocktime: 0, broadcast: 'delayed'
+      )
+      expect(store.pending_proofs).to be_empty
+    end
+
+    it 'respects the limit parameter' do
+      3.times { create_signed_action }
+      results = store.pending_proofs(limit: 2)
+      expect(results.size).to eq(2)
+    end
+
+    it 'returns empty array when nothing pending' do
+      expect(store.pending_proofs).to eq([])
+    end
+  end
+
   # --- Reaper ---
 
   describe '#reap_stale_actions' do

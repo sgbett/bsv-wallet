@@ -272,6 +272,17 @@ module BSV
         { total: total, outputs: outputs }
       end
 
+      def pending_proofs(limit: 100)
+        models::Action
+          .where(outgoing: true)
+          .where(Sequel.~(wtxid: nil))
+          .where(tx_proof_id: nil)
+          .where(Sequel.~(broadcast: 'none'))
+          .limit(limit)
+          .all
+          .map { |a| action_to_hash(a) }
+      end
+
       def relinquish_output(output_id:)
         @db.transaction do
           models::Spendable.where(output_id: output_id).delete
