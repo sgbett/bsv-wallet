@@ -5,7 +5,7 @@ require 'rack'
 
 module BSV
   module Wallet
-    module Store
+    class Store
       class BroadcastCallback
         def initialize(broadcast_queue:)
           @broadcast_queue = broadcast_queue

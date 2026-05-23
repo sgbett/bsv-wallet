@@ -2,11 +2,13 @@
 
 module BSV
   module Wallet
-    module Store
-      class Block < Sequel::Model
-        plugin :timestamps, update_on_create: true
+    class Store
+      module Models
+        class Block < Sequel::Model
+          plugin :timestamps, update_on_create: true
 
-        one_to_many :tx_proofs, class: 'BSV::Wallet::Store::TxProof'
+          one_to_many :tx_proofs, class: 'BSV::Wallet::Store::Models::TxProof'
+        end
       end
     end
   end

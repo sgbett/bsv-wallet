@@ -48,12 +48,13 @@ module BSV
         db_url = env_fetch_optional('DATABASE_URL', wallet_name)
         db_url ||= default_sqlite_url(wallet_name)
 
-        BSV::Wallet::Store::Connection.connect(db_url)
-        BSV::Wallet::Store::Connection.migrate!
-        BSV::Wallet::Store::Connection.bind_models!
-        db = BSV::Wallet::Store::Connection.db
+        store = BSV::Wallet::Store.connect(db_url)
+        store.migrate!
+        db = store.db
 
-        services = BSV::Wallet::Store.bootstrap(db: db)
+        utxo_pool = BSV::Wallet::Store::UTXOPool.new(store: store)
+        proof_store = BSV::Wallet::Store::ProofStore.new(db: db)
+        broadcast_queue = BSV::Wallet::Store::BroadcastQueue.new(db: db)
 
         private_key = BSV::Primitives::PrivateKey.from_wif(wif)
         key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
@@ -70,10 +71,10 @@ module BSV
         end
 
         engine = BSV::Wallet::Engine.new(
-          store: services[:store],
-          utxo_pool: services[:utxo_pool],
-          broadcast_queue: services[:broadcast_queue],
-          proof_store: services[:proof_store],
+          store: store,
+          utxo_pool: utxo_pool,
+          broadcast_queue: broadcast_queue,
+          proof_store: proof_store,
           key_deriver: key_deriver,
           chain_tracker: chain_tracker,
           network_provider: network_provider,
@@ -83,9 +84,9 @@ module BSV
 
         {
           engine: engine,
-          utxo_pool: services[:utxo_pool],
+          utxo_pool: utxo_pool,
           key_deriver: key_deriver,
-          proof_store: services[:proof_store],
+          proof_store: proof_store,
           db: db,
           identity_key: key_deriver.identity_key,
           private_key: private_key

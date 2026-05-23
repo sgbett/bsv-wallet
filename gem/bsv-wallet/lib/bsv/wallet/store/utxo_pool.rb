@@ -2,7 +2,7 @@
 
 module BSV
   module Wallet
-    module Store
+    class Store
       class UTXOPool
         include BSV::Wallet::Interface::UTXOPool
 
@@ -36,11 +36,11 @@ module BSV
         end
 
         def balance
-          (Output.spendable.sum(:satoshis) || 0).to_i
+          (Models::Output.spendable.sum(:satoshis) || 0).to_i
         end
 
         def spendable_count
-          Output.spendable.count
+          Models::Output.spendable.count
         end
 
         def change_output_count

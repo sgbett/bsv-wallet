@@ -137,7 +137,7 @@ RSpec.describe 'Schema migration', :store do
     end
 
     it 'generates reference UUID by default on actions' do
-      action = BSV::Wallet::Store::Action.create(description: 'uuid test 12345', outgoing: true, nlocktime: 0)
+      action = BSV::Wallet::Store::Models::Action.create(description: 'uuid test 12345', outgoing: true, nlocktime: 0)
       expect(action.reference.to_s).to match(/\A[0-9a-f]{8}-[0-9a-f]{4}-/)
     end
 

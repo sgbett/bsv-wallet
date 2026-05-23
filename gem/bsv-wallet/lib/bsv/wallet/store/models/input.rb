@@ -2,12 +2,14 @@
 
 module BSV
   module Wallet
-    module Store
-      class Input < Sequel::Model
-        plugin :timestamps, update_on_create: true
+    class Store
+      module Models
+        class Input < Sequel::Model
+          plugin :timestamps, update_on_create: true
 
-        many_to_one :action, class: 'BSV::Wallet::Store::Action'
-        many_to_one :output, class: 'BSV::Wallet::Store::Output'
+          many_to_one :action, class: 'BSV::Wallet::Store::Models::Action'
+          many_to_one :output, class: 'BSV::Wallet::Store::Models::Output'
+        end
       end
     end
   end

@@ -7,7 +7,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
 
   let(:services) { nil }
   let(:action) do
-    BSV::Wallet::Store::Action.create(
+    BSV::Wallet::Store::Models::Action.create(
       outgoing: true,
       description: 'test action',
       nlocktime: 0,
@@ -65,7 +65,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
 
   describe '#handle_event' do
     it 'updates broadcast record from an ARC event' do
-      BSV::Wallet::Store::Broadcast.create(action_id: action.id)
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
 
       result = queue.handle_event(
         wtxid: action.wtxid,
@@ -94,7 +94,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
       )
 
       expect(result[:action_id]).to eq(action.id)
-      expect(BSV::Wallet::Store::Broadcast.where(action_id: action.id).count).to eq(1)
+      expect(BSV::Wallet::Store::Models::Broadcast.where(action_id: action.id).count).to eq(1)
     end
 
     it 'returns nil for unknown wtxid' do
@@ -110,7 +110,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
 
   describe '#status' do
     it 'returns broadcast status for an action' do
-      BSV::Wallet::Store::Broadcast.create(action_id: action.id, tx_status: 'SENDING')
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, tx_status: 'SENDING')
       result = queue.status(action_id: action.id)
       expect(result[:tx_status]).to eq('SENDING')
     end
@@ -142,7 +142,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
     it 'fetches status for stale broadcasts through services' do
       action.update(wtxid: Sequel.blob(SecureRandom.random_bytes(32))) unless action.wtxid
 
-      BSV::Wallet::Store::Broadcast.create(
+      BSV::Wallet::Store::Models::Broadcast.create(
         action_id: action.id,
         broadcast_at: Time.now - 60
       )
@@ -154,7 +154,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
     end
 
     it 'skips broadcasts with terminal status' do
-      BSV::Wallet::Store::Broadcast.create(
+      BSV::Wallet::Store::Models::Broadcast.create(
         action_id: action.id,
         broadcast_at: Time.now - 60,
         tx_status: 'MINED'
@@ -166,7 +166,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
 
     it 'skips broadcasts without services' do
       no_services_queue = described_class.new
-      BSV::Wallet::Store::Broadcast.create(
+      BSV::Wallet::Store::Models::Broadcast.create(
         action_id: action.id,
         broadcast_at: Time.now - 60
       )

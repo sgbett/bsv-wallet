@@ -2,7 +2,7 @@
 
 module BSV
   module Wallet
-    module Store
+    class Store
       class ArcAdapter
         def initialize(provider)
           @provider = provider

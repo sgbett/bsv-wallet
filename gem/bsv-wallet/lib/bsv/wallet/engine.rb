@@ -17,12 +17,13 @@ module BSV
     #   engine = ctx[:engine]
     #
     # @example Direct injection (any backend; pass any objects implementing the interfaces)
-    #   BSV::Wallet::Store::Connection.connect('sqlite://wallet.db')
-    #   BSV::Wallet::Store::Connection.migrate!
-    #   BSV::Wallet::Store::Connection.bind_models!
-    #   services = BSV::Wallet::Store.bootstrap(db: BSV::Wallet::Store::Connection.db)
+    #   store = BSV::Wallet::Store.connect('sqlite://wallet.db')
+    #   store.migrate!
     #   engine = BSV::Wallet::Engine.new(
-    #     **services,
+    #     store:         store,
+    #     utxo_pool:     BSV::Wallet::Store::UTXOPool.new(store: store),
+    #     broadcast_queue: BSV::Wallet::Store::BroadcastQueue.new(db: store.db),
+    #     proof_store:   BSV::Wallet::Store::ProofStore.new(db: store.db),
     #     key_deriver:   key_deriver,
     #     chain_tracker: chain_tracker
     #   )

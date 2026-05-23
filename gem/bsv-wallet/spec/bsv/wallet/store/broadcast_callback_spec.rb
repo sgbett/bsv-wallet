@@ -11,7 +11,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastCallback, :store do
   let(:app) { described_class.new(broadcast_queue: broadcast_queue) }
 
   let(:action) do
-    BSV::Wallet::Store::Action.create(
+    BSV::Wallet::Store::Models::Action.create(
       outgoing: true,
       description: 'test action',
       nlocktime: 0,
@@ -24,7 +24,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastCallback, :store do
 
   describe 'POST /' do
     it 'parses ARC TransactionStatus JSON and delegates to handle_event' do
-      BSV::Wallet::Store::Broadcast.create(action_id: action.id)
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
 
       payload = {
         txid: txid_hex,
@@ -40,12 +40,12 @@ RSpec.describe BSV::Wallet::Store::BroadcastCallback, :store do
       post '/', payload, 'CONTENT_TYPE' => 'application/json'
       expect(last_response.status).to eq(200)
 
-      broadcast = BSV::Wallet::Store::Broadcast.first(action_id: action.id)
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
       expect(broadcast.tx_status).to eq('SEEN_ON_NETWORK')
     end
 
     it 'hex-decodes binary fields' do
-      BSV::Wallet::Store::Broadcast.create(action_id: action.id)
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
       block_hash = SecureRandom.random_bytes(32)
 
       payload = {
@@ -62,7 +62,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastCallback, :store do
       post '/', payload, 'CONTENT_TYPE' => 'application/json'
       expect(last_response.status).to eq(200)
 
-      broadcast = BSV::Wallet::Store::Broadcast.first(action_id: action.id)
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
       expect(broadcast.block_hash).to eq(block_hash)
       expect(broadcast.block_hash.encoding).to eq(Encoding::BINARY)
     end

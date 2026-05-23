@@ -481,7 +481,7 @@ RSpec.describe BSV::Wallet::Engine do
         action = store.find_action(reference: reference)
 
         # Delete the action directly (simulating reaper)
-        BSV::Wallet::Store::Action.where(id: action[:id]).delete
+        BSV::Wallet::Store::Models::Action.where(id: action[:id]).delete
 
         # Spendable entries are gone (cascade)
         listed_after = engine.list_outputs(basket: 'cascade_test')
@@ -801,7 +801,7 @@ RSpec.describe BSV::Wallet::Engine do
       expect(action).not_to be_nil
 
       # Query the underlying record to check tx_proof_id
-      action_record = BSV::Wallet::Store::Action.first(
+      action_record = BSV::Wallet::Store::Models::Action.first(
         wtxid: Sequel.blob(subject_wtxid)
       )
       expect(action_record.tx_proof_id).to eq(proof[:id])

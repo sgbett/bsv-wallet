@@ -2,8 +2,8 @@
 
 require_relative '../shared_context'
 
-RSpec.describe BSV::Wallet::Store::Output, :store do
-  let(:action) { BSV::Wallet::Store::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
+RSpec.describe BSV::Wallet::Store::Models::Output, :store do
+  let(:action) { BSV::Wallet::Store::Models::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
 
   def create_spendable_output(action_id: action.id, satoshis: 1000, vout: 0, **attrs)
     attrs[:locking_script] ||= SecureRandom.random_bytes(25)
@@ -11,7 +11,7 @@ RSpec.describe BSV::Wallet::Store::Output, :store do
     attrs[:derivation_suffix] ||= '1'
     attrs[:sender_identity_key] ||= 'self'
     output = described_class.create(action_id: action_id, satoshis: satoshis, vout: vout, **attrs)
-    BSV::Wallet::Store::Spendable.create(output_id: output.id, action_id: action_id)
+    BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: action_id)
     output
   end
 
@@ -45,26 +45,26 @@ RSpec.describe BSV::Wallet::Store::Output, :store do
 
     it 'has one spendable_entry' do
       output = create_spendable_output
-      expect(output.reload.spendable_entry).to be_a(BSV::Wallet::Store::Spendable)
+      expect(output.reload.spendable_entry).to be_a(BSV::Wallet::Store::Models::Spendable)
     end
 
     it 'has one detail' do
       output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
-      BSV::Wallet::Store::OutputDetail.create(output_id: output.id, action_id: action.id, description: 'test output')
+      BSV::Wallet::Store::Models::OutputDetail.create(output_id: output.id, action_id: action.id, description: 'test output')
       expect(output.reload.detail.description).to eq('test output')
     end
 
     it 'has one input (when claimed)' do
       output = create_spendable_output
-      lock_action = BSV::Wallet::Store::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
-      BSV::Wallet::Store::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
-      expect(output.reload.input).to be_a(BSV::Wallet::Store::Input)
+      lock_action = BSV::Wallet::Store::Models::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
+      BSV::Wallet::Store::Models::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
+      expect(output.reload.input).to be_a(BSV::Wallet::Store::Models::Input)
     end
 
     it 'has many tags' do
       output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
-      tag = BSV::Wallet::Store::Tag.create(tag: 'payment')
-      BSV::Wallet::Store::OutputTag.create(output_id: output.id, tag_id: tag.id)
+      tag = BSV::Wallet::Store::Models::Tag.create(tag: 'payment')
+      BSV::Wallet::Store::Models::OutputTag.create(output_id: output.id, tag_id: tag.id)
       expect(output.reload.tags.map(&:tag)).to eq(['payment'])
     end
   end
@@ -77,8 +77,8 @@ RSpec.describe BSV::Wallet::Store::Output, :store do
 
     it 'returns false when claimed by an input' do
       output = create_spendable_output
-      lock_action = BSV::Wallet::Store::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
-      BSV::Wallet::Store::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
+      lock_action = BSV::Wallet::Store::Models::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
+      BSV::Wallet::Store::Models::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
       expect(output.reload.spendable?).to be false
     end
 
@@ -101,8 +101,8 @@ RSpec.describe BSV::Wallet::Store::Output, :store do
       output = create_spendable_output(vout: 0)
       create_spendable_output(vout: 1)
 
-      lock_action = BSV::Wallet::Store::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
-      BSV::Wallet::Store::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
+      lock_action = BSV::Wallet::Store::Models::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
+      BSV::Wallet::Store::Models::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
       expect(described_class.spendable.count).to eq(1)
     end
@@ -110,22 +110,22 @@ RSpec.describe BSV::Wallet::Store::Output, :store do
 
   describe '.in_basket' do
     it 'filters outputs by basket name' do
-      basket = BSV::Wallet::Store::Basket.create(name: 'payments')
+      basket = BSV::Wallet::Store::Models::Basket.create(name: 'payments')
       output = create_spendable_output(vout: 0)
       create_spendable_output(vout: 1) # not in any basket
 
-      BSV::Wallet::Store::OutputBasket.create(output_id: output.id, basket_id: basket.id, action_id: action.id)
+      BSV::Wallet::Store::Models::OutputBasket.create(output_id: output.id, basket_id: basket.id, action_id: action.id)
 
       expect(described_class.in_basket('payments').count).to eq(1)
       expect(described_class.in_basket('other').count).to eq(0)
     end
 
     it 'treats outputs without basket rows as default basket' do
-      basket = BSV::Wallet::Store::Basket.create(name: 'payments')
+      basket = BSV::Wallet::Store::Models::Basket.create(name: 'payments')
       output = create_spendable_output(vout: 0)
       create_spendable_output(vout: 1) # not in any basket — implicit default
 
-      BSV::Wallet::Store::OutputBasket.create(output_id: output.id, basket_id: basket.id, action_id: action.id)
+      BSV::Wallet::Store::Models::OutputBasket.create(output_id: output.id, basket_id: basket.id, action_id: action.id)
 
       expect(described_class.in_basket('default').count).to eq(1)
     end

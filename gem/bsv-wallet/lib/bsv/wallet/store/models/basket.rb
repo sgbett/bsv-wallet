@@ -2,11 +2,13 @@
 
 module BSV
   module Wallet
-    module Store
-      class Basket < Sequel::Model
-        plugin :timestamps, update_on_create: true
+    class Store
+      module Models
+        class Basket < Sequel::Model
+          plugin :timestamps, update_on_create: true
 
-        one_to_many :output_baskets, class: 'BSV::Wallet::Store::OutputBasket'
+          one_to_many :output_baskets, class: 'BSV::Wallet::Store::Models::OutputBasket'
+        end
       end
     end
   end
