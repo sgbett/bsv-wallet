@@ -152,20 +152,23 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     context 'with inline broadcast' do
-      let(:push_response) do
+      let(:broadcast_response) do
         double('ProtocolResponse', http_success?: true, data: {
                  tx_status: 'SEEN_ON_NETWORK', status: 200
                })
       end
       let(:services) do
         svc = double('Services')
-        allow(svc).to receive(:push!) do |broadcast|
-          broadcast.write!(push_response)
-          push_response
-        end
+        allow(svc).to receive(:call).with(:broadcast, anything).and_return(broadcast_response)
         svc
       end
-      let(:broadcast_queue) { BSV::Wallet::Store::BroadcastQueue.new(services: services) }
+
+      subject(:engine) do
+        described_class.new(
+          store: store, utxo_pool: utxo_pool,
+          services: services, network: :mainnet
+        )
+      end
 
       it 'broadcasts inline and promotes on acceptance' do
         result = engine.create_action(
@@ -179,7 +182,7 @@ RSpec.describe BSV::Wallet::Engine do
         )
 
         expect(result[:txid]).not_to be_nil
-        expect(services).to have_received(:push!)
+        expect(services).to have_received(:call).with(:broadcast, anything)
 
         # Verify outputs were promoted
         listed = engine.list_outputs(basket: 'payments')
@@ -604,7 +607,6 @@ RSpec.describe BSV::Wallet::Engine do
     let(:engine_with_tracker) do
       described_class.new(
         store: store, utxo_pool: utxo_pool,
-        broadcast_queue: broadcast_queue, proof_store: proof_store,
         chain_tracker: chain_tracker_mock, network: :mainnet
       )
     end
@@ -922,7 +924,6 @@ RSpec.describe BSV::Wallet::Engine do
 
         engine_reject = described_class.new(
           store: store, utxo_pool: utxo_pool,
-          broadcast_queue: broadcast_queue, proof_store: proof_store,
           chain_tracker: rejecting_tracker, network: :mainnet
         )
 

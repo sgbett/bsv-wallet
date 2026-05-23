@@ -22,8 +22,7 @@ module BSV
     #   engine = BSV::Wallet::Engine.new(
     #     store:         store,
     #     utxo_pool:     BSV::Wallet::Store::UTXOPool.new(store: store),
-    #     broadcast_queue: BSV::Wallet::Store::BroadcastQueue.new(db: store.db),
-    #     proof_store:   BSV::Wallet::Store::ProofStore.new(db: store.db),
+    #     services:      BSV::Network::Services.new(providers: [...]),
     #     key_deriver:   key_deriver,
     #     chain_tracker: chain_tracker
     #   )
@@ -39,15 +38,15 @@ module BSV
 
       attr_reader :limp_threshold
 
-      def initialize(store:, utxo_pool:, broadcast_queue:, proof_store:,
-                     key_deriver: nil, chain_tracker: nil, network_provider: nil,
+      def initialize(store:, utxo_pool:,
+                     services: nil, key_deriver: nil, chain_tracker: nil,
+                     network_provider: nil,
                      network: :mainnet, limp_threshold: LIMP_THRESHOLD)
         raise ArgumentError, "limp_threshold must be >= #{LIMP_THRESHOLD_MIN}" if limp_threshold < LIMP_THRESHOLD_MIN
 
         @store = store
         @utxo_pool = utxo_pool
-        @broadcast_queue = broadcast_queue
-        @proof_store = proof_store
+        @services = services
         @key_deriver = key_deriver
         @chain_tracker = chain_tracker
         @network_provider = network_provider
@@ -129,7 +128,7 @@ module BSV
           # Outputs are fully known at createAction time — the deferral is about
           # inputs (waiting for caller-provided unlocking scripts), not outputs.
           @store.sign_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
-          @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+          @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           return {
             signable_transaction: {
@@ -140,7 +139,7 @@ module BSV
         end
 
         @store.sign_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
-        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+        @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         BSV.logger&.debug { "[Engine] create_action: dtxid=#{wtxid.reverse.unpack1('H*')} outputs=#{outputs&.length || 0}" }
 
         # Build Atomic BEEF envelope for the :tx return value
@@ -156,7 +155,7 @@ module BSV
         end
 
         # Phase 3: Broadcast
-        broadcast_result = @broadcast_queue.submit(
+        broadcast_result = broadcast_and_record(
           action_id: action_result[:id],
           raw_tx: raw_tx,
           immediate: broadcast == :inline
@@ -185,7 +184,7 @@ module BSV
         # remaining P2PKH inputs, and updates the action with signed raw_tx + wtxid.
         wtxid, raw_tx = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: raw_tx)
-        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+        @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
 
         # Build Atomic BEEF envelope for the :tx return value
         atomic_beef = build_atomic_beef(raw_tx, action[:id])
@@ -199,7 +198,7 @@ module BSV
         end
 
         unless broadcast == :none
-          broadcast_result = @broadcast_queue.submit(
+          broadcast_result = broadcast_and_record(
             action_id: action[:id],
             raw_tx: raw_tx,
             immediate: broadcast == :inline
@@ -271,7 +270,7 @@ module BSV
           wtxid: subject_tx.wtxid,
           raw_tx: subject_tx.to_binary
         )
-        @proof_store.save_proof(wtxid: subject_tx.wtxid, proof: { raw_tx: subject_tx.to_binary })
+        @store.save_proof(wtxid: subject_tx.wtxid, proof: { raw_tx: subject_tx.to_binary })
         BSV.logger&.debug { "[Engine] internalize_action: subject=#{subject_tx.dtxid}" }
 
         attach_labels(action_result[:id], labels)
@@ -383,7 +382,7 @@ module BSV
           action: { description: 'imported UTXO', broadcast: :none, outgoing: false }
         )
         @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
-        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+        @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         output_ids = @store.promote_action(
           action_id: import_action[:id],
           outputs: [{ satoshis: satoshis, vout: vout, locking_script: locking_script.to_binary, output_type: 'root' }]
@@ -495,7 +494,7 @@ module BSV
 
         wtxid, raw_tx, = build_transaction(locking_action[:id], [{ output_id: slot[:id] }], [], nil, nil, false)
         @store.sign_action(action_id: locking_action[:id], wtxid: wtxid, raw_tx: raw_tx)
-        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+        @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         attach_labels(locking_action[:id], ['wbikd'])
 
         # Derive from on-chain data: slot's source txid + vout.
@@ -961,6 +960,39 @@ module BSV
         ACCEPTED_STATUSES.include?(broadcast_result[:tx_status])
       end
 
+      # Submit a broadcast record and optionally push to the network.
+      #
+      # Creates a broadcast row in the Store, then — when immediate and
+      # a Services instance is available — broadcasts via ARC and records
+      # the response. Returns the broadcast status hash so callers can
+      # inspect tx_status for promotion decisions.
+      #
+      # @param action_id [Integer]
+      # @param raw_tx [String] signed transaction binary
+      # @param immediate [Boolean] whether to push to the network now
+      # @return [Hash] broadcast status from Store
+      def broadcast_and_record(action_id:, raw_tx:, immediate: false)
+        @store.submit_broadcast(action_id: action_id)
+
+        if immediate && @services
+          response = @services.call(:broadcast, raw_tx)
+          if response.http_success?
+            @store.record_broadcast_result(
+              action_id: action_id,
+              tx_status: response.data[:tx_status],
+              arc_status: response.data[:status],
+              block_hash: response.data[:block_hash],
+              block_height: response.data[:block_height],
+              merkle_path: response.data[:merkle_path],
+              extra_info: response.data[:extra_info],
+              competing_txs: response.data[:competing_txs]
+            )
+          end
+        end
+
+        @store.broadcast_status(action_id: action_id)
+      end
+
       def handle_proof_from_broadcast(action_id, broadcast_result)
         return unless broadcast_result[:merkle_path]
 
@@ -974,7 +1006,7 @@ module BSV
         raw_tx = broadcast_result[:raw_tx]
         raw_tx ||= @store.find_action(id: action_id)&.dig(:raw_tx)
 
-        proof_id = @proof_store.save_proof(
+        proof_id = @store.save_proof(
           wtxid: wtxid,
           proof: {
             height: broadcast_result[:block_height],
@@ -1000,7 +1032,7 @@ module BSV
           BSV.logger&.debug { "[Engine] process_send_with: dtxid=#{sw_wtxid.reverse.unpack1('H*')} found=#{!sw_action.nil?}" }
           next unless sw_action
 
-          br = @broadcast_queue.submit(
+          br = broadcast_and_record(
             action_id: sw_action[:id],
             raw_tx: sw_action[:raw_tx] || ''.b,
             immediate: true
@@ -1098,7 +1130,7 @@ module BSV
 
         visited.add(wtxid)
 
-        proof = @proof_store.find_proof(wtxid: wtxid)
+        proof = @store.find_proof(wtxid: wtxid)
         return unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
 
         tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
@@ -1182,7 +1214,7 @@ module BSV
             proof[:merkle_path] = merkle_path.to_binary
           end
 
-          proof_id = @proof_store.save_proof(wtxid: wtxid, proof: proof)
+          proof_id = @store.save_proof(wtxid: wtxid, proof: proof)
           subject_proof_id = proof_id if wtxid == subject_wtxid
         end
 
@@ -1224,7 +1256,7 @@ module BSV
           next if wtxid == subject_wtxid
           next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
 
-          next unless known_set.include?(wtxid) || @proof_store.proof_exists?(wtxid: wtxid)
+          next unless known_set.include?(wtxid) || @store.proof_exists?(wtxid: wtxid)
 
           BSV.logger&.debug { "[Engine] replace_known_ancestors!: replacing dtxid=#{wtxid.reverse.unpack1('H*')}" }
           beef.make_txid_only(wtxid)
@@ -1403,7 +1435,7 @@ module BSV
           action: { description: 'wbikd received funds', broadcast: :none, outgoing: false }
         )
         @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
-        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+        @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
 
         # 4. Promote with BRC-42 derivation params (output is immediately spendable).
         # Tag with 'wbikd' so future sweeps can re-derive and re-scan the address
@@ -1461,7 +1493,7 @@ module BSV
         proof = { raw_tx: raw_tx, merkle_path: merkle_path, height: block_height }.compact
         return unless proof.any?
 
-        proof_id = @proof_store.save_proof(wtxid: wtxid, proof: proof)
+        proof_id = @store.save_proof(wtxid: wtxid, proof: proof)
         @store.link_proof(action_id: action_id, tx_proof_id: proof_id)
       end
 
@@ -1732,7 +1764,7 @@ module BSV
           action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
           change_outputs: change_outputs
         )
-        @proof_store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+        @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         BSV.logger&.debug do
           "[Engine] auto_fund_action: dtxid=#{wtxid.reverse.unpack1('H*')} " \
             "outputs=#{outputs.length} change=#{change_outputs.length}"
@@ -1751,7 +1783,7 @@ module BSV
         end
 
         # Phase 3: Broadcast
-        broadcast_result = @broadcast_queue.submit(
+        broadcast_result = broadcast_and_record(
           action_id: action_result[:id],
           raw_tx: raw_tx,
           immediate: broadcast == :inline

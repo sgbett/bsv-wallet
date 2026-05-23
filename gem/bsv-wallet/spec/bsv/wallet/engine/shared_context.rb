@@ -34,29 +34,26 @@ RSpec.shared_context 'engine setup' do
     described_class.new(
       store: store,
       utxo_pool: utxo_pool,
-      broadcast_queue: broadcast_queue,
-      proof_store: proof_store,
       network: :mainnet
     )
   end
 
   let(:store) { STORE_INSTANCE }
   let(:utxo_pool) { BSV::Wallet::Store::UTXOPool.new(store: store) }
-  let(:proof_store) { BSV::Wallet::Store::ProofStore.new(db: STORE_DB) }
-  let(:broadcast_queue) { BSV::Wallet::Store::BroadcastQueue.new(db: STORE_DB) }
+  # Proof methods now live on Store directly. This alias keeps existing
+  # spec setup/assertion code (proof_store.save_proof, etc.) working.
+  let(:proof_store) { store }
 
   let(:engine_with_privileged_keys) do
     priv_deriver = BSV::Wallet::KeyDeriver.new(private_key: root_key, privileged_key: privileged_key)
     described_class.new(
       store: store, utxo_pool: utxo_pool,
-      broadcast_queue: broadcast_queue, proof_store: proof_store,
       key_deriver: priv_deriver, network: :mainnet
     )
   end
   let(:engine_with_keys) do
     described_class.new(
       store: store, utxo_pool: utxo_pool,
-      broadcast_queue: broadcast_queue, proof_store: proof_store,
       key_deriver: key_deriver, network: :mainnet
     )
   end

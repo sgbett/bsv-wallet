@@ -69,7 +69,6 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect do
         described_class.new(
           store: store, utxo_pool: utxo_pool,
-          broadcast_queue: broadcast_queue, proof_store: proof_store,
           limp_threshold: 5_000
         )
       end.to raise_error(ArgumentError, /limp_threshold/)
@@ -78,7 +77,6 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     it 'accepts custom limp_threshold above hard floor' do
       custom = described_class.new(
         store: store, utxo_pool: utxo_pool,
-        broadcast_queue: broadcast_queue, proof_store: proof_store,
         limp_threshold: 20_000
       )
       expect(custom.limp_threshold).to eq(20_000)

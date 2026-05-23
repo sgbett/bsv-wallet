@@ -93,7 +93,6 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       network_provider = double(:network_provider)
       engine_net = described_class.new(
         store: store, utxo_pool: utxo_pool,
-        broadcast_queue: broadcast_queue, proof_store: proof_store,
         key_deriver: key_deriver, network_provider: network_provider,
         network: :mainnet
       )
@@ -108,7 +107,6 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       let(:engine_net) do
         described_class.new(
           store: store, utxo_pool: utxo_pool,
-          broadcast_queue: broadcast_queue, proof_store: proof_store,
           key_deriver: key_deriver, network_provider: network_provider,
           network: :mainnet
         )
