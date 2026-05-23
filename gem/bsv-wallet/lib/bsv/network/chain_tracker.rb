@@ -13,11 +13,11 @@ module BSV
     # Fails closed: any error returns +false+ — verification fails rather
     # than passing on incomplete data.
     class ChainTracker < BSV::Transaction::ChainTracker
-      # @param db [Sequel::Database] database handle with a +blocks+ table
+      # @param store [BSV::Wallet::Store] store providing block header persistence
       # @param services [BSV::Network::Services] routing layer for network calls
-      def initialize(db:, services:)
+      def initialize(store:, services:)
         super()
-        @db = db
+        @store = store
         @services = services
       end
 
@@ -29,8 +29,8 @@ module BSV
       def valid_root_for_height?(root, height)
         root_bin = [root].pack('H*')
 
-        # Fast path: local blocks table
-        block = @db[:blocks].where(height: height).first
+        # Fast path: local store
+        block = @store.find_block(height: height)
         return block[:merkle_root] == root_bin if block
 
         # Miss path: fetch header via Services routing layer
@@ -57,21 +57,15 @@ module BSV
         result = @services.call(:current_height)
         return result.data if result.http_success?
 
-        @db[:blocks].max(:height) || 0
+        @store.max_block_height || 0
       rescue StandardError
-        @db[:blocks].max(:height) || 0
+        @store.max_block_height || 0
       end
 
       private
 
       def persist_block(height:, merkle_root:, block_hash:)
-        root_bin = [merkle_root].pack('H*')
-        hash_bin = block_hash ? [block_hash].pack('H*') : nil
-        @db[:blocks].insert_conflict(target: :height).insert(
-          height: height,
-          merkle_root: Sequel.blob(root_bin),
-          block_hash: hash_bin ? Sequel.blob(hash_bin) : nil
-        )
+        @store.record_block_header(height: height, merkle_root: merkle_root, block_hash: block_hash)
       rescue Sequel::Error => e
         BSV.logger&.debug { "[ChainTracker] persist_block failed: #{e.message}" }
       end
