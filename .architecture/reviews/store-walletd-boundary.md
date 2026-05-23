@@ -24,7 +24,7 @@ def write!(response)
   data = response.data
   return unless data.is_a?(Hash) && data[:merkle_path] && data[:block_height]
 
-  proof_store = BSV::Wallet::Postgres::Store::ProofStore.new  # ← reaches out
+  proof_store = BSV::Wallet::Store::ProofStore.new  # ← reaches out
   proof_id = proof_store.save_proof(wtxid: wtxid, proof: { ... })  # ← write 1
   update(tx_proof_id: proof_id)  # ← write 2, not in a transaction
 end
