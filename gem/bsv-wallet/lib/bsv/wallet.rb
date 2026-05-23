@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'securerandom'
+
 module BSV
   # Wallet interface for transaction creation, signing, encryption, decryption,
   # certificate management, and identity verification per the BRC standards.
@@ -8,6 +10,12 @@ module BSV
   # are arrays of hashes — documented inline with @option tags where the shape
   # is non-obvious.
   module Wallet
+    # Generate a random BRC-42 derivation value (base64-encoded 8 random bytes).
+    # Matches reference wallet format: 12-character base64 string.
+    def self.random_derivation
+      SecureRandom.random_bytes(8).then { |b| [b].pack('m0') }
+    end
+
     autoload :VERSION, 'bsv/wallet/version'
 
     # BRC-100 interface and error classes come from bsv-sdk.

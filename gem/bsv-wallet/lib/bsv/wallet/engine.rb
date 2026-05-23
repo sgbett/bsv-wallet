@@ -1978,10 +1978,8 @@ module BSV
         [wtxid, raw_tx]
       end
 
-      # Generate a random BRC-42 derivation value (base64-encoded 8 random bytes).
-      # Matches reference wallet format: 12-character base64 string.
       def random_derivation
-        SecureRandom.random_bytes(8).then { |b| [b].pack('m0') }
+        BSV::Wallet.random_derivation
       end
     end
   end
