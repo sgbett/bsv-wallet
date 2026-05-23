@@ -15,6 +15,17 @@ RSpec.describe BSV::Wallet::Store::Action, :store do
       expect(action.nlocktime).to be_nil
     end
 
+    it 'auto-generates a UUID reference when none provided' do
+      action = described_class.create(outgoing: false, description: 'test action')
+      expect(action.reference).to match(/\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/)
+    end
+
+    it 'preserves an explicit reference' do
+      explicit = SecureRandom.uuid
+      action = described_class.create(outgoing: false, description: 'test action', reference: explicit)
+      expect(action.reference).to eq(explicit)
+    end
+
     it 'preserves binary wtxid' do
       wtxid = SecureRandom.random_bytes(32)
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: wtxid, raw_tx: raw_tx)
