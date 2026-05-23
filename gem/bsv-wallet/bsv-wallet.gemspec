@@ -14,7 +14,7 @@ Gem::Specification.new do |spec|
   spec.homepage    = 'https://github.com/sgbett/bsv-ruby-sdk'
   spec.license     = 'LicenseRef-OpenBSV'
 
-  spec.required_ruby_version = '>= 3.0'
+  spec.required_ruby_version = '>= 3.3'
 
   spec.metadata = {
     'homepage_uri' => spec.homepage,
@@ -24,11 +24,16 @@ Gem::Specification.new do |spec|
   }
 
   spec.files = Dir.chdir(__dir__) do
-    Dir.glob('lib/**/*') + Dir.glob('db/**/*')
+    Dir.glob('lib/**/*') + Dir.glob('db/**/*') + Dir.glob('bin/*')
   end + %w[LICENSE CHANGELOG.md]
+  spec.bindir = 'bin'
+  spec.executables = ['walletd']
   spec.require_paths = ['lib']
 
+  spec.add_dependency 'async'
   spec.add_dependency 'bsv-sdk'
+  spec.add_dependency 'logger'
+  spec.add_dependency 'omq'
   spec.add_dependency 'sequel', '~> 5.0'
   spec.add_dependency 'sqlite3'
 end

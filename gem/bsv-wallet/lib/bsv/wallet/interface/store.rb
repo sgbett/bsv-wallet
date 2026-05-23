@@ -117,6 +117,18 @@ module BSV
           raise NotImplementedError
         end
 
+        # Query actions needing proof acquisition.
+        #
+        # Returns outgoing actions that have been signed (wtxid set) but
+        # have no proof yet (tx_proof_id nil), excluding no-send actions
+        # (broadcast: 'none') which receive proofs via other channels.
+        #
+        # @param limit [Integer] maximum records to return
+        # @return [Array<Hash>] action hashes (same shape as find_action)
+        def pending_proofs(limit: 100)
+          raise NotImplementedError
+        end
+
         # --- Outputs ---
 
         # Remove an output from the UTXO set and its basket.

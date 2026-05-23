@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'securerandom'
-require 'set'
 
 module BSV
   module Wallet
@@ -29,6 +28,9 @@ module BSV
     #   engine.create_action(description: 'payment', outputs: [...])
     class Engine
       include BSV::Wallet::Interface::BRC100
+
+      autoload :Broadcast, 'bsv/wallet/engine/broadcast'
+      autoload :TxProof,   'bsv/wallet/engine/tx_proof'
 
       ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK MINED ACCEPTED_BY_NETWORK IMMUTABLE].freeze
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i

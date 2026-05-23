@@ -272,6 +272,17 @@ module BSV
         { total: total, outputs: outputs }
       end
 
+      def pending_proofs(limit: 100)
+        models::Action
+          .where(outgoing: true)
+          .where(Sequel.~(wtxid: nil))
+          .where(tx_proof_id: nil)
+          .where(Sequel.~(broadcast: 'none'))
+          .limit(limit)
+          .all
+          .map { |a| action_to_hash(a) }
+      end
+
       def relinquish_output(output_id:)
         @db.transaction do
           models::Spendable.where(output_id: output_id).delete
@@ -657,7 +668,10 @@ module BSV
         merkle_root = proof[:merkle_root] || derive_merkle_root(proof[:merkle_path])
         return unless merkle_root
 
-        models::Block.create(height: height, merkle_root: merkle_root, block_hash: proof[:block_hash]).id
+        root_bin = to_binary(merkle_root)
+        hash_bin = proof[:block_hash] ? to_binary(proof[:block_hash]) : nil
+
+        models::Block.create(height: height, merkle_root: root_bin, block_hash: hash_bin).id
       rescue Sequel::UniqueConstraintViolation
         models::Block.first!(height: height).id
       end
