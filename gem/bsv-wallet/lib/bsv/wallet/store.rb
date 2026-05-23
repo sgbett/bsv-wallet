@@ -757,9 +757,6 @@ require_relative 'store/models'
 require_relative 'store/sqlite'
 require_relative 'store/postgres'
 
-# Service classes (BroadcastQueue, ProofStore, UTXOPool, etc.)
-BSV::Wallet::Store.autoload :BroadcastQueue,    'bsv/wallet/store/broadcast_queue'
+# Service classes
 BSV::Wallet::Store.autoload :BroadcastCallback, 'bsv/wallet/store/broadcast_callback'
-BSV::Wallet::Store.autoload :ArcAdapter,        'bsv/wallet/store/arc_adapter'
-BSV::Wallet::Store.autoload :ProofStore,        'bsv/wallet/store/proof_store'
 BSV::Wallet::Store.autoload :UTXOPool,          'bsv/wallet/store/utxo_pool'

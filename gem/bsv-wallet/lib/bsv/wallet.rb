@@ -21,10 +21,6 @@ module BSV
     # Key derivation (BRC-42/43)
     autoload :KeyDeriver, 'bsv/wallet/key_deriver'
 
-    # Entity network interaction contracts
-    require_relative 'wallet/pushable'
-    require_relative 'wallet/fetchable'
-
     # Network services (porcelain routing layer over SDK providers)
     require_relative 'network/services'
     require_relative 'network/chain_tracker'
