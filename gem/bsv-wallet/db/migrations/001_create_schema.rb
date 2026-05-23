@@ -26,6 +26,9 @@ Sequel.migration do
     # Helper: typed foreign key (bigint on Postgres, default on SQLite)
     fk_opts = ->(opts) { postgres ? opts.merge(type: :bigint) : opts }
 
+    # Helper: binary column type (bytea on Postgres, blob on SQLite)
+    bin = postgres ? :bytea : :blob
+
     if postgres
       extension :pg_enum
       create_enum(:broadcast_intent, %w[delayed inline none])
@@ -36,8 +39,8 @@ Sequel.migration do
     create_table(:blocks) do
       pk.call(self)
       column :height, :integer, null: false, unique: true
-      column :merkle_root, :blob, null: false
-      column :block_hash, :blob
+      column :merkle_root, bin, null: false
+      column :block_hash, bin
       column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
       column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
 
@@ -49,11 +52,11 @@ Sequel.migration do
     # 2. tx_proofs — merkle inclusion proofs (settlement evidence)
     create_table(:tx_proofs) do
       pk.call(self)
-      column :wtxid, :blob, null: false, unique: true
+      column :wtxid, bin, null: false, unique: true
       foreign_key :block_id, :blocks, **fk_opts.call({})
       column :block_index, :integer
-      column :merkle_path, :blob
-      column :raw_tx, :blob, null: false
+      column :merkle_path, bin
+      column :raw_tx, bin, null: false
       column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
       column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
 
@@ -65,7 +68,7 @@ Sequel.migration do
     create_table(:actions) do
       pk.call(self)
       foreign_key :tx_proof_id, :tx_proofs, **fk_opts.call({})
-      column :wtxid, :blob, unique: true
+      column :wtxid, bin, unique: true
       if postgres
         column :reference, :uuid, null: false, unique: true, default: Sequel.function(:gen_random_uuid)
       else
@@ -80,8 +83,8 @@ Sequel.migration do
       else
         column :broadcast, :text, null: false, default: 'delayed'
       end
-      column :raw_tx, :blob
-      column :input_beef, :blob
+      column :raw_tx, bin
+      column :input_beef, bin
       column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
       column :updated_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
 
@@ -102,9 +105,9 @@ Sequel.migration do
       column :broadcast_at, :datetime
       column :tx_status, :text
       column :arc_status, :integer
-      column :block_hash, :blob
+      column :block_hash, bin
       column :block_height, :integer
-      column :merkle_path, :blob
+      column :merkle_path, bin
       column :extra_info, :text
       column :competing_txs, postgres ? 'text[]' : :text
       column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
@@ -135,7 +138,7 @@ Sequel.migration do
       foreign_key :action_id, :actions, **fk_opts.call(on_delete: :set_null)
       column :satoshis, :integer, null: false
       column :created_at, :datetime, null: false, default: Sequel::CURRENT_TIMESTAMP
-      column :locking_script, :blob, null: false
+      column :locking_script, bin, null: false
       column :vout, :integer, null: false
       if postgres
         column :output_type, :output_type
