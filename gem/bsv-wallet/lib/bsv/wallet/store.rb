@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'json'
+
 module BSV
   module Wallet
     # SQL-backed persistence for the wallet.
@@ -385,16 +387,15 @@ module BSV
         root_bin = to_binary(merkle_root)
         hash_bin = block_hash ? to_binary(block_hash) : nil
 
+        update_fields = { merkle_root: Sequel.blob(root_bin) }
+        update_fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
+
+        insert_fields = { height: height, merkle_root: Sequel.blob(root_bin) }
+        insert_fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
+
         models::Block.dataset
-                     .insert_conflict(target: :height, update: {
-                                        merkle_root: Sequel.blob(root_bin),
-                                        block_hash: hash_bin ? Sequel.blob(hash_bin) : nil
-                                      })
-                     .insert(
-                       height: height,
-                       merkle_root: Sequel.blob(root_bin),
-                       block_hash: hash_bin ? Sequel.blob(hash_bin) : nil
-                     )
+                     .insert_conflict(target: :height, update: update_fields)
+                     .insert(insert_fields)
       end
 
       def find_block(height:)
