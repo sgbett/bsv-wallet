@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'net/http'
-require 'set'
 require 'base64'
 
 RSpec.describe BSV::Network::Services do
