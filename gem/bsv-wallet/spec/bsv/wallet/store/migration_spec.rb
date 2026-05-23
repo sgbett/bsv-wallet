@@ -42,6 +42,22 @@ RSpec.describe 'Schema migration', :store do
     end
   end
 
+  describe 'enums', :postgres do
+    it 'broadcast_intent has the correct values' do
+      values = db.from(
+        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'broadcast_intent'")
+      ).select_map(:enumlabel)
+      expect(values).to eq(%w[delayed inline none])
+    end
+
+    it 'output_type has the correct values' do
+      values = db.from(
+        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'output_type'")
+      ).select_map(:enumlabel)
+      expect(values).to eq(%w[root outbound])
+    end
+  end
+
   describe 'blob columns' do
     it 'stores and retrieves binary data on tx_proofs' do
       db[:tx_proofs].insert(wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx))

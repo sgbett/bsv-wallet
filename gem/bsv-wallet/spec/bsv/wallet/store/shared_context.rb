@@ -1,20 +1,31 @@
 # frozen_string_literal: true
 
-# Shared database setup for default store specs.
+# Shared database setup for store specs.
+#
+# Backend selection:
+#   DATABASE_URL unset / sqlite://  → in-memory SQLite (default)
+#   DATABASE_URL=postgres://...     → Postgres
+#
+# All specs use BSV::Wallet::Store::* models regardless of backend.
 
 require 'securerandom'
 require 'sequel'
 
 unless defined?(STORE_DB)
-  STORE_DB = Sequel.sqlite
-  STORE_DB.run('PRAGMA foreign_keys = ON')
+  database_url = ENV.fetch('DATABASE_URL', nil)
 
-  Sequel.extension :migration
-  migrations_path = File.expand_path('../../../../db/migrations', __dir__)
-  Sequel::Migrator.run(STORE_DB, migrations_path)
+  if database_url&.start_with?('postgres')
+    STORE_DB = Sequel.connect(database_url)
+  else
+    STORE_DB = Sequel.sqlite
+    STORE_DB.run('PRAGMA foreign_keys = ON')
+  end
 
   BSV::Wallet::Store::Connection.connect(STORE_DB)
+  BSV::Wallet::Store::Connection.migrate!
   BSV::Wallet::Store::Connection.bind_models!
+
+  STORE_DATABASE_TYPE = STORE_DB.database_type
 end
 
 RSpec.shared_context 'store setup' do
@@ -66,16 +77,30 @@ end
 RSpec.configure do |config|
   config.include_context 'store setup', :store
 
+  # Skip :postgres-tagged specs when running on SQLite
+  config.before(:each, :postgres) do |_example|
+    skip 'Postgres-only test' unless STORE_DATABASE_TYPE == :postgres
+  end
+
   config.before(:suite) do
     next unless defined?(STORE_DB)
 
-    STORE_DB.run('PRAGMA foreign_keys = OFF')
-    STORE_DB.tables.each do |table|
-      next if table == :schema_info
+    case STORE_DATABASE_TYPE
+    when :sqlite
+      STORE_DB.run('PRAGMA foreign_keys = OFF')
+      STORE_DB.tables.each do |table|
+        next if table == :schema_info
 
-      STORE_DB[table].delete
+        STORE_DB[table].delete
+      end
+      STORE_DB.run('PRAGMA foreign_keys = ON')
+    when :postgres
+      STORE_DB.tables.each do |table|
+        next if table == :schema_info
+
+        STORE_DB[table].truncate(cascade: true)
+      end
     end
-    STORE_DB.run('PRAGMA foreign_keys = ON')
   end
 
   config.around(:each, :store) do |example|

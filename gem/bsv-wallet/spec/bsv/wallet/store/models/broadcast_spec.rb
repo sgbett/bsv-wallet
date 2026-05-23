@@ -186,10 +186,13 @@ RSpec.describe BSV::Wallet::Store::Broadcast, :store do
       expect(broadcast.reload.block_hash).to eq(binary)
     end
 
-    it 'stores competing_txs as JSON' do
+    it 'stores competing_txs' do
       broadcast.write!(make_response({ competing_txs: %w[tx1 tx2] }))
       broadcast.reload
-      expect(JSON.parse(broadcast.competing_txs)).to eq(%w[tx1 tx2])
+      stored = broadcast.competing_txs
+      # SQLite stores as JSON string, Postgres as native array
+      parsed = stored.is_a?(String) ? JSON.parse(stored) : Array(stored)
+      expect(parsed).to eq(%w[tx1 tx2])
     end
 
     it 'does nothing for empty data hash' do
