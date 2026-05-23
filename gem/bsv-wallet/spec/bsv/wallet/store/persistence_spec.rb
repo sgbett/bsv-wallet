@@ -771,6 +771,81 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
+  # --- Block Headers ---
+
+  describe '#record_block_header' do
+    it 'inserts a new block from hex strings' do
+      merkle_root_hex = 'aa' * 32
+      block_hash_hex = 'bb' * 32
+
+      store.record_block_header(height: 100, merkle_root: merkle_root_hex, block_hash: block_hash_hex)
+
+      block = BSV::Wallet::Store::Models::Block.first(height: 100)
+      expect(block).not_to be_nil
+      expect(block.merkle_root).to eq([merkle_root_hex].pack('H*'))
+      expect(block.block_hash).to eq([block_hash_hex].pack('H*'))
+    end
+
+    it 'inserts a new block from binary values' do
+      merkle_root_bin = SecureRandom.random_bytes(32)
+      block_hash_bin = SecureRandom.random_bytes(32)
+
+      store.record_block_header(height: 200, merkle_root: merkle_root_bin, block_hash: block_hash_bin)
+
+      block = BSV::Wallet::Store::Models::Block.first(height: 200)
+      expect(block.merkle_root).to eq(merkle_root_bin)
+      expect(block.block_hash).to eq(block_hash_bin)
+    end
+
+    it 'upserts when height already exists' do
+      original_root = SecureRandom.random_bytes(32)
+      updated_root = SecureRandom.random_bytes(32)
+
+      store.record_block_header(height: 300, merkle_root: original_root)
+      store.record_block_header(height: 300, merkle_root: updated_root)
+
+      block = BSV::Wallet::Store::Models::Block.first(height: 300)
+      expect(block.merkle_root).to eq(updated_root)
+    end
+
+    it 'handles nil block_hash' do
+      store.record_block_header(height: 400, merkle_root: SecureRandom.random_bytes(32))
+
+      block = BSV::Wallet::Store::Models::Block.first(height: 400)
+      expect(block.block_hash).to be_nil
+    end
+  end
+
+  describe '#find_block' do
+    it 'returns block data for a known height' do
+      merkle_root = SecureRandom.random_bytes(32)
+      block_hash = SecureRandom.random_bytes(32)
+      store.record_block_header(height: 500, merkle_root: merkle_root, block_hash: block_hash)
+
+      result = store.find_block(height: 500)
+
+      expect(result).to eq({ height: 500, merkle_root: merkle_root, block_hash: block_hash })
+    end
+
+    it 'returns nil for unknown height' do
+      expect(store.find_block(height: 999_999)).to be_nil
+    end
+  end
+
+  describe '#max_block_height' do
+    it 'returns nil when no blocks stored' do
+      expect(store.max_block_height).to be_nil
+    end
+
+    it 'returns the highest stored height' do
+      store.record_block_header(height: 10, merkle_root: SecureRandom.random_bytes(32))
+      store.record_block_header(height: 50, merkle_root: SecureRandom.random_bytes(32))
+      store.record_block_header(height: 30, merkle_root: SecureRandom.random_bytes(32))
+
+      expect(store.max_block_height).to eq(50)
+    end
+  end
+
   # --- Reaper ---
 
   describe '#reap_stale_actions' do

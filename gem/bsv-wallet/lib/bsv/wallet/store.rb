@@ -379,6 +379,35 @@ module BSV
         models::TxProof.where(wtxid: Sequel.blob(wtxid)).any?
       end
 
+      # --- Block Headers ---
+
+      def record_block_header(height:, merkle_root:, block_hash: nil)
+        root_bin = to_binary(merkle_root)
+        hash_bin = block_hash ? to_binary(block_hash) : nil
+
+        models::Block.dataset
+                     .insert_conflict(target: :height, update: {
+                                        merkle_root: Sequel.blob(root_bin),
+                                        block_hash: hash_bin ? Sequel.blob(hash_bin) : nil
+                                      })
+                     .insert(
+                       height: height,
+                       merkle_root: Sequel.blob(root_bin),
+                       block_hash: hash_bin ? Sequel.blob(hash_bin) : nil
+                     )
+      end
+
+      def find_block(height:)
+        record = models::Block.first(height: height)
+        return unless record
+
+        { height: record.height, merkle_root: record.merkle_root, block_hash: record.block_hash }
+      end
+
+      def max_block_height
+        models::Block.max(:height)
+      end
+
       # --- Settings ---
 
       def get_setting(key:)
@@ -491,6 +520,51 @@ module BSV
         candidates
       end
 
+      # --- Broadcasts ---
+
+      def submit_broadcast(action_id:)
+        broadcast = models::Broadcast.create(action_id: action_id)
+        broadcast_to_hash(broadcast)
+      end
+
+      def record_broadcast_result(action_id:, tx_status:, arc_status: nil,
+                                  block_hash: nil, block_height: nil,
+                                  merkle_path: nil, extra_info: nil,
+                                  competing_txs: nil)
+        @db.transaction do
+          broadcast = models::Broadcast.first(action_id: action_id)
+          broadcast ||= models::Broadcast.create(action_id: action_id)
+
+          fields = { tx_status: tx_status }
+          fields[:broadcast_at] = Time.now if broadcast.broadcast_at.nil?
+          fields[:arc_status] = arc_status if arc_status
+          fields[:block_hash] = decode_hex(block_hash) if block_hash
+          fields[:block_height] = block_height if block_height
+          fields[:merkle_path] = decode_hex(merkle_path) if merkle_path
+          fields[:extra_info] = extra_info if extra_info
+          fields[:competing_txs] = encode_competing_txs(competing_txs) if competing_txs
+
+          broadcast.update(fields)
+          broadcast_to_hash(broadcast)
+        end
+      end
+
+      def broadcast_status(action_id:)
+        broadcast = models::Broadcast.first(action_id: action_id)
+        return unless broadcast
+
+        broadcast_to_hash(broadcast)
+      end
+
+      def pending_broadcasts(limit: 100)
+        models::Broadcast
+          .where { broadcast_at < Time.now - Models::Broadcast::FETCH_STALENESS }
+          .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: Models::Broadcast::TERMINAL_STATUSES)))
+          .limit(limit)
+          .all
+          .map { |b| broadcast_to_hash(b) }
+      end
+
       def reap_stale_actions(threshold:)
         cutoff = Time.now - threshold
         output_exists = models::Output.where(Sequel[:outputs][:action_id] => Sequel[:actions][:id]).select(1)
@@ -519,6 +593,39 @@ module BSV
 
       def models
         BSV::Wallet::Store::Models
+      end
+
+      # Convert a value to binary. If already binary-encoded, return as-is;
+      # otherwise treat as hex string and pack.
+      def to_binary(value)
+        return value if value.encoding == Encoding::BINARY
+
+        [value].pack('H*')
+      end
+
+      def broadcast_to_hash(record)
+        {
+          action_id: record.action_id, tx_status: record.tx_status,
+          arc_status: record.arc_status, broadcast_at: record.broadcast_at,
+          block_hash: record.block_hash, block_height: record.block_height,
+          merkle_path: record.merkle_path
+        }
+      end
+
+      # Decode hex to binary blob, passthrough if already binary.
+      def decode_hex(value)
+        return unless value
+        return Sequel.blob(value) if value.encoding == Encoding::BINARY
+
+        Sequel.blob([value].pack('H*'))
+      end
+
+      def encode_competing_txs(txs)
+        if @db.database_type == :postgres
+          Sequel.pg_array(txs)
+        else
+          JSON.generate(txs)
+        end
       end
 
       def proof_columns(proof)

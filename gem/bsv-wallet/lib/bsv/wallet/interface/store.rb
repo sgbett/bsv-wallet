@@ -299,6 +299,56 @@ module BSV
           raise NotImplementedError
         end
 
+        # --- Broadcasts ---
+
+        # Create a broadcast record for an action (submit for broadcast).
+        #
+        # @param action_id [Integer]
+        # @return [Hash] broadcast data: :action_id, :tx_status, :arc_status, :broadcast_at,
+        #   :block_hash, :block_height, :merkle_path
+        def submit_broadcast(action_id:)
+          raise NotImplementedError
+        end
+
+        # Record a broadcast result from ARC or a callback event.
+        #
+        # Find-or-creates a Broadcast record for the action, then updates
+        # status fields atomically. Handles hex-to-binary decoding for
+        # block_hash and merkle_path, and database-specific coercion for
+        # competing_txs.
+        #
+        # @param action_id [Integer]
+        # @param tx_status [String] e.g. 'SEEN_ON_NETWORK', 'MINED'
+        # @param arc_status [Integer, nil] HTTP status from ARC
+        # @param block_hash [String, nil] hex or binary block hash
+        # @param block_height [Integer, nil]
+        # @param merkle_path [String, nil] hex or binary merkle path
+        # @param extra_info [String, nil]
+        # @param competing_txs [Array<String>, nil]
+        # @return [Hash] updated broadcast data
+        def record_broadcast_result(action_id:, tx_status:, arc_status: nil,
+                                    block_hash: nil, block_height: nil,
+                                    merkle_path: nil, extra_info: nil,
+                                    competing_txs: nil)
+          raise NotImplementedError
+        end
+
+        # Query broadcast status for an action.
+        #
+        # @param action_id [Integer]
+        # @return [Hash, nil] broadcast data or nil if no broadcast exists
+        def broadcast_status(action_id:)
+          raise NotImplementedError
+        end
+
+        # Query broadcasts needing status checks (stale, non-terminal).
+        #
+        # @param limit [Integer] maximum records to return
+        # @return [Array<Hash>] broadcast data hashes
+        def pending_broadcasts(limit: 100)
+          raise NotImplementedError
+        end
+
         # --- Reaper ---
 
         # Delete stale unsigned or unbroadcast actions older than the threshold.
