@@ -1,0 +1,44 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# walletd — persistent background process for the BSV wallet.
+#
+# Runs broadcast retries, proof acquisition, and status polling
+# as OMQ-connected fibers inside an Async reactor.
+#
+# Usage:
+#   bin/walletd [wallet_name] [network]
+#   bin/walletd alice mainnet
+
+require_relative '../lib/bsv/wallet/cli'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+network = (args.first || :mainnet).to_sym
+
+begin
+  require 'dotenv/load'
+rescue LoadError
+  # dotenv is optional
+end
+
+require 'sequel'
+require 'logger'
+require 'bsv-wallet'
+
+BSV.logger ||= Logger.new($stderr, level: Logger::INFO)
+
+# Resolve wallet credentials via CLI helpers
+db_url = BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet_name) ||
+         BSV::Wallet::CLI.default_sqlite_url(wallet_name)
+
+# Boot store + services (walletd doesn't need Engine or KeyDeriver)
+store = BSV::Wallet::Store.connect(db_url)
+store.migrate!
+
+provider = BSV::Network::Providers::WhatsOnChain.send(network)
+services = BSV::Network::Services.new(providers: [provider])
+
+BSV.logger.info { "[walletd] Starting for #{wallet_name || 'default'} (#{network})..." }
+
+daemon = BSV::Wallet::Daemon.new(store: store, services: services)
+daemon.run!
