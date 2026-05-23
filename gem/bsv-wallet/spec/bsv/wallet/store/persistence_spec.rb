@@ -846,6 +846,151 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
+  # --- Broadcasts ---
+
+  describe '#submit_broadcast' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'creates a broadcast record and returns a hash' do
+      result = store.submit_broadcast(action_id: action.id)
+      expect(result[:action_id]).to eq(action.id)
+      expect(result[:tx_status]).to be_nil
+      expect(result[:broadcast_at]).to be_nil
+    end
+  end
+
+  describe '#record_broadcast_result' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'creates a broadcast record if none exists and updates status' do
+      result = store.record_broadcast_result(action_id: action.id, tx_status: 'SEEN_ON_NETWORK', arc_status: 200)
+      expect(result[:action_id]).to eq(action.id)
+      expect(result[:tx_status]).to eq('SEEN_ON_NETWORK')
+      expect(result[:arc_status]).to eq(200)
+      expect(result[:broadcast_at]).not_to be_nil
+    end
+
+    it 'updates an existing broadcast record' do
+      store.submit_broadcast(action_id: action.id)
+
+      result = store.record_broadcast_result(
+        action_id: action.id, tx_status: 'MINED',
+        block_hash: SecureRandom.random_bytes(32),
+        block_height: 800_000
+      )
+
+      expect(result[:tx_status]).to eq('MINED')
+      expect(result[:block_height]).to eq(800_000)
+      expect(result[:block_hash]).not_to be_nil
+      expect(result[:block_hash].encoding).to eq(Encoding::BINARY)
+    end
+
+    it 'decodes hex block_hash and merkle_path to binary' do
+      block_hash_hex = 'aa' * 32
+      merkle_path_hex = 'bb' * 64
+
+      result = store.record_broadcast_result(
+        action_id: action.id, tx_status: 'MINED',
+        block_hash: block_hash_hex, merkle_path: merkle_path_hex
+      )
+
+      expect(result[:block_hash]).to eq([block_hash_hex].pack('H*'))
+      expect(result[:merkle_path]).to eq([merkle_path_hex].pack('H*'))
+    end
+
+    it 'sets broadcast_at only on first write' do
+      store.submit_broadcast(action_id: action.id)
+      store.record_broadcast_result(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
+
+      first_at = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id).broadcast_at
+      expect(first_at).not_to be_nil
+
+      store.record_broadcast_result(action_id: action.id, tx_status: 'MINED')
+      second_at = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id).broadcast_at
+      expect(second_at).to eq(first_at)
+    end
+  end
+
+  describe '#broadcast_status' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'returns broadcast status for an action' do
+      store.submit_broadcast(action_id: action.id)
+      store.record_broadcast_result(action_id: action.id, tx_status: 'SENDING')
+
+      result = store.broadcast_status(action_id: action.id)
+      expect(result[:tx_status]).to eq('SENDING')
+    end
+
+    it 'returns nil when no broadcast exists' do
+      expect(store.broadcast_status(action_id: action.id)).to be_nil
+    end
+  end
+
+  describe '#pending_broadcasts' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'returns broadcasts needing status checks' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now - 60
+      )
+
+      results = store.pending_broadcasts(limit: 10)
+      expect(results.size).to eq(1)
+      expect(results.first[:action_id]).to eq(action.id)
+    end
+
+    it 'excludes broadcasts with terminal status' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now - 60,
+        tx_status: 'MINED'
+      )
+
+      results = store.pending_broadcasts(limit: 10)
+      expect(results).to be_empty
+    end
+
+    it 'excludes recent broadcasts (not yet stale)' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now
+      )
+
+      results = store.pending_broadcasts(limit: 10)
+      expect(results).to be_empty
+    end
+
+    it 'returns empty array when none pending' do
+      expect(store.pending_broadcasts).to eq([])
+    end
+  end
+
   # --- Reaper ---
 
   describe '#reap_stale_actions' do
