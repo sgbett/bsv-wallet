@@ -48,7 +48,7 @@ change = input_sats - payment - fee
 abort "Insufficient funds: have #{input_sats}, need #{payment + fee}" if change.negative?
 
 # Payment output: BRC-42 derived key for recipient
-pay_prefix = SecureRandom.uuid
+pay_prefix = BSV::Wallet.random_derivation
 pay_suffix = '1'
 pay_derived_pub = key_deriver.derive_public_key(
   protocol_id: [2, pay_prefix], key_id: pay_suffix,
@@ -59,7 +59,7 @@ pay_script = BSV::Script::Script.p2pkh_lock(
 ).to_binary
 
 # Change output: BRC-42 derived key for self
-chg_prefix = SecureRandom.uuid
+chg_prefix = BSV::Wallet.random_derivation
 chg_suffix = '1'
 chg_derived_pub = key_deriver.derive_public_key(
   protocol_id: [2, chg_prefix], key_id: chg_suffix,

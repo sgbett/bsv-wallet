@@ -396,7 +396,7 @@ module BSV
 
         # Phase 2: Self-payment to derived address
 
-        derivation_prefix = SecureRandom.uuid
+        derivation_prefix = random_derivation
         derivation_suffix = '1'
         derived_pub = @key_deriver.derive_public_key(
           protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
@@ -602,7 +602,7 @@ module BSV
         require_key_deriver!
         validate_recipient_key!(recipient)
 
-        derivation_prefix = SecureRandom.uuid
+        derivation_prefix = random_derivation
         derivation_suffix = '1'
 
         derived_pub = @key_deriver.derive_public_key(
@@ -1351,7 +1351,7 @@ module BSV
         end
 
         # Create a slot via broadcast self-payment with OP_RETURN recovery marker
-        prefix = SecureRandom.uuid # TODO: random_derivation (#107)
+        prefix = random_derivation
         suffix = '1'
         derived_pub = @key_deriver.derive_public_key(
           protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
@@ -1830,7 +1830,7 @@ module BSV
         # change_count is pre-computed by caller before inputs are locked,
         # since locking removes UTXOs from the spendable set.
         change_keys = change_count.times.map do |i|
-          prefix = SecureRandom.uuid
+          prefix = random_derivation
           suffix = (i + 1).to_s
           pub = @key_deriver.derive_public_key(
             protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
@@ -1976,6 +1976,10 @@ module BSV
         wtxid = tx.wtxid
 
         [wtxid, raw_tx]
+      end
+
+      def random_derivation
+        BSV::Wallet.random_derivation
       end
     end
   end

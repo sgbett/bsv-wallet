@@ -30,7 +30,7 @@ end
 
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 
-prefix = options[:prefix] || SecureRandom.uuid
+prefix = options[:prefix] || BSV::Wallet.random_derivation
 suffix = options[:suffix] || '1'
 
 # Verify derivation works by deriving the counterparty's child public key
