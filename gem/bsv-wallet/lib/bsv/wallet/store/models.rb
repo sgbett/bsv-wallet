@@ -9,6 +9,13 @@ module BSV
       # access — Sequel::Model needs a database connection to read schema
       # metadata, which isn't available at require time.
       module Models
+        # Allow model classes to be defined before their tables exist.
+        # Postgres raises PG::UndefinedTable during class body evaluation
+        # if the table is missing; this defers schema introspection until
+        # first query. bind_models! (called after migrate!) re-binds
+        # datasets to the live database.
+        Sequel::Model.require_valid_table = false
+
         # Shared model concern (eager — no DB dependency)
         require_relative 'models/display_txid'
 
