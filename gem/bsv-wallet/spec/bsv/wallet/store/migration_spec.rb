@@ -19,10 +19,7 @@ RSpec.describe 'Schema migration', :store do
     end
   end
 
-  describe 'value restrictions' do
-    # SQLite enforces via CHECK constraints (Sequel::ConstraintViolation).
-    # Postgres enforces via enums (Sequel::DatabaseError wrapping
-    # PG::InvalidTextRepresentation). Both are Sequel::DatabaseError.
+  describe 'value restrictions', :postgres do
     it 'rejects invalid broadcast values' do
       expect do
         db.transaction(savepoint: true) do

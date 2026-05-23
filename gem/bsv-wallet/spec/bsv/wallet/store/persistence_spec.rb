@@ -596,7 +596,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       end.to raise_error(RuntimeError, /nil wtxid/)
     end
 
-    it 'rejects corrupt wtxid (hex instead of binary) at database level' do
+    it 'rejects corrupt wtxid (hex instead of binary) at database level', :postgres do
       # A 64-char hex string is 64 bytes, not 32 — the wtxid_length CHECK
       # constraint catches this before the application ever sees it.
       hex_wtxid = 'a' * 64

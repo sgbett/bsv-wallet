@@ -84,6 +84,12 @@ Metrics/ParameterLists:
     - 'gem/*/lib/**/*'
     - 'gem/*/spec/**/*'
 
+# Migrations use `if !postgres` for linear readability — the negated
+# form reads as "this is the other case" alongside `if postgres`.
+Style/NegatedIf:
+  Exclude:
+    - 'gem/*/db/migrations/**/*'
+
 # BRC-100 interface method names are spec-mandated (e.g. proof_exists?, authenticated?).
 # Store adapter primitives like try_lock_input are side-effecting + boolean-returning,
 # which doesn't fit the `?` convention.

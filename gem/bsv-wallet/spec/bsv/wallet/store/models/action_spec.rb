@@ -33,7 +33,7 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
       expect(action.wtxid).to eq(wtxid)
     end
 
-    it 'rejects corrupt wtxid (hex stored as binary) at database level' do
+    it 'rejects corrupt wtxid (hex stored as binary) at database level', :postgres do
       hex_value = 'a' * 64 # 64 chars, not 32 bytes
       expect do
         described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: Sequel.blob(hex_value), raw_tx: raw_tx)
