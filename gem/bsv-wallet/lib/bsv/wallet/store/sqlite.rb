@@ -11,8 +11,13 @@ module BSV
       # a re-query to verify input lock ownership.
       class SQLite < Store
         def configure_db
-          @db.run('PRAGMA foreign_keys = ON')
+          # WAL journal mode is database-wide (persists across connections).
           @db.run('PRAGMA journal_mode = WAL')
+
+          # foreign_keys is per-connection — must be enabled on every
+          # connection from the pool, not just the first.
+          @db.pool.after_connect = proc { |conn| conn.execute('PRAGMA foreign_keys = ON') }
+          @db.run('PRAGMA foreign_keys = ON')
         end
 
         def try_lock_input(record_id:, inp:)

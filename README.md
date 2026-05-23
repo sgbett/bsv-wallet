@@ -83,20 +83,16 @@ gem 'pg'  # only if using PostgreSQL
 ```ruby
 require 'bsv-wallet'
 
-# Connect — SQLite by default, or set DATABASE_URL for PostgreSQL
-BSV::Wallet::Store::Connection.connect('sqlite://wallet.db')
-BSV::Wallet::Store::Connection.migrate!
-BSV::Wallet::Store::Connection.bind_models!
-db = BSV::Wallet::Store::Connection.db
-
-services = BSV::Wallet::Store.bootstrap(db: db)
+# Connect — SQLite by default, or pass a postgres:// URL for PostgreSQL
+store = BSV::Wallet::Store.connect('sqlite://wallet.db')
+store.migrate!
 
 # Compose the wallet
 engine = BSV::Wallet::Engine.new(
-  store:           services[:store],
-  utxo_pool:       services[:utxo_pool],
-  broadcast_queue: services[:broadcast_queue],
-  proof_store:     services[:proof_store],
+  store:           store,
+  utxo_pool:       BSV::Wallet::Store::UTXOPool.new(store: store),
+  broadcast_queue: BSV::Wallet::Store::BroadcastQueue.new(db: store.db),
+  proof_store:     BSV::Wallet::Store::ProofStore.new(db: store.db),
   key_deriver:     BSV::Wallet::KeyDeriver.new(private_key),
   network:         :mainnet
 )

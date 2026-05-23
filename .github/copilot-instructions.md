@@ -6,7 +6,7 @@ bsv-wallet is a Ruby BRC-100 wallet implementation — the layer that manages UT
 
 Key architecture (four-layer SOA):
 - `BSV::Wallet::Engine` — Layer 3: orchestrates the 28 BRC-100 methods. Pure logic, no SQL, no I/O.
-- `BSV::Wallet::Store::Persistence` — Layer 2a: persistence, action lifecycle (create → sign → promote)
+- `BSV::Wallet::Store` (with `Store::SQLite` / `Store::Postgres` backends) — Layer 2a: persistence, action lifecycle (create → sign → promote)
 - `BSV::Wallet::Store::BroadcastQueue` — Layer 2a: ARC communication lifecycle
 - `BSV::Wallet::Store::ProofStore` — Layer 2a: merkle proof storage and retrieval
 - Sequel models (Action, Output, Input, Spendable, TxProof, etc.) — Layer 2b: atomic DB operations
