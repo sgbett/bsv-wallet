@@ -41,7 +41,12 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
 
       before do
         allow(services).to receive(:push!) do |broadcast|
-          broadcast.write!(push_response)
+          data = push_response.data
+          broadcast.update(
+            broadcast_at: Time.now,
+            tx_status: data[:tx_status],
+            arc_status: data[:status]
+          )
           push_response
         end
       end
@@ -134,7 +139,11 @@ RSpec.describe BSV::Wallet::Store::BroadcastQueue, :store do
 
     before do
       allow(services).to receive(:fetch!) do |broadcast|
-        broadcast.write!(fetch_response)
+        data = fetch_response.data
+        fields = { tx_status: data[:tx_status], arc_status: data[:status] }
+        fields[:block_hash] = Sequel.blob([data[:block_hash]].pack('H*')) if data[:block_hash]
+        fields[:block_height] = data[:block_height] if data[:block_height]
+        broadcast.update(fields)
         fetch_response
       end
     end
