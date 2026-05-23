@@ -437,6 +437,120 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
+  # --- Proofs ---
+
+  describe '#save_proof' do
+    let(:wtxid) { SecureRandom.random_bytes(32) }
+    let(:proof_data) do
+      {
+        height: 800_000,
+        block_index: 42,
+        merkle_path: SecureRandom.random_bytes(64),
+        raw_tx: SecureRandom.random_bytes(100),
+        block_hash: SecureRandom.random_bytes(32),
+        merkle_root: SecureRandom.random_bytes(32)
+      }
+    end
+
+    it 'creates a new proof' do
+      id = store.save_proof(wtxid: wtxid, proof: proof_data)
+      expect(id).to be_a(Integer)
+    end
+
+    it 'upserts an existing proof' do
+      id1 = store.save_proof(wtxid: wtxid, proof: proof_data)
+      new_merkle_root = SecureRandom.random_bytes(32)
+      id2 = store.save_proof(wtxid: wtxid, proof: proof_data.merge(
+        height: 800_001, merkle_root: new_merkle_root
+      ))
+
+      expect(id2).to eq(id1)
+      record = BSV::Wallet::Store::Models::TxProof[id1]
+      expect(record.block.height).to eq(800_001)
+    end
+
+    it 'preserves binary data' do
+      store.save_proof(wtxid: wtxid, proof: proof_data)
+      record = BSV::Wallet::Store::Models::TxProof.first(wtxid: Sequel.blob(wtxid))
+
+      expect(record.wtxid.encoding).to eq(Encoding::BINARY)
+      expect(record.merkle_path.encoding).to eq(Encoding::BINARY)
+      expect(record.block.block_hash.encoding).to eq(Encoding::BINARY)
+      expect(record.merkle_path).to eq(proof_data[:merkle_path])
+    end
+
+    it 'reuses an existing block for proofs at the same height' do
+      wtxid2 = SecureRandom.random_bytes(32)
+      id1 = store.save_proof(wtxid: wtxid, proof: proof_data)
+      id2 = store.save_proof(wtxid: wtxid2, proof: proof_data.merge(
+        raw_tx: SecureRandom.random_bytes(100)
+      ))
+
+      proof1 = BSV::Wallet::Store::Models::TxProof[id1]
+      proof2 = BSV::Wallet::Store::Models::TxProof[id2]
+      expect(proof1.block_id).to eq(proof2.block_id)
+      expect(BSV::Wallet::Store::Models::Block.where(height: 800_000).count).to eq(1)
+    end
+
+    it 'saves proof without block when merkle_root is absent' do
+      proof_without_root = proof_data.except(:merkle_root, :block_hash)
+      id = store.save_proof(wtxid: wtxid, proof: proof_without_root)
+
+      record = BSV::Wallet::Store::Models::TxProof[id]
+      expect(record.block_id).to be_nil
+    end
+  end
+
+  describe '#find_proof' do
+    let(:wtxid) { SecureRandom.random_bytes(32) }
+    let(:proof_data) do
+      {
+        height: 800_000,
+        block_index: 42,
+        merkle_path: SecureRandom.random_bytes(64),
+        raw_tx: SecureRandom.random_bytes(100),
+        block_hash: SecureRandom.random_bytes(32),
+        merkle_root: SecureRandom.random_bytes(32)
+      }
+    end
+
+    it 'returns the proof hash' do
+      store.save_proof(wtxid: wtxid, proof: proof_data)
+      result = store.find_proof(wtxid: wtxid)
+
+      expect(result[:height]).to eq(800_000)
+      expect(result[:block_index]).to eq(42)
+      expect(result[:wtxid]).to eq(wtxid)
+    end
+
+    it 'returns nil when not found' do
+      expect(store.find_proof(wtxid: SecureRandom.random_bytes(32))).to be_nil
+    end
+  end
+
+  describe '#proof_exists?' do
+    let(:wtxid) { SecureRandom.random_bytes(32) }
+    let(:proof_data) do
+      {
+        height: 800_000,
+        block_index: 42,
+        merkle_path: SecureRandom.random_bytes(64),
+        raw_tx: SecureRandom.random_bytes(100),
+        block_hash: SecureRandom.random_bytes(32),
+        merkle_root: SecureRandom.random_bytes(32)
+      }
+    end
+
+    it 'returns true when proof exists' do
+      store.save_proof(wtxid: wtxid, proof: proof_data)
+      expect(store.proof_exists?(wtxid: wtxid)).to be true
+    end
+
+    it 'returns false when no proof' do
+      expect(store.proof_exists?(wtxid: SecureRandom.random_bytes(32))).to be false
+    end
+  end
+
   # --- Settings ---
 
   describe '#get_setting / #set_setting' do
@@ -654,6 +768,226 @@ RSpec.describe BSV::Wallet::Store, :store do
 
       candidates = store.find_spendable(satoshis: 9999, basket: 'default')
       expect(candidates.map { |c| c[:id] }).not_to include(output.id)
+    end
+  end
+
+  # --- Block Headers ---
+
+  describe '#record_block_header' do
+    it 'inserts a new block from hex strings' do
+      merkle_root_hex = 'aa' * 32
+      block_hash_hex = 'bb' * 32
+
+      store.record_block_header(height: 100, merkle_root: merkle_root_hex, block_hash: block_hash_hex)
+
+      block = BSV::Wallet::Store::Models::Block.first(height: 100)
+      expect(block).not_to be_nil
+      expect(block.merkle_root).to eq([merkle_root_hex].pack('H*'))
+      expect(block.block_hash).to eq([block_hash_hex].pack('H*'))
+    end
+
+    it 'inserts a new block from binary values' do
+      merkle_root_bin = SecureRandom.random_bytes(32)
+      block_hash_bin = SecureRandom.random_bytes(32)
+
+      store.record_block_header(height: 200, merkle_root: merkle_root_bin, block_hash: block_hash_bin)
+
+      block = BSV::Wallet::Store::Models::Block.first(height: 200)
+      expect(block.merkle_root).to eq(merkle_root_bin)
+      expect(block.block_hash).to eq(block_hash_bin)
+    end
+
+    it 'upserts when height already exists' do
+      original_root = SecureRandom.random_bytes(32)
+      updated_root = SecureRandom.random_bytes(32)
+
+      store.record_block_header(height: 300, merkle_root: original_root)
+      store.record_block_header(height: 300, merkle_root: updated_root)
+
+      block = BSV::Wallet::Store::Models::Block.first(height: 300)
+      expect(block.merkle_root).to eq(updated_root)
+    end
+
+    it 'handles nil block_hash' do
+      store.record_block_header(height: 400, merkle_root: SecureRandom.random_bytes(32))
+
+      block = BSV::Wallet::Store::Models::Block.first(height: 400)
+      expect(block.block_hash).to be_nil
+    end
+  end
+
+  describe '#find_block' do
+    it 'returns block data for a known height' do
+      merkle_root = SecureRandom.random_bytes(32)
+      block_hash = SecureRandom.random_bytes(32)
+      store.record_block_header(height: 500, merkle_root: merkle_root, block_hash: block_hash)
+
+      result = store.find_block(height: 500)
+
+      expect(result).to eq({ height: 500, merkle_root: merkle_root, block_hash: block_hash })
+    end
+
+    it 'returns nil for unknown height' do
+      expect(store.find_block(height: 999_999)).to be_nil
+    end
+  end
+
+  describe '#max_block_height' do
+    it 'returns nil when no blocks stored' do
+      expect(store.max_block_height).to be_nil
+    end
+
+    it 'returns the highest stored height' do
+      store.record_block_header(height: 10, merkle_root: SecureRandom.random_bytes(32))
+      store.record_block_header(height: 50, merkle_root: SecureRandom.random_bytes(32))
+      store.record_block_header(height: 30, merkle_root: SecureRandom.random_bytes(32))
+
+      expect(store.max_block_height).to eq(50)
+    end
+  end
+
+  # --- Broadcasts ---
+
+  describe '#submit_broadcast' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'creates a broadcast record and returns a hash' do
+      result = store.submit_broadcast(action_id: action.id)
+      expect(result[:action_id]).to eq(action.id)
+      expect(result[:tx_status]).to be_nil
+      expect(result[:broadcast_at]).to be_nil
+    end
+  end
+
+  describe '#record_broadcast_result' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'creates a broadcast record if none exists and updates status' do
+      result = store.record_broadcast_result(action_id: action.id, tx_status: 'SEEN_ON_NETWORK', arc_status: 200)
+      expect(result[:action_id]).to eq(action.id)
+      expect(result[:tx_status]).to eq('SEEN_ON_NETWORK')
+      expect(result[:arc_status]).to eq(200)
+      expect(result[:broadcast_at]).not_to be_nil
+    end
+
+    it 'updates an existing broadcast record' do
+      store.submit_broadcast(action_id: action.id)
+
+      result = store.record_broadcast_result(
+        action_id: action.id, tx_status: 'MINED',
+        block_hash: SecureRandom.random_bytes(32),
+        block_height: 800_000
+      )
+
+      expect(result[:tx_status]).to eq('MINED')
+      expect(result[:block_height]).to eq(800_000)
+      expect(result[:block_hash]).not_to be_nil
+      expect(result[:block_hash].encoding).to eq(Encoding::BINARY)
+    end
+
+    it 'decodes hex block_hash and merkle_path to binary' do
+      block_hash_hex = 'aa' * 32
+      merkle_path_hex = 'bb' * 64
+
+      result = store.record_broadcast_result(
+        action_id: action.id, tx_status: 'MINED',
+        block_hash: block_hash_hex, merkle_path: merkle_path_hex
+      )
+
+      expect(result[:block_hash]).to eq([block_hash_hex].pack('H*'))
+      expect(result[:merkle_path]).to eq([merkle_path_hex].pack('H*'))
+    end
+
+    it 'sets broadcast_at only on first write' do
+      store.submit_broadcast(action_id: action.id)
+      store.record_broadcast_result(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
+
+      first_at = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id).broadcast_at
+      expect(first_at).not_to be_nil
+
+      store.record_broadcast_result(action_id: action.id, tx_status: 'MINED')
+      second_at = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id).broadcast_at
+      expect(second_at).to eq(first_at)
+    end
+  end
+
+  describe '#broadcast_status' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'returns broadcast status for an action' do
+      store.submit_broadcast(action_id: action.id)
+      store.record_broadcast_result(action_id: action.id, tx_status: 'SENDING')
+
+      result = store.broadcast_status(action_id: action.id)
+      expect(result[:tx_status]).to eq('SENDING')
+    end
+
+    it 'returns nil when no broadcast exists' do
+      expect(store.broadcast_status(action_id: action.id)).to be_nil
+    end
+  end
+
+  describe '#pending_broadcasts' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'returns broadcasts needing status checks' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now - 60
+      )
+
+      results = store.pending_broadcasts(limit: 10)
+      expect(results.size).to eq(1)
+      expect(results.first[:action_id]).to eq(action.id)
+    end
+
+    it 'excludes broadcasts with terminal status' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now - 60,
+        tx_status: 'MINED'
+      )
+
+      results = store.pending_broadcasts(limit: 10)
+      expect(results).to be_empty
+    end
+
+    it 'excludes recent broadcasts (not yet stale)' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now
+      )
+
+      results = store.pending_broadcasts(limit: 10)
+      expect(results).to be_empty
+    end
+
+    it 'returns empty array when none pending' do
+      expect(store.pending_broadcasts).to eq([])
     end
   end
 

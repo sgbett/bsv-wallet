@@ -82,7 +82,7 @@ module BSV
       # Calls +entity.push_command+ and +entity.push_payload+, dispatches
       # through the routing layer, and writes the response back on success.
       #
-      # @param entity [#push_command, #push_payload, #write!] a Pushable entity
+      # @param entity [#push_command, #push_payload, #write!]
       # @return [BSV::Network::ProtocolResponse]
       def push!(entity)
         command = entity.push_command
@@ -103,7 +103,7 @@ module BSV
       # Calls +entity.fetch_command+ and +entity.fetch_args+, dispatches
       # through the routing layer, and writes the response back on success.
       #
-      # @param entity [#fetch_command, #fetch_args, #write!] a Fetchable entity
+      # @param entity [#fetch_command, #fetch_args, #write!]
       # @return [BSV::Network::ProtocolResponse]
       def fetch!(entity)
         command = entity.fetch_command

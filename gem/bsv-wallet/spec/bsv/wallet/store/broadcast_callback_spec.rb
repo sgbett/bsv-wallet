@@ -7,8 +7,7 @@ require 'rack/test'
 RSpec.describe BSV::Wallet::Store::BroadcastCallback, :store do
   include Rack::Test::Methods
 
-  let(:broadcast_queue) { BSV::Wallet::Store::BroadcastQueue.new }
-  let(:app) { described_class.new(broadcast_queue: broadcast_queue) }
+  let(:app) { described_class.new(store: store) }
 
   let(:action) do
     BSV::Wallet::Store::Models::Action.create(

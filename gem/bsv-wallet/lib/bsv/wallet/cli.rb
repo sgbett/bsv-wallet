@@ -28,7 +28,7 @@ module BSV
       #
       # @param wallet_name [String, nil] e.g. "alice", "bob", or nil for default
       # @param network [Symbol] :mainnet or :testnet
-      # @return [Hash] { engine:, key_deriver:, proof_store:, db:, identity_key:, private_key: }
+      # @return [Hash] { engine:, utxo_pool:, key_deriver:, db:, identity_key:, private_key: }
       def boot(wallet_name: nil, network: :mainnet)
         begin
           require 'dotenv/load'
@@ -53,15 +53,13 @@ module BSV
         db = store.db
 
         utxo_pool = BSV::Wallet::Store::UTXOPool.new(store: store)
-        proof_store = BSV::Wallet::Store::ProofStore.new(db: db)
-        broadcast_queue = BSV::Wallet::Store::BroadcastQueue.new(db: db)
 
         private_key = BSV::Primitives::PrivateKey.from_wif(wif)
         key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
 
         network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
         network_services = BSV::Network::Services.new(providers: [network_provider])
-        chain_tracker = BSV::Network::ChainTracker.new(db: db, services: network_services)
+        chain_tracker = BSV::Network::ChainTracker.new(store: store, services: network_services)
 
         limp_threshold_raw = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD)
         begin
@@ -73,8 +71,7 @@ module BSV
         engine = BSV::Wallet::Engine.new(
           store: store,
           utxo_pool: utxo_pool,
-          broadcast_queue: broadcast_queue,
-          proof_store: proof_store,
+          services: network_services,
           key_deriver: key_deriver,
           chain_tracker: chain_tracker,
           network_provider: network_provider,
@@ -86,7 +83,6 @@ module BSV
           engine: engine,
           utxo_pool: utxo_pool,
           key_deriver: key_deriver,
-          proof_store: proof_store,
           db: db,
           identity_key: key_deriver.identity_key,
           private_key: private_key

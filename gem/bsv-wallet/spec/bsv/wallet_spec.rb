@@ -99,36 +99,6 @@ RSpec.describe BSV::Wallet do
     end
   end
 
-  describe BSV::Wallet::Interface::BroadcastQueue do
-    subject { klass.new }
-
-    let(:klass) do
-      Class.new { include BSV::Wallet::Interface::BroadcastQueue }
-    end
-
-    it 'defines broadcast lifecycle methods' do
-      %i[submit process_pending handle_event status].each do |method|
-        expect(subject).to respond_to(method),
-                           "expected broadcast queue to respond to ##{method}"
-      end
-    end
-  end
-
-  describe BSV::Wallet::Interface::ProofStore do
-    subject { klass.new }
-
-    let(:klass) do
-      Class.new { include BSV::Wallet::Interface::ProofStore }
-    end
-
-    it 'defines proof storage methods' do
-      %i[save_proof find_proof proof_exists?].each do |method|
-        expect(subject).to respond_to(method),
-                           "expected proof store to respond to ##{method}"
-      end
-    end
-  end
-
   describe BSV::Wallet::Error do
     it 'carries a machine-readable code' do
       error = described_class.new('something went wrong', 42)

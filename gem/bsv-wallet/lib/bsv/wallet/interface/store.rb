@@ -168,6 +168,37 @@ module BSV
           raise NotImplementedError
         end
 
+        # --- Proofs ---
+
+        # Store a merkle proof for a transaction.
+        #
+        # Upserts — if a proof already exists for this wtxid, updates it.
+        # Wraps the multi-table write (TxProof + Block) in a single transaction.
+        #
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
+        # @param proof [Hash] :height, :block_index, :merkle_path (binary),
+        #   :raw_tx (binary), :block_hash (binary), :merkle_root (binary)
+        # @return [Integer] the tx_proof ID
+        def save_proof(wtxid:, proof:)
+          raise NotImplementedError
+        end
+
+        # Retrieve a proof by wtxid.
+        #
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
+        # @return [Hash, nil] proof data, or nil if not stored
+        def find_proof(wtxid:)
+          raise NotImplementedError
+        end
+
+        # Check whether a proof exists for a transaction.
+        #
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
+        # @return [Boolean]
+        def proof_exists?(wtxid:)
+          raise NotImplementedError
+        end
+
         # --- Settings ---
 
         # Retrieve a setting value by key.
@@ -235,6 +266,86 @@ module BSV
         # @param exclude [Array<Integer>] output IDs to skip (e.g. from a failed lock attempt)
         # @return [Array<Hash>] candidates: :id, :satoshis, :vout, :locking_script, :action_id
         def find_spendable(satoshis:, basket: nil, exclude: [])
+          raise NotImplementedError
+        end
+
+        # --- Block Headers ---
+
+        # Upsert a block header record.
+        #
+        # Accepts merkle_root and block_hash as either 32-byte binary or
+        # 64-char hex strings. Already-binary values (Encoding::BINARY)
+        # are stored as-is; hex strings are packed to binary.
+        #
+        # @param height [Integer] block height
+        # @param merkle_root [String] 32-byte binary or 64-char hex string
+        # @param block_hash [String, nil] 32-byte binary or 64-char hex string
+        def record_block_header(height:, merkle_root:, block_hash: nil)
+          raise NotImplementedError
+        end
+
+        # Find a block header by height.
+        #
+        # @param height [Integer]
+        # @return [Hash, nil] { height:, merkle_root:, block_hash: } or nil
+        def find_block(height:)
+          raise NotImplementedError
+        end
+
+        # Return the maximum block height stored, or nil if no blocks.
+        #
+        # @return [Integer, nil]
+        def max_block_height
+          raise NotImplementedError
+        end
+
+        # --- Broadcasts ---
+
+        # Create a broadcast record for an action (submit for broadcast).
+        #
+        # @param action_id [Integer]
+        # @return [Hash] broadcast data: :action_id, :tx_status, :arc_status, :broadcast_at,
+        #   :block_hash, :block_height, :merkle_path
+        def submit_broadcast(action_id:)
+          raise NotImplementedError
+        end
+
+        # Record a broadcast result from ARC or a callback event.
+        #
+        # Find-or-creates a Broadcast record for the action, then updates
+        # status fields atomically. Handles hex-to-binary decoding for
+        # block_hash and merkle_path, and database-specific coercion for
+        # competing_txs.
+        #
+        # @param action_id [Integer]
+        # @param tx_status [String] e.g. 'SEEN_ON_NETWORK', 'MINED'
+        # @param arc_status [Integer, nil] HTTP status from ARC
+        # @param block_hash [String, nil] hex or binary block hash
+        # @param block_height [Integer, nil]
+        # @param merkle_path [String, nil] hex or binary merkle path
+        # @param extra_info [String, nil]
+        # @param competing_txs [Array<String>, nil]
+        # @return [Hash] updated broadcast data
+        def record_broadcast_result(action_id:, tx_status:, arc_status: nil,
+                                    block_hash: nil, block_height: nil,
+                                    merkle_path: nil, extra_info: nil,
+                                    competing_txs: nil)
+          raise NotImplementedError
+        end
+
+        # Query broadcast status for an action.
+        #
+        # @param action_id [Integer]
+        # @return [Hash, nil] broadcast data or nil if no broadcast exists
+        def broadcast_status(action_id:)
+          raise NotImplementedError
+        end
+
+        # Query broadcasts needing status checks (stale, non-terminal).
+        #
+        # @param limit [Integer] maximum records to return
+        # @return [Array<Hash>] broadcast data hashes
+        def pending_broadcasts(limit: 100)
           raise NotImplementedError
         end
 

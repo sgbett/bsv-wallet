@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'json'
+
 module BSV
   module Wallet
     # SQL-backed persistence for the wallet.
@@ -346,6 +348,67 @@ module BSV
         models::Certificate.where(type: type, serial_number: serial_number, certifier: certifier).delete
       end
 
+      # --- Proofs ---
+
+      def save_proof(wtxid:, proof:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'save_proof wtxid')
+        BSV.logger&.debug { "[Store] save_proof: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{proof[:height]}" }
+
+        @db.transaction do
+          block_id = find_or_create_block(proof) if proof[:height]
+
+          existing = models::TxProof.first(wtxid: Sequel.blob(wtxid))
+          cols = proof_columns(proof).merge(block_id ? { block_id: block_id } : {})
+          if existing
+            existing.update(cols)
+            existing.id
+          else
+            models::TxProof.create({ wtxid: wtxid }.merge(cols)).id
+          end
+        end
+      end
+
+      def find_proof(wtxid:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'find_proof wtxid')
+        record = models::TxProof.first(wtxid: Sequel.blob(wtxid))
+        return unless record
+
+        proof_to_hash(record)
+      end
+
+      def proof_exists?(wtxid:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'proof_exists? wtxid')
+        models::TxProof.where(wtxid: Sequel.blob(wtxid)).any?
+      end
+
+      # --- Block Headers ---
+
+      def record_block_header(height:, merkle_root:, block_hash: nil)
+        root_bin = to_binary(merkle_root)
+        hash_bin = block_hash ? to_binary(block_hash) : nil
+
+        update_fields = { merkle_root: Sequel.blob(root_bin) }
+        update_fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
+
+        insert_fields = { height: height, merkle_root: Sequel.blob(root_bin) }
+        insert_fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
+
+        models::Block.dataset
+                     .insert_conflict(target: :height, update: update_fields)
+                     .insert(insert_fields)
+      end
+
+      def find_block(height:)
+        record = models::Block.first(height: height)
+        return unless record
+
+        { height: record.height, merkle_root: record.merkle_root, block_hash: record.block_hash }
+      end
+
+      def max_block_height
+        models::Block.max(:height)
+      end
+
       # --- Settings ---
 
       def get_setting(key:)
@@ -458,6 +521,51 @@ module BSV
         candidates
       end
 
+      # --- Broadcasts ---
+
+      def submit_broadcast(action_id:)
+        broadcast = models::Broadcast.create(action_id: action_id)
+        broadcast_to_hash(broadcast)
+      end
+
+      def record_broadcast_result(action_id:, tx_status:, arc_status: nil,
+                                  block_hash: nil, block_height: nil,
+                                  merkle_path: nil, extra_info: nil,
+                                  competing_txs: nil)
+        @db.transaction do
+          broadcast = models::Broadcast.first(action_id: action_id)
+          broadcast ||= models::Broadcast.create(action_id: action_id)
+
+          fields = { tx_status: tx_status }
+          fields[:broadcast_at] = Time.now if broadcast.broadcast_at.nil?
+          fields[:arc_status] = arc_status if arc_status
+          fields[:block_hash] = decode_hex(block_hash) if block_hash
+          fields[:block_height] = block_height if block_height
+          fields[:merkle_path] = decode_hex(merkle_path) if merkle_path
+          fields[:extra_info] = extra_info if extra_info
+          fields[:competing_txs] = encode_competing_txs(competing_txs) if competing_txs
+
+          broadcast.update(fields)
+          broadcast_to_hash(broadcast)
+        end
+      end
+
+      def broadcast_status(action_id:)
+        broadcast = models::Broadcast.first(action_id: action_id)
+        return unless broadcast
+
+        broadcast_to_hash(broadcast)
+      end
+
+      def pending_broadcasts(limit: 100)
+        models::Broadcast
+          .where { broadcast_at < Time.now - Models::Broadcast::FETCH_STALENESS }
+          .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: Models::Broadcast::TERMINAL_STATUSES)))
+          .limit(limit)
+          .all
+          .map { |b| broadcast_to_hash(b) }
+      end
+
       def reap_stale_actions(threshold:)
         cutoff = Time.now - threshold
         output_exists = models::Output.where(Sequel[:outputs][:action_id] => Sequel[:actions][:id]).select(1)
@@ -486,6 +594,82 @@ module BSV
 
       def models
         BSV::Wallet::Store::Models
+      end
+
+      # Convert a value to binary. If already binary-encoded, return as-is;
+      # otherwise treat as hex string and pack.
+      def to_binary(value)
+        return value if value.encoding == Encoding::BINARY
+
+        [value].pack('H*')
+      end
+
+      def broadcast_to_hash(record)
+        {
+          action_id: record.action_id, tx_status: record.tx_status,
+          arc_status: record.arc_status, broadcast_at: record.broadcast_at,
+          block_hash: record.block_hash, block_height: record.block_height,
+          merkle_path: record.merkle_path
+        }
+      end
+
+      # Decode hex to binary blob, passthrough if already binary.
+      def decode_hex(value)
+        return unless value
+        return Sequel.blob(value) if value.encoding == Encoding::BINARY
+
+        Sequel.blob([value].pack('H*'))
+      end
+
+      def encode_competing_txs(txs)
+        if @db.database_type == :postgres
+          Sequel.pg_array(txs)
+        else
+          JSON.generate(txs)
+        end
+      end
+
+      def proof_columns(proof)
+        cols = {}
+        cols[:block_index] = proof[:block_index] if proof.key?(:block_index)
+        cols[:merkle_path] = proof[:merkle_path] ? Sequel.blob(proof[:merkle_path]) : nil if proof.key?(:merkle_path)
+        cols[:raw_tx]      = proof[:raw_tx]      ? Sequel.blob(proof[:raw_tx]) : nil      if proof.key?(:raw_tx)
+        cols
+      end
+
+      def proof_to_hash(record)
+        block = record.block
+        {
+          id: record.id, wtxid: record.wtxid, block_id: record.block_id,
+          height: block&.height, block_index: record.block_index,
+          merkle_path: record.merkle_path, raw_tx: record.raw_tx,
+          block_hash: block&.block_hash, merkle_root: block&.merkle_root
+        }
+      end
+
+      def find_or_create_block(proof)
+        height = proof[:height]
+        return unless height
+
+        existing = models::Block.first(height: height)
+        return existing.id if existing
+
+        merkle_root = proof[:merkle_root] || derive_merkle_root(proof[:merkle_path])
+        return unless merkle_root
+
+        models::Block.create(height: height, merkle_root: merkle_root, block_hash: proof[:block_hash]).id
+      rescue Sequel::UniqueConstraintViolation
+        models::Block.first!(height: height).id
+      end
+
+      def derive_merkle_root(merkle_path_binary)
+        return unless merkle_path_binary
+
+        paths = BSV::Transaction::MerklePath.from_binary(merkle_path_binary)
+        mp = paths.is_a?(Array) ? paths.first : paths
+        mp&.compute_root
+      rescue StandardError
+        nil
       end
 
       def bind_models!
@@ -574,9 +758,6 @@ require_relative 'store/models'
 require_relative 'store/sqlite'
 require_relative 'store/postgres'
 
-# Service classes (BroadcastQueue, ProofStore, UTXOPool, etc.)
-BSV::Wallet::Store.autoload :BroadcastQueue,    'bsv/wallet/store/broadcast_queue'
+# Service classes
 BSV::Wallet::Store.autoload :BroadcastCallback, 'bsv/wallet/store/broadcast_callback'
-BSV::Wallet::Store.autoload :ArcAdapter,        'bsv/wallet/store/arc_adapter'
-BSV::Wallet::Store.autoload :ProofStore,        'bsv/wallet/store/proof_store'
 BSV::Wallet::Store.autoload :UTXOPool,          'bsv/wallet/store/utxo_pool'
