@@ -30,6 +30,9 @@ module BSV
     class Engine
       include BSV::Wallet::Interface::BRC100
 
+      autoload :Broadcast, 'bsv/wallet/engine/broadcast'
+      autoload :TxProof,   'bsv/wallet/engine/tx_proof'
+
       ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK MINED ACCEPTED_BY_NETWORK IMMUTABLE].freeze
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 

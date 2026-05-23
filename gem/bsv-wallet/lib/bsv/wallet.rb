@@ -28,8 +28,8 @@ module BSV
     # Default store (SQLite-backed persistence)
     autoload :Store, 'bsv/wallet/store'
 
-    # Async task scheduling (default implementation of Interface::Scheduler)
-    autoload :PollingScheduler, 'bsv/wallet/polling_scheduler'
+    # Async task scheduler (OMQ-based)
+    autoload :Scheduler, 'bsv/wallet/scheduler'
 
     # Engine (Layer 3 — orchestration)
     autoload :Engine, 'bsv/wallet/engine'

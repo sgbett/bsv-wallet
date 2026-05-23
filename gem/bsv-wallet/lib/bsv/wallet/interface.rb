@@ -9,7 +9,6 @@ module BSV
     module Interface
       autoload :Store,          'bsv/wallet/interface/store'
       autoload :UTXOPool,       'bsv/wallet/interface/utxo_pool'
-      autoload :Scheduler,      'bsv/wallet/interface/scheduler'
     end
   end
 end
