@@ -54,9 +54,7 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
   around do |example|
     original_logger = BSV.logger
     BSV.logger = Logger.new(log_output, level: Logger::INFO)
-    # Clear any stale inproc socket bindings left by prior specs (the
-    # global registry persists across examples within the same process).
-    OMQ::Transport::Inproc.reset!
+    # OMQ inproc registry reset is handled globally in spec_helper.
     example.run
   ensure
     BSV.logger = original_logger
