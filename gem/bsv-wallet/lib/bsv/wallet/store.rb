@@ -703,7 +703,8 @@ module BSV
           reference: record.reference, status: record.derived_status,
           outgoing: record.outgoing, description: record.description,
           version: record.version, nlocktime: record.nlocktime,
-          broadcast: record.values[:broadcast], created_at: record.created_at
+          broadcast: record.values[:broadcast], created_at: record.created_at,
+          tx_proof_id: record.tx_proof_id
         }
 
         h[:labels] = record.labels.map(&:label) if include_labels

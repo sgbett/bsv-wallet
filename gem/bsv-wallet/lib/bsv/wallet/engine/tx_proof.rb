@@ -48,6 +48,14 @@ module BSV
             BSV::Wallet.emit('task.skipped', task: 'proof_acquisition', id: action_id, reason: 'no_wtxid')
             return
           end
+          if action[:tx_proof_id]
+            # Defence-in-depth: the daemon's pending_proofs discovery query
+            # filters WHERE tx_proof_id IS NULL, so this branch only fires
+            # on the race window where a proof arrives between discovery
+            # and dispatch. Per #177.
+            BSV::Wallet.emit('task.skipped', task: 'proof_acquisition', id: action_id, reason: 'already_proven')
+            return
+          end
 
           dtxid = action[:wtxid].reverse.unpack1('H*')
           response = @services.call(:get_tx_status, txid: dtxid)

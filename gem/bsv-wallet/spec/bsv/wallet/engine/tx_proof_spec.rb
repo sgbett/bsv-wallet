@@ -181,6 +181,28 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
       end
     end
 
+    context 'when action already has tx_proof_id (race window between discovery and dispatch)' do
+      before do
+        allow(store).to receive(:find_action).with(id: action_id)
+                                             .and_return(action_hash.merge(tx_proof_id: 99))
+        allow(services).to receive(:call)
+      end
+
+      it 'returns nil without calling services' do
+        result = tx_proof.process(action_id)
+        expect(result).to be_nil
+        expect(services).not_to have_received(:call)
+      end
+
+      it 'emits task.dispatched then task.skipped with reason=already_proven' do
+        tx_proof.process(action_id)
+
+        expect(emitted_events.size).to eq(2)
+        expect(emitted_events[0]).to include(name: 'task.dispatched', task: 'proof_acquisition', id: action_id)
+        expect(emitted_events[1]).to include(name: 'task.skipped', reason: 'already_proven', id: action_id)
+      end
+    end
+
     context 'when merklePath is a hex string' do
       let(:binary_data) { "\xab\xcd\xef".b }
       let(:hex_string) { 'abcdef' }
