@@ -80,10 +80,15 @@ module BSV
 
           status = @store.broadcast_status(action_id: action_id)
 
+          # NOTE: only the poll branch is reachable via Scheduler discovery --
+          # Store#pending_broadcasts filters to stale rows with broadcast_at
+          # set. The submit branch fires when callers invoke process directly
+          # (e.g. the inline reply! socket). Store#pending_submissions is the
+          # follow-up that closes the discovery gap.
           if status && status[:broadcast_at]
-            poll_status(action_id, action)
+            poll_status(action_id, action, status: status, started_at: started_at)
           else
-            submit(action_id, action, started_at)
+            submit(action_id, action, started_at: started_at)
           end
         end
 
@@ -98,7 +103,7 @@ module BSV
         private
 
         # Initial broadcast -- submit raw_tx to ARC.
-        def submit(action_id, action, started_at)
+        def submit(action_id, action, started_at:)
           response = @services.call(:broadcast, action[:raw_tx])
           latency_ms = ((Time.now - started_at) * 1000).round
 
@@ -138,24 +143,44 @@ module BSV
         end
 
         # Status poll -- query ARC for current tx status.
-        def poll_status(action_id, action)
-          return @store.broadcast_status(action_id: action_id) unless action[:wtxid]
+        #
+        # Per the analyst's C-2 recommendation, the poll path never aborts.
+        # An ARC-reported terminal status (REJECTED, DOUBLE_SPEND_ATTEMPTED,
+        # MALFORMED) is recorded via record_broadcast_result and surfaces as
+        # task.succeeded outcome=:rejected -- operators reconcile via the
+        # event stream rather than via Store#abort_action, whose semantics
+        # are not well-defined for post-broadcast aborts.
+        def poll_status(action_id, action, status:, started_at:)
+          unless action[:wtxid]
+            BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: :no_wtxid)
+            return status
+          end
 
           dtxid = action[:wtxid].reverse.unpack1('H*')
           response = @services.call(:get_tx_status, txid: dtxid)
+          latency_ms = ((Time.now - started_at) * 1000).round
+
           if response.http_success?
+            data = response.data
             @store.record_broadcast_result(
               action_id: action_id,
-              tx_status: response.data[:tx_status],
-              arc_status: response.data[:status],
-              block_hash: response.data[:block_hash],
-              block_height: response.data[:block_height],
-              merkle_path: response.data[:merkle_path],
-              extra_info: response.data[:extra_info],
-              competing_txs: response.data[:competing_txs]
+              tx_status: data[:tx_status],
+              arc_status: data[:status],
+              block_hash: data[:block_hash],
+              block_height: data[:block_height],
+              merkle_path: data[:merkle_path],
+              extra_info: data[:extra_info],
+              competing_txs: data[:competing_txs]
             )
+            BSV::Wallet.emit('task.succeeded',
+                             task: 'broadcast_push', id: action_id,
+                             latency_ms: latency_ms,
+                             outcome: categorize_outcome(data[:tx_status]))
           else
-            BSV.logger&.warn { "[Engine::Broadcast] poll failed for action #{action_id}: #{response.error_message}" }
+            BSV::Wallet.emit('task.failed',
+                             task: 'broadcast_push', id: action_id,
+                             latency_ms: latency_ms,
+                             reason: categorize_reason(response))
           end
 
           @store.broadcast_status(action_id: action_id)
