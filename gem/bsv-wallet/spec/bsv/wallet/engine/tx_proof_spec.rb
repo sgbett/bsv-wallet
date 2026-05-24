@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'bsv/wallet/engine/tx_proof'
+require 'logger'
 
 RSpec.describe BSV::Wallet::Engine::TxProof do
   subject(:tx_proof) { described_class.new(store: store, services: services) }
@@ -228,6 +229,26 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
         task.stop
       end
     end
+
+    it 'emits fiber.crashed when the bind fails' do
+      # Pre-bind the endpoint so the engine's bind raises.
+      OMQ::PULL.bind('inproc://proofs.pull')
+
+      suppress_console_errors do
+        Async do |task|
+          tx_proof.pull!(task: task)
+          sleep 0.05
+        ensure
+          task.stop
+        end
+      end
+
+      crashed = emitted_events.find { |e| e[:name] == 'fiber.crashed' }
+      expect(crashed).not_to be_nil
+      expect(crashed[:task]).to eq('proof_acquisition')
+      expect(crashed[:error]).to be_a(String)
+      expect(crashed[:error]).not_to be_empty
+    end
   end
 
   describe '.pending' do
@@ -244,5 +265,17 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
       result = described_class.pending(store)
       expect(result).to eq([])
     end
+  end
+
+  # Async logs child-task failures via Console.logger by default,
+  # which dumps a stack trace to stderr. We've asserted the visibility
+  # via the structured fiber.crashed event; silence Console for the
+  # duration to keep test output clean.
+  def suppress_console_errors
+    original = Console.logger.level
+    Console.logger.level = Logger::FATAL
+    yield
+  ensure
+    Console.logger.level = original
   end
 end

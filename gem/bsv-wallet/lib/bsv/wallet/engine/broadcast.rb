@@ -29,7 +29,7 @@ module BSV
         # Binds a PULL socket; the Scheduler pushes action IDs here.
         def pull!(task:)
           task.async do
-            pull = OMQ::PULL.bind('inproc://broadcasts.pull')
+            pull = bind_or_die('broadcast_push') { OMQ::PULL.bind('inproc://broadcasts.pull') }
             while (msg = pull.receive)
               begin
                 process(msg.first.to_i)
@@ -44,7 +44,7 @@ module BSV
         # Inline request-reply -- caller sends action_id, gets tx_status back.
         def reply!(task:)
           task.async do
-            rep = OMQ::REP.bind('inproc://broadcasts.rep')
+            rep = bind_or_die('broadcast_push') { OMQ::REP.bind('inproc://broadcasts.rep') }
             while (msg = rep.receive)
               begin
                 result = process(msg.first.to_i)
@@ -116,6 +116,18 @@ module BSV
         end
 
         private
+
+        # Bind an OMQ socket, emitting fiber.crashed and re-raising on
+        # failure. The bind call must succeed for the fiber to function;
+        # without this, a bind error (e.g. inproc endpoint already bound
+        # by another process or test) would silently leave the engine
+        # deaf with no operator signal. Per #176.
+        def bind_or_die(task_name)
+          yield
+        rescue StandardError => e
+          BSV::Wallet.emit('fiber.crashed', task: task_name, error: e.message.lines.first&.chomp)
+          raise
+        end
 
         # Categorize a successful ARC txStatus into an outcome bucket.
         def categorize_outcome(tx_status)

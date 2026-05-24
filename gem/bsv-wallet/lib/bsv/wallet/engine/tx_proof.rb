@@ -19,7 +19,7 @@ module BSV
         # Background queue — Scheduler pushes action IDs here.
         def pull!(task:)
           task.async do
-            pull = OMQ::PULL.bind('inproc://proofs.pull')
+            pull = bind_or_die('proof_acquisition') { OMQ::PULL.bind('inproc://proofs.pull') }
             while (msg = pull.receive)
               begin
                 process(msg.first.to_i)
@@ -88,6 +88,18 @@ module BSV
         end
 
         private
+
+        # Bind an OMQ socket, emitting fiber.crashed and re-raising on
+        # failure. The bind call must succeed for the fiber to function;
+        # without this, a bind error (e.g. inproc endpoint already bound
+        # by another process or test) would silently leave the engine
+        # deaf with no operator signal. Per #176.
+        def bind_or_die(task_name)
+          yield
+        rescue StandardError => e
+          BSV::Wallet.emit('fiber.crashed', task: task_name, error: e.message.lines.first&.chomp)
+          raise
+        end
 
         # Normalize a merkle_path value to BRC-74 binary format.
         #

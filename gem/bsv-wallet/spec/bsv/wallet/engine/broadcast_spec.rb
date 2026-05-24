@@ -2,6 +2,7 @@
 
 require 'bsv-wallet'
 require 'bsv/wallet/engine/broadcast'
+require 'logger'
 
 RSpec.describe BSV::Wallet::Engine::Broadcast do
   let(:store) { double('Store') }
@@ -467,6 +468,26 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
           task.stop
         end
       end
+
+      it 'emits fiber.crashed when the bind fails' do
+        # Pre-bind the endpoint so the engine's bind raises.
+        OMQ::PULL.bind('inproc://broadcasts.pull')
+
+        suppress_console_errors do
+          Async do |task|
+            broadcast.pull!(task: task)
+            sleep 0.05
+          ensure
+            task.stop
+          end
+        end
+
+        crashed = emitted_events.find { |e| e[:name] == 'fiber.crashed' }
+        expect(crashed).not_to be_nil
+        expect(crashed[:task]).to eq('broadcast_push')
+        expect(crashed[:error]).to be_a(String)
+        expect(crashed[:error]).not_to be_empty
+      end
     end
 
     describe '#reply!' do
@@ -483,6 +504,37 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
           task.stop
         end
       end
+
+      it 'emits fiber.crashed when the bind fails' do
+        OMQ::REP.bind('inproc://broadcasts.rep')
+
+        suppress_console_errors do
+          Async do |task|
+            broadcast.reply!(task: task)
+            sleep 0.05
+          ensure
+            task.stop
+          end
+        end
+
+        crashed = emitted_events.find { |e| e[:name] == 'fiber.crashed' }
+        expect(crashed).not_to be_nil
+        expect(crashed[:task]).to eq('broadcast_push')
+        expect(crashed[:error]).to be_a(String)
+        expect(crashed[:error]).not_to be_empty
+      end
     end
+  end
+
+  # Async logs child-task failures via Console.logger by default,
+  # which dumps a stack trace to stderr. We've asserted the visibility
+  # via the structured fiber.crashed event; silence Console for the
+  # duration to keep test output clean.
+  def suppress_console_errors
+    original = Console.logger.level
+    Console.logger.level = Logger::FATAL
+    yield
+  ensure
+    Console.logger.level = original
   end
 end
