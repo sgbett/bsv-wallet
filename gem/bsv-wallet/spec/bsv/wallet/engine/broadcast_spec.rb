@@ -41,7 +41,10 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
   describe '#process' do
     context 'when action is not found' do
-      before { allow(store).to receive(:find_action).with(id: action_id).and_return(nil) }
+      before do
+        allow(store).to receive(:find_action).with(id: action_id).and_return(nil)
+        allow(services).to receive(:call)
+      end
 
       it 'emits task.dispatched then task.skipped with reason action_not_found' do
         broadcast.process(action_id)
@@ -52,7 +55,6 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
 
       it 'returns nil without calling services' do
-        allow(services).to receive(:call)
         result = broadcast.process(action_id)
         expect(result).to be_nil
         expect(services).not_to have_received(:call)
@@ -62,6 +64,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     context 'when action has no raw_tx' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return({ id: action_id, raw_tx: nil })
+        allow(services).to receive(:call)
       end
 
       it 'emits task.dispatched then task.skipped with reason no_raw_tx' do
@@ -73,19 +76,19 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
 
       it 'returns nil without calling services' do
-        allow(services).to receive(:call)
         result = broadcast.process(action_id)
         expect(result).to be_nil
         expect(services).not_to have_received(:call)
       end
     end
 
+    # Submit path -- no prior broadcast (broadcast_status returns nil)
     context 'when accepted with SEEN_ON_NETWORK' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(success_response)
-        allow(store).to receive(:record_broadcast_result)
-        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(status_hash)
+        allow(store).to receive(:record_broadcast_result).and_return(status_hash)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
       it 'calls services.call(:broadcast) with the raw_tx' do
@@ -129,8 +132,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(success_response)
-        allow(store).to receive(:record_broadcast_result)
-        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(status_hash)
+        allow(store).to receive(:record_broadcast_result).and_return(status_hash)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
       it 'emits task.succeeded with outcome=accepted and integer latency_ms' do
@@ -147,8 +150,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(success_response)
-        allow(store).to receive(:record_broadcast_result)
-        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(status_hash)
+        allow(store).to receive(:record_broadcast_result).and_return(status_hash)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
       it 'emits task.succeeded with outcome=pending' do
@@ -409,8 +412,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(success_response)
-        allow(store).to receive(:record_broadcast_result)
-        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(status_hash)
+        allow(store).to receive(:record_broadcast_result).and_return(status_hash)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
       it 'never emits binary data in event payloads' do
@@ -423,6 +426,373 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
                                       "Binary data leaked in event #{event[:name]}"
           end
         end
+      end
+    end
+
+    # Poll path -- already broadcast (broadcast_status has broadcast_at)
+    context 'when status poll succeeds' do
+      let(:wtxid) { SecureRandom.random_bytes(32) }
+      let(:dtxid) { wtxid.reverse.unpack1('H*') }
+      let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
+      let(:existing_status) do
+        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'ACCEPTED_BY_NETWORK' }
+      end
+      let(:poll_data) do
+        {
+          tx_status: 'SEEN_ON_NETWORK',
+          status: 200,
+          block_hash: 'aa' * 32,
+          block_height: 100_000,
+          merkle_path: nil,
+          extra_info: nil,
+          competing_txs: nil
+        }
+      end
+      let(:poll_response) do
+        BSV::Network::ProtocolResponse.new(nil, data: poll_data, http_success: true)
+      end
+      let(:updated_status) do
+        { action_id: action_id, broadcast_at: existing_status[:broadcast_at], tx_status: 'SEEN_ON_NETWORK' }
+      end
+
+      before do
+        allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
+        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(poll_response)
+        allow(store).to receive(:record_broadcast_result).and_return(updated_status)
+      end
+
+      it 'calls services.call(:get_tx_status) with the dtxid' do
+        broadcast.process(action_id)
+        expect(services).to have_received(:call).with(:get_tx_status, txid: dtxid)
+      end
+
+      it 'does not re-broadcast' do
+        broadcast.process(action_id)
+        expect(services).not_to have_received(:call).with(:broadcast, anything)
+      end
+
+      it 'records the updated broadcast result' do
+        broadcast.process(action_id)
+        expect(store).to have_received(:record_broadcast_result).with(
+          action_id: action_id,
+          tx_status: 'SEEN_ON_NETWORK',
+          arc_status: 200,
+          block_hash: 'aa' * 32,
+          block_height: 100_000,
+          merkle_path: nil,
+          extra_info: nil,
+          competing_txs: nil
+        )
+      end
+
+      it 'returns the updated broadcast status' do
+        result = broadcast.process(action_id)
+        expect(result).to eq(updated_status)
+      end
+
+      it 'emits task.succeeded with outcome=accepted and integer latency_ms' do
+        broadcast.process(action_id)
+        succeeded = emitted_events.find { |e| e[:name] == 'task.succeeded' }
+        expect(succeeded).to include(outcome: :accepted, task: 'broadcast_push', id: action_id)
+        expect(succeeded[:latency_ms]).to be_an(Integer)
+      end
+    end
+
+    context 'when status poll returns REJECTED (terminal -- C-1 aborts via fail_broadcast_action)' do
+      let(:wtxid) { SecureRandom.random_bytes(32) }
+      let(:dtxid) { wtxid.reverse.unpack1('H*') }
+      let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
+      let(:existing_status) do
+        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'ACCEPTED_BY_NETWORK' }
+      end
+      let(:rejected_data) do
+        { tx_status: 'REJECTED', status: 200, block_hash: nil, block_height: nil,
+          merkle_path: nil, extra_info: 'policy violation', competing_txs: nil }
+      end
+      let(:rejected_response) do
+        BSV::Network::ProtocolResponse.new(nil, data: rejected_data, http_success: true)
+      end
+
+      before do
+        allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
+        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(rejected_response)
+        allow(store).to receive(:record_broadcast_result)
+        allow(store).to receive(:abort_action)
+        allow(store).to receive(:fail_broadcast_action)
+      end
+
+      it 'calls fail_broadcast_action (releases locked inputs)' do
+        broadcast.process(action_id)
+        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
+      end
+
+      it 'does NOT call abort_action (pre-broadcast semantics, not applicable)' do
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:abort_action)
+      end
+
+      it 'does NOT call record_broadcast_result (action is being torn down)' do
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:record_broadcast_result)
+      end
+
+      it 'emits task.aborted with reason=:policy_violation and arc_status=REJECTED' do
+        broadcast.process(action_id)
+        aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
+        expect(aborted).to include(
+          reason: :policy_violation, arc_status: 'REJECTED',
+          task: 'broadcast_push', id: action_id
+        )
+      end
+
+      it 'returns nil (the action no longer exists)' do
+        expect(broadcast.process(action_id)).to be_nil
+      end
+    end
+
+    context 'when status poll returns DOUBLE_SPEND_ATTEMPTED (terminal)' do
+      let(:wtxid) { SecureRandom.random_bytes(32) }
+      let(:dtxid) { wtxid.reverse.unpack1('H*') }
+      let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
+      let(:existing_status) do
+        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'ACCEPTED_BY_NETWORK' }
+      end
+      let(:double_spend_data) do
+        { tx_status: 'DOUBLE_SPEND_ATTEMPTED', status: 200, block_hash: nil, block_height: nil,
+          merkle_path: nil, extra_info: nil, competing_txs: nil }
+      end
+      let(:double_spend_response) do
+        BSV::Network::ProtocolResponse.new(nil, data: double_spend_data, http_success: true)
+      end
+
+      before do
+        allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
+        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(double_spend_response)
+        allow(store).to receive(:fail_broadcast_action)
+      end
+
+      it 'calls fail_broadcast_action' do
+        broadcast.process(action_id)
+        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
+      end
+
+      it 'emits task.aborted with reason=:double_spend' do
+        broadcast.process(action_id)
+        aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
+        expect(aborted).to include(reason: :double_spend, arc_status: 'DOUBLE_SPEND_ATTEMPTED')
+      end
+    end
+
+    context 'when status poll returns MALFORMED (terminal)' do
+      let(:wtxid) { SecureRandom.random_bytes(32) }
+      let(:dtxid) { wtxid.reverse.unpack1('H*') }
+      let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
+      let(:existing_status) do
+        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'ACCEPTED_BY_NETWORK' }
+      end
+      let(:malformed_data) do
+        { tx_status: 'MALFORMED', status: 200, block_hash: nil, block_height: nil,
+          merkle_path: nil, extra_info: nil, competing_txs: nil }
+      end
+      let(:malformed_response) do
+        BSV::Network::ProtocolResponse.new(nil, data: malformed_data, http_success: true)
+      end
+
+      before do
+        allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
+        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(malformed_response)
+        allow(store).to receive(:fail_broadcast_action)
+      end
+
+      it 'calls fail_broadcast_action' do
+        broadcast.process(action_id)
+        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
+      end
+
+      it 'emits task.aborted with reason=:malformed' do
+        broadcast.process(action_id)
+        aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
+        expect(aborted).to include(reason: :malformed, arc_status: 'MALFORMED')
+      end
+    end
+
+    context 'when status poll returns ORPHAN in extraInfo (terminal)' do
+      let(:wtxid) { SecureRandom.random_bytes(32) }
+      let(:dtxid) { wtxid.reverse.unpack1('H*') }
+      let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
+      let(:existing_status) do
+        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'ACCEPTED_BY_NETWORK' }
+      end
+      let(:orphan_data) do
+        { tx_status: 'UNKNOWN', status: 200, block_hash: nil, block_height: nil,
+          merkle_path: nil, extra_info: 'transaction is ORPHAN', competing_txs: nil }
+      end
+      let(:orphan_response) do
+        BSV::Network::ProtocolResponse.new(nil, data: orphan_data, http_success: true)
+      end
+
+      before do
+        allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
+        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(orphan_response)
+        allow(store).to receive(:fail_broadcast_action)
+      end
+
+      it 'calls fail_broadcast_action' do
+        broadcast.process(action_id)
+        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
+      end
+
+      it 'emits task.aborted with reason=:policy_violation' do
+        broadcast.process(action_id)
+        aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
+        expect(aborted).to include(reason: :policy_violation, arc_status: 'UNKNOWN')
+      end
+    end
+
+    context 'when status poll returns MINED with merkle_path' do
+      let(:wtxid) { SecureRandom.random_bytes(32) }
+      let(:dtxid) { wtxid.reverse.unpack1('H*') }
+      let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
+      let(:existing_status) do
+        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'SEEN_ON_NETWORK' }
+      end
+      let(:merkle_path) { 'fe6800020001020304050607' }
+      let(:mined_data) do
+        { tx_status: 'MINED', status: 200, block_hash: 'bb' * 32, block_height: 100_001,
+          merkle_path: merkle_path, extra_info: nil, competing_txs: nil }
+      end
+      let(:mined_response) do
+        BSV::Network::ProtocolResponse.new(nil, data: mined_data, http_success: true)
+      end
+
+      before do
+        allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
+        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(mined_response)
+        allow(store).to receive(:record_broadcast_result)
+      end
+
+      it 'persists merkle_path on the broadcast row' do
+        broadcast.process(action_id)
+        expect(store).to have_received(:record_broadcast_result).with(
+          hash_including(
+            tx_status: 'MINED',
+            block_hash: 'bb' * 32,
+            block_height: 100_001,
+            merkle_path: merkle_path
+          )
+        )
+      end
+
+      it 'emits task.succeeded with outcome=accepted' do
+        broadcast.process(action_id)
+        succeeded = emitted_events.find { |e| e[:name] == 'task.succeeded' }
+        expect(succeeded).to include(outcome: :accepted, task: 'broadcast_push', id: action_id)
+      end
+    end
+
+    context 'with a known wtxid fixture (dtxid byte-reversal)' do
+      # Static fixture: wire-order bytes != display-order hex (no palindrome).
+      let(:wtxid) do
+        ['cafebabedeadbeef0123456789abcdef0123456789abcdef0123456789abcdef'].pack('H*')
+      end
+      let(:expected_dtxid) do
+        'efcdab8967452301efcdab8967452301efcdab8967452301efbeaddebebafeca'
+      end
+      let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
+      let(:existing_status) do
+        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'ACCEPTED_BY_NETWORK' }
+      end
+      let(:poll_response) do
+        BSV::Network::ProtocolResponse.new(
+          nil,
+          data: { tx_status: 'SEEN_ON_NETWORK', status: 200, block_hash: nil, block_height: nil,
+                  merkle_path: nil, extra_info: nil, competing_txs: nil },
+          http_success: true
+        )
+      end
+
+      before do
+        allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
+        allow(store).to receive(:record_broadcast_result)
+        allow(services).to receive(:call).and_return(poll_response)
+      end
+
+      it 'sends the byte-reversed hex (display order) to :get_tx_status' do
+        broadcast.process(action_id)
+        expect(services).to have_received(:call).with(:get_tx_status, txid: expected_dtxid)
+      end
+    end
+
+    context 'when status poll fails (503 transport error)' do
+      let(:wtxid) { SecureRandom.random_bytes(32) }
+      let(:dtxid) { wtxid.reverse.unpack1('H*') }
+      let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
+      let(:existing_status) do
+        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'ACCEPTED_BY_NETWORK' }
+      end
+      let(:http_response) { instance_double(Net::HTTPServiceUnavailable, code: '503') }
+      let(:error_response) do
+        BSV::Network::ProtocolResponse.new(http_response, http_success: false, error_message: 'ARC unavailable')
+      end
+
+      before do
+        allow(http_response).to receive(:is_a?).and_return(false)
+        allow(http_response).to receive(:is_a?).with(Net::HTTPSuccess).and_return(false)
+        allow(http_response).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(false)
+        allow(http_response).to receive(:is_a?).with(Net::HTTPServerError).and_return(true)
+        allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
+        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(error_response)
+      end
+
+      it 'does not call record_broadcast_result' do
+        allow(store).to receive(:record_broadcast_result)
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:record_broadcast_result)
+      end
+
+      it 'returns the existing broadcast status' do
+        result = broadcast.process(action_id)
+        expect(result).to eq(existing_status)
+      end
+
+      it 'emits task.failed with reason=transport_error and integer latency_ms' do
+        broadcast.process(action_id)
+        failed = emitted_events.find { |e| e[:name] == 'task.failed' }
+        expect(failed).to include(reason: :transport_error, task: 'broadcast_push', id: action_id)
+        expect(failed[:latency_ms]).to be_an(Integer)
+      end
+    end
+
+    context 'when polling with no wtxid' do
+      let(:existing_status) do
+        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'ACCEPTED_BY_NETWORK' }
+      end
+
+      before do
+        allow(store).to receive(:find_action).with(id: action_id)
+                                             .and_return({ id: action_id, raw_tx: raw_tx, wtxid: nil })
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
+        allow(services).to receive(:call)
+      end
+
+      it 'returns the broadcast status without calling services' do
+        result = broadcast.process(action_id)
+        expect(result).to eq(existing_status)
+        expect(services).not_to have_received(:call)
+      end
+
+      it 'emits task.skipped with reason=no_wtxid' do
+        broadcast.process(action_id)
+        skipped = emitted_events.find { |e| e[:name] == 'task.skipped' }
+        expect(skipped).to include(reason: :no_wtxid, task: 'broadcast_push', id: action_id)
       end
     end
   end

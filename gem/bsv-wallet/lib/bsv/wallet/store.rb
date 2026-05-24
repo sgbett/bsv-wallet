@@ -163,6 +163,13 @@ module BSV
         models::Action.where(id: action_id).exclude(broadcast_exists.exists).delete
       end
 
+      def fail_broadcast_action(action_id:)
+        @db.transaction do
+          models::Broadcast.where(action_id: action_id).delete
+          models::Action.where(id: action_id).delete
+        end
+      end
+
       # --- Queries ---
 
       def find_output(id:)
