@@ -11,6 +11,8 @@ module BSV
       # request-reply (REP). Processes pending broadcasts by calling
       # Services and recording results in Store.
       class Broadcast
+        include OmqSupport
+
         # ARC txStatus values indicating the transaction was accepted by the network.
         ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK ACCEPTED_BY_NETWORK MINED IMMUTABLE].freeze
 
@@ -120,18 +122,6 @@ module BSV
         end
 
         private
-
-        # Bind an OMQ socket, emitting fiber.crashed and re-raising on
-        # failure. The bind call must succeed for the fiber to function;
-        # without this, a bind error (e.g. inproc endpoint already bound
-        # by another process or test) would silently leave the engine
-        # deaf with no operator signal. Per #176.
-        def bind_or_die(task_name)
-          yield
-        rescue StandardError => e
-          BSV::Wallet.emit('fiber.crashed', task: task_name, error: e.message.lines.first&.chomp)
-          raise
-        end
 
         # Categorize a successful ARC txStatus into an outcome bucket.
         def categorize_outcome(tx_status)

@@ -2,6 +2,7 @@
 
 require 'bsv/wallet/engine/tx_proof'
 require 'logger'
+require_relative '../../../support/console_helpers'
 
 RSpec.describe BSV::Wallet::Engine::TxProof do
   subject(:tx_proof) { described_class.new(store: store, services: services) }
@@ -290,15 +291,5 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
     end
   end
 
-  # Async logs child-task failures via Console.logger by default,
-  # which dumps a stack trace to stderr. We've asserted the visibility
-  # via the structured fiber.crashed event; silence Console for the
-  # duration to keep test output clean.
-  def suppress_console_errors
-    original = Console.logger.level
-    Console.logger.level = Logger::FATAL
-    yield
-  ensure
-    Console.logger.level = original
-  end
+  include ConsoleHelpers
 end

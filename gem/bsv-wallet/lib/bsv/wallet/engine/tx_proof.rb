@@ -11,6 +11,8 @@ module BSV
       # merkle_path + block_height), saves the proof and links it to
       # the action.
       class TxProof
+        include OmqSupport
+
         def initialize(store:, services:)
           @store = store
           @services = services
@@ -98,18 +100,6 @@ module BSV
         end
 
         private
-
-        # Bind an OMQ socket, emitting fiber.crashed and re-raising on
-        # failure. The bind call must succeed for the fiber to function;
-        # without this, a bind error (e.g. inproc endpoint already bound
-        # by another process or test) would silently leave the engine
-        # deaf with no operator signal. Per #176.
-        def bind_or_die(task_name)
-          yield
-        rescue StandardError => e
-          BSV::Wallet.emit('fiber.crashed', task: task_name, error: e.message.lines.first&.chomp)
-          raise
-        end
 
         # Normalize a merkle_path value to BRC-74 binary format.
         #
