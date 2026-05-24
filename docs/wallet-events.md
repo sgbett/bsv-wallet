@@ -41,9 +41,12 @@ Ten canonical events across three layers.
 
 | Event | Payload | When |
 |---|---|---|
-| `fiber.crashed` | `task` `error` | Unrecoverable `StandardError` escapes a fiber |
+| `fiber.crashed` | `task` `error` | Unrecoverable `StandardError` escapes a fiber — bind failure or processing error |
 
-`error` is the first line of the exception message (newlines stripped). Emitted by both Scheduler discovery loops and TxProof's PULL socket handler.
+`error` is the first line of the exception message (newlines stripped). Emitted by:
+- **OMQ bind failures** — `bind_or_die` in `Engine::Broadcast#pull!`, `#reply!`, and `Engine::TxProof#pull!` (via `OmqSupport` module). Fires when the inproc endpoint is already bound.
+- **Scheduler discovery loops** — on unhandled exceptions during discovery or enqueue.
+- **TxProof PULL handler** — on unhandled exceptions during message processing.
 
 ### Task lifecycle (7 events)
 
