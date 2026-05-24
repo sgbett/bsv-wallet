@@ -24,7 +24,7 @@ module BSV
               begin
                 process(msg.first.to_i)
               rescue StandardError => e
-                BSV.logger&.error { "[Engine::TxProof] pull error: #{e.message}" }
+                BSV::Wallet.emit('fiber.crashed', task: 'proof_acquisition', error: e.message.lines.first&.chomp)
               end
             end
           end
@@ -32,29 +32,54 @@ module BSV
         end
 
         # Process a single proof acquisition — fetch status, save proof if mined.
+        #
+        # Emits exactly one task.dispatched on entry, then exactly one of
+        # task.succeeded / task.failed / task.skipped.
         def process(action_id)
+          BSV::Wallet.emit('task.dispatched', task: 'proof_acquisition', id: action_id)
+          started_at = Time.now
+
           action = @store.find_action(id: action_id)
-          return unless action && action[:wtxid]
+          unless action
+            BSV::Wallet.emit('task.skipped', task: 'proof_acquisition', id: action_id, reason: 'action_not_found')
+            return
+          end
+          unless action[:wtxid]
+            BSV::Wallet.emit('task.skipped', task: 'proof_acquisition', id: action_id, reason: 'no_wtxid')
+            return
+          end
 
           dtxid = action[:wtxid].reverse.unpack1('H*')
           response = @services.call(:get_tx_status, txid: dtxid)
-          return unless response.http_success?
+          latency_ms = ((Time.now - started_at) * 1000).round
+
+          unless response.http_success?
+            BSV::Wallet.emit('task.failed', task: 'proof_acquisition', id: action_id,
+                                            latency_ms: latency_ms, reason: 'transport_error')
+            return
+          end
 
           data = response.data
-          return unless data[:merkle_path] && data[:block_height]
+          unless data['merklePath'] && data['blockHeight']
+            BSV::Wallet.emit('task.succeeded', task: 'proof_acquisition', id: action_id,
+                                               latency_ms: latency_ms, outcome: :not_yet_mined)
+            return
+          end
 
-          merkle_path = normalize_merkle_path(data[:merkle_path], action[:wtxid])
+          merkle_path = normalize_merkle_path(data['merklePath'], action[:wtxid])
 
           proof_id = @store.save_proof(
             wtxid: action[:wtxid],
             proof: {
-              height: data[:block_height],
-              block_hash: data[:block_hash],
+              height: data['blockHeight'],
+              block_hash: data['blockHash'],
               merkle_path: merkle_path,
               raw_tx: action[:raw_tx]
             }
           )
           @store.link_proof(action_id: action_id, tx_proof_id: proof_id)
+          BSV::Wallet.emit('task.succeeded', task: 'proof_acquisition', id: action_id,
+                                             latency_ms: latency_ms, outcome: :acquired)
         end
 
         # Discovery query — returns action IDs needing proofs.
