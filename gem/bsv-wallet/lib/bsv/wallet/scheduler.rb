@@ -16,27 +16,31 @@ module BSV
 
       def run!(task:)
         # Broadcast retries — every 5 seconds
-        schedule(task: task, endpoint: 'inproc://broadcasts.pull', interval: 5) do
+        schedule(task: task, name: 'broadcast_push', endpoint: 'inproc://broadcasts.pull', interval: 5) do
           Engine::Broadcast.pending(@store, limit: 10)
         end
 
         # Proof acquisition — every 30 seconds
-        schedule(task: task, endpoint: 'inproc://proofs.pull', interval: 30) do
+        schedule(task: task, name: 'proof_acquisition', endpoint: 'inproc://proofs.pull', interval: 30) do
           Engine::TxProof.pending(@store, limit: 10)
         end
       end
 
       private
 
-      def schedule(task:, endpoint:, interval:, &discovery)
+      def schedule(task:, name:, endpoint:, interval:, &discovery)
         task.async do
           push = OMQ::PUSH.connect(endpoint)
           loop do
             ids = discovery.call
-            ids.each { |id| push << id.to_s }
+            BSV::Wallet.emit('task.discovered', task: name, count: ids.size) if ids.any?
+            ids.each do |id|
+              push << id.to_s
+              BSV::Wallet.emit('task.enqueued', task: name, id: id)
+            end
             sleep interval
           rescue StandardError => e
-            BSV.logger&.error { "[Scheduler] #{endpoint}: #{e.message}" }
+            BSV::Wallet.emit('fiber.crashed', task: name, error: e.message.lines.first&.chomp)
           end
         end
       end

@@ -16,6 +16,9 @@ module BSV
       SecureRandom.random_bytes(8).then { |b| [b].pack('m0') }
     end
 
+    # Structured event emission (BSV::Wallet.emit)
+    require_relative 'wallet/events'
+
     autoload :VERSION, 'bsv/wallet/version'
 
     # BRC-100 interface and error classes come from bsv-sdk.

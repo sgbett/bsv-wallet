@@ -22,4 +22,14 @@ RSpec.configure do |config|
   config.disable_monkey_patching!
   config.order = :random
   Kernel.srand config.seed
+
+  # Reset OMQ inproc transport's global registry between examples.
+  # OMQ inproc bindings persist process-wide; without this, a spec that
+  # boots a daemon after another spec already bound the same endpoint
+  # would hit ArgumentError on bind. The fix at the engine layer (#176)
+  # makes that failure visible rather than silent — this hook keeps
+  # specs that exercise the daemon from tripping it.
+  config.before do
+    OMQ::Transport::Inproc.reset! if defined?(OMQ::Transport::Inproc)
+  end
 end

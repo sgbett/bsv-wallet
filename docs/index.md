@@ -26,3 +26,4 @@ gem 'pg'  # only if using PostgreSQL (defaults to SQLite)
 ## Documentation
 
 - [Design](design.md) — architecture, philosophy, and implementation details
+- [Wallet daemon events](wallet-events.md) — structured lifecycle events for walletd background tasks

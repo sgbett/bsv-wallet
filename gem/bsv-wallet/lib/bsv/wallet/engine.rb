@@ -29,8 +29,9 @@ module BSV
     class Engine
       include BSV::Wallet::Interface::BRC100
 
-      autoload :Broadcast, 'bsv/wallet/engine/broadcast'
-      autoload :TxProof,   'bsv/wallet/engine/tx_proof'
+      autoload :Broadcast,  'bsv/wallet/engine/broadcast'
+      autoload :TxProof,    'bsv/wallet/engine/tx_proof'
+      autoload :OmqSupport, 'bsv/wallet/engine/omq_support'
 
       ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK MINED ACCEPTED_BY_NETWORK IMMUTABLE].freeze
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
@@ -1217,7 +1218,13 @@ module BSV
           end
 
           proof_id = @store.save_proof(wtxid: wtxid, proof: proof)
-          subject_proof_id = proof_id if wtxid == subject_wtxid
+          # Only capture the subject's proof_id when it actually carries a
+          # merkle_path. Without this guard, an incoming BEEF whose subject
+          # has no BUMP (raw_tx-only) would link the action to a placeholder
+          # proof row with no chain anchor, making the action falsely appear
+          # "proven". Acquisition of the real proof happens later via the
+          # daemon's proof-acquisition task (#167). Per #177.
+          subject_proof_id = proof_id if wtxid == subject_wtxid && merkle_path
         end
 
         @store.link_proof(action_id: action_id, tx_proof_id: subject_proof_id) if subject_proof_id
