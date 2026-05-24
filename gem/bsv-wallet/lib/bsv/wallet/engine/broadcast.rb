@@ -68,11 +68,11 @@ module BSV
 
           action = @store.find_action(id: action_id)
           unless action
-            BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: 'action_not_found')
+            BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: :action_not_found)
             return
           end
           unless action[:raw_tx]
-            BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: 'no_raw_tx')
+            BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: :no_raw_tx)
             return
           end
 

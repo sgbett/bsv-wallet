@@ -45,7 +45,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
         expect(emitted_events.size).to eq(2)
         expect(emitted_events[0][:name]).to eq('task.dispatched')
-        expect(emitted_events[1]).to include(name: 'task.skipped', reason: 'action_not_found', id: action_id)
+        expect(emitted_events[1]).to include(name: 'task.skipped', reason: :action_not_found, id: action_id)
       end
 
       it 'returns nil without calling services' do
@@ -66,7 +66,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
         expect(emitted_events.size).to eq(2)
         expect(emitted_events[0][:name]).to eq('task.dispatched')
-        expect(emitted_events[1]).to include(name: 'task.skipped', reason: 'no_raw_tx', id: action_id)
+        expect(emitted_events[1]).to include(name: 'task.skipped', reason: :no_raw_tx, id: action_id)
       end
 
       it 'returns nil without calling services' do

@@ -133,7 +133,7 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
         expect(emitted_events[0]).to include(name: 'task.dispatched')
         failed = emitted_events[1]
         expect(failed).to include(name: 'task.failed', task: 'proof_acquisition', id: action_id,
-                                  reason: 'transport_error')
+                                  reason: :transport_error)
         expect(failed[:latency_ms]).to be_an(Integer)
       end
     end
@@ -155,7 +155,7 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
 
         expect(emitted_events.size).to eq(2)
         expect(emitted_events[0]).to include(name: 'task.dispatched', task: 'proof_acquisition', id: action_id)
-        expect(emitted_events[1]).to include(name: 'task.skipped', reason: 'action_not_found', id: action_id)
+        expect(emitted_events[1]).to include(name: 'task.skipped', reason: :action_not_found, id: action_id)
       end
     end
 
@@ -177,7 +177,7 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
 
         expect(emitted_events.size).to eq(2)
         expect(emitted_events[0]).to include(name: 'task.dispatched', task: 'proof_acquisition', id: action_id)
-        expect(emitted_events[1]).to include(name: 'task.skipped', reason: 'no_wtxid', id: action_id)
+        expect(emitted_events[1]).to include(name: 'task.skipped', reason: :no_wtxid, id: action_id)
       end
     end
 
@@ -199,7 +199,7 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
 
         expect(emitted_events.size).to eq(2)
         expect(emitted_events[0]).to include(name: 'task.dispatched', task: 'proof_acquisition', id: action_id)
-        expect(emitted_events[1]).to include(name: 'task.skipped', reason: 'already_proven', id: action_id)
+        expect(emitted_events[1]).to include(name: 'task.skipped', reason: :already_proven, id: action_id)
       end
     end
 

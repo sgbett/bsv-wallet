@@ -41,11 +41,11 @@ module BSV
 
           action = @store.find_action(id: action_id)
           unless action
-            BSV::Wallet.emit('task.skipped', task: 'proof_acquisition', id: action_id, reason: 'action_not_found')
+            BSV::Wallet.emit('task.skipped', task: 'proof_acquisition', id: action_id, reason: :action_not_found)
             return
           end
           unless action[:wtxid]
-            BSV::Wallet.emit('task.skipped', task: 'proof_acquisition', id: action_id, reason: 'no_wtxid')
+            BSV::Wallet.emit('task.skipped', task: 'proof_acquisition', id: action_id, reason: :no_wtxid)
             return
           end
           if action[:tx_proof_id]
@@ -53,7 +53,7 @@ module BSV
             # filters WHERE tx_proof_id IS NULL, so this branch only fires
             # on the race window where a proof arrives between discovery
             # and dispatch. Per #177.
-            BSV::Wallet.emit('task.skipped', task: 'proof_acquisition', id: action_id, reason: 'already_proven')
+            BSV::Wallet.emit('task.skipped', task: 'proof_acquisition', id: action_id, reason: :already_proven)
             return
           end
 
@@ -63,7 +63,7 @@ module BSV
 
           unless response.http_success?
             BSV::Wallet.emit('task.failed', task: 'proof_acquisition', id: action_id,
-                                            latency_ms: latency_ms, reason: 'transport_error')
+                                            latency_ms: latency_ms, reason: :transport_error)
             return
           end
 
