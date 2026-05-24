@@ -1,13 +1,16 @@
 # Daemon Lifecycle Events
 
-**Issue:** #36 (closes the "Lifecycle events logged for observability" criterion)
+**Issue:** #167 (HLR); closes the "Lifecycle events logged for observability" criterion on #36
 **Related:** #126 (e2e on-chain — consumes these events for its logfile), #113 (status polling — will adopt the same conventions when implemented), #111 (broadcast push outcome policy — events make the policy observable)
-**Branch:** `feat/36-daemon-lifecycle-events`
+**Branch:** `feat/167-daemon-lifecycle-events`
 **Date:** 2026-05-24
+**Status:** Implemented (PR #175). Also addresses #176 (OMQ bind visibility), #177 (placeholder-proof linking), #178 (reason-value harmonization).
 
 ## Overview
 
 walletd today emits ad-hoc log lines via `BSV.logger&.info/warn/error` at three places (`Daemon`, `Scheduler`, `Engine::Broadcast`). The lines are human-readable strings, inconsistent in shape, and sparse in coverage — mostly only errors. The #126 e2e test and ongoing operational observability both need:
+
+> **Architecture note (current):** `Store` is a class (`BSV::Wallet::Store`) with `SQLite < Store` and `Postgres < Store` concrete implementations. ProofStore methods (`save_proof`, `link_proof`, `find_proof`) live directly on Store — no separate ProofStore class. All engine ↔ Store interactions go through the Store interface (`@store.xxx`); engines never access Store models directly.
 
 - Structured, grep-friendly events
 - Coverage of the full task lifecycle (not just errors)
@@ -36,7 +39,7 @@ The solution is a tiny helper (`BSV::Wallet.emit`) plus a documented event taxon
 - Dedicated event log stream (separate from `BSV.logger`) — for v1, the walletd `--log-file` already lets the operator route everything to a file; e2e test does the same
 - Event schema validation / registry — convention only at v1
 - Metrics aggregation / dashboards
-- Backfilling `task.aborted` to existing Engine::Broadcast paths if `abort_action` is not yet called on definitive rejections (see Risk #2)
+- ~~Backfilling `task.aborted` to existing Engine::Broadcast paths if `abort_action` is not yet called on definitive rejections (see Risk #2)~~ — **done** in commit `bf031fe`; Risk #2 resolved
 
 ## Design
 
@@ -205,27 +208,44 @@ def process(action_id)
   latency_ms = ((Time.now - started_at) * 1000).round
 
   if response.http_success?
-    @store.record_broadcast_result(action_id: action_id, **broadcast_fields(response))
-    outcome = categorise_outcome(response.data[:tx_status])
+    # Success responses are normalized by BSV::Network::Services to
+    # symbol + snake_case keys (:tx_status, :block_hash, etc.).
+    data = response.data
+    @store.record_broadcast_result(
+      action_id: action_id,
+      tx_status: data[:tx_status],
+      arc_status: data[:status],
+      block_hash: data[:block_hash],
+      block_height: data[:block_height],
+      merkle_path: data[:merkle_path],
+      extra_info: data[:extra_info],
+      competing_txs: data[:competing_txs]
+    )
     BSV::Wallet.emit('task.succeeded',
                      task: 'broadcast_push', id: action_id,
-                     latency_ms: latency_ms, outcome: outcome)
+                     latency_ms: latency_ms,
+                     outcome: categorize_outcome(data[:tx_status]))
   elsif terminal_failure?(response)
+    # Failure responses are returned raw (unnormalized) — string +
+    # camelCase keys from the provider's JSON.parse.
     @store.abort_action(action_id: action_id)
     BSV::Wallet.emit('task.aborted',
                      task: 'broadcast_push', id: action_id,
-                     reason: categorise_reason(response),
-                     arc_status: response.data&.dig(:status))
+                     reason: categorize_reason(response),
+                     arc_status: response.data['txStatus'])
   else
     BSV::Wallet.emit('task.failed',
                      task: 'broadcast_push', id: action_id,
                      latency_ms: latency_ms,
-                     reason: categorise_reason(response))
+                     reason: categorize_reason(response))
   end
 
   @store.broadcast_status(action_id: action_id)
 end
 ```
+
+> **Critical implementation note (learned via Copilot review on PR #175):**
+> `BSV::Network::Services#call` normalizes **success** responses to symbol + snake_case keys (`:tx_status`, `:merkle_path`, etc.) via `normalize_broadcast_response`. **Failure** responses bypass normalization and carry raw provider keys (string + camelCase: `'txStatus'`, `'merklePath'`). The success and failure paths MUST use different key conventions. This distinction applies to Engine::Broadcast AND Engine::TxProof.
 
 This requires three new helpers in `Engine::Broadcast`:
 
@@ -334,12 +354,7 @@ For each ARC response shape, assert the correct event is emitted with the expect
 
 1. **Latency metric scope.** Measuring `dispatched → succeeded/failed` (work duration only). Queue wait is omitted; that's deliberate but worth being aware of if a queueing-bottleneck question ever arises. Adding queue-wait later means including `enqueued_at` in the message payload over OMQ — non-trivial structural change. Defer until needed.
 
-2. **`abort_action` on terminal failure — possibly a #111 gap.** Reading the current `Engine::Broadcast#process`, on `!response.http_success?` it logs a warn and calls `broadcast_status` — but does not call `abort_action`. #111's outcome policy says terminal failures should abort. Either:
-
-   - #111's policy is implemented elsewhere (Store-side categorisation, daemon callback, etc.) — verify before adding `abort_action` call here
-   - There's a real gap, and `task.aborted` instrumentation surfaces it correctly — closing it is fair scope-creep for this work since the event isn't meaningful without the action
-
-   The plan assumes the latter — the implementation step "wire `abort_action` on terminal failure" is included as part of step 4. If verification shows abort is already happening elsewhere, that step becomes a no-op.
+2. **~~`abort_action` on terminal failure — possibly a #111 gap.~~ RESOLVED.** The gap was real — `abort_action` was never called on ARC rejections. Fixed in commit `bf031fe` (#171). `terminal_failure?` distinguishes ARC rejections (REJECTED, DOUBLE_SPEND_ATTEMPTED, MALFORMED, ORPHAN) from transport errors and the explicitly-transient MINED_IN_STALE_BLOCK.
 
 3. **ARC response categorisation taxonomy.** `categorise_reason` needs a stable mapping from response shape → category. Initial set: `:rate_limited`, `:transport_error`, `:stale_beef`, `:malformed`, `:double_spend`, `:policy_violation`, `:unknown`. May need refinement as we observe real ARC responses in #126. The `:unknown` bucket is the escape hatch — anything not yet classified gets it; we sharpen the mapping over time without breaking event consumers.
 
@@ -375,6 +390,18 @@ sleep 5
 kill %1
 grep "^\[event\]" /tmp/walletd-events.log    # should show daemon.started, possibly task.discovered with count=0, daemon.stopped
 ```
+
+## Discovered during implementation
+
+Three follow-up issues raised and resolved within the same PR:
+
+1. **#176 — Silent OMQ bind failure** (`ad62394`). `Engine::Broadcast#pull!`/`#reply!` and `Engine::TxProof#pull!` could silently go deaf when a bind raised (e.g. inproc endpoint already registered). Fix: `bind_or_die` helper emits `fiber.crashed` + re-raises. OMQ inproc reset lifted to shared `spec_helper` hook.
+
+2. **#177 — Placeholder-proof linking in internalize** (`8c60cf1`). `save_beef_proofs` called `link_proof` whenever it saw the subject in the BEEF, regardless of merkle_path presence. Fix: gate on `merkle_path` existence. Also added `tx_proof_id` to `action_to_hash` and wired the `already_proven` skip branch in `Engine::TxProof#process`.
+
+3. **#178 — Reason value type inconsistency** (`86d0992`). Skip-branch reasons were strings; `categorize_reason` returned symbols. Harmonized to symbols throughout (`.to_s` in the emit helper means identical log output).
+
+4. **Copilot review — Services normalization key shape** (`024cac1`). Success responses from `BSV::Network::Services` are normalized to symbol + snake_case keys; failure responses are raw string + camelCase. The initial implementation read camelCase strings everywhere (matching broken test stubs, not production behavior). Fix: success-path reads now use normalized keys; failure-path reads kept raw. Test fixtures corrected to match the normalized shape for success stubs.
 
 ## Out of scope
 
