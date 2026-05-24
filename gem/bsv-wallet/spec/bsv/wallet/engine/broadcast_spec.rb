@@ -12,16 +12,18 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
   let(:action_id) { 42 }
   let(:raw_tx) { "\x01\x00".b }
   let(:action_hash) { { id: action_id, raw_tx: raw_tx } }
+  # Success responses come through BSV::Network::Services which
+  # normalizes to symbol + snake_case keys.
   let(:broadcast_data) do
     {
-      'txid' => 'abc123',
-      'txStatus' => 'SEEN_ON_NETWORK',
-      'status' => 200,
-      'blockHash' => nil,
-      'blockHeight' => nil,
-      'merklePath' => nil,
-      'extraInfo' => nil,
-      'competingTxs' => nil
+      txid: 'abc123',
+      tx_status: 'SEEN_ON_NETWORK',
+      status: 200,
+      block_hash: nil,
+      block_height: nil,
+      merkle_path: nil,
+      extra_info: nil,
+      competing_txs: nil
     }
   end
   let(:success_response) do
@@ -90,7 +92,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         expect(services).to have_received(:call).with(:broadcast, raw_tx)
       end
 
-      it 'records the broadcast result with string-keyed data' do
+      it 'records the broadcast result from normalized response data' do
         broadcast.process(action_id)
         expect(store).to have_received(:record_broadcast_result).with(
           action_id: action_id,
@@ -121,7 +123,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     end
 
     context 'when accepted with MINED' do
-      let(:broadcast_data) { super().merge('txStatus' => 'MINED') }
+      let(:broadcast_data) { super().merge(tx_status: 'MINED') }
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
@@ -139,7 +141,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     end
 
     context 'when accepted with intermediate status (QUEUED)' do
-      let(:broadcast_data) { super().merge('txStatus' => 'QUEUED') }
+      let(:broadcast_data) { super().merge(tx_status: 'QUEUED') }
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)

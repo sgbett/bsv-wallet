@@ -30,12 +30,13 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
 
   describe '#process' do
     context 'when proof acquired (mined)' do
+      # Success responses from Services are normalized to symbol + snake_case.
       let(:response) do
         double('Response', http_success?: true,
                            data: {
-                             'merklePath' => merkle_path_binary,
-                             'blockHeight' => block_height,
-                             'blockHash' => block_hash
+                             merkle_path: merkle_path_binary,
+                             block_height: block_height,
+                             block_hash: block_hash
                            })
       end
 
@@ -51,7 +52,7 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
         expect(services).to have_received(:call).with(:get_tx_status, txid: dtxid)
       end
 
-      it 'saves the proof with string-keyed ARC data' do
+      it 'saves the proof with normalized response data' do
         tx_proof.process(action_id)
         expect(store).to have_received(:save_proof).with(
           wtxid: wtxid,
@@ -84,7 +85,7 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
     context 'when not yet mined (nil merklePath)' do
       let(:response) do
         double('Response', http_success?: true,
-                           data: { 'merklePath' => nil, 'blockHeight' => nil })
+                           data: { merkle_path: nil, block_height: nil })
       end
 
       before do
@@ -209,9 +210,9 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
       let(:response) do
         double('Response', http_success?: true,
                            data: {
-                             'merklePath' => hex_string,
-                             'blockHeight' => block_height,
-                             'blockHash' => block_hash
+                             merkle_path: hex_string,
+                             block_height: block_height,
+                             block_hash: block_hash
                            })
       end
 

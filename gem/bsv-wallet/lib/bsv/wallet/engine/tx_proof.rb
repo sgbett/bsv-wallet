@@ -67,20 +67,22 @@ module BSV
             return
           end
 
+          # Success responses are normalized by BSV::Network::Services
+          # to symbol + snake_case keys.
           data = response.data
-          unless data['merklePath'] && data['blockHeight']
+          unless data[:merkle_path] && data[:block_height]
             BSV::Wallet.emit('task.succeeded', task: 'proof_acquisition', id: action_id,
                                                latency_ms: latency_ms, outcome: :not_yet_mined)
             return
           end
 
-          merkle_path = normalize_merkle_path(data['merklePath'], action[:wtxid])
+          merkle_path = normalize_merkle_path(data[:merkle_path], action[:wtxid])
 
           proof_id = @store.save_proof(
             wtxid: action[:wtxid],
             proof: {
-              height: data['blockHeight'],
-              block_hash: data['blockHash'],
+              height: data[:block_height],
+              block_hash: data[:block_hash],
               merkle_path: merkle_path,
               raw_tx: action[:raw_tx]
             }

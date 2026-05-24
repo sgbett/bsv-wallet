@@ -83,9 +83,9 @@ This distinction is load-bearing for operators:
 | `:malformed` | `txStatus: MALFORMED` or malformed 2xx (no data) | Yes (when data present) |
 | `:double_spend` | `txStatus: DOUBLE_SPEND_ATTEMPTED` | Yes |
 | `:policy_violation` | `txStatus: REJECTED` or ORPHAN marker | Yes |
-| `:unknown` | Data present but no pattern matched | Yes |
+| `:unknown` | Data present but no pattern matched | No |
 
-The `:unknown` bucket is the escape hatch. Any ARC response shape not yet classified lands here. When `:unknown` appears in production logs, it signals a categorization gap — inspect the response and add a specific reason.
+The `:unknown` bucket is the escape hatch — transient, not terminal. Any ARC response shape not yet classified lands here. The daemon re-discovers the broadcast and retries rather than aborting an action for a response we don't understand. When `:unknown` appears in production logs, it signals a categorization gap — inspect the response and add a specific reason.
 
 ### Stale-block is transient
 

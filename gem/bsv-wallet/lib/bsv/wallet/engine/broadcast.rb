@@ -80,20 +80,24 @@ module BSV
           latency_ms = ((Time.now - started_at) * 1000).round
 
           if response.http_success?
+            # Success responses are normalized by BSV::Network::Services
+            # to symbol + snake_case keys. Failure responses (below) are
+            # returned raw from the provider (string + camelCase).
+            data = response.data
             @store.record_broadcast_result(
               action_id: action_id,
-              tx_status: response.data['txStatus'],
-              arc_status: response.data['status'],
-              block_hash: response.data['blockHash'],
-              block_height: response.data['blockHeight'],
-              merkle_path: response.data['merklePath'],
-              extra_info: response.data['extraInfo'],
-              competing_txs: response.data['competingTxs']
+              tx_status: data[:tx_status],
+              arc_status: data[:status],
+              block_hash: data[:block_hash],
+              block_height: data[:block_height],
+              merkle_path: data[:merkle_path],
+              extra_info: data[:extra_info],
+              competing_txs: data[:competing_txs]
             )
             BSV::Wallet.emit('task.succeeded',
                              task: 'broadcast_push', id: action_id,
                              latency_ms: latency_ms,
-                             outcome: categorize_outcome(response.data['txStatus']))
+                             outcome: categorize_outcome(data[:tx_status]))
           elsif terminal_failure?(response)
             @store.abort_action(action_id: action_id)
             BSV::Wallet.emit('task.aborted',

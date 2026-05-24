@@ -22,18 +22,19 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
 
   let(:store) { double('Store') }
 
+  # Services normalizes successful responses to symbol + snake_case keys.
   let(:broadcast_response) do
     BSV::Network::ProtocolResponse.new(
       nil,
       data: {
-        'txid' => dtxid,
-        'txStatus' => 'SEEN_ON_NETWORK',
-        'status' => 200,
-        'blockHash' => nil,
-        'blockHeight' => nil,
-        'merklePath' => nil,
-        'extraInfo' => nil,
-        'competingTxs' => nil
+        txid: dtxid,
+        tx_status: 'SEEN_ON_NETWORK',
+        status: 200,
+        block_hash: nil,
+        block_height: nil,
+        merkle_path: nil,
+        extra_info: nil,
+        competing_txs: nil
       },
       http_success: true
     )
@@ -43,9 +44,9 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
     double('Response',
            http_success?: true,
            data: {
-             'merklePath' => merkle_path_binary,
-             'blockHeight' => 850_000,
-             'blockHash' => SecureRandom.hex(32)
+             merkle_path: merkle_path_binary,
+             block_height: 850_000,
+             block_hash: SecureRandom.hex(32)
            })
   end
 
