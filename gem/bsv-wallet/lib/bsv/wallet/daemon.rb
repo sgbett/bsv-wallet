@@ -18,9 +18,11 @@ module BSV
     #   daemon = BSV::Wallet::Daemon.new(store: store, services: services)
     #   daemon.run!  # blocks until stopped
     class Daemon
-      def initialize(store:, services:)
+      def initialize(store:, services:, wallet: nil, network: nil)
         @store = store
         @services = services
+        @wallet_name = wallet
+        @network = network
         @task = nil
       end
 
@@ -41,13 +43,13 @@ module BSV
           scheduler = Scheduler.new(store: @store)
           scheduler.run!(task: task)
 
-          BSV.logger&.info { '[Daemon] All fibers started' }
+          BSV::Wallet.emit('daemon.started', wallet: @wallet_name, network: @network)
         end
       end
 
       # Signal the reactor to stop.
       def stop!
-        BSV.logger&.info { '[Daemon] Stopping...' }
+        BSV::Wallet.emit('daemon.stopped', reason: 'signal')
         @task&.stop
       end
 

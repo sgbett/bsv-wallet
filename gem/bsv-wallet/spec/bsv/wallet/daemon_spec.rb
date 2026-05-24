@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
+require 'logger'
+require 'stringio'
 require 'bsv/wallet/daemon'
 
 RSpec.describe BSV::Wallet::Daemon do
@@ -8,11 +10,23 @@ RSpec.describe BSV::Wallet::Daemon do
   # of Store::Models which requires a live Sequel connection.
   let(:store) { double('store') }
   let(:services) { instance_double(BSV::Network::Services) }
-  let(:daemon) { described_class.new(store: store, services: services) }
+  let(:wallet_name) { 'alice' }
+  let(:network) { :mainnet }
+  let(:daemon) { described_class.new(store: store, services: services, wallet: wallet_name, network: network) }
 
   let(:broadcast) { instance_double(BSV::Wallet::Engine::Broadcast) }
   let(:tx_proof) { instance_double(BSV::Wallet::Engine::TxProof) }
   let(:scheduler) { instance_double(BSV::Wallet::Scheduler) }
+
+  let(:log_output) { StringIO.new }
+
+  around do |example|
+    original_logger = BSV.logger
+    BSV.logger = Logger.new(log_output, level: Logger::INFO)
+    example.run
+  ensure
+    BSV.logger = original_logger
+  end
 
   describe '#run!' do
     before do
@@ -88,6 +102,28 @@ RSpec.describe BSV::Wallet::Daemon do
       expect(Signal).to have_received(:trap).with('INT')
       expect(Signal).to have_received(:trap).with('TERM')
     end
+
+    it 'emits daemon.started with wallet and network on run!' do
+      Async do |task|
+        daemon.run!
+        task.stop
+      end
+
+      expect(log_output.string).to include('[event] daemon.started wallet=alice network=mainnet')
+    end
+
+    it 'omits wallet field when wallet_name is nil' do
+      daemon_no_wallet = described_class.new(store: store, services: services, network: network)
+
+      Async do |task|
+        daemon_no_wallet.run!
+        task.stop
+      end
+
+      log = log_output.string
+      expect(log).to include('[event] daemon.started')
+      expect(log).not_to include('wallet=')
+    end
   end
 
   describe '#stop!' do
@@ -103,6 +139,16 @@ RSpec.describe BSV::Wallet::Daemon do
 
     it 'is safe to call before run!' do
       expect { daemon.stop! }.not_to raise_error
+    end
+
+    it 'emits daemon.stopped with reason=signal on stop!' do
+      task = instance_double(Async::Task)
+      allow(task).to receive(:stop)
+      daemon.instance_variable_set(:@task, task)
+
+      daemon.stop!
+
+      expect(log_output.string).to include('[event] daemon.stopped reason=signal')
     end
   end
 end
