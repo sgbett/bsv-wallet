@@ -54,6 +54,9 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
   around do |example|
     original_logger = BSV.logger
     BSV.logger = Logger.new(log_output, level: Logger::INFO)
+    # Clear any stale inproc socket bindings left by prior specs (the
+    # global registry persists across examples within the same process).
+    OMQ::Transport::Inproc.reset!
     example.run
   ensure
     BSV.logger = original_logger
@@ -105,13 +108,21 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
       # Start the daemon (non-blocking -- spawns child fibers).
       daemon.run!
 
-      # The scheduler's intervals are 5s (broadcast) and 30s (proof), but
-      # the first cycle fires immediately. Wait for both engines to process.
-      # 0.5s is generous for in-memory OMQ + stubbed I/O.
-      sleep 0.5
+      # Wait for both engines to finish processing. The scheduler's first
+      # cycle fires immediately, but OMQ subscriber bind and engine process
+      # roundtrip timing is non-deterministic. Poll the log for the two
+      # task.succeeded events rather than using a fixed sleep.
+      deadline = Time.now + 5
+      loop do
+        break if log_output.string.scan('task.succeeded').size >= 2
+        raise 'Timed out waiting for engine events' if Time.now > deadline
 
-      daemon.stop!
+        sleep 0.05
+      end
     ensure
+      # Stop the daemon outside the main flow. daemon.stop! emits
+      # daemon.stopped synchronously before killing the reactor task.
+      daemon.stop!
       task.stop
     end
 
