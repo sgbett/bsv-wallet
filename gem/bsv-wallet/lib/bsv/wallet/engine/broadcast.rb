@@ -87,7 +87,10 @@ module BSV
           end
         end
 
-        # Discovery query -- returns action IDs needing broadcast.
+        # Discovery query -- returns action IDs whose broadcasts are stale
+        # and non-terminal (eligible for status polling). Pre-broadcast
+        # actions (no Broadcasts row, or broadcast_at IS NULL) are not
+        # returned here; submission discovery is a separate concern.
         def self.pending(store, limit: 10)
           store.pending_broadcasts(limit: limit).map { |b| b[:action_id] }
         end
