@@ -76,6 +76,21 @@ module BSV
           raise NotImplementedError
         end
 
+        # Fail a broadcasted action. Removes the broadcast row first
+        # (broadcasts has no cascade FK on action_id) and then deletes
+        # the action. CASCADE on the other action-scoped tables releases
+        # locked UTXOs and removes derivation/spendable records.
+        #
+        # Distinct from abort_action -- BRC-100 abortAction targets
+        # actions under construction (no broadcast yet); this method
+        # is for actions that were broadcast and observed terminal
+        # via status polling.
+        #
+        # @param action_id [Integer]
+        def fail_broadcast_action(action_id:)
+          raise NotImplementedError
+        end
+
         # --- Queries ---
 
         # Find an action by id, wtxid, or reference.

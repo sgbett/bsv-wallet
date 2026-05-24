@@ -112,7 +112,7 @@ module BSV
             # to symbol + snake_case keys. Failure responses (below) are
             # returned raw from the provider (string + camelCase).
             data = response.data
-            @store.record_broadcast_result(
+            updated = @store.record_broadcast_result(
               action_id: action_id,
               tx_status: data[:tx_status],
               arc_status: data[:status],
@@ -126,30 +126,32 @@ module BSV
                              task: 'broadcast_push', id: action_id,
                              latency_ms: latency_ms,
                              outcome: categorize_outcome(data[:tx_status]))
+            updated
           elsif terminal_failure?(response)
             @store.abort_action(action_id: action_id)
             BSV::Wallet.emit('task.aborted',
                              task: 'broadcast_push', id: action_id,
                              reason: categorize_reason(response),
                              arc_status: response.data['txStatus'])
+            nil
           else
             BSV::Wallet.emit('task.failed',
                              task: 'broadcast_push', id: action_id,
                              latency_ms: latency_ms,
                              reason: categorize_reason(response))
+            @store.broadcast_status(action_id: action_id)
           end
-
-          @store.broadcast_status(action_id: action_id)
         end
 
         # Status poll -- query ARC for current tx status.
         #
-        # Per the analyst's C-2 recommendation, the poll path never aborts.
-        # An ARC-reported terminal status (REJECTED, DOUBLE_SPEND_ATTEMPTED,
-        # MALFORMED) is recorded via record_broadcast_result and surfaces as
-        # task.succeeded outcome=:rejected -- operators reconcile via the
-        # event stream rather than via Store#abort_action, whose semantics
-        # are not well-defined for post-broadcast aborts.
+        # Per the analyst's Task C option C-1, the poll path aborts on a
+        # terminal txStatus (REJECTED, DOUBLE_SPEND_ATTEMPTED, MALFORMED,
+        # or ORPHAN in extraInfo). Store#abort_action is a no-op once a
+        # broadcast row exists, so terminal aborts go through
+        # Store#fail_broadcast_action which deletes both the broadcast row
+        # and the action (cascading to outputs / inputs / spendable rows
+        # so locked UTXOs are released for re-use).
         def poll_status(action_id, action, status:, started_at:)
           unless action[:wtxid]
             BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: :no_wtxid)
@@ -162,7 +164,16 @@ module BSV
 
           if response.http_success?
             data = response.data
-            @store.record_broadcast_result(
+            if terminal_status?(data[:tx_status], data[:extra_info])
+              @store.fail_broadcast_action(action_id: action_id)
+              BSV::Wallet.emit('task.aborted',
+                               task: 'broadcast_push', id: action_id,
+                               reason: categorize_terminal_reason(data[:tx_status], data[:extra_info]),
+                               arc_status: data[:tx_status])
+              return nil
+            end
+
+            updated = @store.record_broadcast_result(
               action_id: action_id,
               tx_status: data[:tx_status],
               arc_status: data[:status],
@@ -176,14 +187,14 @@ module BSV
                              task: 'broadcast_push', id: action_id,
                              latency_ms: latency_ms,
                              outcome: categorize_outcome(data[:tx_status]))
+            updated
           else
             BSV::Wallet.emit('task.failed',
                              task: 'broadcast_push', id: action_id,
                              latency_ms: latency_ms,
                              reason: categorize_reason(response))
+            status
           end
-
-          @store.broadcast_status(action_id: action_id)
         end
 
         # Categorize a successful ARC txStatus into an outcome bucket.
@@ -202,15 +213,9 @@ module BSV
         def categorize_reason(response)
           if response.data
             tx_status = response.data['txStatus'].to_s.upcase
-            extra_info = response.data['extraInfo'].to_s.upcase
-
-            return :double_spend if tx_status == 'DOUBLE_SPEND_ATTEMPTED'
-            return :malformed if tx_status == 'MALFORMED'
             return :stale_beef if tx_status == 'MINED_IN_STALE_BLOCK'
-            return :policy_violation if tx_status == 'REJECTED'
-            return :policy_violation if tx_status.include?('ORPHAN') || extra_info.include?('ORPHAN')
 
-            :unknown
+            categorize_terminal_reason(response.data['txStatus'], response.data['extraInfo'])
           elsif response.retryable?
             response.code.to_i == 429 ? :rate_limited : :transport_error
           else
@@ -218,20 +223,39 @@ module BSV
           end
         end
 
-        # True when the ARC response indicates a definitive, non-recoverable
-        # rejection. Requires data to be present (transport errors are always
-        # transient) and the txStatus to be in our terminal set or carry the
-        # ORPHAN marker.
+        # Categorize a terminal-status payload (from either an ARC failure
+        # response's data hash or a successful get_tx_status payload) into
+        # a reason bucket. Excludes MINED_IN_STALE_BLOCK -- that is
+        # transient, not terminal, and handled upstream.
+        def categorize_terminal_reason(tx_status, extra_info)
+          status = tx_status.to_s.upcase
+          info = extra_info.to_s.upcase
+          return :double_spend if status == 'DOUBLE_SPEND_ATTEMPTED'
+          return :malformed if status == 'MALFORMED'
+          return :policy_violation if status == 'REJECTED'
+          return :policy_violation if status.include?('ORPHAN') || info.include?('ORPHAN')
+
+          :unknown
+        end
+
+        # True when the txStatus + extraInfo indicate a definitive,
+        # non-recoverable rejection. Used by both submit (failure path)
+        # and poll (success path with terminal txStatus).
+        def terminal_status?(tx_status, extra_info = nil)
+          status = tx_status.to_s.upcase
+          return true if TERMINAL_STATUSES.include?(status)
+
+          info = extra_info.to_s.upcase
+          status.include?('ORPHAN') || info.include?('ORPHAN')
+        end
+
+        # True when the ARC failure response indicates a definitive,
+        # non-recoverable rejection. Requires data to be present
+        # (transport errors are always transient).
         def terminal_failure?(response)
           return false unless response.data
 
-          tx_status = response.data['txStatus'].to_s.upcase
-          return true if TERMINAL_STATUSES.include?(tx_status)
-
-          extra_info = response.data['extraInfo'].to_s.upcase
-          return true if tx_status.include?('ORPHAN') || extra_info.include?('ORPHAN')
-
-          false
+          terminal_status?(response.data['txStatus'], response.data['extraInfo'])
         end
       end
     end

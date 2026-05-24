@@ -218,6 +218,31 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
+  describe '#fail_broadcast_action' do
+    it 'deletes the broadcast row and the action, releasing locked inputs via CASCADE' do
+      output = create_funded_output(satoshis: 1000)
+      result = store.create_action(
+        action: { description: 'to fail', nlocktime: 0 },
+        inputs: [{ output_id: output.id, vin: 0 }]
+      )
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: result[:id], tx_status: 'REJECTED')
+
+      expect(output.reload.spendable?).to be false
+
+      store.fail_broadcast_action(action_id: result[:id])
+
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
+      expect(BSV::Wallet::Store::Models::Broadcast.first(action_id: result[:id])).to be_nil
+      expect(output.reload.spendable?).to be true
+    end
+
+    it 'is idempotent (no-op when neither row exists)' do
+      expect { store.fail_broadcast_action(action_id: 999_999) }.not_to raise_error
+    end
+  end
+
   # --- Queries ---
 
   describe '#find_action' do
