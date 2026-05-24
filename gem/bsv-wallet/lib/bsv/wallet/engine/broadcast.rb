@@ -11,6 +11,15 @@ module BSV
       # request-reply (REP). Processes pending broadcasts by calling
       # Services and recording results in Store.
       class Broadcast
+        # ARC txStatus values indicating the transaction was accepted by the network.
+        ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK ACCEPTED_BY_NETWORK MINED IMMUTABLE].freeze
+
+        # ARC txStatus values indicating a definitive, non-recoverable rejection.
+        # Intentionally excludes MINED_IN_STALE_BLOCK (transient -- the tx is
+        # valid, just on a stale chain; daemon re-discovers per #126's self-heal
+        # narrative).
+        TERMINAL_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
+
         def initialize(store:, services:)
           @store = store
           @services = services
@@ -50,24 +59,52 @@ module BSV
         end
 
         # Process a single broadcast -- look up action, call ARC, record result.
+        #
+        # Emits exactly one task.dispatched on entry, then exactly one of
+        # task.succeeded / task.failed / task.aborted / task.skipped.
         def process(action_id)
+          BSV::Wallet.emit('task.dispatched', task: 'broadcast_push', id: action_id)
+          started_at = Time.now
+
           action = @store.find_action(id: action_id)
-          return unless action && action[:raw_tx]
+          unless action
+            BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: 'action_not_found')
+            return
+          end
+          unless action[:raw_tx]
+            BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: 'no_raw_tx')
+            return
+          end
 
           response = @services.call(:broadcast, action[:raw_tx])
+          latency_ms = ((Time.now - started_at) * 1000).round
+
           if response.http_success?
             @store.record_broadcast_result(
               action_id: action_id,
-              tx_status: response.data[:tx_status],
-              arc_status: response.data[:status],
-              block_hash: response.data[:block_hash],
-              block_height: response.data[:block_height],
-              merkle_path: response.data[:merkle_path],
-              extra_info: response.data[:extra_info],
-              competing_txs: response.data[:competing_txs]
+              tx_status: response.data['txStatus'],
+              arc_status: response.data['status'],
+              block_hash: response.data['blockHash'],
+              block_height: response.data['blockHeight'],
+              merkle_path: response.data['merklePath'],
+              extra_info: response.data['extraInfo'],
+              competing_txs: response.data['competingTxs']
             )
+            BSV::Wallet.emit('task.succeeded',
+                             task: 'broadcast_push', id: action_id,
+                             latency_ms: latency_ms,
+                             outcome: categorize_outcome(response.data['txStatus']))
+          elsif terminal_failure?(response)
+            @store.abort_action(action_id: action_id)
+            BSV::Wallet.emit('task.aborted',
+                             task: 'broadcast_push', id: action_id,
+                             reason: categorize_reason(response),
+                             arc_status: response.data['txStatus'])
           else
-            BSV.logger&.warn { "[Engine::Broadcast] failed for action #{action_id}: #{response.error_message}" }
+            BSV::Wallet.emit('task.failed',
+                             task: 'broadcast_push', id: action_id,
+                             latency_ms: latency_ms,
+                             reason: categorize_reason(response))
           end
 
           @store.broadcast_status(action_id: action_id)
@@ -76,6 +113,56 @@ module BSV
         # Discovery query -- returns action IDs needing broadcast.
         def self.pending(store, limit: 10)
           store.pending_broadcasts(limit: limit).map { |b| b[:action_id] }
+        end
+
+        private
+
+        # Categorize a successful ARC txStatus into an outcome bucket.
+        def categorize_outcome(tx_status)
+          status = tx_status.to_s.upcase
+          if ACCEPTED_STATUSES.include?(status)
+            :accepted
+          elsif TERMINAL_STATUSES.include?(status)
+            :rejected
+          else
+            :pending
+          end
+        end
+
+        # Categorize a failure response into a reason bucket.
+        def categorize_reason(response)
+          if response.data
+            tx_status = response.data['txStatus'].to_s.upcase
+            extra_info = response.data['extraInfo'].to_s.upcase
+
+            return :double_spend if tx_status == 'DOUBLE_SPEND_ATTEMPTED'
+            return :malformed if tx_status == 'MALFORMED'
+            return :stale_beef if tx_status == 'MINED_IN_STALE_BLOCK'
+            return :policy_violation if tx_status == 'REJECTED'
+            return :policy_violation if tx_status.include?('ORPHAN') || extra_info.include?('ORPHAN')
+
+            :unknown
+          elsif response.retryable?
+            response.code.to_i == 429 ? :rate_limited : :transport_error
+          else
+            :malformed
+          end
+        end
+
+        # True when the ARC response indicates a definitive, non-recoverable
+        # rejection. Requires data to be present (transport errors are always
+        # transient) and the txStatus to be in our terminal set or carry the
+        # ORPHAN marker.
+        def terminal_failure?(response)
+          return false unless response.data
+
+          tx_status = response.data['txStatus'].to_s.upcase
+          return true if TERMINAL_STATUSES.include?(tx_status)
+
+          extra_info = response.data['extraInfo'].to_s.upcase
+          return true if tx_status.include?('ORPHAN') || extra_info.include?('ORPHAN')
+
+          false
         end
       end
     end
