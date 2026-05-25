@@ -385,11 +385,19 @@ module BSV
           raise NotImplementedError
         end
 
-        # Query broadcasts needing status checks (stale, non-terminal).
+        # Query broadcasts eligible for status polling.
+        #
+        # Returns broadcasts that have been attempted (+broadcast_at IS NOT NULL+)
+        # and whose +tx_status+ is not in the terminal set (or is still NULL,
+        # which signals an in-flight or crash-recovery row). Under the
+        # post-T2/T3 invariant, +broadcast_at+ is stamped pre-POST in the same
+        # committed transaction, so this query is purely binary: any attempted
+        # row not yet at a terminal status is the daemon's responsibility to
+        # poll regardless of age. No staleness predicate.
         #
         # @param limit [Integer] maximum records to return
         # @return [Array<Hash>] broadcast data hashes
-        def pending_broadcasts(limit: 100)
+        def pending_polls(limit: 100)
           raise NotImplementedError
         end
 

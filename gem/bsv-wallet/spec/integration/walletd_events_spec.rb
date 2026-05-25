@@ -64,15 +64,12 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
   before do
     # --- Store stubs ---
 
-    # Broadcast discovery: return one action on first call, empty thereafter.
+    # Poll discovery: return one action on first call, empty thereafter.
     broadcast_call_count = 0
-    allow(store).to receive(:pending_broadcasts) do |**_kwargs|
+    allow(store).to receive(:pending_polls) do |**_kwargs|
       broadcast_call_count += 1
       broadcast_call_count == 1 ? [{ action_id: 1 }] : []
     end
-
-    # Push-submission discovery: dormant in this spec (poll path under test).
-    allow(store).to receive(:pending_pushes) { |**_kwargs| [] }
 
     # Proof discovery: return one action on first call, empty thereafter.
     proof_call_count = 0
@@ -89,14 +86,16 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
       end
     end
 
-    # Broadcast result recording.
-    allow(store).to receive(:record_broadcast_result)
-    allow(store).to receive(:broadcast_status)
-    allow(store).to receive(:mark_broadcast_attempted)
-
-    # Proof result recording.
-    allow(store).to receive(:save_proof).and_return(99)
-    allow(store).to receive(:link_proof)
+    # Push-submission dormant (poll path under test); broadcast/proof
+    # result recording and the proof-save id stub are flat returns.
+    allow(store).to receive_messages(
+      pending_pushes: [],
+      record_broadcast_result: nil,
+      broadcast_status: nil,
+      mark_broadcast_attempted: nil,
+      save_proof: 99,
+      link_proof: nil
+    )
 
     # --- Services stubs ---
     allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(broadcast_response)

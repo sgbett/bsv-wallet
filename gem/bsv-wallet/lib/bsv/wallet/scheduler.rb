@@ -24,7 +24,7 @@ module BSV
 
         # Broadcast retries — every 5 seconds
         schedule(task: task, name: 'broadcast_push', endpoint: 'inproc://broadcasts.pull', interval: 5) do
-          Engine::Broadcast.pending(@store, limit: 10)
+          Engine::Broadcast.pending_polls(@store, limit: 10)
         end
 
         # Proof acquisition — every 30 seconds

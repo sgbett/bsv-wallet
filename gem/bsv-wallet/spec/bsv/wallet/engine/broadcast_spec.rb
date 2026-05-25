@@ -836,22 +836,22 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     end
   end
 
-  describe '.pending' do
-    it 'delegates to store.pending_broadcasts and maps to action IDs' do
+  describe '.pending_polls' do
+    it 'delegates to store.pending_polls and maps to action IDs' do
       pending_records = [
         { action_id: 1, tx_status: nil },
         { action_id: 2, tx_status: 'UNKNOWN' }
       ]
-      allow(store).to receive(:pending_broadcasts).with(limit: 5).and_return(pending_records)
+      allow(store).to receive(:pending_polls).with(limit: 5).and_return(pending_records)
 
-      result = described_class.pending(store, limit: 5)
+      result = described_class.pending_polls(store, limit: 5)
       expect(result).to eq([1, 2])
     end
 
     it 'uses default limit of 10' do
-      allow(store).to receive(:pending_broadcasts).with(limit: 10).and_return([])
+      allow(store).to receive(:pending_polls).with(limit: 10).and_return([])
 
-      result = described_class.pending(store)
+      result = described_class.pending_polls(store)
       expect(result).to eq([])
     end
   end

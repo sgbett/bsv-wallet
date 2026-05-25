@@ -538,10 +538,9 @@ module BSV
                                   competing_txs: nil)
         @db.transaction do
           broadcast = models::Broadcast.first(action_id: action_id)
-          broadcast ||= models::Broadcast.create(action_id: action_id)
+          raise "no broadcasts row for action_id=#{action_id}" unless broadcast
 
           fields = { tx_status: tx_status }
-          fields[:broadcast_at] = Time.now if broadcast.broadcast_at.nil?
           fields[:arc_status] = arc_status if arc_status
           fields[:block_hash] = decode_hex(block_hash) if block_hash
           fields[:block_height] = block_height if block_height
@@ -561,9 +560,9 @@ module BSV
         broadcast_to_hash(broadcast)
       end
 
-      def pending_broadcasts(limit: 100)
+      def pending_polls(limit: 100)
         models::Broadcast
-          .where { broadcast_at < Time.now - Models::Broadcast::FETCH_STALENESS }
+          .exclude(broadcast_at: nil)
           .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: Models::Broadcast::TERMINAL_STATUSES)))
           .limit(limit)
           .all

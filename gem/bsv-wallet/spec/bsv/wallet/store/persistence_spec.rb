@@ -959,16 +959,8 @@ RSpec.describe BSV::Wallet::Store, :store do
       )
     end
 
-    it 'creates a broadcast record if none exists and updates status' do
-      result = store.record_broadcast_result(action_id: action.id, tx_status: 'SEEN_ON_NETWORK', arc_status: 200)
-      expect(result[:action_id]).to eq(action.id)
-      expect(result[:tx_status]).to eq('SEEN_ON_NETWORK')
-      expect(result[:arc_status]).to eq(200)
-      expect(result[:broadcast_at]).not_to be_nil
-    end
-
     it 'updates an existing broadcast record' do
-      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, broadcast_at: Time.now - 60)
 
       result = store.record_broadcast_result(
         action_id: action.id, tx_status: 'MINED',
@@ -983,6 +975,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'decodes hex block_hash and merkle_path to binary' do
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, broadcast_at: Time.now - 60)
       block_hash_hex = 'aa' * 32
       merkle_path_hex = 'bb' * 64
 
@@ -995,16 +988,39 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(result[:merkle_path]).to eq([merkle_path_hex].pack('H*'))
     end
 
-    it 'sets broadcast_at only on first write' do
-      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+    # Under the post-T2/T3 invariant, the broadcasts row is created atomically
+    # with sign_action and broadcast_at is stamped pre-POST by
+    # mark_broadcast_attempted. record_broadcast_result is only ever called
+    # after that, with the ARC response in hand. A missing row indicates a
+    # broken caller -- raise loudly rather than silently stubbing one in.
+    it 'raises when no broadcasts row exists for the action' do
+      expect do
+        store.record_broadcast_result(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
+      end.to raise_error(RuntimeError, /no broadcasts row/)
+    end
+
+    # The pre-POST stamp set by mark_broadcast_attempted is canonical;
+    # record_broadcast_result must never touch broadcast_at, even on the
+    # first response or on subsequent updates.
+    it 'does not modify broadcast_at on first call' do
+      original = Time.now - 120
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, broadcast_at: original)
+
       store.record_broadcast_result(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
 
-      first_at = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id).broadcast_at
-      expect(first_at).not_to be_nil
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
+      expect(broadcast.broadcast_at.to_i).to eq(original.to_i)
+    end
 
+    it 'does not modify broadcast_at on subsequent calls (no double-stamping)' do
+      original = Time.now - 120
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, broadcast_at: original)
+
+      store.record_broadcast_result(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
       store.record_broadcast_result(action_id: action.id, tx_status: 'MINED')
-      second_at = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id).broadcast_at
-      expect(second_at).to eq(first_at)
+
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
+      expect(broadcast.broadcast_at.to_i).to eq(original.to_i)
     end
   end
 
@@ -1030,7 +1046,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
-  describe '#pending_broadcasts' do
+  describe '#pending_polls' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
         outgoing: true, description: 'test action', nlocktime: 0,
@@ -1039,13 +1055,36 @@ RSpec.describe BSV::Wallet::Store, :store do
       )
     end
 
-    it 'returns broadcasts needing status checks' do
+    it 'returns attempted, non-terminal broadcasts' do
       BSV::Wallet::Store::Models::Broadcast.create(
         action_id: action.id,
         broadcast_at: Time.now - 60
       )
 
-      results = store.pending_broadcasts(limit: 10)
+      results = store.pending_polls(limit: 10)
+      expect(results.size).to eq(1)
+      expect(results.first[:action_id]).to eq(action.id)
+    end
+
+    it 'includes recently-attempted rows (no staleness predicate)' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now
+      )
+
+      results = store.pending_polls(limit: 10)
+      expect(results.size).to eq(1)
+      expect(results.first[:action_id]).to eq(action.id)
+    end
+
+    it 'includes crash-recovery rows (broadcast_at set, tx_status NULL)' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now - 60,
+        tx_status: nil
+      )
+
+      results = store.pending_polls(limit: 10)
       expect(results.size).to eq(1)
       expect(results.first[:action_id]).to eq(action.id)
     end
@@ -1057,22 +1096,34 @@ RSpec.describe BSV::Wallet::Store, :store do
         tx_status: 'MINED'
       )
 
-      results = store.pending_broadcasts(limit: 10)
+      results = store.pending_polls(limit: 10)
       expect(results).to be_empty
     end
 
-    it 'excludes recent broadcasts (not yet stale)' do
+    # MINED_IN_STALE_BLOCK is intentionally transient -- the tx is on a fork
+    # but valid; the poll loop must continue checking until it lands on the
+    # main chain (see docs/wallet-events.md and HLR #182).
+    it 'includes MINED_IN_STALE_BLOCK rows (transient, not terminal)' do
       BSV::Wallet::Store::Models::Broadcast.create(
         action_id: action.id,
-        broadcast_at: Time.now
+        broadcast_at: Time.now - 60,
+        tx_status: 'MINED_IN_STALE_BLOCK'
       )
 
-      results = store.pending_broadcasts(limit: 10)
+      results = store.pending_polls(limit: 10)
+      expect(results.size).to eq(1)
+      expect(results.first[:action_id]).to eq(action.id)
+    end
+
+    it 'excludes queued rows (broadcast_at IS NULL)' do
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+
+      results = store.pending_polls(limit: 10)
       expect(results).to be_empty
     end
 
     it 'returns empty array when none pending' do
-      expect(store.pending_broadcasts).to eq([])
+      expect(store.pending_polls).to eq([])
     end
   end
 

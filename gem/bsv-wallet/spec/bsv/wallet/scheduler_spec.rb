@@ -27,7 +27,7 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'pushes pending broadcast IDs to the broadcast endpoint' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([1, 2])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([1, 2])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -47,7 +47,7 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'pushes pending push-submission IDs to the broadcast endpoint' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([])
       allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_pushes).with(store, limit: 10).and_return([3, 4])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
@@ -67,7 +67,7 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'emits task.discovered with task=broadcast_push_submission when pushes are queued' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([])
       allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_pushes).with(store, limit: 10).and_return([3, 4])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
@@ -85,7 +85,7 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'pushes pending proof IDs to the proof endpoint' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([10, 20])
 
       Async do |task|
@@ -105,7 +105,7 @@ RSpec.describe BSV::Wallet::Scheduler do
 
     it 'continues when a discovery query raises' do
       call_count = 0
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending) do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls) do
         call_count += 1
         raise 'db error' if call_count == 1
 
@@ -129,7 +129,7 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'does not push anything when no pending work' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -141,7 +141,7 @@ RSpec.describe BSV::Wallet::Scheduler do
         # Give the loops time to run one cycle
         sleep 0.05
 
-        expect(BSV::Wallet::Engine::Broadcast).to have_received(:pending).at_least(:once)
+        expect(BSV::Wallet::Engine::Broadcast).to have_received(:pending_polls).at_least(:once)
         expect(BSV::Wallet::Engine::TxProof).to have_received(:pending).at_least(:once)
       ensure
         task.stop
@@ -149,7 +149,7 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'emits task.discovered with count=2 when two ids are returned' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([1, 2])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([1, 2])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -168,7 +168,7 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'emits one task.enqueued per id' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([5, 7])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([5, 7])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -188,7 +188,7 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'emits neither when discovery returns []' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -209,7 +209,7 @@ RSpec.describe BSV::Wallet::Scheduler do
 
     it 'emits fiber.crashed when discovery raises' do
       call_count = 0
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending) do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls) do
         call_count += 1
         raise 'db error' if call_count == 1
 

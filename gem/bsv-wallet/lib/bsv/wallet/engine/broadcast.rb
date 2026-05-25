@@ -19,8 +19,9 @@ module BSV
         # ARC txStatus values indicating a definitive, non-recoverable rejection.
         # Intentionally excludes MINED_IN_STALE_BLOCK (transient -- the tx is
         # valid, just on a stale chain; daemon re-discovers per #126's self-heal
-        # narrative).
-        TERMINAL_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
+        # narrative). Distinct from Models::Broadcast::TERMINAL_STATUSES, which
+        # is the "polling stops" set (includes accepted statuses too).
+        REJECTED_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
 
         def initialize(store:, services:)
           @store = store
@@ -87,18 +88,18 @@ module BSV
           end
         end
 
-        # Discovery query -- returns action IDs whose broadcasts are stale
-        # and non-terminal (eligible for status polling). Pre-broadcast
-        # actions (no Broadcasts row, or broadcast_at IS NULL) are not
-        # returned here; submission discovery is via .pending_pushes.
-        def self.pending(store, limit: 10)
-          store.pending_broadcasts(limit: limit).map { |b| b[:action_id] }
+        # Discovery query -- returns action IDs of attempted, non-terminal
+        # broadcasts (eligible for status polling). Pre-broadcast actions
+        # (no Broadcasts row, or broadcast_at IS NULL) are not returned
+        # here; submission discovery is via .pending_pushes.
+        def self.pending_polls(store, limit: 10)
+          store.pending_polls(limit: limit).map { |b| b[:action_id] }
         end
 
         # Discovery query -- returns action IDs of broadcasts that have
         # never been attempted (broadcast_at IS NULL). Counterpart to
-        # .pending: this drives the push loop, .pending drives the poll
-        # loop. Both feed the same PULL socket; process routes them.
+        # .pending_polls: this drives the push loop, .pending_polls drives
+        # the poll loop. Both feed the same PULL socket; process routes them.
         def self.pending_pushes(store, limit: 10)
           store.pending_pushes(limit: limit).map { |b| b[:action_id] }
         end
@@ -212,7 +213,7 @@ module BSV
           status = tx_status.to_s.upcase
           if ACCEPTED_STATUSES.include?(status)
             :accepted
-          elsif TERMINAL_STATUSES.include?(status)
+          elsif REJECTED_STATUSES.include?(status)
             :rejected
           else
             :pending
@@ -253,7 +254,7 @@ module BSV
         # and poll (success path with terminal txStatus).
         def terminal_status?(tx_status, extra_info = nil)
           status = tx_status.to_s.upcase
-          return true if TERMINAL_STATUSES.include?(status)
+          return true if REJECTED_STATUSES.include?(status)
 
           info = extra_info.to_s.upcase
           status.include?('ORPHAN') || info.include?('ORPHAN')
