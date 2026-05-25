@@ -76,7 +76,7 @@ This distinction is load-bearing for operators:
 
 - **`task.failed`** — Transient. The work can be retried. The Scheduler will re-discover the item on the next cycle. Examples: rate limiting (429), transport errors (5xx), stale BEEF (see below).
 
-- **`task.aborted`** — Terminal. The transaction was definitively rejected by the network. The action is removed: `Store#abort_action` from the submit path (deletes an unsigned action via cascade) or `Store#fail_broadcast_action` from the poll path (deletes the action and its broadcast row, releasing locked UTXOs via cascade). The item will never be re-discovered. Examples: double spend, policy violation, malformed transaction.
+- **`task.aborted`** — Terminal. The transaction was definitively rejected by the network. The action is removed via `Store#fail_broadcast_action` (deletes the action and its broadcasts row in a single transaction, releasing locked UTXOs via cascade). Used by both the submit path and the poll path under #182's atomic invariant — the broadcasts row exists by the time `#process` runs, so `Store#abort_action` (which only deletes actions lacking a broadcasts row) would be a no-op. `abort_action` is the separate BRC-100 surface for aborting unsigned/unbroadcast actions; not used here. The item will never be re-discovered. Examples: double spend, policy violation, malformed transaction.
 
 - **`task.skipped`** — Benign no-op. The item was discovered but is no longer actionable by the time `#process` runs. No failure occurred. Examples: action not found, no raw transaction, no wtxid, proof already acquired.
 
@@ -171,7 +171,7 @@ Per `#process(action_id)` call:
    - `task.skipped` — `action_not_found`, `no_raw_tx` (submit path), or `no_wtxid` (poll path)
    - `task.succeeded` — ARC accepted the broadcast or returned a non-terminal status
    - `task.failed` — transient failure (rate limit, transport, stale BEEF)
-   - `task.aborted` — terminal rejection (double spend, policy, malformed); `fail_broadcast_action` (poll path) or `abort_action` (submit path) invoked
+   - `task.aborted` — terminal rejection (double spend, policy, malformed); `fail_broadcast_action` invoked (both submit and poll paths — the broadcasts row exists by the time `#process` runs, so `abort_action` would be a no-op)
 
 #### Pre-POST `broadcast_at` invariant
 

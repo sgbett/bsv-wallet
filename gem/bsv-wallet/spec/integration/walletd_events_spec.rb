@@ -86,8 +86,11 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
       end
     end
 
-    # Push-submission dormant (poll path under test); broadcast/proof
-    # result recording and the proof-save id stub are flat returns.
+    # The poll-discovery loop enqueues action_id=1; broadcast_status is
+    # stubbed to nil so Engine::Broadcast#process takes the submit branch
+    # (no broadcast_at). The smoke covers the submit path end-to-end; a
+    # dedicated poll-path smoke is a separate concern. Push-discovery is
+    # dormant (pending_pushes: []) to keep the test focused.
     allow(store).to receive_messages(
       pending_pushes: [],
       record_broadcast_result: nil,
