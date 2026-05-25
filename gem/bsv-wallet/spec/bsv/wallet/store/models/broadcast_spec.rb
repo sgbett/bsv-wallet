@@ -38,11 +38,12 @@ RSpec.describe BSV::Wallet::Store::Models::Broadcast, :store do
     it 'is frozen' do
       expect(described_class::TERMINAL_STATUSES).to be_frozen
     end
-  end
 
-  describe 'FETCH_STALENESS' do
-    it 'is 30 seconds' do
-      expect(described_class::FETCH_STALENESS).to eq(30)
+    # MINED_IN_STALE_BLOCK is transient: the tx is valid but on a fork, and
+    # must continue to be re-polled until it lands on the main chain.
+    # See docs/wallet-events.md and HLR #182.
+    it 'excludes MINED_IN_STALE_BLOCK so stale-block rows keep being polled' do
+      expect(described_class::TERMINAL_STATUSES).not_to include('MINED_IN_STALE_BLOCK')
     end
   end
 end

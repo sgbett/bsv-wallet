@@ -19,8 +19,9 @@ module BSV
         # ARC txStatus values indicating a definitive, non-recoverable rejection.
         # Intentionally excludes MINED_IN_STALE_BLOCK (transient -- the tx is
         # valid, just on a stale chain; daemon re-discovers per #126's self-heal
-        # narrative).
-        TERMINAL_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
+        # narrative). Distinct from Models::Broadcast::TERMINAL_STATUSES, which
+        # is the "polling stops" set (includes accepted statuses too).
+        REJECTED_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
 
         def initialize(store:, services:)
           @store = store
@@ -80,11 +81,6 @@ module BSV
 
           status = @store.broadcast_status(action_id: action_id)
 
-          # NOTE: only the poll branch is reachable via Scheduler discovery --
-          # Store#pending_broadcasts filters to stale rows with broadcast_at
-          # set. The submit branch fires when callers invoke process directly
-          # (e.g. the inline reply! socket). Store#pending_submissions is the
-          # follow-up that closes the discovery gap.
           if status && status[:broadcast_at]
             poll_status(action_id, action, status: status, started_at: started_at)
           else
@@ -92,18 +88,33 @@ module BSV
           end
         end
 
-        # Discovery query -- returns action IDs whose broadcasts are stale
-        # and non-terminal (eligible for status polling). Pre-broadcast
-        # actions (no Broadcasts row, or broadcast_at IS NULL) are not
-        # returned here; submission discovery is a separate concern.
-        def self.pending(store, limit: 10)
-          store.pending_broadcasts(limit: limit).map { |b| b[:action_id] }
+        # Discovery query -- returns action IDs of attempted, non-terminal
+        # broadcasts (eligible for status polling). Pre-broadcast actions
+        # (no Broadcasts row, or broadcast_at IS NULL) are not returned
+        # here; submission discovery is via .pending_pushes.
+        def self.pending_polls(store, limit: 10)
+          store.pending_polls(limit: limit).map { |b| b[:action_id] }
+        end
+
+        # Discovery query -- returns action IDs of broadcasts that have
+        # never been attempted (broadcast_at IS NULL). Counterpart to
+        # .pending_polls: this drives the push loop, .pending_polls drives
+        # the poll loop. Both feed the same PULL socket; process routes them.
+        def self.pending_pushes(store, limit: 10)
+          store.pending_pushes(limit: limit).map { |b| b[:action_id] }
         end
 
         private
 
         # Initial broadcast -- submit raw_tx to ARC.
+        #
+        # Stamps broadcast_at in a committed transaction *before* the
+        # network call. A mid-POST crash therefore leaves the row in
+        # broadcast_at IS NOT NULL, tx_status IS NULL -- a recognisable
+        # crash-recovery state that the poll loop subsequently resolves
+        # via GET /tx/{txid}.
         def submit(action_id, action, started_at:)
+          @store.mark_broadcast_attempted(action_id: action_id)
           response = @services.call(:broadcast, action[:raw_tx])
           latency_ms = ((Time.now - started_at) * 1000).round
 
@@ -128,7 +139,12 @@ module BSV
                              outcome: categorize_outcome(data[:tx_status]))
             updated
           elsif terminal_failure?(response)
-            @store.abort_action(action_id: action_id)
+            # Under HLR #182's atomic invariant, the broadcasts row already
+            # exists by submit time -- so Store#abort_action (which only
+            # deletes rows without a broadcasts row) would be a no-op. Use
+            # fail_broadcast_action to delete both the broadcasts row and
+            # the action, releasing locked UTXOs.
+            @store.fail_broadcast_action(action_id: action_id)
             BSV::Wallet.emit('task.aborted',
                              task: 'broadcast_push', id: action_id,
                              reason: categorize_reason(response),
@@ -202,7 +218,7 @@ module BSV
           status = tx_status.to_s.upcase
           if ACCEPTED_STATUSES.include?(status)
             :accepted
-          elsif TERMINAL_STATUSES.include?(status)
+          elsif REJECTED_STATUSES.include?(status)
             :rejected
           else
             :pending
@@ -243,7 +259,7 @@ module BSV
         # and poll (success path with terminal txStatus).
         def terminal_status?(tx_status, extra_info = nil)
           status = tx_status.to_s.upcase
-          return true if TERMINAL_STATUSES.include?(status)
+          return true if REJECTED_STATUSES.include?(status)
 
           info = extra_info.to_s.upcase
           status.include?('ORPHAN') || info.include?('ORPHAN')

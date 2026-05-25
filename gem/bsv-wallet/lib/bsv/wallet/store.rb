@@ -85,29 +85,20 @@ module BSV
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'sign_action wtxid')
         BSV.logger&.debug { "[Store] sign_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
         @db.transaction do
-          models::Action.where(id: action_id).update(
-            wtxid: Sequel.blob(wtxid),
-            raw_tx: Sequel.blob(raw_tx)
-          )
-          models::TxProof.dataset.insert_conflict(target: :wtxid, update: { raw_tx: Sequel.blob(raw_tx) })
-                         .insert(wtxid: Sequel.blob(wtxid), raw_tx: Sequel.blob(raw_tx))
+          write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
 
-          change_outputs.each do |chg|
-            output = models::Output.create(
-              action_id: action_id,
-              satoshis: chg[:satoshis],
-              vout: chg[:vout],
-              locking_script: chg[:locking_script],
-              derivation_prefix: chg[:derivation_prefix],
-              derivation_suffix: chg[:derivation_suffix],
-              sender_identity_key: chg[:sender_identity_key]
-            )
-            models::OutputDetail.create(
-              output_id: output.id,
-              action_id: action_id,
-              change: true
-            )
-          end
+          intent = models::Action.where(id: action_id).get(:broadcast)
+          models::Broadcast.dataset.insert_conflict(target: :action_id).insert(action_id: action_id) if intent && intent != 'none'
+
+          write_change_outputs(action_id: action_id, change_outputs: change_outputs)
+        end
+      end
+
+      def stage_action(action_id:, wtxid:, raw_tx:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'stage_action wtxid')
+        BSV.logger&.debug { "[Store] stage_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
+        @db.transaction do
+          write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
         end
       end
 
@@ -541,21 +532,15 @@ module BSV
 
       # --- Broadcasts ---
 
-      def submit_broadcast(action_id:)
-        broadcast = models::Broadcast.create(action_id: action_id)
-        broadcast_to_hash(broadcast)
-      end
-
       def record_broadcast_result(action_id:, tx_status:, arc_status: nil,
                                   block_hash: nil, block_height: nil,
                                   merkle_path: nil, extra_info: nil,
                                   competing_txs: nil)
         @db.transaction do
           broadcast = models::Broadcast.first(action_id: action_id)
-          broadcast ||= models::Broadcast.create(action_id: action_id)
+          raise "no broadcasts row for action_id=#{action_id}" unless broadcast
 
           fields = { tx_status: tx_status }
-          fields[:broadcast_at] = Time.now if broadcast.broadcast_at.nil?
           fields[:arc_status] = arc_status if arc_status
           fields[:block_hash] = decode_hex(block_hash) if block_hash
           fields[:block_height] = block_height if block_height
@@ -575,25 +560,54 @@ module BSV
         broadcast_to_hash(broadcast)
       end
 
-      def pending_broadcasts(limit: 100)
+      def pending_polls(limit: 100)
         models::Broadcast
-          .where { broadcast_at < Time.now - Models::Broadcast::FETCH_STALENESS }
+          .exclude(broadcast_at: nil)
           .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: Models::Broadcast::TERMINAL_STATUSES)))
           .limit(limit)
           .all
           .map { |b| broadcast_to_hash(b) }
       end
 
+      def pending_pushes(limit: 100)
+        models::Broadcast
+          .where(broadcast_at: nil)
+          .limit(limit)
+          .all
+          .map { |b| broadcast_to_hash(b) }
+      end
+
+      def mark_broadcast_attempted(action_id:)
+        @db.transaction do
+          raise "no broadcasts row for action_id=#{action_id}" unless models::Broadcast.where(action_id: action_id).any?
+
+          models::Broadcast
+            .where(action_id: action_id, broadcast_at: nil)
+            .update(broadcast_at: Time.now)
+        end
+      end
+
       def reap_stale_actions(threshold:)
         cutoff = Time.now - threshold
         output_exists = models::Output.where(Sequel[:outputs][:action_id] => Sequel[:actions][:id]).select(1)
 
-        models::Action
-          .where { created_at < cutoff }
-          .where(Sequel.~(broadcast: 'none'))
-          .where(Sequel.lit('wtxid IS NOT NULL'))
-          .exclude(output_exists.exists)
-          .delete
+        # Under #184's atomic invariant, signed actions with broadcast != 'none'
+        # always have a broadcasts row. broadcasts.action_id has no CASCADE FK
+        # today (tracked in #189), so we delete the broadcasts row first inside
+        # the same transaction. Both deletes use the stale dataset as a
+        # subquery so the predicate is re-evaluated at delete time -- avoids
+        # a race where a row could be promoted between predicate evaluation
+        # and the delete.
+        @db.transaction do
+          stale = models::Action
+                  .where { created_at < cutoff }
+                  .where(Sequel.~(broadcast: 'none'))
+                  .where(Sequel.lit('wtxid IS NOT NULL'))
+                  .exclude(output_exists.exists)
+
+          models::Broadcast.where(action_id: stale.select(:id)).delete
+          stale.delete
+        end
       end
 
       # Base try_lock_input: performs the insert. Subclasses override to
@@ -612,6 +626,40 @@ module BSV
 
       def models
         BSV::Wallet::Store::Models
+      end
+
+      # Persist the signed artifacts (wtxid + raw_tx) on the action row and
+      # upsert the matching TxProof entry. Caller is responsible for wrapping
+      # in a transaction.
+      def write_signing_artifacts(action_id:, wtxid:, raw_tx:)
+        models::Action.where(id: action_id).update(
+          wtxid: Sequel.blob(wtxid),
+          raw_tx: Sequel.blob(raw_tx)
+        )
+        models::TxProof.dataset
+                       .insert_conflict(target: :wtxid, update: { raw_tx: Sequel.blob(raw_tx) })
+                       .insert(wtxid: Sequel.blob(wtxid), raw_tx: Sequel.blob(raw_tx))
+      end
+
+      # Write change output rows (and their detail rows) for an action.
+      # Caller is responsible for wrapping in a transaction.
+      def write_change_outputs(action_id:, change_outputs:)
+        change_outputs.each do |chg|
+          output = models::Output.create(
+            action_id: action_id,
+            satoshis: chg[:satoshis],
+            vout: chg[:vout],
+            locking_script: chg[:locking_script],
+            derivation_prefix: chg[:derivation_prefix],
+            derivation_suffix: chg[:derivation_suffix],
+            sender_identity_key: chg[:sender_identity_key]
+          )
+          models::OutputDetail.create(
+            output_id: output.id,
+            action_id: action_id,
+            change: true
+          )
+        end
       end
 
       # Convert a value to binary. If already binary-encoded, return as-is;

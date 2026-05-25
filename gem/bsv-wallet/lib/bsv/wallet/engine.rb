@@ -130,7 +130,9 @@ module BSV
           # Store unsigned raw_tx (empty unlocking scripts) and promote outputs now.
           # Outputs are fully known at createAction time — the deferral is about
           # inputs (waiting for caller-provided unlocking scripts), not outputs.
-          @store.sign_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
+          # stage_action (vs sign_action) leaves the broadcasts queue untouched
+          # until the real signAction call completes signing.
+          @store.stage_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
           @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           return {
@@ -157,17 +159,15 @@ module BSV
           return result
         end
 
-        # Phase 3: Broadcast
-        broadcast_result = broadcast_and_record(
-          action_id: action_result[:id],
-          raw_tx: raw_tx,
-          immediate: broadcast == :inline
-        )
-
-        # Phase 4: Promote (if inline broadcast accepted)
-        if broadcast == :inline && accepted?(broadcast_result)
-          promote_with_outputs(action_result[:id], outputs, vout_mapping)
-          handle_proof_from_broadcast(action_result[:id], broadcast_result)
+        # Phase 3 + 4: Broadcast inline (delayed broadcasts are picked up by
+        # the daemon's push-discovery loop from the broadcasts row that
+        # sign_action created atomically above).
+        if broadcast == :inline
+          broadcast_result = inline_broadcast(action_id: action_result[:id], raw_tx: raw_tx)
+          if accepted?(broadcast_result)
+            promote_with_outputs(action_result[:id], outputs, vout_mapping)
+            handle_proof_from_broadcast(action_result[:id], broadcast_result)
+          end
         end
 
         result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
@@ -200,14 +200,9 @@ module BSV
           return result
         end
 
-        unless broadcast == :none
-          broadcast_result = broadcast_and_record(
-            action_id: action[:id],
-            raw_tx: raw_tx,
-            immediate: broadcast == :inline
-          )
-
-          handle_proof_from_broadcast(action[:id], broadcast_result) if broadcast == :inline && accepted?(broadcast_result)
+        if broadcast == :inline
+          broadcast_result = inline_broadcast(action_id: action[:id], raw_tx: raw_tx)
+          handle_proof_from_broadcast(action[:id], broadcast_result) if accepted?(broadcast_result)
         end
 
         result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
@@ -963,37 +958,42 @@ module BSV
         ACCEPTED_STATUSES.include?(broadcast_result[:tx_status])
       end
 
-      # Submit a broadcast record and optionally push to the network.
+      # Inline ARC submission for the synchronous broadcast path.
       #
-      # Creates a broadcast row in the Store, then — when immediate and
-      # a Services instance is available — broadcasts via ARC and records
-      # the response. Returns the broadcast status hash so callers can
-      # inspect tx_status for promotion decisions.
+      # Stamps broadcast_at in a committed transaction *before* the
+      # network call (mirrors Engine::Broadcast#submit). A mid-POST
+      # crash therefore leaves the row in broadcast_at IS NOT NULL,
+      # tx_status IS NULL -- a recognisable crash-recovery state the
+      # poll loop subsequently resolves via GET /tx/{txid}.
+      #
+      # The broadcasts row is created atomically by Store#sign_action
+      # when actions.broadcast != 'none', so this method assumes the
+      # row exists and only updates it.
       #
       # @param action_id [Integer]
       # @param raw_tx [String] signed transaction binary
-      # @param immediate [Boolean] whether to push to the network now
-      # @return [Hash] broadcast status from Store
-      def broadcast_and_record(action_id:, raw_tx:, immediate: false)
-        @store.submit_broadcast(action_id: action_id)
+      # @return [Hash, nil] broadcast status from Store
+      def inline_broadcast(action_id:, raw_tx:)
+        return @store.broadcast_status(action_id: action_id) unless @services
 
-        if immediate && @services
-          response = @services.call(:broadcast, raw_tx)
-          if response.http_success?
-            @store.record_broadcast_result(
-              action_id: action_id,
-              tx_status: response.data[:tx_status],
-              arc_status: response.data[:status],
-              block_hash: response.data[:block_hash],
-              block_height: response.data[:block_height],
-              merkle_path: response.data[:merkle_path],
-              extra_info: response.data[:extra_info],
-              competing_txs: response.data[:competing_txs]
-            )
-          end
+        @store.mark_broadcast_attempted(action_id: action_id)
+        response = @services.call(:broadcast, raw_tx)
+
+        if response.http_success?
+          data = response.data
+          @store.record_broadcast_result(
+            action_id: action_id,
+            tx_status: data[:tx_status],
+            arc_status: data[:status],
+            block_hash: data[:block_hash],
+            block_height: data[:block_height],
+            merkle_path: data[:merkle_path],
+            extra_info: data[:extra_info],
+            competing_txs: data[:competing_txs]
+          )
+        else
+          @store.broadcast_status(action_id: action_id)
         end
-
-        @store.broadcast_status(action_id: action_id)
       end
 
       def handle_proof_from_broadcast(action_id, broadcast_result)
@@ -1024,6 +1024,11 @@ module BSV
 
       # Broadcast companion transactions listed in send_with.
       #
+      # Companion actions arrive signed-but-unbroadcast: their broadcasts
+      # row already exists (from their own sign_action). BRC-100's
+      # sendWith contract is synchronous, so we drive the inline path
+      # for each companion regardless of its own broadcast disposition.
+      #
       # @param send_with [Array<String>] wtxids (wire order) of companion transactions
       # @return [Array<Hash>] :txid (wire-order wtxid, BRC-100 key name), :status
       def process_send_with(send_with)
@@ -1035,12 +1040,11 @@ module BSV
           BSV.logger&.debug { "[Engine] process_send_with: dtxid=#{sw_wtxid.reverse.unpack1('H*')} found=#{!sw_action.nil?}" }
           next unless sw_action
 
-          br = broadcast_and_record(
+          br = inline_broadcast(
             action_id: sw_action[:id],
-            raw_tx: sw_action[:raw_tx] || ''.b,
-            immediate: true
+            raw_tx: sw_action[:raw_tx] || ''.b
           )
-          status = br[:tx_status]&.downcase&.tr('_', ' ')&.to_sym || :sending
+          status = br&.dig(:tx_status)&.downcase&.tr('_', ' ')&.to_sym || :sending
           { txid: sw_wtxid, status: status }
         end
       end
@@ -1791,19 +1795,16 @@ module BSV
           return result
         end
 
-        # Phase 3: Broadcast
-        broadcast_result = broadcast_and_record(
-          action_id: action_result[:id],
-          raw_tx: raw_tx,
-          immediate: broadcast == :inline
-        )
-
-        # Phase 4: Promote all outputs (change output rows written in Phase 2b,
-        # but spendable rows deferred until now)
-        if broadcast == :inline && accepted?(broadcast_result)
-          promote_with_outputs(action_result[:id], outputs, vout_mapping)
-          @store.promote_change_to_spendable(action_id: action_result[:id])
-          handle_proof_from_broadcast(action_result[:id], broadcast_result)
+        # Phase 3 + 4: Broadcast inline (change output rows already written
+        # in Phase 2b, but spendable rows deferred until now). Delayed
+        # broadcasts are picked up by the daemon's push-discovery loop.
+        if broadcast == :inline
+          broadcast_result = inline_broadcast(action_id: action_result[:id], raw_tx: raw_tx)
+          if accepted?(broadcast_result)
+            promote_with_outputs(action_result[:id], outputs, vout_mapping)
+            @store.promote_change_to_spendable(action_id: action_result[:id])
+            handle_proof_from_broadcast(action_result[:id], broadcast_result)
+          end
         end
 
         result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }

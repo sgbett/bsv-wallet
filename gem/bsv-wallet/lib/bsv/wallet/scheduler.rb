@@ -15,9 +15,16 @@ module BSV
       end
 
       def run!(task:)
+        # Broadcast submission — newly queued rows (broadcast_at IS NULL).
+        # Single-table scan; the most responsive path for delayed sends.
+        schedule(task: task, name: 'broadcast_push_submission',
+                 endpoint: 'inproc://broadcasts.pull', interval: 5) do
+          Engine::Broadcast.pending_pushes(@store, limit: 10)
+        end
+
         # Broadcast retries — every 5 seconds
         schedule(task: task, name: 'broadcast_push', endpoint: 'inproc://broadcasts.pull', interval: 5) do
-          Engine::Broadcast.pending(@store, limit: 10)
+          Engine::Broadcast.pending_polls(@store, limit: 10)
         end
 
         # Proof acquisition — every 30 seconds

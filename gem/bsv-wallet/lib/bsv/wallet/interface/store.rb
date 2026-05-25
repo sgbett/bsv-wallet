@@ -29,12 +29,22 @@ module BSV
           raise NotImplementedError
         end
 
-        # Phase 2: Attach wtxid and signed raw transaction to an action.
+        # Phase 2: Attach wtxid and signed raw transaction to an action,
+        # atomically queueing the broadcast.
+        #
+        # Updates the action with +wtxid+ and +raw_tx+, and (when
+        # +actions.broadcast+ is not +'none'+) inserts the corresponding
+        # +broadcasts+ row in the same database transaction. The row begins
+        # life with +broadcast_at IS NULL+ (queued, not yet attempted).
         #
         # When +change_outputs+ is present, writes change output rows
-        # (outputs + output_details) atomically within the same database
-        # transaction. No spendable rows — promotion happens after broadcast
-        # acceptance. This ensures signing failure produces zero orphan rows.
+        # (outputs + output_details) in the same transaction. No spendable
+        # rows — promotion happens after broadcast acceptance. This ensures
+        # signing failure produces zero orphan rows.
+        #
+        # Used by the real-signing paths (non-deferred +createAction+ and
+        # BRC-100 +signAction+). The deferred +createAction+ path calls
+        # {#stage_action} instead, which does not touch +broadcasts+.
         #
         # @param action_id [Integer]
         # @param wtxid [String] 32-byte binary wtxid (wire byte order)
@@ -43,6 +53,22 @@ module BSV
         #   atomically. Each: :satoshis, :vout, :locking_script,
         #   :derivation_prefix, :derivation_suffix, :sender_identity_key
         def sign_action(action_id:, wtxid:, raw_tx:, change_outputs: [])
+          raise NotImplementedError
+        end
+
+        # Phase 2 (deferred): Attach placeholder signing artifacts to an action.
+        #
+        # Updates the action with +wtxid+ and +raw_tx+ but does NOT create a
+        # +broadcasts+ row. Used by the deferred +createAction+ path where
+        # +raw_tx+ carries placeholder unlocking scripts; the broadcast row
+        # must wait for the real {#sign_action} call (via BRC-100
+        # +signAction+) to avoid pushing an unsigned transaction to ARC.
+        #
+        # @param action_id [Integer]
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
+        # @param raw_tx [String] binary-encoded transaction with placeholder
+        #   unlocking scripts
+        def stage_action(action_id:, wtxid:, raw_tx:)
           raise NotImplementedError
         end
 
@@ -328,15 +354,6 @@ module BSV
 
         # --- Broadcasts ---
 
-        # Create a broadcast record for an action (submit for broadcast).
-        #
-        # @param action_id [Integer]
-        # @return [Hash] broadcast data: :action_id, :tx_status, :arc_status, :broadcast_at,
-        #   :block_hash, :block_height, :merkle_path
-        def submit_broadcast(action_id:)
-          raise NotImplementedError
-        end
-
         # Record a broadcast result from ARC or a callback event.
         #
         # Find-or-creates a Broadcast record for the action, then updates
@@ -368,11 +385,49 @@ module BSV
           raise NotImplementedError
         end
 
-        # Query broadcasts needing status checks (stale, non-terminal).
+        # Query broadcasts eligible for status polling.
+        #
+        # Returns broadcasts that have been attempted (+broadcast_at IS NOT NULL+)
+        # and whose +tx_status+ is not in the terminal set (or is still NULL,
+        # which signals an in-flight or crash-recovery row). Under the
+        # post-T2/T3 invariant, +broadcast_at+ is stamped pre-POST in the same
+        # committed transaction, so this query is purely binary: any attempted
+        # row not yet at a terminal status is the daemon's responsibility to
+        # poll regardless of age. No staleness predicate.
         #
         # @param limit [Integer] maximum records to return
         # @return [Array<Hash>] broadcast data hashes
-        def pending_broadcasts(limit: 100)
+        def pending_polls(limit: 100)
+          raise NotImplementedError
+        end
+
+        # Query broadcasts queued for an initial ARC submission.
+        #
+        # Returns broadcasts that have never been attempted (+broadcast_at IS NULL+).
+        # Single-table scan, no join to actions. Under the #184 invariant a
+        # broadcasts row implies a signed action, so no time math or staleness
+        # predicate is needed -- a row in this state is by definition the
+        # daemon's responsibility to push.
+        #
+        # @param limit [Integer] maximum records to return
+        # @return [Array<Hash>] broadcast data hashes
+        def pending_pushes(limit: 100)
+          raise NotImplementedError
+        end
+
+        # Mark a broadcast row as attempted (stamp +broadcast_at+).
+        #
+        # Idempotent: only stamps rows where +broadcast_at IS NULL+. A row
+        # that already has a stamp keeps the original timestamp -- this lets
+        # the push and poll discovery loops race safely on the same row.
+        #
+        # Called by +Engine::Broadcast#submit+ in a committed transaction
+        # immediately before the network call. A mid-POST crash therefore
+        # leaves the row with +broadcast_at IS NOT NULL+ and +tx_status IS NULL+,
+        # which the poll loop subsequently recovers via +GET /tx/{txid}+.
+        #
+        # @param action_id [Integer]
+        def mark_broadcast_attempted(action_id:)
           raise NotImplementedError
         end
 
