@@ -570,6 +570,22 @@ module BSV
           .map { |b| broadcast_to_hash(b) }
       end
 
+      def pending_pushes(limit: 100)
+        models::Broadcast
+          .where(broadcast_at: nil)
+          .limit(limit)
+          .all
+          .map { |b| broadcast_to_hash(b) }
+      end
+
+      def mark_broadcast_attempted(action_id:)
+        @db.transaction do
+          models::Broadcast
+            .where(action_id: action_id, broadcast_at: nil)
+            .update(broadcast_at: Time.now)
+        end
+      end
+
       def reap_stale_actions(threshold:)
         cutoff = Time.now - threshold
         output_exists = models::Output.where(Sequel[:outputs][:action_id] => Sequel[:actions][:id]).select(1)

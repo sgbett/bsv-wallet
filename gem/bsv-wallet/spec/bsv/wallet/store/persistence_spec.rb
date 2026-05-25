@@ -1076,6 +1076,114 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
+  describe '#pending_pushes' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'returns broadcasts queued for an initial submission (broadcast_at IS NULL)' do
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+
+      results = store.pending_pushes(limit: 10)
+      expect(results.size).to eq(1)
+      expect(results.first[:action_id]).to eq(action.id)
+      expect(results.first[:broadcast_at]).to be_nil
+    end
+
+    it 'excludes broadcasts that have already been attempted' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now
+      )
+
+      expect(store.pending_pushes(limit: 10)).to be_empty
+    end
+
+    it 'excludes attempted rows regardless of tx_status' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id,
+        broadcast_at: Time.now - 60,
+        tx_status: 'SEEN_ON_NETWORK'
+      )
+
+      expect(store.pending_pushes(limit: 10)).to be_empty
+    end
+
+    it 'respects the limit' do
+      3.times do
+        a = BSV::Wallet::Store::Models::Action.create(
+          outgoing: true, description: 'test',
+          wtxid: SecureRandom.random_bytes(32),
+          raw_tx: SecureRandom.random_bytes(100)
+        )
+        BSV::Wallet::Store::Models::Broadcast.create(action_id: a.id)
+      end
+
+      expect(store.pending_pushes(limit: 2).size).to eq(2)
+    end
+
+    it 'returns empty array when none queued' do
+      expect(store.pending_pushes).to eq([])
+    end
+  end
+
+  describe '#mark_broadcast_attempted' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'stamps broadcast_at on a queued row' do
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+      before = Time.now
+
+      store.mark_broadcast_attempted(action_id: action.id)
+
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
+      expect(broadcast.broadcast_at).not_to be_nil
+      expect(broadcast.broadcast_at).to be >= before
+    end
+
+    it 'is idempotent — does not overwrite an existing broadcast_at' do
+      original = Time.now - 60
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, broadcast_at: original)
+
+      store.mark_broadcast_attempted(action_id: action.id)
+
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
+      expect(broadcast.broadcast_at.to_i).to eq(original.to_i)
+    end
+
+    it 'does not leave tx_status set (crash-recovery signal)' do
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+
+      store.mark_broadcast_attempted(action_id: action.id)
+
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
+      expect(broadcast.tx_status).to be_nil
+    end
+
+    it 'removes the row from pending_pushes results' do
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+      expect(store.pending_pushes.map { |b| b[:action_id] }).to include(action.id)
+
+      store.mark_broadcast_attempted(action_id: action.id)
+
+      expect(store.pending_pushes.map { |b| b[:action_id] }).not_to include(action.id)
+    end
+
+    it 'is a no-op for actions with no broadcasts row' do
+      expect { store.mark_broadcast_attempted(action_id: action.id) }.not_to raise_error
+    end
+  end
+
   # --- Pending Proofs ---
 
   describe '#pending_proofs' do

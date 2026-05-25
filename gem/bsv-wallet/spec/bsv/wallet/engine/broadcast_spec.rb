@@ -37,6 +37,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
   before do
     allow(BSV::Wallet).to receive(:emit) { |name, **payload| emitted_events << { name: name, **payload } }
+    allow(store).to receive(:mark_broadcast_attempted)
   end
 
   describe '#process' do
@@ -797,6 +798,44 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     end
   end
 
+  describe 'pre-POST broadcast_at stamp on submit path' do
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
+      allow(store).to receive(:record_broadcast_result).and_return(status_hash)
+    end
+
+    it 'stamps broadcast_at before calling services.call(:broadcast)' do
+      call_order = []
+      allow(store).to receive(:mark_broadcast_attempted) do |**|
+        call_order << :stamp
+      end
+      allow(services).to receive(:call).with(:broadcast, raw_tx) do
+        call_order << :network
+        success_response
+      end
+
+      broadcast.process(action_id)
+
+      expect(call_order).to eq(%i[stamp network])
+    end
+
+    it 'stamps the broadcast row even when services.call raises' do
+      allow(services).to receive(:call).with(:broadcast, raw_tx).and_raise(StandardError, 'boom')
+
+      expect { broadcast.process(action_id) }.to raise_error(StandardError, 'boom')
+      expect(store).to have_received(:mark_broadcast_attempted).with(action_id: action_id)
+    end
+
+    it 'does not call record_broadcast_result when services.call raises (crash-recovery state)' do
+      allow(store).to receive(:record_broadcast_result)
+      allow(services).to receive(:call).with(:broadcast, raw_tx).and_raise(StandardError, 'boom')
+
+      expect { broadcast.process(action_id) }.to raise_error(StandardError, 'boom')
+      expect(store).not_to have_received(:record_broadcast_result)
+    end
+  end
+
   describe '.pending' do
     it 'delegates to store.pending_broadcasts and maps to action IDs' do
       pending_records = [
@@ -813,6 +852,26 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       allow(store).to receive(:pending_broadcasts).with(limit: 10).and_return([])
 
       result = described_class.pending(store)
+      expect(result).to eq([])
+    end
+  end
+
+  describe '.pending_pushes' do
+    it 'delegates to store.pending_pushes and maps to action IDs' do
+      pending_records = [
+        { action_id: 7, broadcast_at: nil },
+        { action_id: 9, broadcast_at: nil }
+      ]
+      allow(store).to receive(:pending_pushes).with(limit: 5).and_return(pending_records)
+
+      result = described_class.pending_pushes(store, limit: 5)
+      expect(result).to eq([7, 9])
+    end
+
+    it 'uses default limit of 10' do
+      allow(store).to receive(:pending_pushes).with(limit: 10).and_return([])
+
+      result = described_class.pending_pushes(store)
       expect(result).to eq([])
     end
   end

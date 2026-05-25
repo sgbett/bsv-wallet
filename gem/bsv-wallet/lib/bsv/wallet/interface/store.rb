@@ -393,6 +393,36 @@ module BSV
           raise NotImplementedError
         end
 
+        # Query broadcasts queued for an initial ARC submission.
+        #
+        # Returns broadcasts that have never been attempted (+broadcast_at IS NULL+).
+        # Single-table scan, no join to actions. Under the #184 invariant a
+        # broadcasts row implies a signed action, so no time math or staleness
+        # predicate is needed -- a row in this state is by definition the
+        # daemon's responsibility to push.
+        #
+        # @param limit [Integer] maximum records to return
+        # @return [Array<Hash>] broadcast data hashes
+        def pending_pushes(limit: 100)
+          raise NotImplementedError
+        end
+
+        # Mark a broadcast row as attempted (stamp +broadcast_at+).
+        #
+        # Idempotent: only stamps rows where +broadcast_at IS NULL+. A row
+        # that already has a stamp keeps the original timestamp -- this lets
+        # the push and poll discovery loops race safely on the same row.
+        #
+        # Called by +Engine::Broadcast#submit+ in a committed transaction
+        # immediately before the network call. A mid-POST crash therefore
+        # leaves the row with +broadcast_at IS NOT NULL+ and +tx_status IS NULL+,
+        # which the poll loop subsequently recovers via +GET /tx/{txid}+.
+        #
+        # @param action_id [Integer]
+        def mark_broadcast_attempted(action_id:)
+          raise NotImplementedError
+        end
+
         # --- Reaper ---
 
         # Delete stale unsigned or unbroadcast actions older than the threshold.

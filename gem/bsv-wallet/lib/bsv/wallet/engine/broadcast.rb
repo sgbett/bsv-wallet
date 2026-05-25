@@ -80,11 +80,6 @@ module BSV
 
           status = @store.broadcast_status(action_id: action_id)
 
-          # NOTE: only the poll branch is reachable via Scheduler discovery --
-          # Store#pending_broadcasts filters to stale rows with broadcast_at
-          # set. The submit branch fires when callers invoke process directly
-          # (e.g. the inline reply! socket). Store#pending_submissions is the
-          # follow-up that closes the discovery gap.
           if status && status[:broadcast_at]
             poll_status(action_id, action, status: status, started_at: started_at)
           else
@@ -95,15 +90,30 @@ module BSV
         # Discovery query -- returns action IDs whose broadcasts are stale
         # and non-terminal (eligible for status polling). Pre-broadcast
         # actions (no Broadcasts row, or broadcast_at IS NULL) are not
-        # returned here; submission discovery is a separate concern.
+        # returned here; submission discovery is via .pending_pushes.
         def self.pending(store, limit: 10)
           store.pending_broadcasts(limit: limit).map { |b| b[:action_id] }
+        end
+
+        # Discovery query -- returns action IDs of broadcasts that have
+        # never been attempted (broadcast_at IS NULL). Counterpart to
+        # .pending: this drives the push loop, .pending drives the poll
+        # loop. Both feed the same PULL socket; process routes them.
+        def self.pending_pushes(store, limit: 10)
+          store.pending_pushes(limit: limit).map { |b| b[:action_id] }
         end
 
         private
 
         # Initial broadcast -- submit raw_tx to ARC.
+        #
+        # Stamps broadcast_at in a committed transaction *before* the
+        # network call. A mid-POST crash therefore leaves the row in
+        # broadcast_at IS NOT NULL, tx_status IS NULL -- a recognisable
+        # crash-recovery state that the poll loop subsequently resolves
+        # via GET /tx/{txid}.
         def submit(action_id, action, started_at:)
+          @store.mark_broadcast_attempted(action_id: action_id)
           response = @services.call(:broadcast, action[:raw_tx])
           latency_ms = ((Time.now - started_at) * 1000).round
 

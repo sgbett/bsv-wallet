@@ -22,6 +22,10 @@ RSpec.describe BSV::Wallet::Scheduler do
   end
 
   describe '#run!' do
+    before do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_pushes).with(store, limit: 10).and_return([])
+    end
+
     it 'pushes pending broadcast IDs to the broadcast endpoint' do
       allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([1, 2])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
@@ -37,6 +41,44 @@ RSpec.describe BSV::Wallet::Scheduler do
         2.times { messages << broadcast_pull.receive.first }
 
         expect(messages).to eq(%w[1 2])
+      ensure
+        task.stop
+      end
+    end
+
+    it 'pushes pending push-submission IDs to the broadcast endpoint' do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_pushes).with(store, limit: 10).and_return([3, 4])
+      allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
+
+      Async do |task|
+        broadcast_pull = OMQ::PULL.bind('inproc://broadcasts.pull')
+        OMQ::PULL.bind('inproc://proofs.pull')
+
+        scheduler.run!(task: task)
+
+        messages = []
+        2.times { messages << broadcast_pull.receive.first }
+
+        expect(messages).to eq(%w[3 4])
+      ensure
+        task.stop
+      end
+    end
+
+    it 'emits task.discovered with task=broadcast_push_submission when pushes are queued' do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_pushes).with(store, limit: 10).and_return([3, 4])
+      allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
+
+      Async do |task|
+        broadcast_pull = OMQ::PULL.bind('inproc://broadcasts.pull')
+        OMQ::PULL.bind('inproc://proofs.pull')
+
+        scheduler.run!(task: task)
+        2.times { broadcast_pull.receive }
+
+        expect(log_output.string).to include('[event] task.discovered task=broadcast_push_submission count=2')
       ensure
         task.stop
       end
