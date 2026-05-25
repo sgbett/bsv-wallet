@@ -128,8 +128,9 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'rolls back the action update if the broadcasts insert fails' do
       result = store.create_action(action: { description: 'atomic', nlocktime: 0, broadcast: :delayed })
 
-      # Force a failure in the broadcasts insert by stubbing Broadcast.create
-      allow(BSV::Wallet::Store::Models::Broadcast).to receive(:create).and_raise(Sequel::DatabaseError)
+      # Force a failure on the broadcasts dataset access (the idempotent insert
+      # path goes via Models::Broadcast.dataset.insert_conflict(...).insert(...)).
+      allow(BSV::Wallet::Store::Models::Broadcast).to receive(:dataset).and_raise(Sequel::DatabaseError)
 
       expect do
         store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
@@ -139,6 +140,17 @@ RSpec.describe BSV::Wallet::Store, :store do
       action = BSV::Wallet::Store::Models::Action[result[:id]]
       expect(action.wtxid).to be_nil
       expect(action.raw_tx).to be_nil
+    end
+
+    it 'is idempotent on the broadcasts row insert (second call does not raise)' do
+      result = store.create_action(action: { description: 'idempotent', nlocktime: 0, broadcast: :delayed })
+      wtxid = SecureRandom.random_bytes(32)
+      raw_tx = SecureRandom.random_bytes(100)
+
+      store.sign_action(action_id: result[:id], wtxid: wtxid, raw_tx: raw_tx)
+      expect { store.sign_action(action_id: result[:id], wtxid: wtxid, raw_tx: raw_tx) }.not_to raise_error
+
+      expect(BSV::Wallet::Store::Models::Broadcast.where(action_id: result[:id]).count).to eq(1)
     end
   end
 
@@ -1230,8 +1242,13 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.pending_pushes.map { |b| b[:action_id] }).not_to include(action.id)
     end
 
-    it 'is a no-op for actions with no broadcasts row' do
-      expect { store.mark_broadcast_attempted(action_id: action.id) }.not_to raise_error
+    it 'raises when no broadcasts row exists for the action (invariant violation)' do
+      # Action exists but no broadcasts row -- e.g., action created with
+      # broadcast: 'none'. Stamping in this state would silently no-op
+      # and leave the action untracked by either discovery loop.
+      expect do
+        store.mark_broadcast_attempted(action_id: action.id)
+      end.to raise_error(RuntimeError, /no broadcasts row/)
     end
   end
 

@@ -139,7 +139,12 @@ module BSV
                              outcome: categorize_outcome(data[:tx_status]))
             updated
           elsif terminal_failure?(response)
-            @store.abort_action(action_id: action_id)
+            # Under HLR #182's atomic invariant, the broadcasts row already
+            # exists by submit time -- so Store#abort_action (which only
+            # deletes rows without a broadcasts row) would be a no-op. Use
+            # fail_broadcast_action to delete both the broadcasts row and
+            # the action, releasing locked UTXOs.
+            @store.fail_broadcast_action(action_id: action_id)
             BSV::Wallet.emit('task.aborted',
                              task: 'broadcast_push', id: action_id,
                              reason: categorize_reason(response),

@@ -293,7 +293,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(rejected_response)
-        allow(store).to receive(:abort_action)
+        allow(store).to receive(:fail_broadcast_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
@@ -306,9 +306,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         )
       end
 
-      it 'calls abort_action on the store' do
+      it 'calls fail_broadcast_action on the store (releases locked inputs)' do
         broadcast.process(action_id)
-        expect(store).to have_received(:abort_action).with(action_id: action_id)
+        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
       end
     end
 
@@ -325,7 +325,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(double_spend_response)
-        allow(store).to receive(:abort_action)
+        allow(store).to receive(:fail_broadcast_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
@@ -338,9 +338,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         )
       end
 
-      it 'calls abort_action on the store' do
+      it 'calls fail_broadcast_action on the store (releases locked inputs)' do
         broadcast.process(action_id)
-        expect(store).to have_received(:abort_action).with(action_id: action_id)
+        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
       end
     end
 
@@ -357,7 +357,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(malformed_response)
-        allow(store).to receive(:abort_action)
+        allow(store).to receive(:fail_broadcast_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
@@ -370,9 +370,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         )
       end
 
-      it 'calls abort_action on the store' do
+      it 'calls fail_broadcast_action on the store (releases locked inputs)' do
         broadcast.process(action_id)
-        expect(store).to have_received(:abort_action).with(action_id: action_id)
+        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
       end
     end
 
@@ -390,7 +390,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(orphan_response)
-        allow(store).to receive(:abort_action)
+        allow(store).to receive(:fail_broadcast_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
@@ -403,9 +403,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         )
       end
 
-      it 'calls abort_action on the store' do
+      it 'calls fail_broadcast_action on the store (releases locked inputs)' do
         broadcast.process(action_id)
-        expect(store).to have_received(:abort_action).with(action_id: action_id)
+        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
       end
     end
 

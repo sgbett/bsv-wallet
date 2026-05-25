@@ -88,7 +88,7 @@ module BSV
           write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
 
           intent = models::Action.where(id: action_id).get(:broadcast)
-          models::Broadcast.create(action_id: action_id) if intent && intent != 'none'
+          models::Broadcast.dataset.insert_conflict(target: :action_id).insert(action_id: action_id) if intent && intent != 'none'
 
           write_change_outputs(action_id: action_id, change_outputs: change_outputs)
         end
@@ -579,6 +579,8 @@ module BSV
 
       def mark_broadcast_attempted(action_id:)
         @db.transaction do
+          raise "no broadcasts row for action_id=#{action_id}" unless models::Broadcast.where(action_id: action_id).any?
+
           models::Broadcast
             .where(action_id: action_id, broadcast_at: nil)
             .update(broadcast_at: Time.now)
@@ -590,8 +592,12 @@ module BSV
         output_exists = models::Output.where(Sequel[:outputs][:action_id] => Sequel[:actions][:id]).select(1)
 
         # Under #184's atomic invariant, signed actions with broadcast != 'none'
-        # always have a broadcasts row. broadcasts.action_id has no CASCADE FK,
-        # so we delete the broadcasts row first inside the same transaction.
+        # always have a broadcasts row. broadcasts.action_id has no CASCADE FK
+        # today (tracked in #189), so we delete the broadcasts row first inside
+        # the same transaction. Both deletes use the stale dataset as a
+        # subquery so the predicate is re-evaluated at delete time -- avoids
+        # a race where a row could be promoted between predicate evaluation
+        # and the delete.
         @db.transaction do
           stale = models::Action
                   .where { created_at < cutoff }
@@ -599,8 +605,7 @@ module BSV
                   .where(Sequel.lit('wtxid IS NOT NULL'))
                   .exclude(output_exists.exists)
 
-          stale_ids = stale.select_map(:id)
-          models::Broadcast.where(action_id: stale_ids).delete if stale_ids.any?
+          models::Broadcast.where(action_id: stale.select(:id)).delete
           stale.delete
         end
       end
