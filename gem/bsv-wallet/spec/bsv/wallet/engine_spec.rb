@@ -188,6 +188,103 @@ RSpec.describe BSV::Wallet::Engine do
         listed = engine.list_outputs(basket: 'payments')
         expect(listed[:total_outputs]).to eq(1)
       end
+
+      it 'stamps broadcast_at before the ARC call (pre-POST timing)' do
+        # Inject a stubbed services.call that raises mid-POST. The row
+        # should still have broadcast_at set -- the recognisable
+        # crash-recovery state the poll loop subsequently resolves.
+        stamped_at_call_time = nil
+        allow(services).to receive(:call).with(:broadcast, anything) do
+          action = store.send(:models)::Action.order(:id).last
+          stamped_at_call_time = store.broadcast_status(action_id: action.id)
+          raise StandardError, 'network down'
+        end
+
+        expect do
+          engine.create_action(
+            description: 'pre-POST stamp guard',
+            inputs: [],
+            accept_delayed_broadcast: false,
+            outputs: [
+              { satoshis: 500, locking_script: OP_TRUE,
+                output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+            ]
+          )
+        end.to raise_error(StandardError, 'network down')
+
+        expect(stamped_at_call_time).not_to be_nil
+        expect(stamped_at_call_time[:broadcast_at]).not_to be_nil
+        expect(stamped_at_call_time[:tx_status]).to be_nil
+      end
+
+      it 'records tx_status from the ARC response' do
+        engine.create_action(
+          description: 'records tx_status',
+          inputs: [],
+          accept_delayed_broadcast: false,
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          ]
+        )
+
+        action = store.send(:models)::Action.order(:id).last
+        status = store.broadcast_status(action_id: action.id)
+        expect(status[:broadcast_at]).not_to be_nil
+        expect(status[:tx_status]).to eq('SEEN_ON_NETWORK')
+      end
+    end
+
+    context 'with delayed broadcast (accept_delayed_broadcast: true)' do
+      subject(:engine) do
+        described_class.new(
+          store: store, utxo_pool: utxo_pool,
+          services: services, network: :mainnet
+        )
+      end
+
+      let(:services) do
+        svc = double('Services')
+        allow(svc).to receive(:call)
+        svc
+      end
+
+      it 'creates a broadcasts row with broadcast_at IS NULL and does not call ARC' do
+        engine.create_action(
+          description: 'delayed broadcast',
+          inputs: [],
+          accept_delayed_broadcast: true,
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          ]
+        )
+
+        expect(services).not_to have_received(:call)
+
+        action = store.send(:models)::Action.order(:id).last
+        status = store.broadcast_status(action_id: action.id)
+        expect(status).not_to be_nil
+        expect(status[:broadcast_at]).to be_nil
+        expect(status[:tx_status]).to be_nil
+      end
+    end
+
+    context 'with no_send: true' do
+      it 'creates no broadcasts row (regression guard for #184 atomic invariant)' do
+        engine_with_keys.create_action(
+          description: 'no_send guard',
+          inputs: [],
+          no_send: true,
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          ]
+        )
+
+        action = store.send(:models)::Action.order(:id).last
+        expect(store.broadcast_status(action_id: action.id)).to be_nil
+      end
     end
   end
 
