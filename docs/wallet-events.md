@@ -60,7 +60,13 @@ Ten canonical events across three layers.
 | `task.aborted` | `task` `id` `reason` `arc_status` | Terminal failure (action aborted, no re-discovery) |
 | `task.skipped` | `task` `id` `reason` | Benign no-op (work no longer applicable) |
 
-`task` identifies the task type: `broadcast_push` or `proof_acquisition`.
+`task` identifies the task type. Three values are emitted:
+
+- `broadcast_push_submission` — push-discovery loop (Scheduler). Found a broadcast row with `broadcast_at IS NULL` (never attempted). Emitted on `task.discovered` and `task.enqueued` only.
+- `broadcast_push` — poll-discovery loop (Scheduler) and the broadcast processing engine (`Engine::Broadcast#process`, both push and poll paths). Emitted on all task lifecycle events for broadcasts.
+- `proof_acquisition` — proof discovery loop and the proof engine (`Engine::TxProof#process`). Emitted on all task lifecycle events for proofs.
+
+Operators tracing one broadcast through the daemon will see `task=broadcast_push_submission` on the discovery line and `task=broadcast_push` on the dispatch/outcome lines. See [Discovery streams](#discovery-streams) below.
 
 `latency_ms` measures work duration only (dispatched to completion), not queue wait.
 
@@ -70,9 +76,18 @@ This distinction is load-bearing for operators:
 
 - **`task.failed`** — Transient. The work can be retried. The Scheduler will re-discover the item on the next cycle. Examples: rate limiting (429), transport errors (5xx), stale BEEF (see below).
 
-- **`task.aborted`** — Terminal. The transaction was definitively rejected by the network. `Store#abort_action` is invoked to mark the action as failed. The item will never be re-discovered. Examples: double spend, policy violation, malformed transaction.
+- **`task.aborted`** — Terminal. The transaction was definitively rejected by the network. The action is removed: `Store#abort_action` from the submit path (deletes an unsigned action via cascade) or `Store#fail_broadcast_action` from the poll path (deletes the action and its broadcast row, releasing locked UTXOs via cascade). The item will never be re-discovered. Examples: double spend, policy violation, malformed transaction.
 
-- **`task.skipped`** — Benign no-op. The item was discovered but is no longer actionable by the time `#process` runs. No failure occurred. Examples: action not found, no raw transaction, no wtxid.
+- **`task.skipped`** — Benign no-op. The item was discovered but is no longer actionable by the time `#process` runs. No failure occurred. Examples: action not found, no raw transaction, no wtxid, proof already acquired.
+
+`reason` values for `task.skipped`:
+
+| `reason` | Task | Cause |
+|---|---|---|
+| `action_not_found` | both | The action row was deleted between discovery and dispatch (e.g. aborted) |
+| `no_raw_tx` | `broadcast_push` | The action has no `raw_tx` — was never signed |
+| `no_wtxid` | both | The action has no `wtxid` — broadcast poll path cannot derive a txid for ARC; proof path cannot identify the transaction |
+| `already_proven` | `proof_acquisition` | A proof was linked between discovery and dispatch (race window) |
 
 ## ARC Response Categorization
 
@@ -96,11 +111,13 @@ The `:unknown` bucket is the escape hatch — transient, not terminal. Any ARC r
 
 The transaction itself is valid — it was mined, just on a chain branch that lost the race. The underlying transaction is not rejected; it is a chain-side timing artifact. The daemon will re-discover the broadcast on the next Scheduler cycle, and ARC will accept it once the proof refreshes onto the active chain.
 
-`TERMINAL_STATUSES` (which drive `task.aborted`) explicitly excludes `MINED_IN_STALE_BLOCK`. The constant is defined in `Engine::Broadcast`:
+`REJECTED_STATUSES` (which drive `task.aborted`) explicitly excludes `MINED_IN_STALE_BLOCK`. The constant is defined in `Engine::Broadcast`:
 
 ```ruby
-TERMINAL_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
+REJECTED_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
 ```
+
+A second, broader constant — `Models::Broadcast::TERMINAL_STATUSES` — lists the statuses that stop poll discovery (the accepted set plus the rejected set, but not `MINED_IN_STALE_BLOCK`). `Store#pending_polls` uses it to decide which rows are still worth polling.
 
 ### Outcome buckets (success path)
 
@@ -121,20 +138,58 @@ On `response.http_success?`, `categorize_outcome` classifies the `txStatus`:
 
 ### Scheduler (`scheduler.rb`)
 
+Runs three independent discovery loops as Async fibers. Each polls the Store on its own interval, enqueues action IDs onto an OMQ inproc PUSH socket, and emits:
+
 - `task.discovered` — once per cycle when pending items exist
 - `task.enqueued` — once per item pushed to the OMQ socket
 - `fiber.crashed` — on `StandardError` in a discovery loop
+
+| Loop name (`task=`) | Source query | Endpoint | Interval | Purpose |
+|---|---|---|---|---|
+| `broadcast_push_submission` | `Store#pending_pushes` (rows where `broadcast_at IS NULL`) | `inproc://broadcasts.pull` | 5s | Push discovery — find newly signed broadcasts and submit them to ARC |
+| `broadcast_push` | `Store#pending_polls` (rows where `broadcast_at IS NOT NULL` and `tx_status` is non-terminal) | `inproc://broadcasts.pull` | 5s | Poll discovery — re-check in-flight broadcasts for status changes |
+| `proof_acquisition` | `Store#pending_proofs` (actions with `wtxid` and no linked `tx_proof_id`) | `inproc://proofs.pull` | 30s | Find mined actions awaiting proof acquisition |
+
+#### Discovery streams
+
+Both broadcast loops feed the **same** PULL socket (`inproc://broadcasts.pull`). `Engine::Broadcast#process` routes each enqueued ID by inspecting the row's `broadcast_at`:
+
+- `broadcast_at IS NULL` → `submit` path — initial broadcast to ARC.
+- `broadcast_at IS NOT NULL` → `poll_status` path — `GET /tx/{txid}` for status convergence.
+
+The two loops are kept separate at the discovery layer so each scans a single-column predicate without joins; combining them into one query would force a `UNION` or `OR` and lose the index-friendly shape. Operators tracing one broadcast row through the daemon will see `task=broadcast_push_submission` on the discovery line followed by `task=broadcast_push` on the dispatch and outcome lines — the engine emits with a single canonical name regardless of which loop enqueued the ID.
 
 ### Engine::Broadcast (`engine/broadcast.rb`)
 
 Per `#process(action_id)` call:
 
 1. `task.dispatched` — always, on entry
-2. Exactly one of:
-   - `task.skipped` — action not found or no raw_tx
-   - `task.succeeded` — ARC accepted the broadcast
+2. Routing on the broadcast row:
+   - `broadcast_at IS NULL` → `submit` path (initial broadcast to ARC)
+   - `broadcast_at IS NOT NULL` → `poll_status` path (`GET /tx/{txid}` for status convergence)
+3. Exactly one of:
+   - `task.skipped` — `action_not_found`, `no_raw_tx` (submit path), or `no_wtxid` (poll path)
+   - `task.succeeded` — ARC accepted the broadcast or returned a non-terminal status
    - `task.failed` — transient failure (rate limit, transport, stale BEEF)
-   - `task.aborted` — terminal rejection (double spend, policy, malformed); `abort_action` invoked
+   - `task.aborted` — terminal rejection (double spend, policy, malformed); `fail_broadcast_action` (poll path) or `abort_action` (submit path) invoked
+
+#### Pre-POST `broadcast_at` invariant
+
+`Engine::Broadcast#submit` stamps `broadcast_at = Time.now` in a committed transaction **before** the ARC call (via `Store#mark_broadcast_attempted`). This is the daemon-side counterpart to the synchronous `:inline` broadcast path, which performs the same stamp before its own ARC call.
+
+The invariant: **`broadcast_at` is set before any network call to broadcast the transaction**, never after. A row with `broadcast_at IS NULL` has never been submitted.
+
+#### Crash-recovery state: `broadcast_at IS NOT NULL AND tx_status IS NULL`
+
+A mid-POST crash (process exit between the stamp commit and the ARC response being persisted) leaves the broadcast row in a recognisable "attempted, outcome unknown" state:
+
+```
+broadcast_at IS NOT NULL AND tx_status IS NULL
+```
+
+This is intentional and recoverable. The row satisfies `Store#pending_polls`, so the next scheduler tick discovers it and routes it through `poll_status`. ARC's `GET /tx/{txid}` then resolves whether the transaction was received: a successful status response converges the row, a 404 (not received) leaves it for another tick. Operators investigating a crash can also query ARC directly with the action's `dtxid` to determine outcome before the next poll cycle.
+
+This is distinct from a *queued* state (`broadcast_at IS NULL`) — the pre-POST stamp is the boundary between the two discovery streams.
 
 ### Engine::TxProof (`engine/tx_proof.rb`)
 
@@ -142,7 +197,7 @@ Per `#process(action_id)` call:
 
 1. `task.dispatched` — always, on entry
 2. Exactly one of:
-   - `task.skipped` — action not found or no wtxid
+   - `task.skipped` — `action_not_found`, `no_wtxid`, or `already_proven` (proof linked between discovery and dispatch)
    - `task.succeeded outcome=acquired` — proof saved and linked
    - `task.succeeded outcome=not_yet_mined` — tx exists but no merkle proof yet
    - `task.failed` — transport error fetching status
@@ -151,18 +206,21 @@ No `task.aborted` — proof acquisition has no terminal-rejection mode. A proof 
 
 ## Example Log Output
 
+A delayed broadcast (push discovery → submit → succeed), an in-flight broadcast picked up by the poll loop (poll discovery → poll_status → succeed), and a proof acquisition:
+
 ```
 [event] daemon.started wallet=alice network=mainnet
-[event] task.discovered task=broadcast_push count=3
-[event] task.enqueued task=broadcast_push id=42
-[event] task.enqueued task=broadcast_push id=43
-[event] task.enqueued task=broadcast_push id=44
+[event] task.discovered task=broadcast_push_submission count=2
+[event] task.enqueued task=broadcast_push_submission id=42
+[event] task.enqueued task=broadcast_push_submission id=43
 [event] task.dispatched task=broadcast_push id=42
 [event] task.succeeded task=broadcast_push id=42 latency_ms=127 outcome=accepted
 [event] task.dispatched task=broadcast_push id=43
-[event] task.failed task=broadcast_push id=43 latency_ms=3012 reason=rate_limited
+[event] task.aborted task=broadcast_push id=43 reason=double_spend arc_status=DOUBLE_SPEND_ATTEMPTED
+[event] task.discovered task=broadcast_push count=1
+[event] task.enqueued task=broadcast_push id=44
 [event] task.dispatched task=broadcast_push id=44
-[event] task.aborted task=broadcast_push id=44 reason=double_spend arc_status=DOUBLE_SPEND_ATTEMPTED
+[event] task.failed task=broadcast_push id=44 latency_ms=3012 reason=rate_limited
 [event] task.discovered task=proof_acquisition count=1
 [event] task.enqueued task=proof_acquisition id=42
 [event] task.dispatched task=proof_acquisition id=42
@@ -179,6 +237,10 @@ grep "id=42" walletd.log
 # All failures
 grep "task.failed\|task.aborted" walletd.log
 
-# All broadcast outcomes
-grep "task=broadcast_push" walletd.log | grep -v "task.dispatched"
+# All broadcast outcomes (dispatch + outcome events; the engine emits with
+# task=broadcast_push for both submit and poll paths)
+grep "task=broadcast_push " walletd.log | grep -v "task.dispatched"
+
+# All discoveries from the push-discovery loop only (newly queued broadcasts)
+grep "task=broadcast_push_submission" walletd.log
 ```
