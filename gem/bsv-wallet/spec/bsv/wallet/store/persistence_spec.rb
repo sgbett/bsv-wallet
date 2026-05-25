@@ -1179,7 +1179,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'respects the limit' do
       3.times do |i|
         a = BSV::Wallet::Store::Models::Action.create(
-          outgoing: true, description: "test action #{i}",
+          outgoing: true, description: "test action #{i}", nlocktime: 0,
           wtxid: SecureRandom.random_bytes(32),
           raw_tx: SecureRandom.random_bytes(100)
         )
