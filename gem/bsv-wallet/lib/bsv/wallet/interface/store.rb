@@ -29,12 +29,22 @@ module BSV
           raise NotImplementedError
         end
 
-        # Phase 2: Attach wtxid and signed raw transaction to an action.
+        # Phase 2: Attach wtxid and signed raw transaction to an action,
+        # atomically queueing the broadcast.
+        #
+        # Updates the action with +wtxid+ and +raw_tx+, and (when
+        # +actions.broadcast+ is not +'none'+) inserts the corresponding
+        # +broadcasts+ row in the same database transaction. The row begins
+        # life with +broadcast_at IS NULL+ (queued, not yet attempted).
         #
         # When +change_outputs+ is present, writes change output rows
-        # (outputs + output_details) atomically within the same database
-        # transaction. No spendable rows — promotion happens after broadcast
-        # acceptance. This ensures signing failure produces zero orphan rows.
+        # (outputs + output_details) in the same transaction. No spendable
+        # rows — promotion happens after broadcast acceptance. This ensures
+        # signing failure produces zero orphan rows.
+        #
+        # Used by the real-signing paths (non-deferred +createAction+ and
+        # BRC-100 +signAction+). The deferred +createAction+ path calls
+        # {#stage_action} instead, which does not touch +broadcasts+.
         #
         # @param action_id [Integer]
         # @param wtxid [String] 32-byte binary wtxid (wire byte order)
@@ -43,6 +53,22 @@ module BSV
         #   atomically. Each: :satoshis, :vout, :locking_script,
         #   :derivation_prefix, :derivation_suffix, :sender_identity_key
         def sign_action(action_id:, wtxid:, raw_tx:, change_outputs: [])
+          raise NotImplementedError
+        end
+
+        # Phase 2 (deferred): Attach placeholder signing artifacts to an action.
+        #
+        # Updates the action with +wtxid+ and +raw_tx+ but does NOT create a
+        # +broadcasts+ row. Used by the deferred +createAction+ path where
+        # +raw_tx+ carries placeholder unlocking scripts; the broadcast row
+        # must wait for the real {#sign_action} call (via BRC-100
+        # +signAction+) to avoid pushing an unsigned transaction to ARC.
+        #
+        # @param action_id [Integer]
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
+        # @param raw_tx [String] binary-encoded transaction with placeholder
+        #   unlocking scripts
+        def stage_action(action_id:, wtxid:, raw_tx:)
           raise NotImplementedError
         end
 
@@ -327,15 +353,6 @@ module BSV
         end
 
         # --- Broadcasts ---
-
-        # Create a broadcast record for an action (submit for broadcast).
-        #
-        # @param action_id [Integer]
-        # @return [Hash] broadcast data: :action_id, :tx_status, :arc_status, :broadcast_at,
-        #   :block_hash, :block_height, :merkle_path
-        def submit_broadcast(action_id:)
-          raise NotImplementedError
-        end
 
         # Record a broadcast result from ARC or a callback event.
         #

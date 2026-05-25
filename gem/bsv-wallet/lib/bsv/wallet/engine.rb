@@ -130,7 +130,9 @@ module BSV
           # Store unsigned raw_tx (empty unlocking scripts) and promote outputs now.
           # Outputs are fully known at createAction time — the deferral is about
           # inputs (waiting for caller-provided unlocking scripts), not outputs.
-          @store.sign_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
+          # stage_action (vs sign_action) leaves the broadcasts queue untouched
+          # until the real signAction call completes signing.
+          @store.stage_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
           @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           return {
@@ -975,8 +977,9 @@ module BSV
       # @param immediate [Boolean] whether to push to the network now
       # @return [Hash] broadcast status from Store
       def broadcast_and_record(action_id:, raw_tx:, immediate: false)
-        @store.submit_broadcast(action_id: action_id)
-
+        # The broadcasts row is created atomically by Store#sign_action when
+        # actions.broadcast != 'none'. This method only attempts the inline
+        # push (when immediate) and records the result.
         if immediate && @services
           response = @services.call(:broadcast, raw_tx)
           if response.http_success?

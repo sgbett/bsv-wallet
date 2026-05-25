@@ -85,29 +85,20 @@ module BSV
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'sign_action wtxid')
         BSV.logger&.debug { "[Store] sign_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
         @db.transaction do
-          models::Action.where(id: action_id).update(
-            wtxid: Sequel.blob(wtxid),
-            raw_tx: Sequel.blob(raw_tx)
-          )
-          models::TxProof.dataset.insert_conflict(target: :wtxid, update: { raw_tx: Sequel.blob(raw_tx) })
-                         .insert(wtxid: Sequel.blob(wtxid), raw_tx: Sequel.blob(raw_tx))
+          write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
 
-          change_outputs.each do |chg|
-            output = models::Output.create(
-              action_id: action_id,
-              satoshis: chg[:satoshis],
-              vout: chg[:vout],
-              locking_script: chg[:locking_script],
-              derivation_prefix: chg[:derivation_prefix],
-              derivation_suffix: chg[:derivation_suffix],
-              sender_identity_key: chg[:sender_identity_key]
-            )
-            models::OutputDetail.create(
-              output_id: output.id,
-              action_id: action_id,
-              change: true
-            )
-          end
+          intent = models::Action.where(id: action_id).get(:broadcast)
+          models::Broadcast.create(action_id: action_id) if intent && intent != 'none'
+
+          write_change_outputs(action_id: action_id, change_outputs: change_outputs)
+        end
+      end
+
+      def stage_action(action_id:, wtxid:, raw_tx:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'stage_action wtxid')
+        BSV.logger&.debug { "[Store] stage_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
+        @db.transaction do
+          write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
         end
       end
 
@@ -541,11 +532,6 @@ module BSV
 
       # --- Broadcasts ---
 
-      def submit_broadcast(action_id:)
-        broadcast = models::Broadcast.create(action_id: action_id)
-        broadcast_to_hash(broadcast)
-      end
-
       def record_broadcast_result(action_id:, tx_status:, arc_status: nil,
                                   block_hash: nil, block_height: nil,
                                   merkle_path: nil, extra_info: nil,
@@ -588,12 +574,20 @@ module BSV
         cutoff = Time.now - threshold
         output_exists = models::Output.where(Sequel[:outputs][:action_id] => Sequel[:actions][:id]).select(1)
 
-        models::Action
-          .where { created_at < cutoff }
-          .where(Sequel.~(broadcast: 'none'))
-          .where(Sequel.lit('wtxid IS NOT NULL'))
-          .exclude(output_exists.exists)
-          .delete
+        # Under #184's atomic invariant, signed actions with broadcast != 'none'
+        # always have a broadcasts row. broadcasts.action_id has no CASCADE FK,
+        # so we delete the broadcasts row first inside the same transaction.
+        @db.transaction do
+          stale = models::Action
+                  .where { created_at < cutoff }
+                  .where(Sequel.~(broadcast: 'none'))
+                  .where(Sequel.lit('wtxid IS NOT NULL'))
+                  .exclude(output_exists.exists)
+
+          stale_ids = stale.select_map(:id)
+          models::Broadcast.where(action_id: stale_ids).delete if stale_ids.any?
+          stale.delete
+        end
       end
 
       # Base try_lock_input: performs the insert. Subclasses override to
@@ -612,6 +606,40 @@ module BSV
 
       def models
         BSV::Wallet::Store::Models
+      end
+
+      # Persist the signed artifacts (wtxid + raw_tx) on the action row and
+      # upsert the matching TxProof entry. Caller is responsible for wrapping
+      # in a transaction.
+      def write_signing_artifacts(action_id:, wtxid:, raw_tx:)
+        models::Action.where(id: action_id).update(
+          wtxid: Sequel.blob(wtxid),
+          raw_tx: Sequel.blob(raw_tx)
+        )
+        models::TxProof.dataset
+                       .insert_conflict(target: :wtxid, update: { raw_tx: Sequel.blob(raw_tx) })
+                       .insert(wtxid: Sequel.blob(wtxid), raw_tx: Sequel.blob(raw_tx))
+      end
+
+      # Write change output rows (and their detail rows) for an action.
+      # Caller is responsible for wrapping in a transaction.
+      def write_change_outputs(action_id:, change_outputs:)
+        change_outputs.each do |chg|
+          output = models::Output.create(
+            action_id: action_id,
+            satoshis: chg[:satoshis],
+            vout: chg[:vout],
+            locking_script: chg[:locking_script],
+            derivation_prefix: chg[:derivation_prefix],
+            derivation_suffix: chg[:derivation_suffix],
+            sender_identity_key: chg[:sender_identity_key]
+          )
+          models::OutputDetail.create(
+            output_id: output.id,
+            action_id: action_id,
+            change: true
+          )
+        end
       end
 
       # Convert a value to binary. If already binary-encoded, return as-is;
