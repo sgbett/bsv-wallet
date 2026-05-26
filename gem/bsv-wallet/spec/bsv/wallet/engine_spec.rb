@@ -638,8 +638,8 @@ RSpec.describe BSV::Wallet::Engine do
       end
     end
 
-    context 'cascade cleanup' do
-      it 'deleting an action cascades to outputs and spendable entries' do
+    context 'RESTRICT cleanup' do
+      it 'raw delete of an action with outputs is blocked by RESTRICT FK (#189)' do
         create_result = engine.create_action(
           description: 'cascade test action',
           inputs: [],
@@ -650,18 +650,12 @@ RSpec.describe BSV::Wallet::Engine do
           ]
         )
 
-        # Send-path outputs are written with promoted: false; cascade cleanup
-        # should still find them via outputs.action_id.
         reference = create_result[:signable_transaction][:reference]
         action = store.find_action(reference: reference)
         expect(BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).count).to eq(1)
 
-        # Delete the action directly (simulating reaper)
-        BSV::Wallet::Store::Models::Action.where(id: action[:id]).delete
-
-        # Spendable entries are gone (cascade)
-        listed_after = engine.list_outputs(basket: 'cascade_test')
-        expect(listed_after[:total_outputs]).to eq(0)
+        expect { BSV::Wallet::Store::Models::Action.where(id: action[:id]).delete }
+          .to raise_error(Sequel::ForeignKeyConstraintViolation)
       end
     end
 

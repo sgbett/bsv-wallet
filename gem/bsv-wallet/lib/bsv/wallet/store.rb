@@ -169,14 +169,37 @@ module BSV
       end
 
       def abort_action(action_id:)
-        broadcast_exists = models::Broadcast.where(
-          Sequel[:broadcasts][:action_id] => Sequel[:actions][:id]
-        ).select(1)
-        models::Action.where(id: action_id).exclude(broadcast_exists.exists).delete
+        @db.transaction do
+          broadcast_exists = models::Broadcast.where(action_id: action_id).any?
+          return 0 if broadcast_exists
+
+          # outputs.action_id is RESTRICT (#189). The deferred-sign path
+          # writes outputs as promoted: false at stage_action time; aborting
+          # such an action must clear those rows first.
+          output_ids = models::Output.where(action_id: action_id).select_map(:id)
+          if output_ids.any?
+            models::OutputBasket.where(action_id: action_id).delete
+            models::OutputDetail.where(action_id: action_id).delete
+            models::OutputTag.where(output_id: output_ids).delete
+            models::Output.where(id: output_ids).delete
+          end
+          models::Action.where(id: action_id).delete
+        end
       end
 
       def fail_broadcast_action(action_id:)
         @db.transaction do
+          # outputs.action_id is RESTRICT (#189). Under #194 the only
+          # outputs reachable here are promoted: false send-path rows
+          # (Phase 4 hasn't fired). Clear their dependents, then the
+          # output rows, then the broadcast row, then the action.
+          output_ids = models::Output.where(action_id: action_id).select_map(:id)
+          if output_ids.any?
+            models::OutputBasket.where(action_id: action_id).delete
+            models::OutputDetail.where(action_id: action_id).delete
+            models::OutputTag.where(output_id: output_ids).delete
+            models::Output.where(id: output_ids).delete
+          end
           models::Broadcast.where(action_id: action_id).delete
           models::Action.where(id: action_id).delete
         end

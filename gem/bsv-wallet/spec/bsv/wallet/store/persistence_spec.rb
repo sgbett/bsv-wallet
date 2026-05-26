@@ -487,8 +487,84 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(output.reload.spendable?).to be true
     end
 
+    it 'deletes promoted: false outputs and their associations before the action' do
+      input_output = create_funded_output(satoshis: 1000)
+      result = store.create_action(
+        action: { description: 'to fail with outputs', nlocktime: 0 },
+        inputs: [{ output_id: input_output.id, vin: 0 }]
+      )
+      pending_outputs = [{
+        satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
+        derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+        sender_identity_key: 'self', basket: 'my-basket', tags: %w[urgent]
+      }]
+      change_outputs = [{
+        satoshis: 400, vout: 1, locking_script: SecureRandom.random_bytes(25),
+        derivation_prefix: SecureRandom.uuid, derivation_suffix: '2',
+        sender_identity_key: 'self'
+      }]
+      store.sign_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: pending_outputs, change_outputs: change_outputs
+      )
+
+      output_ids = BSV::Wallet::Store::Models::Output.where(action_id: result[:id]).select_map(:id)
+      expect(output_ids.length).to eq(2)
+      expect(BSV::Wallet::Store::Models::Output.where(id: output_ids, promoted: false).count).to eq(2)
+      expect(BSV::Wallet::Store::Models::OutputBasket.where(action_id: result[:id]).any?).to be true
+      expect(BSV::Wallet::Store::Models::OutputDetail.where(action_id: result[:id]).any?).to be true
+      expect(BSV::Wallet::Store::Models::OutputTag.where(output_id: output_ids).any?).to be true
+
+      store.fail_broadcast_action(action_id: result[:id])
+
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
+      expect(BSV::Wallet::Store::Models::Output.where(id: output_ids).any?).to be false
+      expect(BSV::Wallet::Store::Models::OutputBasket.where(action_id: result[:id]).any?).to be false
+      expect(BSV::Wallet::Store::Models::OutputDetail.where(action_id: result[:id]).any?).to be false
+      expect(BSV::Wallet::Store::Models::OutputTag.where(output_id: output_ids).any?).to be false
+      expect(input_output.reload.spendable?).to be true
+    end
+
     it 'is idempotent (no-op when neither row exists)' do
       expect { store.fail_broadcast_action(action_id: 999_999) }.not_to raise_error
+    end
+  end
+
+  describe 'outputs.action_id FK (RESTRICT)' do
+    it 'blocks deleting an action that has promoted outputs' do
+      result = store.create_action(action: { description: 'with outputs', nlocktime: 0 })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      store.promote_action(
+        action_id: result[:id],
+        outputs: [{
+          satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25),
+          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+          sender_identity_key: 'self'
+        }]
+      )
+
+      # Postgres aborts the whole tx on a FK violation; isolate the failing
+      # delete in its own savepoint so the surrounding shared_context tx
+      # stays usable for the post-condition assertion.
+      store.db.transaction(savepoint: true) do
+        expect { BSV::Wallet::Store::Models::Action.where(id: result[:id]).delete }
+          .to raise_error(Sequel::ForeignKeyConstraintViolation)
+        raise Sequel::Rollback
+      end
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
+    end
+
+    it 'rejects inserting an output with NULL action_id' do
+      expect do
+        BSV::Wallet::Store::Models::Output.create(
+          action_id: nil, satoshis: 100, vout: 0,
+          locking_script: SecureRandom.random_bytes(25),
+          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+          sender_identity_key: 'self'
+        )
+      end.to raise_error(Sequel::NotNullConstraintViolation)
     end
   end
 
