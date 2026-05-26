@@ -356,12 +356,12 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect(actions[:actions].first[:labels]).to include('wbikd')
     end
 
-    it 'creates a locking action with nosend status' do
+    it 'creates a locking action with internal status' do
       engine_with_keys.generate_receive_address
 
       actions = engine_with_keys.list_actions(labels: ['wbikd'])
       locking_action = actions[:actions].first
-      expect(locking_action[:status]).to eq(:nosend)
+      expect(locking_action[:status]).to eq(:internal)
     end
   end
 

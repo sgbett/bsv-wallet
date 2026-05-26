@@ -513,7 +513,7 @@ module BSV
 
       # List outstanding (pending) WBIKD receive addresses.
       #
-      # Queries actions with the 'wbikd' label, filters for :nosend status
+      # Queries actions with the 'wbikd' label, filters for :internal status
       # (active locks), and re-derives the P2PKH address from each slot's
       # source transaction ID and output index (on-chain data).
       #
@@ -524,7 +524,7 @@ module BSV
 
         result = list_actions(labels: ['wbikd'], include_inputs: true, limit: 10_000)
         result[:actions].filter_map do |action|
-          next unless action[:status] == :nosend
+          next unless action[:status] == :internal
 
           input = action[:inputs]&.first
           next unless input
