@@ -85,7 +85,7 @@ RSpec.describe BSV::Wallet::Engine do
       expect(proof[:raw_tx].bytesize).to be >= 10
     end
 
-    it 'creates a deferred signing action with outputs promoted immediately' do
+    it 'creates a deferred signing action with outputs queued for Phase 4' do
       result = engine.create_action(
         description: 'deferred action',
         inputs: [],
@@ -99,13 +99,20 @@ RSpec.describe BSV::Wallet::Engine do
       expect(result).to include(:signable_transaction)
       expect(result[:signable_transaction][:reference]).to be_a(String)
 
-      # Outputs are promoted during create_action, not deferred to sign_action
+      # Send-path outputs are persisted with promoted: false at stage time —
+      # they exist in the outputs table but aren't in the canonical UTXO set
+      # until Phase 4 (broadcast acceptance) flips promoted: true and inserts
+      # spendable rows. list_outputs is gated on spendable, so total is 0.
       listed = engine.list_outputs(basket: 'deferred')
-      expect(listed[:total_outputs]).to eq(1)
+      expect(listed[:total_outputs]).to eq(0)
 
-      # Unsigned raw_tx is stored on the action
       action = store.find_action(reference: result[:signable_transaction][:reference])
       expect(action[:raw_tx]).to be_a(String)
+
+      # The pending output row exists with promoted: false.
+      rows = BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).all
+      expect(rows.size).to eq(1)
+      expect(rows.first.promoted).to be(false)
     end
 
     it 'creates a no-send action' do
@@ -316,11 +323,15 @@ RSpec.describe BSV::Wallet::Engine do
 
       reference = create_result[:signable_transaction][:reference]
 
-      # Outputs are already in the database from create_action
+      # Send-path outputs aren't in the canonical UTXO set yet — they were
+      # written with promoted: false at stage time. Phase 4 (broadcast
+      # acceptance) is what flips them to promoted: true and inserts the
+      # spendable rows that list_outputs queries.
       listed_before = engine.list_outputs(basket: 'deferred_sign')
-      expect(listed_before[:total_outputs]).to eq(1)
+      expect(listed_before[:total_outputs]).to eq(0)
 
-      # Sign with empty spends (no inputs to sign)
+      # Sign with empty spends (no inputs to sign). no_send: true short-
+      # circuits broadcast — Phase 4 never runs, so outputs stay invisible.
       result = engine.sign_action(
         spends: {},
         reference: reference,
@@ -336,9 +347,69 @@ RSpec.describe BSV::Wallet::Engine do
       expect(parsed.outputs.length).to eq(1)
       expect(parsed.outputs[0].satoshis).to eq(500)
 
-      # Outputs remain after sign_action (not duplicated)
+      # Still no spendable rows — no broadcast acceptance was simulated.
       listed_after = engine.list_outputs(basket: 'deferred_sign')
-      expect(listed_after[:total_outputs]).to eq(1)
+      expect(listed_after[:total_outputs]).to eq(0)
+    end
+
+    it 'promotes outputs after broadcast acceptance on a deferred sign-then-broadcast flow' do
+      basket = 'deferred_promoted'
+      create_result = engine.create_action(
+        description: 'deferred to broadcast',
+        inputs: [],
+        sign_and_process: false,
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            output_description: 'output', basket: basket,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+            sender_identity_key: 'self' }
+        ]
+      )
+      reference = create_result[:signable_transaction][:reference]
+      action = store.find_action(reference: reference)
+
+      # Sign with no_send: false so the broadcasts row is created (but we
+      # don't actually call ARC — the daemon would). Simulate broadcast
+      # acceptance directly by invoking the Phase 4 store operation.
+      engine.sign_action(spends: {}, reference: reference, no_send: true)
+
+      # Outputs still pending — no Phase 4 yet.
+      expect(engine.list_outputs(basket: basket)[:total_outputs]).to eq(0)
+
+      # Simulate the daemon flipping promoted: true on broadcast acceptance.
+      promoted_ids = store.promote_action_outputs(action_id: action[:id])
+      expect(promoted_ids.size).to eq(1)
+
+      # The output is now in the canonical UTXO set.
+      listed = engine.list_outputs(basket: basket)
+      expect(listed[:total_outputs]).to eq(1)
+      expect(listed[:outputs].first[:satoshis]).to eq(500)
+    end
+
+    it 'builds a valid Atomic BEEF before broadcast acceptance (outputs still promoted: false)' do
+      # BEEF construction resolves *source* outputs of the new action's
+      # inputs (parent transactions), not the new action's own outputs.
+      # Even with the new action's outputs sitting at promoted: false,
+      # BEEF construction should produce a valid envelope.
+      basket = 'beef_before_phase4'
+      create_result = engine.create_action(
+        description: 'beef pre phase4',
+        inputs: [],
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            output_description: 'output', basket: basket,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+            sender_identity_key: 'self' }
+        ]
+      )
+
+      action = store.find_action(wtxid: create_result[:txid])
+      rows = BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).all
+      expect(rows.map(&:promoted)).to all(be(false))
+
+      parsed = parse_beef_tx(create_result[:tx])
+      expect(parsed.outputs.length).to eq(1)
+      expect(parsed.outputs[0].satoshis).to eq(500)
     end
   end
 
@@ -523,10 +594,10 @@ RSpec.describe BSV::Wallet::Engine do
       end
     end
 
-    context 'output promotion at create time' do
-      it 'writes outputs to the database during deferred create_action' do
+    context 'output persistence at stage time' do
+      it 'writes outputs with promoted: false during deferred create_action' do
         binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
-        engine.create_action(
+        create_result = engine.create_action(
           description: 'deferred promo',
           inputs: [],
           sign_and_process: false,
@@ -536,10 +607,17 @@ RSpec.describe BSV::Wallet::Engine do
           ]
         )
 
-        # Outputs are in the database immediately after create_action
+        # Send-path outputs are pending Phase 4 — written but not in the
+        # canonical UTXO set, so list_outputs returns nothing.
         listed = engine.list_outputs(basket: 'deferred_test')
-        expect(listed[:total_outputs]).to eq(1)
-        expect(listed[:outputs].first[:satoshis]).to eq(500)
+        expect(listed[:total_outputs]).to eq(0)
+
+        # The output row itself exists with promoted: false.
+        action = store.find_action(reference: create_result[:signable_transaction][:reference])
+        rows = BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).all
+        expect(rows.size).to eq(1)
+        expect(rows.first.satoshis).to eq(500)
+        expect(rows.first.promoted).to be(false)
       end
 
       it 'stores unsigned raw_tx on the action' do
@@ -561,7 +639,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     context 'cascade cleanup' do
-      it 'deleting an action cascades to spendable entries' do
+      it 'deleting an action cascades to outputs and spendable entries' do
         create_result = engine.create_action(
           description: 'cascade test action',
           inputs: [],
@@ -572,13 +650,11 @@ RSpec.describe BSV::Wallet::Engine do
           ]
         )
 
-        # Outputs and spendable entries exist
-        listed = engine.list_outputs(basket: 'cascade_test')
-        expect(listed[:total_outputs]).to eq(1)
-
-        # Abort (delete) the action
+        # Send-path outputs are written with promoted: false; cascade cleanup
+        # should still find them via outputs.action_id.
         reference = create_result[:signable_transaction][:reference]
         action = store.find_action(reference: reference)
+        expect(BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).count).to eq(1)
 
         # Delete the action directly (simulating reaper)
         BSV::Wallet::Store::Models::Action.where(id: action[:id]).delete

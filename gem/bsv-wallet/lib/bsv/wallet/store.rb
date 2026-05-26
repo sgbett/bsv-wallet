@@ -81,7 +81,7 @@ module BSV
         end
       end
 
-      def sign_action(action_id:, wtxid:, raw_tx:, change_outputs: [])
+      def sign_action(action_id:, wtxid:, raw_tx:, outputs: [], change_outputs: [])
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'sign_action wtxid')
         BSV.logger&.debug { "[Store] sign_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
         @db.transaction do
@@ -90,18 +90,32 @@ module BSV
           intent = models::Action.where(id: action_id).get(:broadcast)
           models::Broadcast.dataset.insert_conflict(target: :action_id).insert(action_id: action_id) if intent && intent != 'none'
 
-          write_change_outputs(action_id: action_id, change_outputs: change_outputs)
+          # Send-path outputs written with promoted: false. spendable rows
+          # deferred until Phase 4 (broadcast acceptance). Internal-path
+          # callers pass an empty outputs array and reach the canonical UTXO
+          # set via promote_action; change_outputs follow the same lifecycle
+          # as the action's broadcast intent.
+          write_pending_outputs(action_id: action_id, outputs: outputs)
+          write_change_outputs(action_id: action_id, change_outputs: change_outputs, internal: intent == 'none')
         end
       end
 
-      def stage_action(action_id:, wtxid:, raw_tx:)
+      def stage_action(action_id:, wtxid:, raw_tx:, outputs: [])
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'stage_action wtxid')
         BSV.logger&.debug { "[Store] stage_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
         @db.transaction do
           write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
+          # Deferred-path outputs persisted with promoted: false. The BRC-100
+          # signAction call later updates raw_tx + wtxid but doesn't reach
+          # the outputs again; their metadata must live in the row from now on.
+          write_pending_outputs(action_id: action_id, outputs: outputs)
         end
       end
 
+      # Internal-path Phase 4: write outputs as already promoted, insert
+      # spendable rows in the same transaction. Used by incoming actions
+      # (internalize_action, import_utxo, wbikd) where broadcast == 'none'
+      # — outputs join the canonical UTXO set immediately.
       def promote_action(action_id:, outputs:)
         @db.transaction do
           outputs.map do |out|
@@ -113,33 +127,40 @@ module BSV
               output_type: out[:output_type],
               derivation_prefix: out[:derivation_prefix],
               derivation_suffix: out[:derivation_suffix],
-              sender_identity_key: out[:sender_identity_key]
+              sender_identity_key: out[:sender_identity_key],
+              promoted: true
             )
 
             wallet_owned = out[:derivation_prefix] || out[:output_type] == 'root'
             models::Spendable.create(output_id: output.id, action_id: action_id) if wallet_owned
 
-            if out[:basket] && out[:basket] != 'default'
-              basket_id = find_or_create_basket(name: out[:basket])
-              models::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: action_id)
-            end
-
-            if out[:description] || out[:custom_instructions]
-              models::OutputDetail.create(
-                output_id: output.id,
-                action_id: action_id,
-                description: out[:description],
-                custom_instructions: out[:custom_instructions]
-              )
-            end
-
-            if out[:tags]&.any?
-              tag_ids = find_or_create_tags(names: out[:tags])
-              tag_ids.each { |tid| models::OutputTag.create(output_id: output.id, tag_id: tid) }
-            end
+            write_output_associations(output: output, action_id: action_id, spec: out)
 
             output.id
           end
+        end
+      end
+
+      # Send-path Phase 4: flip promoted flag on existing output rows and
+      # insert spendable rows for wallet-owned outputs. Idempotent — a
+      # second invocation finds already-promoted rows and is a no-op.
+      # Called when broadcast is accepted (inline or via the daemon).
+      def promote_action_outputs(action_id:)
+        @db.transaction do
+          unpromoted = models::Output.where(action_id: action_id, promoted: false).all
+          return [] if unpromoted.empty?
+
+          unpromoted.each do |output|
+            output.update(promoted: true)
+
+            wallet_owned = output.derivation_prefix || output.output_type == 'root' || change_output?(output_id: output.id)
+            next unless wallet_owned
+
+            existing = models::Spendable.where(output_id: output.id).any?
+            models::Spendable.create(output_id: output.id, action_id: action_id) unless existing
+          end
+
+          unpromoted.map(&:id)
         end
       end
 
@@ -643,7 +664,12 @@ module BSV
 
       # Write change output rows (and their detail rows) for an action.
       # Caller is responsible for wrapping in a transaction.
-      def write_change_outputs(action_id:, change_outputs:)
+      #
+      # +internal: true+ writes outputs as +promoted: true+ for internal-path
+      # actions (broadcast 'none') where Phase 4 is synchronous. +internal:
+      # false+ writes +promoted: false+ for send-path actions awaiting
+      # broadcast acceptance.
+      def write_change_outputs(action_id:, change_outputs:, internal: false)
         change_outputs.each do |chg|
           output = models::Output.create(
             action_id: action_id,
@@ -652,7 +678,8 @@ module BSV
             locking_script: chg[:locking_script],
             derivation_prefix: chg[:derivation_prefix],
             derivation_suffix: chg[:derivation_suffix],
-            sender_identity_key: chg[:sender_identity_key]
+            sender_identity_key: chg[:sender_identity_key],
+            promoted: internal
           )
           models::OutputDetail.create(
             output_id: output.id,
@@ -660,6 +687,55 @@ module BSV
             change: true
           )
         end
+      end
+
+      # Write send-path output rows as promoted: false. Spendable rows are
+      # deferred until Phase 4 (broadcast acceptance). Caller is responsible
+      # for wrapping in a transaction.
+      def write_pending_outputs(action_id:, outputs:)
+        outputs.each do |out|
+          output = models::Output.create(
+            action_id: action_id,
+            satoshis: out[:satoshis],
+            vout: out[:vout],
+            locking_script: out[:locking_script],
+            output_type: out[:output_type],
+            derivation_prefix: out[:derivation_prefix],
+            derivation_suffix: out[:derivation_suffix],
+            sender_identity_key: out[:sender_identity_key],
+            promoted: false
+          )
+          write_output_associations(output: output, action_id: action_id, spec: out)
+        end
+      end
+
+      # Write basket / detail / tag rows for an output. Caller is responsible
+      # for wrapping in a transaction. The spendable row is not handled here —
+      # callers decide when an output joins the canonical UTXO set.
+      def write_output_associations(output:, action_id:, spec:)
+        if spec[:basket] && spec[:basket] != 'default'
+          basket_id = find_or_create_basket(name: spec[:basket])
+          models::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: action_id)
+        end
+
+        if spec[:description] || spec[:custom_instructions]
+          models::OutputDetail.create(
+            output_id: output.id,
+            action_id: action_id,
+            description: spec[:description],
+            custom_instructions: spec[:custom_instructions]
+          )
+        end
+
+        return unless spec[:tags]&.any?
+
+        tag_ids = find_or_create_tags(names: spec[:tags])
+        tag_ids.each { |tid| models::OutputTag.create(output_id: output.id, tag_id: tid) }
+      end
+
+      # True when the output is a change output (has a change=true detail row).
+      def change_output?(output_id:)
+        models::OutputDetail.where(output_id: output_id, change: true).any?
       end
 
       # Convert a value to binary. If already binary-encoded, return as-is;

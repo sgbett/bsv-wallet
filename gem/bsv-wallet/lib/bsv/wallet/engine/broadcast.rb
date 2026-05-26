@@ -133,6 +133,11 @@ module BSV
               extra_info: data[:extra_info],
               competing_txs: data[:competing_txs]
             )
+            # Phase 4: ARC accepted the broadcast. Flip the action's outputs
+            # from promoted: false to true and insert their spendable rows.
+            # Idempotent — already-promoted outputs are skipped, so a re-poll
+            # on an action accepted earlier is safe.
+            @store.promote_action_outputs(action_id: action_id) if ACCEPTED_STATUSES.include?(data[:tx_status].to_s.upcase)
             BSV::Wallet.emit('task.succeeded',
                              task: 'broadcast_push', id: action_id,
                              latency_ms: latency_ms,
@@ -199,6 +204,10 @@ module BSV
               extra_info: data[:extra_info],
               competing_txs: data[:competing_txs]
             )
+            # Phase 4: poll observed an accepted status (the crash-recovery
+            # case where submit returned before recording, or a re-poll on
+            # an action already accepted). Idempotent via the promoted flag.
+            @store.promote_action_outputs(action_id: action_id) if ACCEPTED_STATUSES.include?(data[:tx_status].to_s.upcase)
             BSV::Wallet.emit('task.succeeded',
                              task: 'broadcast_push', id: action_id,
                              latency_ms: latency_ms,

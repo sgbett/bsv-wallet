@@ -32,7 +32,12 @@ module BSV
             return :unsigned   if wtxid.nil?
             return :completed  if tx_proof_id
             return :nosend     if values[:broadcast] == 'none'
-            return :unproven   unless outputs_dataset.empty?
+            # Send-path outputs are persisted at sign time with promoted: false
+            # (#194). Only outputs flipped to promoted: true at Phase 4 mean
+            # the broadcast was accepted — the :unproven gate. #195 will
+            # rename this status; until then, the predicate matches the new
+            # semantics.
+            return :unproven   if outputs_dataset.where(promoted: true).any?
             return :failed     if broadcast_entry&.tx_status == 'REJECTED'
             return :sending    if broadcast_entry
 
