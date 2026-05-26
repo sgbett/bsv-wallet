@@ -73,8 +73,8 @@ module BSV
       def create_action(description:, input_beef: nil, inputs: nil, outputs: nil,
                         lock_time: nil, version: nil, labels: nil,
                         sign_and_process: true, accept_delayed_broadcast: true,
-                        trust_self: nil, known_txids: nil, return_txid_only: false,
-                        no_send: false, no_send_change: nil, send_with: nil,
+                        trust_self: nil, return_txid_only: false,
+                        no_send: false,
                         randomize_outputs: true, originator: nil)
         validate_description!(description)
         validate_create_action_params!(inputs: inputs, outputs: outputs)
@@ -95,7 +95,7 @@ module BSV
             lock_time: lock_time, version: version,
             broadcast: determine_broadcast(no_send, accept_delayed_broadcast),
             labels: labels, randomize_outputs: randomize_outputs,
-            no_send: no_send, send_with: send_with,
+            no_send: no_send,
             return_txid_only: return_txid_only
           )
         end
@@ -154,9 +154,7 @@ module BSV
         if no_send
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           change = query_change_outpoints(action_result[:id])
-          result = { txid: wtxid, tx: atomic_beef, no_send_change: change }
-          result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-          return result
+          return { txid: wtxid, tx: atomic_beef, no_send_change: change }
         end
 
         # Phase 3 + 4: Broadcast inline (delayed broadcasts are picked up by
@@ -170,13 +168,11 @@ module BSV
           end
         end
 
-        result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
-        result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-        result
+        { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
 
       def sign_action(spends:, reference:, accept_delayed_broadcast: true,
-                      return_txid_only: false, no_send: false, send_with: nil,
+                      return_txid_only: false, no_send: false,
                       originator: nil)
         validate_reference!(reference)
         action = @store.find_action(reference: reference)
@@ -194,20 +190,14 @@ module BSV
 
         broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
 
-        if no_send
-          result = { txid: wtxid, tx: atomic_beef }
-          result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-          return result
-        end
+        return { txid: wtxid, tx: atomic_beef } if no_send
 
         if broadcast == :inline
           broadcast_result = inline_broadcast(action_id: action[:id], raw_tx: raw_tx)
           handle_proof_from_broadcast(action[:id], broadcast_result) if accepted?(broadcast_result)
         end
 
-        result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
-        result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-        result
+        { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
 
       def abort_action(reference:, originator: nil)
@@ -1022,33 +1012,6 @@ module BSV
         BSV.logger&.debug { "[Engine] proof_from_broadcast: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{broadcast_result[:block_height]}" }
       end
 
-      # Broadcast companion transactions listed in send_with.
-      #
-      # Companion actions arrive signed-but-unbroadcast: their broadcasts
-      # row already exists (from their own sign_action). BRC-100's
-      # sendWith contract is synchronous, so we drive the inline path
-      # for each companion regardless of its own broadcast disposition.
-      #
-      # @param send_with [Array<String>] wtxids (wire order) of companion transactions
-      # @return [Array<Hash>] :txid (wire-order wtxid, BRC-100 key name), :status
-      def process_send_with(send_with)
-        return unless send_with
-
-        send_with.filter_map do |sw_wtxid|
-          BSV::Primitives::Hex.validate_wtxid!(sw_wtxid, name: 'send_with entry')
-          sw_action = @store.find_action(wtxid: sw_wtxid)
-          BSV.logger&.debug { "[Engine] process_send_with: dtxid=#{sw_wtxid.reverse.unpack1('H*')} found=#{!sw_action.nil?}" }
-          next unless sw_action
-
-          br = inline_broadcast(
-            action_id: sw_action[:id],
-            raw_tx: sw_action[:raw_tx] || ''.b
-          )
-          status = br&.dig(:tx_status)&.downcase&.tr('_', ' ')&.to_sym || :sending
-          { txid: sw_wtxid, status: status }
-        end
-      end
-
       def query_change_outpoints(action_id)
         action = @store.find_action(id: action_id)
         return [] unless action&.dig(:wtxid)
@@ -1734,7 +1697,7 @@ module BSV
       # @return [Hash] same shape as create_action's return value
       def auto_fund_action(description:, outputs:, lock_time:, version:,
                            broadcast:, labels:, randomize_outputs:,
-                           no_send:, send_with:, return_txid_only:)
+                           no_send:, return_txid_only:)
         # Estimate satoshis needed (outputs + conservative fee margin).
         # Assumes 1 input for the estimate — if the pool returns multiple
         # UTXOs, each extra input adds ~15 sats of fee but contributes its
@@ -1790,9 +1753,7 @@ module BSV
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           @store.promote_change_to_spendable(action_id: action_result[:id])
           change = query_change_outpoints(action_result[:id])
-          result = { txid: wtxid, tx: atomic_beef, no_send_change: change }
-          result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-          return result
+          return { txid: wtxid, tx: atomic_beef, no_send_change: change }
         end
 
         # Phase 3 + 4: Broadcast inline (change output rows already written
@@ -1807,9 +1768,7 @@ module BSV
           end
         end
 
-        result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
-        result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-        result
+        { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
 
       # Build a funded transaction with SDK fee computation and change.
