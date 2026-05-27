@@ -49,7 +49,7 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
 
     it 'has one broadcast_entry' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0)
-      broadcast = BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+      broadcast = BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed')
       expect(action.reload.broadcast_entry).to eq(broadcast)
     end
 
@@ -100,13 +100,13 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
 
     it 'returns :failed when broadcast status is REJECTED' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, tx_status: 'REJECTED')
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed', tx_status: 'REJECTED')
       expect(action.reload.derived_status).to eq(:failed)
     end
 
     it 'returns :sending when broadcast exists but no outputs' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed', tx_status: 'SEEN_ON_NETWORK')
       expect(action.reload.derived_status).to eq(:sending)
     end
 

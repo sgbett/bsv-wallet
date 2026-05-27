@@ -91,7 +91,14 @@ module BSV
           write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
 
           intent = models::Action.where(id: action_id).get(:broadcast_intent)
-          models::Broadcast.dataset.insert_conflict(target: :action_id).insert(action_id: action_id) if intent && intent != 'none'
+          # broadcasts.(action_id, intent) → actions(id, broadcast_intent) composite FK +
+          # CHECK intent != 'none' (#198/#221) — the intent column lets the FK tie
+          # the broadcast row to its parent action's intent atomically.
+          if intent && intent != 'none'
+            models::Broadcast.dataset.insert_conflict(target: :action_id).insert(
+              action_id: action_id, intent: intent
+            )
+          end
 
           # Send-path outputs written with promoted: false. spendable rows
           # deferred until Phase 4 (broadcast acceptance). Internal-path

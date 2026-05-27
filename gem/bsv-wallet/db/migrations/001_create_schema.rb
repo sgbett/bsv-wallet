@@ -93,11 +93,15 @@ Sequel.migration do
     create_table(:broadcasts) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
-      foreign_key :action_id, :actions, type: :bigint, null: false, unique: true
+      column :action_id, :bigint, null: false
       column :broadcast_at, c[:timestamptz]
       column :callback_token, :text
       column :arc_status, :integer
       column :tx_status, c[:tx_status]
+      # Composite FK to actions(id, broadcast_intent) + CHECK intent != 'none'
+      # (#198/#221) keeps broadcasts.intent in sync with the parent action's
+      # intent and forbids broadcast rows for internal-path actions.
+      column :intent, c[:broadcast_intent], null: false
       column :block_hash, c[:bytea]
       column :block_height, :integer
       column :merkle_path, c[:bytea]
@@ -105,6 +109,10 @@ Sequel.migration do
       column :competing_txs, postgres ? 'text[]' : :text
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
+
+      unique :action_id
+      foreign_key %i[action_id intent], :actions, key: %i[id broadcast_intent]
+      constraint(:intent_not_none, "intent != 'none'")
     end
 
     # 5. baskets — output grouping with replenishment policy

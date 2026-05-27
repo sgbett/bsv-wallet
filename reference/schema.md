@@ -183,11 +183,12 @@ When ARC reports MINED with a `merklePath`, the broadcast handler creates a `tx_
 | col | type | attributes |
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| action_id | bigint | NOT NULL REFERENCES actions (id) UNIQUE |
+| action_id | bigint | NOT NULL |
 | broadcast_at | timestamptz | |
 | callback_token | text | |
 | arc_status | integer | |
 | tx_status | tx_status | |
+| intent | broadcast_intent | NOT NULL |
 | block_hash | bytea | |
 | block_height | integer | |
 | merkle_path | bytea | |
@@ -198,8 +199,12 @@ When ARC reports MINED with a `merklePath`, the broadcast handler creates a `tx_
 
 **Constraints:**
 - `UNIQUE (action_id)` — one broadcast record per action
+- `FOREIGN KEY (action_id, intent) REFERENCES actions (id, broadcast_intent)` — composite FK ties the broadcast row to its parent action's intent atomically
+- `CHECK intent != 'none'` — actions with `broadcast_intent = 'none'` are internal-path and cannot have a broadcast row
 - `CHECK block_hash IS NULL OR length(block_hash) = 32`
 - `CHECK block_height IS NULL OR block_height >= 0`
+
+**`intent` column:** Duplicates `actions.broadcast_intent` for the composite FK target. The pair `(intent != 'none', composite FK)` is the trigger-free equivalent of "an action with `broadcast_intent = 'none'` cannot have a broadcasts row" (#198/#221) — chosen over a trigger to avoid per-row procedural overhead at high throughput.
 
 **`callback_token`:** Wallet-generated opaque string sent to ARC in the `X-CallbackToken` header at submission time. ARC's `/events` SSE endpoint echoes the token on each status event — the listener uses it to look up the originating broadcast row without round-tripping a txid lookup. Nullable: rows broadcast before the SSE listener landed have none.
 
