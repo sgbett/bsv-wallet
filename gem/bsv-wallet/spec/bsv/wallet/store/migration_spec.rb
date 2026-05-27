@@ -40,6 +40,15 @@ RSpec.describe 'Schema migration', :store do
         end
       end.to raise_error(Sequel::DatabaseError)
     end
+
+    it 'rejects invalid tx_status values' do
+      action_id = insert_action(description: 'test action 12345')
+      expect do
+        db.transaction(savepoint: true) do
+          db[:broadcasts].insert(action_id: action_id, intent: 'delayed', tx_status: 'BOGUS')
+        end
+      end.to raise_error(Sequel::DatabaseError)
+    end
   end
 
   describe 'enums', :postgres do
@@ -55,6 +64,20 @@ RSpec.describe 'Schema migration', :store do
         Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'output_type'")
       ).select_map(:enumlabel)
       expect(values).to eq(%w[root outbound])
+    end
+
+    # ARC's metamorph Status enum + IMMUTABLE (wallet's TERMINAL_STATUSES).
+    # See #198/#220 — the canonical source is ARC's metamorph_api.proto.
+    it 'tx_status has the correct values' do
+      values = db.from(
+        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'tx_status'")
+      ).select_map(:enumlabel)
+      expect(values).to eq(%w[
+        UNKNOWN QUEUED RECEIVED STORED
+        ANNOUNCED_TO_NETWORK REQUESTED_BY_NETWORK SENT_TO_NETWORK
+        ACCEPTED_BY_NETWORK SEEN_IN_ORPHAN_MEMPOOL SEEN_ON_NETWORK
+        DOUBLE_SPEND_ATTEMPTED REJECTED MINED_IN_STALE_BLOCK MINED IMMUTABLE
+      ])
     end
   end
 

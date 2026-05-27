@@ -950,7 +950,13 @@ RSpec.describe BSV::Wallet::Store, :store do
       # path_requires_block CHECK: a merkle_path without block context is
       # unverifiable (no root to check against). Without merkle_root,
       # find_or_create_block returns nil — the DB rejects the insert.
-      proof_without_root = proof_data.except(:merkle_root, :block_hash)
+      #
+      # Use a deterministic, unparseable merkle_path so this test can't
+      # flake on the astronomically-rare chance that random 64 bytes
+      # decode as a valid BUMP and let find_or_create_block derive a root.
+      proof_without_root = proof_data
+                           .except(:merkle_root, :block_hash)
+                           .merge(merkle_path: "\x00".b)
       expect { store.save_proof(wtxid: wtxid, proof: proof_without_root) }
         .to raise_error(Sequel::CheckConstraintViolation)
     end
