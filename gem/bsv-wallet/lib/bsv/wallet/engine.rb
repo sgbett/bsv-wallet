@@ -121,6 +121,16 @@ module BSV
         deferred = !sign_and_process ||
                    inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
 
+        # Internal-path deferred signing (no_send: true + sign_and_process:
+        # false, or inputs with unlocking_script_length placeholders) is
+        # not implemented in the base wallet — the internal-action Phase 4
+        # currently runs synchronously during create_action, which deferred
+        # signing cannot reach. Tracked in #192.
+        if no_send && deferred
+          raise BSV::Wallet::UnsupportedActionError,
+                'createAction(no_send: true) combined with deferred signing is not implemented in the base wallet; tracked in #192.'
+        end
+
         # Phase 2: Build transaction (sign unless deferred)
         wtxid, raw_tx, vout_mapping = build_transaction(
           action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,

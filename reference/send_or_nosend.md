@@ -1,12 +1,15 @@
 # send / noSend: batching and chained-send workflows
 
-> **Status note (May 2026):** HLR #183 stripped the BRC-100 `noSend` /
-> `noSendChange` / `sendWith` / `knownTxids` primitives from the base
-> wallet's public API. The wallet retains the `'none'` value of the
-> `broadcast_intent` enum, but only for **internal** non-network actions
+> **Status note (May 2026):** HLR #183 removed the BRC-100 chained-send
+> primitives (`noSendChange` / `sendWith` / `knownTxids`) from the base
+> wallet's public API and deleted `Engine#process_send_with`. The
+> `noSend` parameter is retained but its semantics are restricted: under
+> #183 it marks an action as an **internal** non-network action
 > (incoming BEEF, imported root UTXOs, wbikd locks, `send_payment`
-> returning BEEF). The chained-send subsystem that this document
-> describes will be reintroduced under issue
+> returning BEEF) and the wallet promotes outputs synchronously rather
+> than parking them for a later `sendWith` flush. The full chained-send
+> / batching workflow this document describes will be reintroduced
+> under issue
 > [#192](https://github.com/sgbett/bsv-wallet/issues/192) as a separate,
 > persistent-batch-aware feature. Read this document as a description
 > of "what the wallet *will* eventually support," not "what the wallet
@@ -200,14 +203,15 @@ supports multi-transaction graphs:
 ## State in this codebase
 
 > The detail below describes the pre-#183 state. After HLR #183 the base
-> wallet no longer exposes `no_send`, `no_send_change`, `send_with`, or
+> wallet no longer exposes `no_send_change`, `send_with`, or
 > `known_txids` on the public BRC-100 surface, and the
-> `Engine#process_send_with` helper has been removed. The
-> `broadcast_intent` enum still has a `'none'` value, but it now marks
-> internal non-network actions only (see `reference/schema.md` and
-> `reference/schema-intent.md`). The `Action#derived_status` for those
-> actions is `:internal`, not `:nosend`. The notes below are kept as
-> the design study that will inform issue #192.
+> `Engine#process_send_with` helper has been removed. The `no_send`
+> parameter is retained but its semantics narrowed: it now marks an
+> action as a synchronous internal non-network action rather than a
+> parked candidate for `sendWith` (see `reference/schema.md`). The
+> `Action#derived_status` for those actions is `:internal`, not
+> `:nosend`. The notes below are kept as the design study that will
+> inform issue #192.
 
 The pre-#183 Ruby implementation (`gem/bsv-wallet`) covered the primitives
 but not the persistent batch:

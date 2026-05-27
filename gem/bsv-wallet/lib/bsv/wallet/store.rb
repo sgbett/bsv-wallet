@@ -200,10 +200,21 @@ module BSV
 
       def fail_broadcast_action(action_id:)
         @db.transaction do
-          # outputs.action_id is RESTRICT (#189). Under #194 the only
-          # outputs reachable here are promoted: false send-path rows
-          # (Phase 4 hasn't fired). Clear their dependents, then the
-          # output rows, then the broadcast row, then the action.
+          # Refuse if any output is promoted: true. Under #194 the only
+          # reachable outputs for a terminal-broadcast cleanup are
+          # promoted: false send-path rows (Phase 4 hasn't fired). But
+          # defensively guard against a race where an accepted callback
+          # has already promoted while a stale failure event is being
+          # processed — destroying promoted outbound rows would damage
+          # canonical history. Mirrors abort_action's invariant.
+          if models::Output.where(action_id: action_id, promoted: true).any?
+            raise BSV::Wallet::CannotAbortPromotedActionError,
+                  "action_id=#{action_id} has promoted outputs; fail_broadcast_action refused"
+          end
+
+          # outputs.action_id is RESTRICT (#189). Clear unpromoted output
+          # rows and their dependents, then the broadcast row, then the
+          # action.
           output_ids = models::Output.where(action_id: action_id).select_map(:id)
           if output_ids.any?
             models::OutputBasket.where(action_id: action_id).delete

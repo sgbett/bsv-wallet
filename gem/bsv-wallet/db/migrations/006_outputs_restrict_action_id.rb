@@ -22,6 +22,18 @@ Sequel.migration do
     orphan_count = from(:outputs).where(action_id: nil).count
     if orphan_count.positive?
       BSV.logger&.warn { "[migration 006] deleting #{orphan_count} orphan output row(s) with action_id IS NULL" }
+      # Output dependents (output_baskets, output_details, output_tags,
+      # spendable) reference outputs.id but were never re-pointed when the
+      # SET NULL semantics severed outputs.action_id, so legacy orphans may
+      # still carry tags / details / baskets / spendable rows that block
+      # the FK-RESTRICT delete below. Clear those first so the migration
+      # can run on wallets that previously held tagged orphan outputs.
+      orphan_ids = from(:outputs).where(action_id: nil).select(:id)
+      from(:inputs).where(output_id: orphan_ids).delete
+      from(:output_tags).where(output_id: orphan_ids).delete
+      from(:output_baskets).where(output_id: orphan_ids).delete
+      from(:output_details).where(output_id: orphan_ids).delete
+      from(:spendable).where(output_id: orphan_ids).delete
       from(:outputs).where(action_id: nil).delete
     end
 
