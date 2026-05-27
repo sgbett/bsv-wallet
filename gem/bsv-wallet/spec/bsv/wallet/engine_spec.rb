@@ -653,8 +653,11 @@ RSpec.describe BSV::Wallet::Engine do
         action = store.find_action(reference: reference)
         expect(BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).count).to eq(1)
 
+        # Match the base Sequel::DatabaseError + message: Postgres 18 reports
+        # RESTRICT violations with SQLSTATE 23001 (PG::RestrictViolation),
+        # which Sequel doesn't map to ForeignKeyConstraintViolation.
         expect { BSV::Wallet::Store::Models::Action.where(id: action[:id]).delete }
-          .to raise_error(Sequel::ForeignKeyConstraintViolation)
+          .to raise_error(Sequel::DatabaseError, /foreign key/i)
       end
     end
 
