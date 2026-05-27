@@ -11,7 +11,7 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
       action = described_class.create(outgoing: false, description: 'test action')
       expect(action.id).to be_a(Integer)
       expect(action.reference).to be_a(String)
-      expect(action.values[:broadcast]).to eq('delayed')
+      expect(action.values[:broadcast_intent]).to eq('delayed')
       expect(action.nlocktime).to be_nil
     end
 
@@ -88,7 +88,7 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
     end
 
     it 'returns :internal when broadcast is none' do
-      action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx, broadcast: 'none')
+      action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx, broadcast_intent: 'none')
       expect(action.derived_status).to eq(:internal)
     end
 

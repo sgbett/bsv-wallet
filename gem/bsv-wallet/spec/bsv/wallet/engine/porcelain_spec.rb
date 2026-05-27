@@ -24,7 +24,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     script = p2pkh_locking_script_for(derived_key)
 
     source_action = store.create_action(
-      action: { description: 'funding source', broadcast: :none, outgoing: false }
+      action: { description: 'funding source', broadcast_intent: :none, outgoing: false }
     )
     source_wtxid = SecureRandom.random_bytes(32)
     store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: dummy_raw_tx)
@@ -395,7 +395,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         )
         script = p2pkh_locking_script_for(derived_key)
         source_action = store.create_action(
-          action: { description: 'topup funding', broadcast: :none, outgoing: false }
+          action: { description: 'topup funding', broadcast_intent: :none, outgoing: false }
         )
         store.sign_action(action_id: source_action[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: dummy_raw_tx)
         store.promote_action(

@@ -23,7 +23,7 @@ RSpec.describe BSV::Wallet::Engine do
   describe 'wtxid validation' do
     it 'Store#sign_action rejects display-order hex as wtxid' do
       action = store.create_action(
-        action: { description: 'validation test', broadcast: :none, outgoing: false }
+        action: { description: 'validation test', broadcast_intent: :none, outgoing: false }
       )
       hex_dtxid = 'a' * 64 # 64-char hex string, not 32-byte binary
       expect do
@@ -372,7 +372,7 @@ RSpec.describe BSV::Wallet::Engine do
 
       # Sign with default broadcast intent (delayed). store.sign_action
       # creates the broadcasts row; the engine returns without invoking
-      # ARC because broadcast: :delayed defers to the daemon. The test
+      # ARC because broadcast_intent: :delayed defers to the daemon. The test
       # then simulates the daemon's Phase 4 trigger directly.
       engine.sign_action(spends: {}, reference: reference)
 
@@ -443,7 +443,7 @@ RSpec.describe BSV::Wallet::Engine do
 
       # Create a source action with a wtxid (needed for input resolution)
       source_action = store.create_action(
-        action: { description: 'funding source', broadcast: :none, outgoing: false }
+        action: { description: 'funding source', broadcast_intent: :none, outgoing: false }
       )
       # Set a real wtxid on the source action
       source_wtxid = SecureRandom.random_bytes(32)
@@ -2274,7 +2274,7 @@ RSpec.describe BSV::Wallet::Engine do
       script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
 
       source = store.create_action(
-        action: { description: 'gc funding', broadcast: :none, outgoing: false }
+        action: { description: 'gc funding', broadcast_intent: :none, outgoing: false }
       )
       store.sign_action(action_id: source[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: DUMMY_RAW_TX)
       store.promote_action(
@@ -2290,7 +2290,7 @@ RSpec.describe BSV::Wallet::Engine do
                          .where(action_id: source[:id]).first.id
 
       action = store.create_action(
-        action: { description: 'gc target', broadcast: :none, outgoing: true, nlocktime: 0 },
+        action: { description: 'gc target', broadcast_intent: :none, outgoing: true, nlocktime: 0 },
         inputs: [{ output_id: funded_output_id, vin: 0 }]
       )
       action[:id]

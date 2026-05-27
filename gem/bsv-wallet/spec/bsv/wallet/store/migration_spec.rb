@@ -20,10 +20,10 @@ RSpec.describe 'Schema migration', :store do
   end
 
   describe 'value restrictions', :postgres do
-    it 'rejects invalid broadcast values' do
+    it 'rejects invalid broadcast_intent values' do
       expect do
         db.transaction(savepoint: true) do
-          db[:actions].insert(description: 'test action 12345', outgoing: true, nlocktime: 0, reference: SecureRandom.uuid, broadcast: 'bogus')
+          db[:actions].insert(description: 'test action 12345', outgoing: true, nlocktime: 0, reference: SecureRandom.uuid, broadcast_intent: 'bogus')
         end
       end.to raise_error(Sequel::DatabaseError)
     end
@@ -144,7 +144,7 @@ RSpec.describe 'Schema migration', :store do
     it 'defaults broadcast to delayed' do
       action_id = insert_action(description: 'broadcast test 1')
       row = db[:actions].where(id: action_id).first
-      expect(row[:broadcast]).to eq('delayed')
+      expect(row[:broadcast_intent]).to eq('delayed')
     end
   end
 end

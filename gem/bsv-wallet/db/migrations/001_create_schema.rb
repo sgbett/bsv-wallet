@@ -62,14 +62,18 @@ Sequel.migration do
       column :description, :text
       column :version, :integer
       column :nlocktime, :bigint
-      column :broadcast, c[:broadcast_intent], null: false, default: 'delayed'
+      column :broadcast_intent, c[:broadcast_intent], null: false, default: 'delayed'
       column :raw_tx, c[:bytea]
       column :input_beef, c[:bytea]
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       index :wtxid, unique: true, where: Sequel.lit('wtxid IS NOT NULL')
-      index :broadcast
+      index :broadcast_intent
+
+      # Composite FK target: broadcasts(action_id, intent) → actions(id, broadcast_intent)
+      # makes broadcasts.intent track actions.broadcast_intent atomically (#221).
+      unique %i[id broadcast_intent]
     end
 
     # 4. broadcasts — ARC lifecycle

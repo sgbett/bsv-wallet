@@ -15,7 +15,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     script = BSV::Script::Script.p2pkh_lock(
       BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
     )
-    source = store.create_action(action: { description: 'limp funding', broadcast: :none, outgoing: false })
+    source = store.create_action(action: { description: 'limp funding', broadcast_intent: :none, outgoing: false })
     store.sign_action(action_id: source[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: dummy_raw_tx)
     outputs = count.times.map do |i|
       { satoshis: satoshis, vout: i, locking_script: script.to_binary,

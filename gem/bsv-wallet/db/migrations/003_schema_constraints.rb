@@ -34,7 +34,7 @@ Sequel.migration do
       add_constraint(:description_length, 'length(description) BETWEEN 5 AND 50')
       add_constraint(:nlocktime_range, 'NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)')
       add_constraint(:wtxid_raw_tx_parity, '(wtxid IS NULL) = (raw_tx IS NULL)')
-      add_constraint(:broadcast_values, "broadcast IN ('delayed', 'inline', 'none')") if !postgres
+      add_constraint(:broadcast_values, "broadcast_intent IN ('delayed', 'inline', 'none')") if !postgres
     end
 
     if postgres

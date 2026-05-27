@@ -101,7 +101,7 @@ RSpec.shared_context 'engine setup' do
                   prefix: 'wallet payment', suffix: 'suffix',
                   sender_identity_key: 'self')
     source_action = store.create_action(
-      action: { description: 'funding source', broadcast: :none, outgoing: false }
+      action: { description: 'funding source', broadcast_intent: :none, outgoing: false }
     )
     source_wtxid = SecureRandom.random_bytes(32)
     store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: dummy_raw_tx)

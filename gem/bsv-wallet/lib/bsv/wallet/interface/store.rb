@@ -53,7 +53,7 @@ module BSV
         # atomically queueing the broadcast.
         #
         # Updates the action with +wtxid+ and +raw_tx+, and (when
-        # +actions.broadcast+ is not +'none'+) inserts the corresponding
+        # +actions.broadcast_intent+ is not +'none'+) inserts the corresponding
         # +broadcasts+ row in the same database transaction. The row begins
         # life with +broadcast_at IS NULL+ (queued, not yet attempted).
         #
@@ -225,7 +225,7 @@ module BSV
         #
         # Returns outgoing actions that have been signed (wtxid set) but
         # have no proof yet (tx_proof_id nil), excluding no-send actions
-        # (broadcast: 'none') which receive proofs via other channels.
+        # (broadcast_intent: 'none') which receive proofs via other channels.
         #
         # @param limit [Integer] maximum records to return
         # @return [Array<Hash>] action hashes (same shape as find_action)

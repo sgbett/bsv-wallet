@@ -35,7 +35,7 @@ module BSV
           def derived_status
             return :unsigned   if wtxid.nil?
             return :completed  if tx_proof_id
-            return :internal   if values[:broadcast] == 'none'
+            return :internal   if values[:broadcast_intent] == 'none'
             # Send-path outputs are persisted at sign time with promoted: false
             # (#194). Only outputs flipped to promoted: true at Phase 4 mean
             # the broadcast was accepted — the :unproven gate.

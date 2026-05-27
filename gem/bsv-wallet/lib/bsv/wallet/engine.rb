@@ -167,7 +167,7 @@ module BSV
 
         action_result = @store.create_action(
           action: {
-            description: description, broadcast: broadcast,
+            description: description, broadcast_intent: broadcast,
             nlocktime: lock_time || 0, version: version,
             input_beef: input_beef, outgoing: true
           },
@@ -273,7 +273,7 @@ module BSV
         # chained-send subsystem (#192). The base wallet's signAction
         # only completes the deferred-construction lifecycle per the
         # original broadcast intent set at createAction time.
-        if no_send && action[:broadcast] != 'none'
+        if no_send && action[:broadcast_intent] != 'none'
           raise BSV::Wallet::UnsupportedActionError,
                 'signAction(no_send: true) requires the action to have been ' \
                 "created with no_send: true (broadcast intent 'none'). " \
@@ -356,7 +356,7 @@ module BSV
 
         # Create action (incoming, no broadcast, already completed)
         action_result = @store.create_action(
-          action: { description: description, broadcast: :none, outgoing: false }
+          action: { description: description, broadcast_intent: :none, outgoing: false }
         )
 
         # Store wtxid and raw_tx on the action
@@ -474,7 +474,7 @@ module BSV
 
         # Phase 1: Record the root-key UTXO
         import_action = @store.create_action(
-          action: { description: 'imported UTXO', broadcast: :none, outgoing: false }
+          action: { description: 'imported UTXO', broadcast_intent: :none, outgoing: false }
         )
         @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
@@ -581,7 +581,7 @@ module BSV
         # Uses @store.create_action directly — this is an internal operation
         # that should not enforce limp mode.
         locking_action = @store.create_action(
-          action: { description: 'wbikd address lock', broadcast: :none, nlocktime: 0, outgoing: true },
+          action: { description: 'wbikd address lock', broadcast_intent: :none, nlocktime: 0, outgoing: true },
           inputs: [{ output_id: slot[:id], vin: 0 }]
         )
         # Slot may have been locked by a concurrent caller — retry with a different slot
@@ -1100,7 +1100,7 @@ module BSV
       # poll loop subsequently resolves via GET /tx/{txid}.
       #
       # The broadcasts row is created atomically by Store#sign_action
-      # when actions.broadcast != 'none', so this method assumes the
+      # when actions.broadcast_intent != 'none', so this method assumes the
       # row exists and only updates it.
       #
       # @param action_id [Integer]
@@ -1560,7 +1560,7 @@ module BSV
         # 3. Create incoming action (same pattern as import_utxo)
         wtxid = tx.wtxid
         import_action = @store.create_action(
-          action: { description: 'wbikd received funds', broadcast: :none, outgoing: false }
+          action: { description: 'wbikd received funds', broadcast_intent: :none, outgoing: false }
         )
         @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })

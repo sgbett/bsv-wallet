@@ -34,7 +34,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       result = store.create_action(action: { description: 'test action', nlocktime: 0 })
       expect(result).to include(:id, :reference, :status)
       expect(result[:status]).to eq(:unsigned)
-      expect(result[:broadcast]).to eq('delayed')
+      expect(result[:broadcast_intent]).to eq('delayed')
     end
 
     it 'creates an action and locks inputs atomically' do
@@ -67,8 +67,8 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'sets broadcast intent' do
-      result = store.create_action(action: { description: 'nosend', nlocktime: 0, broadcast: :none })
-      expect(result[:broadcast]).to eq('none')
+      result = store.create_action(action: { description: 'nosend', nlocktime: 0, broadcast_intent: :none })
+      expect(result[:broadcast_intent]).to eq('none')
     end
 
     it 'preserves binary input_beef' do
@@ -194,7 +194,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'atomically creates a broadcasts row when broadcast intent is delayed' do
-      result = store.create_action(action: { description: 'delayed', nlocktime: 0, broadcast: :delayed })
+      result = store.create_action(action: { description: 'delayed', nlocktime: 0, broadcast_intent: :delayed })
 
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
@@ -206,7 +206,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'atomically creates a broadcasts row when broadcast intent is inline' do
-      result = store.create_action(action: { description: 'inline', nlocktime: 0, broadcast: :inline })
+      result = store.create_action(action: { description: 'inline', nlocktime: 0, broadcast_intent: :inline })
 
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
@@ -217,7 +217,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'does NOT create a broadcasts row when broadcast intent is none' do
-      result = store.create_action(action: { description: 'nosend', nlocktime: 0, broadcast: :none })
+      result = store.create_action(action: { description: 'nosend', nlocktime: 0, broadcast_intent: :none })
 
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
@@ -226,7 +226,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'rolls back the action update if the broadcasts insert fails' do
-      result = store.create_action(action: { description: 'atomic', nlocktime: 0, broadcast: :delayed })
+      result = store.create_action(action: { description: 'atomic', nlocktime: 0, broadcast_intent: :delayed })
 
       # Force a failure on the broadcasts dataset access (the idempotent insert
       # path goes via Models::Broadcast.dataset.insert_conflict(...).insert(...)).
@@ -243,7 +243,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'is idempotent on the broadcasts row insert (second call does not raise)' do
-      result = store.create_action(action: { description: 'idempotent', nlocktime: 0, broadcast: :delayed })
+      result = store.create_action(action: { description: 'idempotent', nlocktime: 0, broadcast_intent: :delayed })
       wtxid = SecureRandom.random_bytes(32)
       raw_tx = SecureRandom.random_bytes(100)
 
@@ -254,7 +254,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'writes send-path outputs as promoted: false with no spendable row' do
-      result = store.create_action(action: { description: 'send path', broadcast: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'send path', broadcast_intent: :delayed, nlocktime: 0 })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
@@ -275,7 +275,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'writes change outputs as promoted: false on the send path' do
-      result = store.create_action(action: { description: 'change path', broadcast: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'change path', broadcast_intent: :delayed, nlocktime: 0 })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         change_outputs: [
@@ -288,7 +288,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'writes change outputs as promoted: true on the internal path' do
-      result = store.create_action(action: { description: 'internal change', broadcast: :none, nlocktime: 0 })
+      result = store.create_action(action: { description: 'internal change', broadcast_intent: :none, nlocktime: 0 })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         change_outputs: [
@@ -315,7 +315,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'does NOT create a broadcasts row even when broadcast intent is delayed' do
-      result = store.create_action(action: { description: 'staged delayed', nlocktime: 0, broadcast: :delayed })
+      result = store.create_action(action: { description: 'staged delayed', nlocktime: 0, broadcast_intent: :delayed })
 
       store.stage_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                          raw_tx: SecureRandom.random_bytes(100))
@@ -332,7 +332,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'persists outputs with promoted: false and their metadata' do
-      result = store.create_action(action: { description: 'staged outputs', broadcast: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'staged outputs', broadcast_intent: :delayed, nlocktime: 0 })
       store.stage_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
@@ -435,7 +435,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#promote_action_outputs' do
     it 'flips promoted: false to true and inserts spendable rows for wallet-owned outputs' do
-      result = store.create_action(action: { description: 'send path action', broadcast: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'send path action', broadcast_intent: :delayed, nlocktime: 0 })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
@@ -457,7 +457,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'is idempotent — second call is a no-op' do
-      result = store.create_action(action: { description: 'idempotent test', broadcast: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'idempotent test', broadcast_intent: :delayed, nlocktime: 0 })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
@@ -477,7 +477,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'skips spendable creation for outbound (non-wallet-owned) outputs' do
-      result = store.create_action(action: { description: 'outbound payment', broadcast: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'outbound payment', broadcast_intent: :delayed, nlocktime: 0 })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
@@ -493,7 +493,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'promotes change outputs and creates their spendable rows' do
-      result = store.create_action(action: { description: 'with change', broadcast: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'with change', broadcast_intent: :delayed, nlocktime: 0 })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         change_outputs: [
@@ -573,7 +573,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         action: { description: 'to fail', nlocktime: 0 },
         inputs: [{ output_id: output.id, vin: 0 }]
       )
-      # sign_action atomically creates the broadcasts row (broadcast != 'none').
+      # sign_action atomically creates the broadcasts row (broadcast_intent != 'none').
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
       BSV::Wallet::Store::Models::Broadcast.where(action_id: result[:id]).update(tx_status: 'REJECTED')
@@ -1584,7 +1584,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     it 'raises when no broadcasts row exists for the action (invariant violation)' do
       # Action exists but no broadcasts row -- e.g., action created with
-      # broadcast: 'none'. Stamping in this state would silently no-op
+      # broadcast_intent: 'none'. Stamping in this state would silently no-op
       # and leave the action untracked by either discovery loop.
       expect do
         store.mark_broadcast_attempted(action_id: action.id)
@@ -1595,10 +1595,10 @@ RSpec.describe BSV::Wallet::Store, :store do
   # --- Pending Proofs ---
 
   describe '#pending_proofs' do
-    def create_signed_action(broadcast: 'delayed', outgoing: true, tx_proof_id: nil)
+    def create_signed_action(broadcast_intent: 'delayed', outgoing: true, tx_proof_id: nil)
       action = BSV::Wallet::Store::Models::Action.create(
         outgoing: outgoing, description: 'test action', nlocktime: 0,
-        broadcast: broadcast,
+        broadcast_intent: broadcast_intent,
         wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
@@ -1627,7 +1627,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'excludes actions with broadcast none' do
-      create_signed_action(broadcast: 'none')
+      create_signed_action(broadcast_intent: 'none')
       expect(store.pending_proofs).to be_empty
     end
 
@@ -1638,7 +1638,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     it 'excludes unsigned actions (no wtxid)' do
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'unsigned', nlocktime: 0, broadcast: 'delayed'
+        outgoing: true, description: 'unsigned', nlocktime: 0, broadcast_intent: 'delayed'
       )
       expect(store.pending_proofs).to be_empty
     end
@@ -1671,7 +1671,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'does not reap nosend actions' do
-      result = store.create_action(action: { description: 'nosend', nlocktime: 0, broadcast: :none })
+      result = store.create_action(action: { description: 'nosend', nlocktime: 0, broadcast_intent: :none })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
       BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 600)

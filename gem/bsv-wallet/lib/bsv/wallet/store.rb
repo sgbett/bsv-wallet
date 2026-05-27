@@ -61,7 +61,7 @@ module BSV
         @db.transaction do
           record = models::Action.create(
             description: action[:description],
-            broadcast: action[:broadcast]&.to_s || 'delayed',
+            broadcast_intent: action[:broadcast_intent]&.to_s || 'delayed',
             nlocktime: action[:nlocktime],
             version: action[:version],
             outgoing: action.fetch(:outgoing, true),
@@ -90,7 +90,7 @@ module BSV
         @db.transaction do
           write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
 
-          intent = models::Action.where(id: action_id).get(:broadcast)
+          intent = models::Action.where(id: action_id).get(:broadcast_intent)
           models::Broadcast.dataset.insert_conflict(target: :action_id).insert(action_id: action_id) if intent && intent != 'none'
 
           # Send-path outputs written with promoted: false. spendable rows
@@ -117,7 +117,7 @@ module BSV
 
       # Internal-path Phase 4: write outputs as already promoted, insert
       # spendable rows in the same transaction. Used by incoming actions
-      # (internalize_action, import_utxo, wbikd) where broadcast == 'none'
+      # (internalize_action, import_utxo, wbikd) where broadcast_intent == 'none'
       # — outputs join the canonical UTXO set immediately.
       def promote_action(action_id:, outputs:)
         @db.transaction do
@@ -177,7 +177,7 @@ module BSV
           return 0 if broadcast_exists
 
           # Refuse if any output is promoted: true. Internal-path actions
-          # (broadcast = 'none') legitimately have no broadcasts row but
+          # (broadcast_intent = 'none') legitimately have no broadcasts row but
           # their outputs are promoted at create_action time and may be
           # spendable / spent — deleting them would destroy canonical UTXO
           # history. abortAction is meant for unfinished work, not for
@@ -344,7 +344,7 @@ module BSV
           .where(outgoing: true)
           .where(Sequel.~(wtxid: nil))
           .where(tx_proof_id: nil)
-          .where(Sequel.~(broadcast: 'none'))
+          .where(Sequel.~(broadcast_intent: 'none'))
           .limit(limit)
           .all
           .map { |a| action_to_hash(a) }
@@ -681,7 +681,7 @@ module BSV
         @db.transaction do
           stale = models::Action
                   .where { created_at < cutoff }
-                  .where(Sequel.~(broadcast: 'none'))
+                  .where(Sequel.~(broadcast_intent: 'none'))
                   .where(Sequel.lit('wtxid IS NOT NULL'))
                   .exclude(promoted_output_exists.exists)
 
@@ -915,7 +915,7 @@ module BSV
           reference: record.reference, status: record.derived_status,
           outgoing: record.outgoing, description: record.description,
           version: record.version, nlocktime: record.nlocktime,
-          broadcast: record.values[:broadcast], created_at: record.created_at,
+          broadcast_intent: record.values[:broadcast_intent], created_at: record.created_at,
           tx_proof_id: record.tx_proof_id
         }
 
