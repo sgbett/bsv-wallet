@@ -91,6 +91,7 @@ Merkle inclusion proof — evidence that a transaction is in a block. Independen
 **Constraints:**
 - `CHECK length(wtxid) = 32` — wtxid is always 32 bytes
 - `CHECK length(raw_tx) >= 20` — minimum valid transaction size (version + input_count + output_count + amount + script_len + OP_1 + locktime)
+- `CHECK merkle_path IS NULL OR block_id IS NOT NULL` — a path is unverifiable without block context. The reverse (`block_id` known, `merkle_path` pending) is allowed — that's the "confirmed but unproven" intermediate state when ARC reports MINED with `blockHeight` ahead of the path.
 
 ```ruby
 class Wallet::TxProof < Sequel::Model

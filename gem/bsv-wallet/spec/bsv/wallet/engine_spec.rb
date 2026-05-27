@@ -1183,7 +1183,7 @@ RSpec.describe BSV::Wallet::Engine do
             .each do |bt|
           proof_store.save_proof(
             wtxid: bt.wtxid,
-            proof: { height: 800_000, merkle_path: "\x00".b, raw_tx: bt.transaction.to_binary }
+            proof: { height: 800_000, raw_tx: bt.transaction.to_binary }
           )
         end
 
@@ -1211,7 +1211,7 @@ RSpec.describe BSV::Wallet::Engine do
 
         proof_store.save_proof(
           wtxid: first_ancestor.wtxid,
-          proof: { height: 800_000, merkle_path: "\x00".b, raw_tx: first_ancestor.transaction.to_binary }
+          proof: { height: 800_000, raw_tx: first_ancestor.transaction.to_binary }
         )
 
         result = engine_with_tracker.internalize_action(
@@ -1294,7 +1294,7 @@ RSpec.describe BSV::Wallet::Engine do
             .each do |bt|
           proof_store.save_proof(
             wtxid: bt.wtxid,
-            proof: { height: 800_000, merkle_path: "\x00".b, raw_tx: bt.transaction.to_binary }
+            proof: { height: 800_000, raw_tx: bt.transaction.to_binary }
           )
         end
 

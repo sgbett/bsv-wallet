@@ -24,6 +24,10 @@ Sequel.migration do
       set_column_not_null :raw_tx
       add_constraint(:wtxid_length)       { length(wtxid) =~ 32 }
       add_constraint(:raw_tx_min_length)  { length(raw_tx) >= 20 }
+      # A merkle_path without block context is unverifiable — no root to
+      # check against. The reverse is fine (#198/#219): height-known +
+      # path-pending is the "confirmed but unproven" intermediate state.
+      add_constraint(:path_requires_block, 'merkle_path IS NULL OR block_id IS NOT NULL')
     end
 
     # --- 3. actions ---
@@ -304,6 +308,7 @@ Sequel.migration do
     alter_table(:tx_proofs) do
       drop_constraint :wtxid_length
       drop_constraint :raw_tx_min_length
+      drop_constraint :path_requires_block
       set_column_allow_null :raw_tx
     end
 

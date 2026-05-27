@@ -89,6 +89,29 @@ RSpec.describe 'Schema migration', :store do
       end.to raise_error(Sequel::UniqueConstraintViolation)
     end
 
+    it 'rejects tx_proofs.merkle_path without block_id (path_requires_block)' do
+      expect do
+        db.transaction(savepoint: true) do
+          db[:tx_proofs].insert(
+            wtxid: Sequel.blob(SecureRandom.random_bytes(32)),
+            raw_tx: Sequel.blob(valid_raw_tx),
+            merkle_path: Sequel.blob(SecureRandom.random_bytes(64))
+          )
+        end
+      end.to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    it 'allows tx_proofs.block_id without merkle_path (confirmed but unproven)' do
+      block_id = db[:blocks].insert(height: 800_000, merkle_root: Sequel.blob(SecureRandom.random_bytes(32)))
+      expect do
+        db[:tx_proofs].insert(
+          wtxid: Sequel.blob(SecureRandom.random_bytes(32)),
+          raw_tx: Sequel.blob(valid_raw_tx),
+          block_id: block_id
+        )
+      end.not_to raise_error
+    end
+
     it 'enforces UNIQUE on inputs.output_id (structural lock)' do
       action_id = insert_action(description: 'lock test source')
       output_id = db[:outputs].insert(

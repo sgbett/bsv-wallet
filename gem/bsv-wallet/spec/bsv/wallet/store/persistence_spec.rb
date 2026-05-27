@@ -946,12 +946,22 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(BSV::Wallet::Store::Models::Block.where(height: 800_000).count).to eq(1)
     end
 
-    it 'saves proof without block when merkle_root is absent' do
+    it 'rejects a proof with merkle_path but no resolvable block (#219)' do
+      # path_requires_block CHECK: a merkle_path without block context is
+      # unverifiable (no root to check against). Without merkle_root,
+      # find_or_create_block returns nil — the DB rejects the insert.
       proof_without_root = proof_data.except(:merkle_root, :block_hash)
-      id = store.save_proof(wtxid: wtxid, proof: proof_without_root)
+      expect { store.save_proof(wtxid: wtxid, proof: proof_without_root) }
+        .to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    it 'saves a proof with block_id but no merkle_path (confirmed but unproven)' do
+      proof_block_only = proof_data.except(:merkle_path)
+      id = store.save_proof(wtxid: wtxid, proof: proof_block_only)
 
       record = BSV::Wallet::Store::Models::TxProof[id]
-      expect(record.block_id).to be_nil
+      expect(record.block_id).not_to be_nil
+      expect(record.merkle_path).to be_nil
     end
   end
 
