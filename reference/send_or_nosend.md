@@ -1,5 +1,17 @@
 # send / noSend: batching and chained-send workflows
 
+> **Status note (May 2026):** HLR #183 stripped the BRC-100 `noSend` /
+> `noSendChange` / `sendWith` / `knownTxids` primitives from the base
+> wallet's public API. The wallet retains the `'none'` value of the
+> `broadcast_intent` enum, but only for **internal** non-network actions
+> (incoming BEEF, imported root UTXOs, wbikd locks, `send_payment`
+> returning BEEF). The chained-send subsystem that this document
+> describes will be reintroduced under issue
+> [#192](https://github.com/sgbett/bsv-wallet/issues/192) as a separate,
+> persistent-batch-aware feature. Read this document as a description
+> of "what the wallet *will* eventually support," not "what the wallet
+> currently does."
+
 Reference notes on the BRC-100 `noSend` / `sendWith` / `noSendChange` /
 `acceptDelayedBroadcast` primitives — what each one means, how they combine,
 how the reference TypeScript implementation realises them, and where the
@@ -187,12 +199,21 @@ supports multi-transaction graphs:
 
 ## State in this codebase
 
-The current Ruby implementation (`gem/bsv-wallet`) covers the primitives
+> The detail below describes the pre-#183 state. After HLR #183 the base
+> wallet no longer exposes `no_send`, `no_send_change`, `send_with`, or
+> `known_txids` on the public BRC-100 surface, and the
+> `Engine#process_send_with` helper has been removed. The
+> `broadcast_intent` enum still has a `'none'` value, but it now marks
+> internal non-network actions only (see `reference/schema.md` and
+> `reference/schema-intent.md`). The `Action#derived_status` for those
+> actions is `:internal`, not `:nosend`. The notes below are kept as
+> the design study that will inform issue #192.
+
+The pre-#183 Ruby implementation (`gem/bsv-wallet`) covered the primitives
 but not the persistent batch:
 
-- `Engine#create_action` accepts `no_send`, `no_send_change`, `send_with`
-  (`gem/bsv-wallet/lib/bsv/wallet/engine.rb:77`) and the broadcast-mode
-  resolution mirrors BRC-100:
+- `Engine#create_action` accepted `no_send`, `no_send_change`, `send_with`,
+  `known_txids` and the broadcast-mode resolution mirrored BRC-100:
   ```ruby
   def determine_broadcast(no_send, accept_delayed_broadcast)
     if no_send then :none
@@ -201,28 +222,30 @@ but not the persistent batch:
     end
   end
   ```
-- `process_send_with` (`engine.rb:1034`) inline-broadcasts each companion
-  by looking up its existing `actions` row + pre-staged `broadcasts` row.
-  There is **no batch id** — companions are looked up by wtxid one at a
-  time.
-- The action status enum maps to BRC-100: `Action#derived_status` returns
-  `:nosend` when `broadcast == 'none'`.
-- The OMQ-based `Engine::Broadcast` plays the role of wallet-toolbox's
-  Monitor daemon: `pull!` consumes `pending_pushes` from a PULL socket,
-  `reply!` answers REP for inline calls.
-- The `noSendChange` round-trip works (the engine returns change outpoints
-  in the `:no_send_change` key) but the wallet doesn't yet treat "this
-  outpoint belongs to a pending noSend action" as a first-class concept on
-  the spendable side — auto-funding via `inputs: nil` won't pick
-  `noSendChange` UTXOs as inputs.
+- `process_send_with` inline-broadcast each companion by looking up its
+  existing `actions` row + pre-staged `broadcasts` row. There was **no
+  batch id** — companions were looked up by wtxid one at a time.
+- The action status enum mapped to BRC-100: `Action#derived_status`
+  returned `:nosend` when `broadcast == 'none'`.
+- The OMQ-based `Engine::Broadcast` played the role of wallet-toolbox's
+  Monitor daemon (still does, for the surviving send-path lifecycle):
+  `pull!` consumes `pending_pushes` from a PULL socket, `reply!` answers
+  REP for inline calls.
+- The `noSendChange` round-trip worked (the engine returned change
+  outpoints in the `:no_send_change` key) but the wallet didn't treat
+  "this outpoint belongs to a pending noSend action" as a first-class
+  concept on the spendable side — auto-funding via `inputs: nil` would
+  not pick `noSendChange` UTXOs as inputs.
 
 ### Gap
 
 The named missing piece is **the persistent batch entity**. wallet-toolbox
 stamps `batch = randomBytesBase64(16)` on every member of a multi-tx group;
 the daemon then drives the whole group through ARC together and can
-detect/replay batch-level failures. The Ruby implementation processes
-companions one by one inside the request that supplied `sendWith`.
+detect/replay batch-level failures. The pre-#183 Ruby implementation
+processed companions one by one inside the request that supplied
+`sendWith`; #183 removed that helper, and the eventual #192 implementation
+is expected to introduce the persistent batch as a proper subsystem.
 
 For the wallet's scaling target the batch becomes load-bearing — it is the
 unit ZeroMQ would shuttle around, and it is the failure-recovery boundary
