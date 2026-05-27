@@ -2789,6 +2789,9 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'single-input P2PKH' do
       it 'constructs a valid signed Bitcoin transaction end-to-end' do
+        # Reserve UTXO keeps the headroom check satisfied while a small
+        # caller UTXO drives the e2e signing path.
+        fund_wallet(satoshis: 100_000, prefix: 'reserve', suffix: 'reserve', basket: 'reserve')
         fund_wallet(satoshis: 1000)
 
         listed = engine_with_keys.list_outputs(basket: 'default')
@@ -2813,11 +2816,14 @@ RSpec.describe BSV::Wallet::Engine do
         expect(result[:txid].bytesize).to eq(32)
         expect(result[:tx]).to be_a(String)
 
-        # Deserialize and verify wire format
+        # Caller output (900 sats) + change outputs absorb the surplus
+        # (#210 — caller-inputs now receive change for the fee remainder).
         parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(1)
-        expect(parsed.outputs.length).to eq(1)
-        expect(parsed.outputs[0].satoshis).to eq(900)
+        expect(parsed.outputs.length).to be >= 2
+        caller_output = parsed.outputs.find { |o| o.locking_script.to_binary == output_script }
+        expect(caller_output).not_to be_nil
+        expect(caller_output.satoshis).to eq(900)
 
         # Verify result[:txid] = wire-order wtxid (double-SHA-256 of serialized tx)
         expected_wtxid = parse_beef_tx(result[:tx]).wtxid
@@ -2842,7 +2848,9 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'multi-input transaction' do
       it 'spends multiple outputs in a single transaction' do
-        # Fund with three separate calls so each output has a distinct, predictable suffix
+        # Reserve UTXO covers headroom while three small UTXOs feed the
+        # caller-inputs path. Each output has a distinct, predictable suffix.
+        fund_wallet(satoshis: 100_000, prefix: 'reserve', suffix: 'reserve', basket: 'reserve')
         fund_wallet(satoshis: 500, suffix: 'multi0')
         fund_wallet(satoshis: 500, suffix: 'multi1')
         fund_wallet(satoshis: 500, suffix: 'multi2')
@@ -2867,8 +2875,11 @@ RSpec.describe BSV::Wallet::Engine do
 
         parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(3)
-        expect(parsed.outputs.length).to eq(1)
-        expect(parsed.outputs[0].satoshis).to eq(1400)
+        # Caller output + change outputs (surplus absorbed) per #210.
+        expect(parsed.outputs.length).to be >= 2
+        caller_output = parsed.outputs.find { |o| o.locking_script.to_binary == output_script }
+        expect(caller_output).not_to be_nil
+        expect(caller_output.satoshis).to eq(1400)
 
         # Verify each input signature using the matching derivation suffix
         %w[multi0 multi1 multi2].each_with_index do |suffix, i|
@@ -2888,6 +2899,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'multi-output transaction' do
       it 'creates multiple outputs from a single input' do
+        fund_wallet(satoshis: 100_000, prefix: 'reserve', suffix: 'reserve', basket: 'reserve')
         fund_wallet(satoshis: 2000)
 
         listed = engine_with_keys.list_outputs(basket: 'default')
@@ -2897,16 +2909,22 @@ RSpec.describe BSV::Wallet::Engine do
         key2 = derive_key(suffix: 'out2')
         key3 = derive_key(suffix: 'out3')
 
+        caller_scripts = [
+          p2pkh_locking_script_for(key1).to_binary,
+          p2pkh_locking_script_for(key2).to_binary,
+          p2pkh_locking_script_for(key3).to_binary
+        ]
+
         result = engine_with_keys.create_action(
           description: 'multi output test',
           no_send: true,
           inputs: [{ output_id: output_id }],
           outputs: [
-            { satoshis: 600, locking_script: p2pkh_locking_script_for(key1).to_binary,
+            { satoshis: 600, locking_script: caller_scripts[0],
               output_description: 'first', basket: 'payments' },
-            { satoshis: 700, locking_script: p2pkh_locking_script_for(key2).to_binary,
+            { satoshis: 700, locking_script: caller_scripts[1],
               output_description: 'second', basket: 'payments' },
-            { satoshis: 500, locking_script: p2pkh_locking_script_for(key3).to_binary,
+            { satoshis: 500, locking_script: caller_scripts[2],
               output_description: 'third', basket: 'payments' }
           ],
           randomize_outputs: false
@@ -2914,8 +2932,15 @@ RSpec.describe BSV::Wallet::Engine do
 
         parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(1)
-        expect(parsed.outputs.length).to eq(3)
-        expect(parsed.outputs.map(&:satoshis)).to eq([600, 700, 500])
+        # Three caller outputs + change outputs (surplus absorbed) per #210.
+        expect(parsed.outputs.length).to be >= 4
+        # Caller outputs preserved at their satoshi values; change varies.
+        caller_sats = caller_scripts.map do |script|
+          out = parsed.outputs.find { |o| o.locking_script.to_binary == script }
+          expect(out).not_to be_nil
+          out.satoshis
+        end
+        expect(caller_sats).to eq([600, 700, 500])
 
         # Verify input
         parsed.inputs[0].source_satoshis = 2000

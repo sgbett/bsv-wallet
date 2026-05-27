@@ -80,70 +80,84 @@ module BSV
         validate_create_action_params!(inputs: inputs, outputs: outputs)
         validate_output_ownership!(outputs)
 
-        # Auto-fund: when inputs is nil with outputs present, the wallet
-        # handles UTXO selection, fee estimation, and change generation.
-        if inputs.nil? && outputs&.any?
-          unless sign_and_process
-            raise BSV::Wallet::InvalidParameterError.new(
-              'sign_and_process', 'true when inputs is nil (auto-funded actions sign immediately)'
-            )
-          end
-          require_key_deriver!
-          enforce_limp_mode!
-          return auto_fund_action(
-            description: description, outputs: outputs,
-            lock_time: lock_time, version: version,
-            broadcast: determine_broadcast(no_send, accept_delayed_broadcast),
-            labels: labels, randomize_outputs: randomize_outputs,
-            no_send: no_send,
-            return_txid_only: return_txid_only
+        # Caller-supplied inputs: explicit array (possibly empty) — the
+        # wallet does not extend this set. inputs: nil means "select for me".
+        caller_supplied_inputs = !inputs.nil?
+        deferred = !sign_and_process ||
+                   inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
+
+        # Auto-fund (inputs: nil) cannot be deferred: wallet-selected
+        # inputs sign immediately. Deferred signing only makes sense with
+        # caller-supplied inputs the caller intends to script themselves.
+        if !caller_supplied_inputs && !sign_and_process
+          raise BSV::Wallet::InvalidParameterError.new(
+            'sign_and_process', 'true when inputs is nil (auto-funded actions sign immediately)'
           )
         end
+
+        # Internal-path deferred signing is not implemented in the base
+        # wallet — the internal-action Phase 4 runs synchronously during
+        # create_action, which deferred signing cannot reach (#192).
+        if no_send && deferred
+          raise BSV::Wallet::UnsupportedActionError,
+                'createAction(no_send: true) combined with deferred signing is not implemented in the base wallet; tracked in #192.'
+        end
+
+        # key_deriver is required only when the wallet must derive BRC-42
+        # change keys (generate_change). Deferred signing defers to
+        # signAction; explicit empty inputs (OP_RETURN-only) skip change
+        # generation. Both paths can run without a key deriver here.
+        skip_change = caller_supplied_inputs && inputs.empty?
+        require_key_deriver! unless deferred || skip_change
 
         broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
         enforce_limp_mode!
 
-        # Phase 1: Lock
-        input_specs = build_input_specs(inputs)
+        # Output total drives the initial selection target and the cheap
+        # pre-flight headroom check. The exact post-loop headroom check
+        # (sum(outputs) + actual_fee) runs after generate_change converges.
+        # pre_lock_balance / change_count are captured before Phase 1
+        # locking shrinks the spendable set; both headroom checks use the
+        # pre-lock balance, and the funding loop uses the pre-lock change
+        # count so target sizing reflects the wallet's full pool.
+        output_total = outputs&.sum { |o| o[:satoshis] || 0 } || 0
+        pre_lock_balance = @utxo_pool.balance
+        pre_lock_change_count = @utxo_pool.change_output_count
+        enforce_headroom_against!(pre_lock_balance, output_total) unless deferred
+
+        # Phase 1: resolve initial inputs and lock the action.
+        # - caller_supplied_inputs (including empty array): use as-is.
+        # - inputs: nil + outputs present: select to cover sum(outputs).
+        # - inputs: nil + no outputs: no selection (nothing to fund).
+        initial_inputs =
+          if caller_supplied_inputs
+            build_input_specs(inputs)
+          elsif output_total.positive?
+            select_inputs(target_satoshis: output_total)
+          else
+            []
+          end
+
         action_result = @store.create_action(
           action: {
             description: description, broadcast: broadcast,
             nlocktime: lock_time || 0, version: version,
             input_beef: input_beef, outgoing: true
           },
-          inputs: input_specs
+          inputs: initial_inputs
         )
         raise BSV::Wallet::InsufficientFundsError if action_result.nil?
 
         attach_labels(action_result[:id], labels)
 
-        # Check for deferred signing
-        deferred = !sign_and_process ||
-                   inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
-
-        # Internal-path deferred signing (no_send: true + sign_and_process:
-        # false, or inputs with unlocking_script_length placeholders) is
-        # not implemented in the base wallet — the internal-action Phase 4
-        # currently runs synchronously during create_action, which deferred
-        # signing cannot reach. Tracked in #192.
-        if no_send && deferred
-          raise BSV::Wallet::UnsupportedActionError,
-                'createAction(no_send: true) combined with deferred signing is not implemented in the base wallet; tracked in #192.'
-        end
-
-        # Phase 2: Build transaction (sign unless deferred)
-        wtxid, raw_tx, vout_mapping = build_transaction(
-          action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,
-          sign: !deferred
-        )
-        # Send-path outputs (broadcast intent :delayed or :inline) are
-        # persisted with promoted: false at sign / stage time. Spendable
-        # rows are deferred until Phase 4 on broadcast acceptance.
-        # Internal-path outputs (broadcast intent :none) are promoted
-        # synchronously via promote_with_outputs below.
-        pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
-
+        # Deferred path: assemble unsigned tx, stage, return signable handle.
+        # No change generation on this path (preserved from prior behaviour).
         if deferred
+          wtxid, raw_tx, vout_mapping = build_transaction(
+            action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,
+            sign: false
+          )
+          pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
           @store.stage_action(
             action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
             outputs: pending_outputs
@@ -157,29 +171,56 @@ module BSV
           }
         end
 
+        # Synchronous path. The empty-inputs case (OP_RETURN-only) skips
+        # change generation — already detected above to keep the
+        # key_deriver check honest.
+        if skip_change
+          wtxid, raw_tx, vout_mapping = build_transaction(
+            action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,
+            sign: true
+          )
+          change_outputs = []
+        else
+          wtxid, raw_tx, vout_mapping, change_outputs = run_funding_loop(
+            action_id: action_result[:id],
+            caller_outputs: outputs || [],
+            caller_supplied_inputs: caller_supplied_inputs,
+            initial_locked_output_ids: initial_inputs.map { |i| i[:output_id] },
+            change_count: pre_lock_change_count,
+            lock_time: lock_time, version: version,
+            randomize_outputs: randomize_outputs
+          )
+          # Exact post-loop headroom check: actual fee is now known.
+          actual_fee = total_input_satoshis_for(action_result[:id]) - output_total - change_outputs.sum { |c| c[:satoshis] }
+          enforce_headroom_against!(pre_lock_balance, output_total + actual_fee)
+        end
+
+        pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
         @store.sign_action(
           action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
-          outputs: pending_outputs
+          outputs: pending_outputs, change_outputs: change_outputs
         )
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-        BSV.logger&.debug { "[Engine] create_action: dtxid=#{wtxid.reverse.unpack1('H*')} outputs=#{outputs&.length || 0}" }
+        BSV.logger&.debug do
+          "[Engine] create_action: dtxid=#{wtxid.reverse.unpack1('H*')} " \
+            "outputs=#{outputs&.length || 0} change=#{change_outputs.length}"
+        end
 
-        # Build Atomic BEEF envelope for the :tx return value
         atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
 
-        # Internal-path (no_send): synchronous Phase 4 — promote outputs,
-        # create spendable rows, return change outpoints.
+        # Internal-path (no_send): synchronous Phase 4 — promote caller
+        # outputs, promote change to spendable, return change outpoints.
         if no_send
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
+          @store.promote_change_to_spendable(action_id: action_result[:id]) if change_outputs.any?
           change = query_change_outpoints(action_result[:id])
           return { txid: wtxid, tx: atomic_beef, no_send_change: change }
         end
 
-        # Phase 3 + 4: Broadcast inline. Phase 4 (output promotion + spendable
-        # row creation) runs on accepted ARC response. Delayed broadcasts are
-        # picked up by the daemon's push-discovery loop from the broadcasts
-        # row that sign_action created atomically above; the daemon triggers
-        # Phase 4 on its own broadcast acceptance.
+        # Phase 3 + 4: Broadcast inline. Phase 4 (output promotion +
+        # spendable row creation) runs on accepted ARC response. Delayed
+        # broadcasts are picked up by the daemon's push-discovery loop from
+        # the broadcasts row that sign_action created atomically above.
         if broadcast == :inline
           broadcast_result = inline_broadcast(action_id: action_result[:id], raw_tx: raw_tx)
           if accepted?(broadcast_result)
@@ -1364,7 +1405,15 @@ module BSV
       end
 
       def enforce_headroom!(spending)
-        projected = @utxo_pool.balance - spending
+        enforce_headroom_against!(@utxo_pool.balance, spending)
+      end
+
+      # Headroom guard against a caller-supplied balance reference. The
+      # funding loop captures balance pre-lock and re-uses it for both the
+      # pre-flight and exact post-loop checks — once inputs are locked,
+      # @utxo_pool.balance no longer reflects the wallet's full pool.
+      def enforce_headroom_against!(balance, spending)
+        projected = balance - spending
         return unless projected < @limp_threshold
 
         raise BSV::Wallet::LimpModeError.new(
@@ -1758,101 +1807,59 @@ module BSV
         [wtxid, raw_tx, vout_mapping]
       end
 
-      # Orchestrate the auto-fund flow for createAction when inputs is nil.
+      # Funding loop (#210): drive generate_change until inputs cover the
+      # actual fee. On a shortfall, top up via select_inputs + lock_inputs
+      # and re-evaluate. Bounded by the spendable-pool size to prevent
+      # pathological infinite loops; in practice converges in one or two
+      # iterations.
       #
-      # Selects UTXOs, locks them (Phase 1), builds and signs a funded
-      # transaction with SDK fee computation and change distribution,
-      # then writes change outputs atomically with signing (Phase 2b).
+      # Caller-supplied inputs are fixed — a shortfall raises immediately
+      # with no top-up attempted. Auto-fund top-ups that exhaust the pool
+      # surface as InsufficientFundsError (wrapping PoolDepletedError).
       #
-      # @return [Hash] same shape as create_action's return value
-      def auto_fund_action(description:, outputs:, lock_time:, version:,
-                           broadcast:, labels:, randomize_outputs:,
-                           no_send:, return_txid_only:)
-        # Estimate satoshis needed (outputs + conservative fee margin).
-        # Assumes 1 input for the estimate — if the pool returns multiple
-        # UTXOs, each extra input adds ~15 sats of fee but contributes its
-        # own satoshis (always >> 15), so the estimate is safe. The SDK
-        # computes the real fee from actual tx size regardless.
-        output_total = outputs.sum { |o| o[:satoshis] || 0 }
-        estimated_change_count = @utxo_pool.change_output_count
-        estimated_size = 10 + 148 + ((outputs.length + estimated_change_count) * 34)
-        fee_margin = (estimated_size / 1000.0 * 100).ceil
+      # @return [Array(String, String, Hash, Array<Hash>)] wtxid, raw_tx,
+      #   vout_mapping, change_outputs — ready for Store#sign_action.
+      def run_funding_loop(action_id:, caller_outputs:,
+                           caller_supplied_inputs:, initial_locked_output_ids:,
+                           change_count:,
+                           lock_time:, version:, randomize_outputs:)
+        locked_output_ids = initial_locked_output_ids.dup
+        max_iterations = [@utxo_pool.spendable_count + 1, 2].max
 
-        # Headroom guard: ensure post-tx balance stays above limp threshold
-        enforce_headroom!(output_total + fee_margin)
+        max_iterations.times do
+          result = generate_change(
+            action_id: action_id, caller_outputs: caller_outputs,
+            lock_time: lock_time, version: version, randomize: randomize_outputs,
+            change_count: change_count
+          )
+          return [result[:wtxid], result[:raw_tx], result[:vout_mapping], result[:change_outputs]] unless result[:shortfall]
 
-        candidates = @utxo_pool.select(satoshis: output_total + fee_margin)
+          raise BSV::Wallet::InsufficientFundsError if caller_supplied_inputs
 
-        # Phase 1: Lock inputs (reversible via CASCADE)
-        input_specs = candidates.each_with_index.map do |c, idx|
-          { output_id: c[:id], vin: idx }
-        end
-        action_result = @store.create_action(
-          action: {
-            description: description, broadcast: broadcast,
-            nlocktime: lock_time || 0, version: version, outgoing: true
-          },
-          inputs: input_specs
-        )
-        attach_labels(action_result[:id], labels)
-
-        # Phase 2: Build funded transaction (in memory). If this raises,
-        # the action + input rows from Phase 1 remain locked until the
-        # reaper cleans them up via CASCADE delete.
-        funded = generate_change(
-          action_id: action_result[:id], caller_outputs: outputs,
-          lock_time: lock_time, version: version, randomize: randomize_outputs,
-          change_count: estimated_change_count
-        )
-        # Top-up integration arrives in #210; for now any shortfall on the
-        # auto-fund path surfaces as InsufficientFundsError, preserving
-        # existing user-visible behaviour. Phase 1 rows are reaped via CASCADE.
-        raise BSV::Wallet::InsufficientFundsError if funded[:shortfall]
-
-        wtxid = funded[:wtxid]
-        raw_tx = funded[:raw_tx]
-        vout_mapping = funded[:vout_mapping]
-        change_outputs = funded[:change_outputs]
-
-        # Phase 2b: Atomic sign + outputs/change persistence (promoted: false).
-        # Send-path caller outputs and change outputs both written here; the
-        # internal path (no_send) leaves caller outputs to the synchronous
-        # promote_with_outputs call below.
-        pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
-        @store.sign_action(
-          action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
-          outputs: pending_outputs, change_outputs: change_outputs
-        )
-        @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-        BSV.logger&.debug do
-          "[Engine] auto_fund_action: dtxid=#{wtxid.reverse.unpack1('H*')} " \
-            "outputs=#{outputs.length} change=#{change_outputs.length}"
-        end
-
-        atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
-
-        # Internal-path (no_send): synchronous Phase 4 — promote caller
-        # outputs and change-to-spendable, return change outpoints.
-        if no_send
-          promote_with_outputs(action_result[:id], outputs, vout_mapping)
-          @store.promote_change_to_spendable(action_id: action_result[:id])
-          change = query_change_outpoints(action_result[:id])
-          return { txid: wtxid, tx: atomic_beef, no_send_change: change }
-        end
-
-        # Phase 3 + 4: Broadcast inline. Send-path Phase 4 promotes outputs
-        # (flips promoted: true) and inserts spendable rows in a single
-        # transaction. Delayed broadcasts are picked up by the daemon's
-        # push-discovery loop.
-        if broadcast == :inline
-          broadcast_result = inline_broadcast(action_id: action_result[:id], raw_tx: raw_tx)
-          if accepted?(broadcast_result)
-            @store.promote_action_outputs(action_id: action_result[:id])
-            handle_proof_from_broadcast(action_result[:id], broadcast_result)
+          begin
+            extra = select_inputs(target_satoshis: result[:shortfall], exclude: locked_output_ids)
+          rescue BSV::Wallet::PoolDepletedError
+            raise BSV::Wallet::InsufficientFundsError
           end
+          raise BSV::Wallet::InsufficientFundsError if extra.empty?
+
+          # Re-vin against the existing lock count so vin numbering stays
+          # contiguous on the inputs table.
+          base_vin = locked_output_ids.length
+          top_up = extra.each_with_index.map do |spec, i|
+            { output_id: spec[:output_id], vin: base_vin + i }
+          end
+          @store.lock_inputs(action_id: action_id, inputs: top_up)
+          locked_output_ids.concat(top_up.map { |i| i[:output_id] })
         end
 
-        { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
+        raise BSV::Wallet::InsufficientFundsError
+      end
+
+      # Sum source_satoshis across all inputs currently locked to action_id.
+      # Used by the exact post-loop headroom check.
+      def total_input_satoshis_for(action_id)
+        @store.resolve_inputs_for_signing(action_id: action_id).sum { |r| r[:source_satoshis] }
       end
 
       # Build a transaction with BRC-42 change derivation, explicit fee
