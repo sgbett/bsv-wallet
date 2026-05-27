@@ -238,8 +238,8 @@ but not the persistent batch:
 - The `noSendChange` round-trip worked (the engine returned change
   outpoints in the `:no_send_change` key) but the wallet didn't treat
   "this outpoint belongs to a pending noSend action" as a first-class
-  concept on the spendable side — auto-funding via `inputs: nil` would
-  not pick `noSendChange` UTXOs as inputs.
+  concept on the spendable side — wallet-driven funding via `inputs: nil`
+  would not pick `noSendChange` UTXOs as inputs.
 
 ### Gap
 

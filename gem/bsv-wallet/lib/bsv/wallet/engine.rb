@@ -70,6 +70,31 @@ module BSV
 
       # --- Transaction Operations (codes 1-7) ---
 
+      # Create a BRC-100 action (Phases 1, 2, optionally 3, optionally 4).
+      #
+      # Composes the funding primitives:
+      #   1. Phase 1 picks the initial input set:
+      #      - inputs: nil and outputs present  → select_inputs(sum(outputs))
+      #      - inputs: [] / empty                → no selection (OP_RETURN-only)
+      #      - inputs: [...]                     → caller-supplied, used as-is
+      #      Followed by an atomic Store#create_action that inserts the
+      #      action row and the input rows together.
+      #   2. Phase 2 runs the funding loop: generate_change builds + templates
+      #      the transaction, computes the exact fee, and either returns the
+      #      finished {wtxid, raw_tx, vout_mapping, change_outputs} or a
+      #      shortfall. On shortfall (wallet-selected inputs only) the loop
+      #      tops up via select_inputs + Store#lock_inputs and re-evaluates.
+      #      Caller-supplied input shortfalls raise InsufficientFundsError
+      #      immediately.
+      #   3. Phase 3 / 4 follow the broadcast intent (send path versus
+      #      internal path); see docs/design.md.
+      #
+      # Deferred signing (sign_and_process: false, caller-supplied inputs
+      # only) skips the funding loop entirely and returns a signable handle.
+      #
+      # @return [Hash] either { txid:, tx: } (signed),
+      #   { signable_transaction: { tx:, reference: } } (deferred), or
+      #   { txid:, tx:, no_send_change: } (internal path with no_send: true).
       def create_action(description:, input_beef: nil, inputs: nil, outputs: nil,
                         lock_time: nil, version: nil, labels: nil,
                         sign_and_process: true, accept_delayed_broadcast: true,
@@ -86,12 +111,14 @@ module BSV
         deferred = !sign_and_process ||
                    inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
 
-        # Auto-fund (inputs: nil) cannot be deferred: wallet-selected
-        # inputs sign immediately. Deferred signing only makes sense with
-        # caller-supplied inputs the caller intends to script themselves.
+        # Wallet-selected inputs (inputs: nil) cannot be deferred — the
+        # funding loop signs immediately so the change template can be
+        # evaluated against the actual fee. Deferred signing only makes
+        # sense with caller-supplied inputs the caller intends to script
+        # themselves.
         if !caller_supplied_inputs && !sign_and_process
           raise BSV::Wallet::InvalidParameterError.new(
-            'sign_and_process', 'true when inputs is nil (auto-funded actions sign immediately)'
+            'sign_and_process', 'true when inputs is nil (wallet-selected inputs sign immediately)'
           )
         end
 
@@ -655,8 +682,9 @@ module BSV
       # Send a BRC-42 derived payment to a recipient.
       #
       # Generates derivation parameters, derives a P2PKH locking script for
-      # the recipient via BRC-42, and calls create_action with auto-fund to
-      # handle UTXO selection, fees, and change.
+      # the recipient via BRC-42, and calls create_action — which composes
+      # select_inputs and generate_change inside its funding loop to handle
+      # UTXO selection, fees, and change.
       #
       # @param recipient [String] 66-char compressed public key hex (02/03 prefix)
       # @param satoshis [Integer] amount to send
@@ -677,7 +705,8 @@ module BSV
         ).to_binary
 
         # randomize_outputs: false guarantees the payment output stays at
-        # index 0.  Auto-fund change outputs are appended after caller outputs.
+        # index 0. Change outputs from generate_change are appended after
+        # caller outputs.
         result = create_action(
           description: "send #{satoshis} sats",
           outputs: [{ satoshis: satoshis, locking_script: locking_script }],
@@ -1427,9 +1456,10 @@ module BSV
       # exists, creates a broadcast self-payment with random satoshis (100-1000)
       # and an OP_RETURN recovery marker.
       #
-      # Broadcasting is essential — auto-fund locks UTXOs and creates change.
-      # Without broadcast, those funding UTXOs stay locked and change never
-      # becomes spendable. The random amount provides privacy (slots are
+      # Broadcasting is essential — create_action's funding loop locks UTXOs
+      # and writes change rows that only become spendable at Phase 4. Without
+      # broadcast, those funding UTXOs stay locked and change never becomes
+      # spendable. The random amount provides privacy (slots are
       # indistinguishable from normal wallet activity on-chain). The OP_RETURN
       # marker enables address recovery from the identity key alone.
       #

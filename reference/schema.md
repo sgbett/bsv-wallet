@@ -1003,7 +1003,7 @@ end
 
 ## Key Queries
 
-**Spendable outputs in a basket** — the hot path for `createAction` auto-funding. Enters through `spendable` (the wallet, in memory), PK-joins to `outputs` (the log) for data:
+**Spendable outputs in a basket** — the hot path for `createAction`'s funding loop (the `select_inputs` primitive). Enters through `spendable` (the wallet, in memory), PK-joins to `outputs` (the log) for data:
 
 ```sql
 SELECT o.id, o.satoshis, o.vout, o.action_id, o.locking_script,
