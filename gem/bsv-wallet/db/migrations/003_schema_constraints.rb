@@ -45,7 +45,7 @@ Sequel.migration do
       # Convert reference from text to uuid
       run 'ALTER TABLE actions ALTER COLUMN reference SET NOT NULL'
       run 'ALTER TABLE actions ALTER COLUMN reference TYPE uuid USING reference::uuid'
-      run 'ALTER TABLE actions ALTER COLUMN reference SET DEFAULT gen_random_uuid()'
+      run 'ALTER TABLE actions ALTER COLUMN reference SET DEFAULT uuidv7()'
     else
       alter_table(:actions) do
         set_column_not_null :reference

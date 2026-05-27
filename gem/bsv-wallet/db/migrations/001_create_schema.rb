@@ -66,7 +66,11 @@ Sequel.migration do
       foreign_key :tx_proof_id, :tx_proofs, type: :bigint
       column :wtxid, c[:bytea]
       if postgres
-        column :reference, :text, unique: true, default: Sequel.function(:gen_random_uuid)
+        # UUIDv7 is time-ordered (#198/#222) — sequential B-tree inserts on
+        # the UNIQUE index, no page splits or fragmentation. Native to
+        # Postgres 18. SQLite has no default — the Action model generates
+        # via SecureRandom.uuid_v7 in before_create.
+        column :reference, :text, unique: true, default: Sequel.function(:uuidv7)
       else
         column :reference, :text, unique: true
       end

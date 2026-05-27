@@ -116,7 +116,7 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
 | tx_proof_id | bigint | REFERENCES tx_proofs (id) |
 | wtxid | bytea | UNIQUE WHERE NOT NULL |
-| reference | uuid | NOT NULL UNIQUE DEFAULT gen_random_uuid() |
+| reference | uuid | NOT NULL UNIQUE DEFAULT uuidv7() |
 | outgoing | bool | NOT NULL DEFAULT true |
 | description | text | NOT NULL |
 | version | integer | |
@@ -132,6 +132,8 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 - `CHECK length(description) BETWEEN 5 AND 50`
 - `CHECK NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)` — outgoing actions require nlocktime; incoming actions may omit it
 - `CHECK (wtxid IS NULL) = (raw_tx IS NULL)` — an action is either unsigned (both NULL) or signed (both set)
+
+**`reference` UUIDv7:** Time-ordered UUID (#198/#222). Postgres uses the native `uuidv7()` function (PG 18+) as the column default. SQLite calls `SecureRandom.uuid_v7` (Ruby 3.3+) from `Action#before_create`. Sequential inserts on the UNIQUE index — no B-tree page splits or fragmentation that random UUIDv4 caused.
 
 **Indexes:**
 - `idx_actions_broadcast_intent` on `(broadcast_intent)` — worker queries scan for actions pending broadcast
