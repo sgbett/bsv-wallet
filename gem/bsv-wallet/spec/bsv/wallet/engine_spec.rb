@@ -2284,7 +2284,7 @@ RSpec.describe BSV::Wallet::Engine do
                          .where(action_id: source[:id]).first.id
 
       action = store.create_action(
-        action: { description: 'gc target', broadcast: :none, outgoing: true },
+        action: { description: 'gc target', broadcast: :none, outgoing: true, nlocktime: 0 },
         inputs: [{ output_id: funded_output_id, vin: 0 }]
       )
       action[:id]
