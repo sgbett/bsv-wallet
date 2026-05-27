@@ -641,18 +641,6 @@ module BSV
           .map { |b| broadcast_to_hash(b) }
       end
 
-      # Cancel a pending broadcast: delete the broadcasts row and set the
-      # action's broadcast intent to 'none'. Atomic. Used when signAction
-      # is called with no_send: true on an action that was created with
-      # broadcast intent IN ('delayed', 'inline') — the user is overriding
-      # the original intent and the daemon must not pick this up.
-      def cancel_broadcast(action_id:)
-        @db.transaction do
-          models::Broadcast.where(action_id: action_id).delete
-          models::Action.where(id: action_id).update(broadcast: 'none')
-        end
-      end
-
       def mark_broadcast_attempted(action_id:)
         @db.transaction do
           raise "no broadcasts row for action_id=#{action_id}" unless models::Broadcast.where(action_id: action_id).any?

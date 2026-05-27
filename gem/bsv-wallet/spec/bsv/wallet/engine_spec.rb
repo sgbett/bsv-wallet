@@ -334,8 +334,7 @@ RSpec.describe BSV::Wallet::Engine do
       # circuits broadcast — Phase 4 never runs, so outputs stay invisible.
       result = engine.sign_action(
         spends: {},
-        reference: reference,
-        no_send: true
+        reference: reference
       )
 
       expect(result[:txid]).to be_a(String)
@@ -368,10 +367,11 @@ RSpec.describe BSV::Wallet::Engine do
       reference = create_result[:signable_transaction][:reference]
       action = store.find_action(reference: reference)
 
-      # Sign with no_send: false so the broadcasts row is created (but we
-      # don't actually call ARC — the daemon would). Simulate broadcast
-      # acceptance directly by invoking the Phase 4 store operation.
-      engine.sign_action(spends: {}, reference: reference, no_send: true)
+      # Sign with default broadcast intent (delayed). store.sign_action
+      # creates the broadcasts row; the engine returns without invoking
+      # ARC because broadcast: :delayed defers to the daemon. The test
+      # then simulates the daemon's Phase 4 trigger directly.
+      engine.sign_action(spends: {}, reference: reference)
 
       # Outputs still pending — no Phase 4 yet.
       expect(engine.list_outputs(basket: basket)[:total_outputs]).to eq(0)
@@ -481,8 +481,7 @@ RSpec.describe BSV::Wallet::Engine do
         # Sign with empty spends — wallet signs the P2PKH input
         result = engine_with_keys.sign_action(
           spends: {},
-          reference: reference,
-          no_send: true
+          reference: reference
         )
 
         expect(result[:txid]).to be_a(String)
@@ -523,8 +522,7 @@ RSpec.describe BSV::Wallet::Engine do
         # Caller provides unlocking script for input 0
         result = engine_with_keys.sign_action(
           spends: { 0 => { unlocking_script: custom_unlock } },
-          reference: reference,
-          no_send: true
+          reference: reference
         )
 
         expect(result[:txid]).to be_a(String)
@@ -557,8 +555,7 @@ RSpec.describe BSV::Wallet::Engine do
         # Caller provides script for input 0, wallet signs input 1
         result = engine_with_keys.sign_action(
           spends: { 0 => { unlocking_script: custom_unlock } },
-          reference: reference,
-          no_send: true
+          reference: reference
         )
 
         expect(result[:txid]).to be_a(String)
@@ -587,8 +584,7 @@ RSpec.describe BSV::Wallet::Engine do
         expect do
           engine.sign_action(
             spends: { 99 => { unlocking_script: "\x00".b } },
-            reference: reference,
-            no_send: true
+            reference: reference
           )
         end.to raise_error(BSV::Wallet::InvalidParameterError, /vin 99/)
       end
@@ -678,8 +674,7 @@ RSpec.describe BSV::Wallet::Engine do
 
         result = engine_with_keys.sign_action(
           spends: { 0 => { unlocking_script: "\x01".b, sequence_number: 42 } },
-          reference: reference,
-          no_send: true
+          reference: reference
         )
 
         parsed = parse_beef_tx(result[:tx])
@@ -2770,8 +2765,7 @@ RSpec.describe BSV::Wallet::Engine do
         # Phase 2: sign with empty spends (wallet signs all P2PKH)
         sign_result = engine_with_keys.sign_action(
           spends: {},
-          reference: reference,
-          no_send: true
+          reference: reference
         )
 
         expect(sign_result[:txid]).to be_a(String)
@@ -2818,8 +2812,7 @@ RSpec.describe BSV::Wallet::Engine do
 
         result = engine_with_keys.sign_action(
           spends: { 0 => { unlocking_script: custom_unlock } },
-          reference: reference,
-          no_send: true
+          reference: reference
         )
 
         parsed = parse_beef_tx(result[:tx])

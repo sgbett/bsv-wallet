@@ -5,7 +5,7 @@
 #
 # Migration 002 relaxed this FK to SET NULL when the deferred-sign path
 # promoted outputs at sign time -- aborting such an action then needed
-# to severe the FK to delete the row. Under #194 the send path no longer
+# to sever the FK to delete the row. Under #194 the send path no longer
 # promotes outputs at sign time (promoted: false until broadcast accept),
 # and Store#fail_broadcast_action explicitly deletes promoted: false output
 # rows before the action. No reachable code path mutates outputs.action_id.

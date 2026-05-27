@@ -131,7 +131,7 @@ module BSV
         # rows are deferred until Phase 4 on broadcast acceptance.
         # Internal-path outputs (broadcast intent :none) are promoted
         # synchronously via promote_with_outputs below.
-        pending_outputs = broadcast == :none ? [] : build_output_specs(outputs, vout_mapping)
+        pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
 
         if deferred
           @store.stage_action(
@@ -188,6 +188,18 @@ module BSV
         action = @store.find_action(reference: reference)
         raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
+        # Runtime broadcast-override at sign time belongs to the
+        # chained-send subsystem (#192). The base wallet's signAction
+        # only completes the deferred-construction lifecycle per the
+        # original broadcast intent set at createAction time.
+        if no_send && action[:broadcast] != 'none'
+          raise BSV::Wallet::UnsupportedActionError,
+                'signAction(no_send: true) requires the action to have been ' \
+                "created with no_send: true (broadcast intent 'none'). " \
+                'Runtime override at sign time is not implemented in the base ' \
+                'wallet; tracked in #192.'
+        end
+
         # Outputs were already written during create_action (promoted: false)
         # so sign_action only deserializes the unsigned tx, applies caller
         # unlocking scripts, signs remaining P2PKH inputs, and updates the
@@ -195,13 +207,6 @@ module BSV
         wtxid, raw_tx = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-
-        # signAction(no_send: true) overrides the action's original broadcast
-        # intent. @store.sign_action already inserted a broadcasts row per
-        # the original intent; cancel it so the daemon doesn't pick it up.
-        # Updates the action's broadcast field to 'none' to keep the
-        # schema invariant ("broadcast != 'none' ⇒ broadcasts row exists").
-        @store.cancel_broadcast(action_id: action[:id]) if no_send && action[:broadcast] != 'none'
 
         # Build Atomic BEEF envelope for the :tx return value
         atomic_beef = build_atomic_beef(raw_tx, action[:id])
@@ -1772,7 +1777,7 @@ module BSV
         # Send-path caller outputs and change outputs both written here; the
         # internal path (no_send) leaves caller outputs to the synchronous
         # promote_with_outputs call below.
-        pending_outputs = broadcast == :none ? [] : build_output_specs(outputs, vout_mapping)
+        pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
         @store.sign_action(
           action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
           outputs: pending_outputs, change_outputs: change_outputs
