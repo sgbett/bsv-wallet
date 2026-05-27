@@ -20,7 +20,11 @@ module BSV
                                 left_key: :action_id, right_key: :label_id
 
           def before_create
-            self.reference ||= SecureRandom.uuid
+            # UUIDv7 is time-ordered (#198/#222) — sequential inserts on
+            # the UNIQUE reference index. Postgres has a server-side
+            # default; this branch covers SQLite (and any path that
+            # doesn't go through DB defaults).
+            self.reference ||= SecureRandom.uuid_v7
             super
           end
 
@@ -35,7 +39,7 @@ module BSV
           def derived_status
             return :unsigned   if wtxid.nil?
             return :completed  if tx_proof_id
-            return :internal   if values[:broadcast] == 'none'
+            return :internal   if values[:broadcast_intent] == 'none'
             # Send-path outputs are persisted at sign time with promoted: false
             # (#194). Only outputs flipped to promoted: true at Phase 4 mean
             # the broadcast was accepted — the :unproven gate.

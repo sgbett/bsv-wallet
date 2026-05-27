@@ -23,7 +23,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastCallback, :store do
 
   describe 'POST /' do
     it 'parses ARC TransactionStatus JSON and delegates to handle_event' do
-      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed')
 
       payload = {
         txid: txid_hex,
@@ -44,7 +44,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastCallback, :store do
     end
 
     it 'hex-decodes binary fields' do
-      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed')
       block_hash = SecureRandom.random_bytes(32)
 
       payload = {

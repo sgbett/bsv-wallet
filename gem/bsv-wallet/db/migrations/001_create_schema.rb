@@ -15,11 +15,24 @@ Sequel.migration do
     c[:bytea] = postgres ? :bytea : :blob
     c[:timestamptz] = postgres ? :timestamptz : :datetime
     c[:broadcast_intent] = postgres ? :broadcast_intent : :text
+    c[:tx_status] = postgres ? :tx_status : :text
     c[:now] = postgres ? Sequel.function(:now) : Sequel::CURRENT_TIMESTAMP
+
+    # ARC tx_status vocabulary, per
+    # https://github.com/bitcoin-sv/arc internal/metamorph/metamorph_api/metamorph_api.proto.
+    # IMMUTABLE appended for the wallet's TERMINAL_STATUSES (anticipates an
+    # ARC addition; #198/#220 design intent).
+    arc_tx_statuses = %w[
+      UNKNOWN QUEUED RECEIVED STORED
+      ANNOUNCED_TO_NETWORK REQUESTED_BY_NETWORK SENT_TO_NETWORK
+      ACCEPTED_BY_NETWORK SEEN_IN_ORPHAN_MEMPOOL SEEN_ON_NETWORK
+      DOUBLE_SPEND_ATTEMPTED REJECTED MINED_IN_STALE_BLOCK MINED IMMUTABLE
+    ]
 
     if postgres
       extension :pg_enum
       create_enum(:broadcast_intent, %w[delayed inline none])
+      create_enum(:tx_status, arc_tx_statuses)
     end
 
     # 1. blocks — known block headers (chain tracker's local view)
@@ -53,7 +66,11 @@ Sequel.migration do
       foreign_key :tx_proof_id, :tx_proofs, type: :bigint
       column :wtxid, c[:bytea]
       if postgres
-        column :reference, :text, unique: true, default: Sequel.function(:gen_random_uuid)
+        # UUIDv7 is time-ordered (#198/#222) — sequential B-tree inserts on
+        # the UNIQUE index, no page splits or fragmentation. Native to
+        # Postgres 18. SQLite has no default — the Action model generates
+        # via SecureRandom.uuid_v7 in before_create.
+        column :reference, :text, unique: true, default: Sequel.function(:uuidv7)
       else
         column :reference, :text, unique: true
       end
@@ -62,24 +79,33 @@ Sequel.migration do
       column :description, :text
       column :version, :integer
       column :nlocktime, :bigint
-      column :broadcast, c[:broadcast_intent], null: false, default: 'delayed'
+      column :broadcast_intent, c[:broadcast_intent], null: false, default: 'delayed'
       column :raw_tx, c[:bytea]
       column :input_beef, c[:bytea]
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       index :wtxid, unique: true, where: Sequel.lit('wtxid IS NOT NULL')
-      index :broadcast
+      index :broadcast_intent
+
+      # Composite FK target: broadcasts(action_id, intent) → actions(id, broadcast_intent)
+      # makes broadcasts.intent track actions.broadcast_intent atomically (#221).
+      unique %i[id broadcast_intent]
     end
 
     # 4. broadcasts — ARC lifecycle
     create_table(:broadcasts) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
-      foreign_key :action_id, :actions, type: :bigint, null: false, unique: true
+      column :action_id, :bigint, null: false
       column :broadcast_at, c[:timestamptz]
-      column :tx_status, :text
+      column :callback_token, :text
       column :arc_status, :integer
+      column :tx_status, c[:tx_status]
+      # Composite FK to actions(id, broadcast_intent) + CHECK intent != 'none'
+      # (#198/#221) keeps broadcasts.intent in sync with the parent action's
+      # intent and forbids broadcast rows for internal-path actions.
+      column :intent, c[:broadcast_intent], null: false
       column :block_hash, c[:bytea]
       column :block_height, :integer
       column :merkle_path, c[:bytea]
@@ -87,6 +113,15 @@ Sequel.migration do
       column :competing_txs, postgres ? 'text[]' : :text
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
+
+      unique :action_id
+      # ON UPDATE RESTRICT makes the immutability of actions.broadcast_intent
+      # explicit at the schema level — any path that tries to mutate the
+      # parent's intent while a broadcasts row exists is rejected, rather
+      # than relying on application code to honour the invariant.
+      foreign_key %i[action_id intent], :actions,
+                  key: %i[id broadcast_intent], on_update: :restrict
+      constraint(:intent_not_none, "intent != 'none'")
     end
 
     # 5. baskets — output grouping with replenishment policy
@@ -296,6 +331,7 @@ Sequel.migration do
 
     if postgres
       extension :pg_enum
+      drop_enum(:tx_status)
       drop_enum(:broadcast_intent)
     end
   end

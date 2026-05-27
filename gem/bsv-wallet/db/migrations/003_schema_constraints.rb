@@ -24,6 +24,10 @@ Sequel.migration do
       set_column_not_null :raw_tx
       add_constraint(:wtxid_length)       { length(wtxid) =~ 32 }
       add_constraint(:raw_tx_min_length)  { length(raw_tx) >= 20 }
+      # A merkle_path without block context is unverifiable — no root to
+      # check against. The reverse is fine (#198/#219): height-known +
+      # path-pending is the "confirmed but unproven" intermediate state.
+      add_constraint(:path_requires_block, 'merkle_path IS NULL OR block_id IS NOT NULL')
     end
 
     # --- 3. actions ---
@@ -34,14 +38,14 @@ Sequel.migration do
       add_constraint(:description_length, 'length(description) BETWEEN 5 AND 50')
       add_constraint(:nlocktime_range, 'NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)')
       add_constraint(:wtxid_raw_tx_parity, '(wtxid IS NULL) = (raw_tx IS NULL)')
-      add_constraint(:broadcast_values, "broadcast IN ('delayed', 'inline', 'none')") if !postgres
+      add_constraint(:broadcast_intent_values, "broadcast_intent IN ('delayed', 'inline', 'none')") if !postgres
     end
 
     if postgres
       # Convert reference from text to uuid
       run 'ALTER TABLE actions ALTER COLUMN reference SET NOT NULL'
       run 'ALTER TABLE actions ALTER COLUMN reference TYPE uuid USING reference::uuid'
-      run 'ALTER TABLE actions ALTER COLUMN reference SET DEFAULT gen_random_uuid()'
+      run 'ALTER TABLE actions ALTER COLUMN reference SET DEFAULT uuidv7()'
     else
       alter_table(:actions) do
         set_column_not_null :reference
@@ -52,6 +56,18 @@ Sequel.migration do
     alter_table(:broadcasts) do
       add_constraint(:block_hash_length, 'block_hash IS NULL OR length(block_hash) = 32')
       add_constraint(:block_height_range, 'block_height IS NULL OR block_height >= 0')
+      # Postgres uses the tx_status ENUM; SQLite gets an equivalent CHECK
+      # to keep parity. List mirrors arc_tx_statuses in 001 (ARC's metamorph
+      # Status enum plus IMMUTABLE, #198/#220).
+      if !postgres
+        add_constraint(
+          :tx_status_values,
+          "tx_status IS NULL OR tx_status IN ('UNKNOWN', 'QUEUED', 'RECEIVED', 'STORED', " \
+          "'ANNOUNCED_TO_NETWORK', 'REQUESTED_BY_NETWORK', 'SENT_TO_NETWORK', " \
+          "'ACCEPTED_BY_NETWORK', 'SEEN_IN_ORPHAN_MEMPOOL', 'SEEN_ON_NETWORK', " \
+          "'DOUBLE_SPEND_ATTEMPTED', 'REJECTED', 'MINED_IN_STALE_BLOCK', 'MINED', 'IMMUTABLE')"
+        )
+      end
     end
 
     # --- 5. baskets ---
@@ -279,6 +295,7 @@ Sequel.migration do
     alter_table(:broadcasts) do
       drop_constraint :block_hash_length
       drop_constraint :block_height_range
+      drop_constraint :tx_status_values if !postgres
     end
 
     # --- 3. actions ---
@@ -295,7 +312,7 @@ Sequel.migration do
       drop_constraint :description_length
       drop_constraint :nlocktime_range
       drop_constraint :wtxid_raw_tx_parity
-      drop_constraint :broadcast_values if !postgres
+      drop_constraint :broadcast_intent_values if !postgres
       set_column_allow_null :description
       add_column :satoshis, :bigint
     end
@@ -304,6 +321,7 @@ Sequel.migration do
     alter_table(:tx_proofs) do
       drop_constraint :wtxid_length
       drop_constraint :raw_tx_min_length
+      drop_constraint :path_requires_block
       set_column_allow_null :raw_tx
     end
 

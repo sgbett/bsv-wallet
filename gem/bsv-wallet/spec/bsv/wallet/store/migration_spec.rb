@@ -20,10 +20,10 @@ RSpec.describe 'Schema migration', :store do
   end
 
   describe 'value restrictions', :postgres do
-    it 'rejects invalid broadcast values' do
+    it 'rejects invalid broadcast_intent values' do
       expect do
         db.transaction(savepoint: true) do
-          db[:actions].insert(description: 'test action 12345', outgoing: true, nlocktime: 0, reference: SecureRandom.uuid, broadcast: 'bogus')
+          db[:actions].insert(description: 'test action 12345', outgoing: true, nlocktime: 0, reference: SecureRandom.uuid, broadcast_intent: 'bogus')
         end
       end.to raise_error(Sequel::DatabaseError)
     end
@@ -37,6 +37,15 @@ RSpec.describe 'Schema migration', :store do
             locking_script: Sequel.blob(valid_locking_script),
             output_type: 'bogus'
           )
+        end
+      end.to raise_error(Sequel::DatabaseError)
+    end
+
+    it 'rejects invalid tx_status values' do
+      action_id = insert_action(description: 'test action 12345')
+      expect do
+        db.transaction(savepoint: true) do
+          db[:broadcasts].insert(action_id: action_id, intent: 'delayed', tx_status: 'BOGUS')
         end
       end.to raise_error(Sequel::DatabaseError)
     end
@@ -55,6 +64,22 @@ RSpec.describe 'Schema migration', :store do
         Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'output_type'")
       ).select_map(:enumlabel)
       expect(values).to eq(%w[root outbound])
+    end
+
+    # ARC's metamorph Status enum + IMMUTABLE (wallet's TERMINAL_STATUSES).
+    # See #198/#220 — the canonical source is ARC's metamorph_api.proto.
+    it 'tx_status has the correct values' do
+      values = db.from(
+        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'tx_status'")
+      ).select_map(:enumlabel)
+      expect(values).to eq(
+        %w[
+          UNKNOWN QUEUED RECEIVED STORED
+          ANNOUNCED_TO_NETWORK REQUESTED_BY_NETWORK SENT_TO_NETWORK
+          ACCEPTED_BY_NETWORK SEEN_IN_ORPHAN_MEMPOOL SEEN_ON_NETWORK
+          DOUBLE_SPEND_ATTEMPTED REJECTED MINED_IN_STALE_BLOCK MINED IMMUTABLE
+        ]
+      )
     end
   end
 
@@ -87,6 +112,29 @@ RSpec.describe 'Schema migration', :store do
           db[:tx_proofs].insert(wtxid: Sequel.blob(valid_wtxid), raw_tx: Sequel.blob(valid_raw_tx))
         end
       end.to raise_error(Sequel::UniqueConstraintViolation)
+    end
+
+    it 'rejects tx_proofs.merkle_path without block_id (path_requires_block)' do
+      expect do
+        db.transaction(savepoint: true) do
+          db[:tx_proofs].insert(
+            wtxid: Sequel.blob(SecureRandom.random_bytes(32)),
+            raw_tx: Sequel.blob(valid_raw_tx),
+            merkle_path: Sequel.blob(SecureRandom.random_bytes(64))
+          )
+        end
+      end.to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    it 'allows tx_proofs.block_id without merkle_path (confirmed but unproven)' do
+      block_id = db[:blocks].insert(height: 800_000, merkle_root: Sequel.blob(SecureRandom.random_bytes(32)))
+      expect do
+        db[:tx_proofs].insert(
+          wtxid: Sequel.blob(SecureRandom.random_bytes(32)),
+          raw_tx: Sequel.blob(valid_raw_tx),
+          block_id: block_id
+        )
+      end.not_to raise_error
     end
 
     it 'enforces UNIQUE on inputs.output_id (structural lock)' do
@@ -141,10 +189,10 @@ RSpec.describe 'Schema migration', :store do
       expect(action.reference.to_s).to match(/\A[0-9a-f]{8}-[0-9a-f]{4}-/)
     end
 
-    it 'defaults broadcast to delayed' do
+    it 'defaults broadcast_intent to delayed' do
       action_id = insert_action(description: 'broadcast test 1')
       row = db[:actions].where(id: action_id).first
-      expect(row[:broadcast]).to eq('delayed')
+      expect(row[:broadcast_intent]).to eq('delayed')
     end
   end
 end

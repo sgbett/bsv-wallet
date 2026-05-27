@@ -196,7 +196,7 @@ RSpec.describe 'Schema constraints', :postgres, :store do
       action_id = insert_action
       expect do
         db.transaction(savepoint: true) do
-          db[:broadcasts].insert(action_id: action_id, block_hash: Sequel.blob("\x00" * 31))
+          db[:broadcasts].insert(action_id: action_id, intent: 'delayed', block_hash: Sequel.blob("\x00" * 31))
         end
       end.to raise_error(Sequel::CheckConstraintViolation)
     end
@@ -205,9 +205,33 @@ RSpec.describe 'Schema constraints', :postgres, :store do
       action_id = insert_action
       expect do
         db.transaction(savepoint: true) do
-          db[:broadcasts].insert(action_id: action_id, block_height: -1)
+          db[:broadcasts].insert(action_id: action_id, intent: 'delayed', block_height: -1)
         end
       end.to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    # #198/#221 — broadcasts.intent + composite FK + CHECK intent != 'none'
+    # together enforce that an action with broadcast_intent = 'none' cannot
+    # have a broadcasts row, without a trigger.
+    it "rejects intent = 'none' (intent_not_none CHECK)" do
+      action_id = insert_action
+      expect do
+        db.transaction(savepoint: true) do
+          db[:broadcasts].insert(action_id: action_id, intent: 'none')
+        end
+      end.to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    it "rejects intent mismatching the parent action's broadcast_intent" do
+      # Parent action defaults to broadcast_intent = 'delayed'; try to
+      # claim 'inline' instead — composite FK to actions(id, broadcast_intent)
+      # rejects the mismatch.
+      action_id = insert_action
+      expect do
+        db.transaction(savepoint: true) do
+          db[:broadcasts].insert(action_id: action_id, intent: 'inline')
+        end
+      end.to raise_error(Sequel::DatabaseError, /foreign key/i)
     end
   end
 

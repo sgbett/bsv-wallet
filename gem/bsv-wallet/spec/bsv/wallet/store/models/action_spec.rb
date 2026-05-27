@@ -11,7 +11,7 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
       action = described_class.create(outgoing: false, description: 'test action')
       expect(action.id).to be_a(Integer)
       expect(action.reference).to be_a(String)
-      expect(action.values[:broadcast]).to eq('delayed')
+      expect(action.values[:broadcast_intent]).to eq('delayed')
       expect(action.nlocktime).to be_nil
     end
 
@@ -49,7 +49,7 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
 
     it 'has one broadcast_entry' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0)
-      broadcast = BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
+      broadcast = BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed')
       expect(action.reload.broadcast_entry).to eq(broadcast)
     end
 
@@ -87,8 +87,8 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
       expect(action.derived_status).to eq(:completed)
     end
 
-    it 'returns :internal when broadcast is none' do
-      action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx, broadcast: 'none')
+    it 'returns :internal when broadcast_intent is none' do
+      action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx, broadcast_intent: 'none')
       expect(action.derived_status).to eq(:internal)
     end
 
@@ -100,13 +100,13 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
 
     it 'returns :failed when broadcast status is REJECTED' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, tx_status: 'REJECTED')
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed', tx_status: 'REJECTED')
       expect(action.reload.derived_status).to eq(:failed)
     end
 
     it 'returns :sending when broadcast exists but no outputs' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed', tx_status: 'SEEN_ON_NETWORK')
       expect(action.reload.derived_status).to eq(:sending)
     end
 
