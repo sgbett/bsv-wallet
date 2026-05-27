@@ -98,6 +98,9 @@ RSpec.describe BSV::Wallet::Engine do
 
       expect(result).to include(:signable_transaction)
       expect(result[:signable_transaction][:reference]).to be_a(String)
+      # BRC-100 contract: tx is Atomic BEEF of the unsigned transaction.
+      expect(result[:signable_transaction][:tx]).to be_a(String)
+      expect(result[:signable_transaction][:tx].bytesize).to be >= 10
 
       # Send-path outputs are persisted with promoted: false at stage time —
       # they exist in the outputs table but aren't in the canonical UTXO set

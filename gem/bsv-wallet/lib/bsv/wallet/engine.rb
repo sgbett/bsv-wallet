@@ -75,7 +75,7 @@ module BSV
       # Composes the funding primitives:
       #   1. Phase 1 picks the initial input set:
       #      - inputs: nil and outputs present  → select_inputs(sum(outputs))
-      #      - inputs: [] / empty                → no selection (OP_RETURN-only)
+      #      - inputs: [] / empty                → no selection (explicit zero-input tx)
       #      - inputs: [...]                     → caller-supplied, used as-is
       #      Followed by an atomic Store#create_action that inserts the
       #      action row and the input rows together.
@@ -132,7 +132,7 @@ module BSV
 
         # key_deriver is required only when the wallet must derive BRC-42
         # change keys (generate_change). Deferred signing defers to
-        # signAction; explicit empty inputs (OP_RETURN-only) skip change
+        # signAction; explicit zero-input transactions skip change
         # generation. Both paths can run without a key deriver here.
         skip_change = caller_supplied_inputs && inputs.empty?
         require_key_deriver! unless deferred || skip_change
@@ -190,9 +190,11 @@ module BSV
             outputs: pending_outputs
           )
           @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+          # BRC-100: signableTransaction.tx is Atomic BEEF of the unsigned tx
+          # so external signers can inspect ancestry without a follow-up call.
           return {
             signable_transaction: {
-              tx: nil,
+              tx: build_atomic_beef(raw_tx, action_result[:id]),
               reference: action_result[:reference]
             }
           }
