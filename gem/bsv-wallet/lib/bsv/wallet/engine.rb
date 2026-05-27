@@ -939,6 +939,28 @@ module BSV
         end
       end
 
+      # Input-selection primitive (#208).
+      #
+      # Pure pool selection: no fee estimation, no headroom margin, no
+      # locking. The funding loop in create_action composes this with
+      # generate_change to converge on a fully funded transaction.
+      #
+      # @param target_satoshis [Integer] minimum total value to select
+      # @param exclude [Array<Integer>] output IDs already locked in this
+      #   action — skipped so a top-up call doesn't re-select them
+      # @return [Array<Hash>] input specs ({ output_id:, vin: }) suitable
+      #   for Store#lock_inputs / Store#create_action's inputs argument
+      # @raise [BSV::Wallet::PoolDepletedError] when the pool cannot meet
+      #   the target after applying exclude:
+      def select_inputs(target_satoshis:, exclude: [])
+        return [] if target_satoshis.zero?
+
+        candidates = @utxo_pool.select(satoshis: target_satoshis, exclude: exclude)
+        candidates.each_with_index.map do |c, idx|
+          { output_id: c[:id], vin: idx }
+        end
+      end
+
       def attach_labels(action_id, labels)
         return unless labels&.any?
 
