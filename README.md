@@ -69,6 +69,11 @@ docker compose up -d postgres
 
 It runs `postgres:18` on port `5433` (to avoid clashing with a host install on `5432`) with user/password `postgres`/`postgres`, matching the `DATABASE_URL_*` entries in `.env`. Data is bind-mounted to `./tmp/postgres-data` (gitignored) — wipe it with `rm -rf tmp/postgres-data` to start fresh.
 
+On first init, `docker/postgres/initdb/01-create-databases.sql` creates three empty databases:
+
+- `bsv_wallet_test` — for `DATABASE_URL=postgres://…/bsv_wallet_test bundle exec rspec` (RSpec runs its own schema migrations)
+- `bsv_wallet_alice` / `bsv_wallet_bob` — for hand-driven CLI sessions against Postgres (the wallet boots and migrates per-process)
+
 ## Getting Started
 
 ### Requirements
