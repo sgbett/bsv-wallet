@@ -1799,11 +1799,20 @@ module BSV
         # Phase 2: Build funded transaction (in memory). If this raises,
         # the action + input rows from Phase 1 remain locked until the
         # reaper cleans them up via CASCADE delete.
-        wtxid, raw_tx, vout_mapping, change_outputs = build_funded_transaction(
+        funded = generate_change(
           action_id: action_result[:id], caller_outputs: outputs,
           lock_time: lock_time, version: version, randomize: randomize_outputs,
           change_count: estimated_change_count
         )
+        # Top-up integration arrives in #210; for now any shortfall on the
+        # auto-fund path surfaces as InsufficientFundsError, preserving
+        # existing user-visible behaviour. Phase 1 rows are reaped via CASCADE.
+        raise BSV::Wallet::InsufficientFundsError if funded[:shortfall]
+
+        wtxid = funded[:wtxid]
+        raw_tx = funded[:raw_tx]
+        vout_mapping = funded[:vout_mapping]
+        change_outputs = funded[:change_outputs]
 
         # Phase 2b: Atomic sign + outputs/change persistence (promoted: false).
         # Send-path caller outputs and change outputs both written here; the
@@ -1846,31 +1855,49 @@ module BSV
         { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
 
-      # Build a funded transaction with SDK fee computation and change.
+      # Build a transaction with BRC-42 change derivation, explicit fee
+      # detection, and shortfall reporting.
       #
-      # Separate from build_transaction to avoid touching the existing
-      # caller-provided-inputs path. Derives a BRC-42 change key, builds
-      # the transaction with all outputs (caller + change), computes the
-      # fee via the SDK, and signs.
+      # Works regardless of input source (caller-supplied or wallet-selected);
+      # the inputs must already be locked to +action_id+ when this is called.
       #
-      # Ordering constraint:
-      #   build → attach templates → tx.fee → shuffle → sign
+      # Order of operations:
+      #   build -> attach templates -> fee check -> distribute_change -> shuffle -> sign
       #   Templates before fee (estimated_size needs them).
-      #   Fee before shuffle (Benford remainder targets @outputs.last).
+      #   Fee check before distribute_change so a shortfall is reported
+      #     before any change is allocated.
+      #   Distribute before shuffle (Benford remainder targets @outputs.last).
       #   Shuffle before sign (sighash commits to final output positions).
       #
-      # @return [Array(String, String, Hash, Array<Hash>)]
-      #   wtxid, raw_tx, vout_mapping (caller only), change_output_specs
-      def build_funded_transaction(action_id:, caller_outputs:,
-                                   lock_time:, version:, randomize:,
-                                   change_count:)
+      # The SDK's +Transaction#fee+ does not raise on insufficient inputs:
+      # +distribute_change+ silently drops all change outputs when
+      # +available <= 0+. To get an explicit shortfall we call
+      # +FeeModels::SatoshisPerKilobyte#compute_fee(tx)+ against the
+      # templated tx and compare to +total_input_satoshis - sum(caller
+      # outputs)+. Only when the surplus exceeds the required fee do we
+      # delegate to +tx.fee+ for change distribution.
+      #
+      # @param change_count [Integer] number of BRC-42 change outputs to
+      #   derive. Precondition: must be >= 1. +@utxo_pool.change_output_count+
+      #   clamps to +[1, MAX_CHANGE_PER_TX]+ so in normal operation this is
+      #   invariant; the assertion makes the contract explicit.
+      # @return [Hash] one of:
+      #   - +{ wtxid:, raw_tx:, vout_mapping:, change_outputs: }+ on success.
+      #     +change_outputs+ lists only the change rows that survived
+      #     +distribute_change+ — empty when the surplus exactly covers
+      #     the fee.
+      #   - +{ shortfall: N }+ where +N+ is the positive deficit in satoshis
+      #     (+required_fee - surplus+) when inputs do not cover the fee.
+      def generate_change(action_id:, caller_outputs:,
+                          lock_time:, version:, randomize:,
+                          change_count:)
+        raise ArgumentError, "change_count must be >= 1, got #{change_count}" if change_count < 1
+
         # A. Resolve inputs + derive signing keys
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
         tx_inputs, signing_keys = build_inputs(resolved_inputs, nil)
 
         # B. Derive change output keys (BRC-42 self-payments)
-        # change_count is pre-computed by caller before inputs are locked,
-        # since locking removes UTXOs from the spendable set.
         change_keys = change_count.times.map do |i|
           prefix = random_derivation
           suffix = (i + 1).to_s
@@ -1910,18 +1937,24 @@ module BSV
           tx.inputs[idx].unlocking_script_template = BSV::Transaction::P2PKH.new(key)
         end
 
-        # E. Compute fee + distribute change (Benford for privacy)
+        # E. Explicit fee detection. compute_fee asks the model "what fee
+        # would this tx require?" without mutating the tx. Surplus is the
+        # caller-side balance with change still at 0 sats. If the required
+        # fee exceeds the surplus, return a shortfall before distributing.
         fee_model = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
-        tx.fee(fee_model, change_distribution: :random)
+        required_fee = fee_model.compute_fee(tx)
+        surplus = tx.total_input_satoshis - caller_tx_outputs.sum(&:satoshis)
+        return { shortfall: required_fee - surplus } if required_fee > surplus
 
-        # F. Detect which change outputs survived (SDK removes all if
-        # insufficient change to cover them).
+        # F. Surplus covers fee — distribute remaining sats across change
+        # outputs (Benford for privacy). The SDK drops change outputs whose
+        # share rounds to zero, hence the surviving_change filter below.
+        tx.fee(fee_model, change_distribution: :random)
         surviving_change = change_tx_outputs.select { |co| tx.outputs.include?(co) }
 
-        # G. Shuffle outputs AFTER fee — fee computation doesn't depend on
-        # order, but SDK distributes change across all change-flagged outputs
-        # so they must be present during tx.fee. Shuffle now for privacy
-        # before signing.
+        # G. Shuffle outputs AFTER fee distribution — fee computation
+        # doesn't depend on order, but SDK distributes change across all
+        # change-flagged outputs so they must be present during tx.fee.
         tx.outputs.shuffle! if randomize && tx.outputs.length > 1
 
         # H. Compute final vout positions (post-shuffle)
@@ -1946,7 +1979,12 @@ module BSV
           }
         end
 
-        [tx.wtxid, tx.to_binary, vout_mapping, change_output_specs]
+        {
+          wtxid: tx.wtxid,
+          raw_tx: tx.to_binary,
+          vout_mapping: vout_mapping,
+          change_outputs: change_output_specs
+        }
       end
 
       # Apply caller-provided unlocking scripts and sign remaining inputs.

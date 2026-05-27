@@ -2255,6 +2255,140 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
+  # --- generate_change: explicit fee detection + shortfall reporting (#209) ---
+
+  describe '#generate_change (private)' do
+    # Funds a single P2PKH UTXO and locks it to a fresh action. Returns the
+    # action_id so the test can call generate_change against it.
+    def fund_and_lock(satoshis:)
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, 'wallet payment'], key_id: 'gc', counterparty: 'self'
+      )
+      pubkey_hash = BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
+      script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
+
+      source = store.create_action(
+        action: { description: 'gc funding', broadcast: :none, outgoing: false }
+      )
+      store.sign_action(action_id: source[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: DUMMY_RAW_TX)
+      store.promote_action(
+        action_id: source[:id],
+        outputs: [{
+          satoshis: satoshis, vout: 0, locking_script: script, basket: 'gc',
+          derivation_prefix: 'wallet payment', derivation_suffix: 'gc',
+          sender_identity_key: 'self'
+        }]
+      )
+
+      funded_output_id = BSV::Wallet::Store::Models::Output
+                         .where(action_id: source[:id]).first.id
+
+      action = store.create_action(
+        action: { description: 'gc target', broadcast: :none, outgoing: true },
+        inputs: [{ output_id: funded_output_id, vin: 0 }]
+      )
+      action[:id]
+    end
+
+    def generate_change(action_id:, caller_outputs:, change_count: 1,
+                        lock_time: 0, version: 1, randomize: false)
+      engine_with_keys.send(
+        :generate_change,
+        action_id: action_id, caller_outputs: caller_outputs,
+        lock_time: lock_time, version: version, randomize: randomize,
+        change_count: change_count
+      )
+    end
+
+    it 'returns the funded tuple as a hash when surplus covers the fee' do
+      action_id = fund_and_lock(satoshis: 10_000)
+      payment_script = SecureRandom.random_bytes(25)
+
+      result = generate_change(
+        action_id: action_id,
+        caller_outputs: [{ satoshis: 4_000, locking_script: payment_script }]
+      )
+
+      expect(result.keys).to contain_exactly(:wtxid, :raw_tx, :vout_mapping, :change_outputs)
+      expect(result[:wtxid].bytesize).to eq(32)
+      expect(result[:raw_tx]).to be_a(String)
+      expect(result[:vout_mapping]).to eq(0 => 0) # randomize: false, caller out first
+      expect(result[:change_outputs].length).to eq(1)
+      expect(result[:change_outputs].first[:satoshis]).to be > 0
+    end
+
+    it 'returns { shortfall: N } when inputs fall short of outputs + fee' do
+      action_id = fund_and_lock(satoshis: 5_000)
+      payment_script = SecureRandom.random_bytes(25)
+
+      result = generate_change(
+        action_id: action_id,
+        # Deliberately overspend: 5_000 input vs 5_000 output means surplus = 0,
+        # but a 1-input/2-output P2PKH tx still needs a positive fee.
+        caller_outputs: [{ satoshis: 5_000, locking_script: payment_script }]
+      )
+
+      expect(result).to match(shortfall: a_value > 0)
+      expect(result[:shortfall]).to be_a(Integer)
+    end
+
+    it 'reports the exact deficit as required_fee - surplus' do
+      action_id = fund_and_lock(satoshis: 10_000)
+      payment_script = SecureRandom.random_bytes(25)
+
+      # First call: succeed and learn the required fee. Surplus on this run
+      # is 10_000 - 4_000 = 6_000; sum of change outputs equals surplus - fee.
+      ok = generate_change(
+        action_id: action_id,
+        caller_outputs: [{ satoshis: 4_000, locking_script: payment_script }]
+      )
+      change_total = ok[:change_outputs].sum { |c| c[:satoshis] }
+      required_fee = (10_000 - 4_000) - change_total
+
+      # Second action with inputs that fall short by 1 sat.
+      short_action_id = fund_and_lock(satoshis: required_fee + 4_000 - 1)
+      result = generate_change(
+        action_id: short_action_id,
+        caller_outputs: [{ satoshis: 4_000, locking_script: payment_script }]
+      )
+
+      # Shortfall should be exactly 1 sat (within size estimate variance).
+      # The two transactions have the same shape, so the required_fee is
+      # identical and the surplus differs by 1.
+      expect(result[:shortfall]).to eq(1)
+    end
+
+    it 'raises ArgumentError when change_count is zero' do
+      action_id = fund_and_lock(satoshis: 10_000)
+      expect do
+        generate_change(
+          action_id: action_id,
+          caller_outputs: [{ satoshis: 100, locking_script: SecureRandom.random_bytes(25) }],
+          change_count: 0
+        )
+      end.to raise_error(ArgumentError, /change_count must be >= 1/)
+    end
+
+    it 'derives BRC-42 change outputs the wallet can re-derive' do
+      action_id = fund_and_lock(satoshis: 10_000)
+
+      result = generate_change(
+        action_id: action_id,
+        caller_outputs: [{ satoshis: 4_000, locking_script: SecureRandom.random_bytes(25) }]
+      )
+
+      change = result[:change_outputs].first
+      derived = key_deriver.derive_private_key(
+        protocol_id: [2, change[:derivation_prefix]],
+        key_id: change[:derivation_suffix],
+        counterparty: 'self'
+      )
+      pubkey_hash = BSV::Primitives::Digest.hash160(derived.public_key.compressed)
+      expected_script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
+      expect(change[:locking_script]).to eq(expected_script)
+    end
+  end
+
   # --- Input Resolution and P2PKH Signing (#22) ---
 
   describe '#build_inputs (private)' do
