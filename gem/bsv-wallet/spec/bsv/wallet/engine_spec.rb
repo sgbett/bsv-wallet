@@ -98,6 +98,9 @@ RSpec.describe BSV::Wallet::Engine do
 
       expect(result).to include(:signable_transaction)
       expect(result[:signable_transaction][:reference]).to be_a(String)
+      # BRC-100 contract: tx is Atomic BEEF of the unsigned transaction.
+      expect(result[:signable_transaction][:tx]).to be_a(String)
+      expect(result[:signable_transaction][:tx].bytesize).to be >= 10
 
       # Send-path outputs are persisted with promoted: false at stage time —
       # they exist in the outputs table but aren't in the canonical UTXO set
@@ -2175,6 +2178,220 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
+  # --- Input Selection Primitive (#208) ---
+
+  describe '#select_inputs (private)' do
+    def select_inputs(target_satoshis:, exclude: [])
+      engine.send(:select_inputs, target_satoshis: target_satoshis, exclude: exclude)
+    end
+
+    it 'returns input specs whose satoshis cover the target' do
+      fund_wallet(satoshis: 2000, count: 3, basket: 'select-inputs', suffix: 'a')
+
+      specs = select_inputs(target_satoshis: 3500)
+
+      total = specs.sum { |s| BSV::Wallet::Store::Models::Output[s[:output_id]].satoshis }
+      expect(total).to be >= 3500
+      expect(specs).to all(match(a_hash_including(:output_id, :vin)))
+    end
+
+    it 'returns an empty array when target is zero' do
+      expect(select_inputs(target_satoshis: 0)).to eq([])
+    end
+
+    it 'raises PoolDepletedError when the target exceeds the pool' do
+      # Reserve UTXO is 100_000 sats; ask for 10x that.
+      expect { select_inputs(target_satoshis: 1_000_000) }
+        .to raise_error(BSV::Wallet::PoolDepletedError)
+    end
+
+    it 'meets the target with a single large UTXO when one suffices' do
+      fund_wallet(satoshis: 50_000, count: 1, basket: 'select-inputs-large', suffix: 'big')
+
+      specs = select_inputs(target_satoshis: 40_000)
+
+      expect(specs.length).to eq(1)
+    end
+
+    it 'meets the target with multiple UTXOs when no single one suffices' do
+      # Reserve UTXO is 100_000 sats; add three 50K outputs and target
+      # 180K — no single output covers it, so selection must combine.
+      fund_wallet(satoshis: 50_000, count: 3, basket: 'select-inputs-small', suffix: 's')
+
+      specs = select_inputs(target_satoshis: 180_000)
+
+      expect(specs.length).to be >= 2
+    end
+
+    it 'assigns sequential vin indices starting at 0' do
+      fund_wallet(satoshis: 1000, count: 4, basket: 'select-inputs-vins', suffix: 'v')
+
+      specs = select_inputs(target_satoshis: 3000)
+
+      expect(specs.map { |s| s[:vin] }).to eq((0...specs.length).to_a)
+    end
+
+    context 'with exclude:' do
+      it 'skips supplied output_ids even when they would otherwise fit' do
+        fund_wallet(satoshis: 5000, count: 3, basket: 'select-inputs-excl', suffix: 'e')
+
+        first = select_inputs(target_satoshis: 4000)
+        # Exclude the just-picked output; next call must select a different one.
+        excluded_ids = first.map { |s| s[:output_id] }
+
+        second = select_inputs(target_satoshis: 4000, exclude: excluded_ids)
+
+        expect(second.map { |s| s[:output_id] } & excluded_ids).to be_empty
+      end
+
+      it 'raises PoolDepletedError when exclude leaves insufficient balance' do
+        fund_wallet(satoshis: 5000, count: 1, basket: 'select-inputs-excl-empty', suffix: 'only')
+
+        # Pull the one funded UTXO, exclude it, then try to spend more than
+        # the reserve covers — should fail.
+        sole = select_inputs(target_satoshis: 5000)
+        excluded_ids = sole.map { |s| s[:output_id] }
+
+        expect { select_inputs(target_satoshis: 1_000_000, exclude: excluded_ids) }
+          .to raise_error(BSV::Wallet::PoolDepletedError)
+      end
+    end
+  end
+
+  # --- generate_change: explicit fee detection + shortfall reporting (#209) ---
+
+  describe '#generate_change (private)' do
+    # Funds a single P2PKH UTXO and locks it to a fresh action. Returns the
+    # action_id so the test can call generate_change against it.
+    def fund_and_lock(satoshis:)
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, 'wallet payment'], key_id: 'gc', counterparty: 'self'
+      )
+      pubkey_hash = BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
+      script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
+
+      source = store.create_action(
+        action: { description: 'gc funding', broadcast: :none, outgoing: false }
+      )
+      store.sign_action(action_id: source[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: DUMMY_RAW_TX)
+      store.promote_action(
+        action_id: source[:id],
+        outputs: [{
+          satoshis: satoshis, vout: 0, locking_script: script, basket: 'gc',
+          derivation_prefix: 'wallet payment', derivation_suffix: 'gc',
+          sender_identity_key: 'self'
+        }]
+      )
+
+      funded_output_id = BSV::Wallet::Store::Models::Output
+                         .where(action_id: source[:id]).first.id
+
+      action = store.create_action(
+        action: { description: 'gc target', broadcast: :none, outgoing: true, nlocktime: 0 },
+        inputs: [{ output_id: funded_output_id, vin: 0 }]
+      )
+      action[:id]
+    end
+
+    def generate_change(action_id:, caller_outputs:, change_count: 1,
+                        lock_time: 0, version: 1, randomize: false)
+      engine_with_keys.send(
+        :generate_change,
+        action_id: action_id, caller_outputs: caller_outputs,
+        lock_time: lock_time, version: version, randomize: randomize,
+        change_count: change_count
+      )
+    end
+
+    it 'returns the funded tuple as a hash when surplus covers the fee' do
+      action_id = fund_and_lock(satoshis: 10_000)
+      payment_script = SecureRandom.random_bytes(25)
+
+      result = generate_change(
+        action_id: action_id,
+        caller_outputs: [{ satoshis: 4_000, locking_script: payment_script }]
+      )
+
+      expect(result.keys).to contain_exactly(:wtxid, :raw_tx, :vout_mapping, :change_outputs)
+      expect(result[:wtxid].bytesize).to eq(32)
+      expect(result[:raw_tx]).to be_a(String)
+      expect(result[:vout_mapping]).to eq(0 => 0) # randomize: false, caller out first
+      expect(result[:change_outputs].length).to eq(1)
+      expect(result[:change_outputs].first[:satoshis]).to be > 0
+    end
+
+    it 'returns { shortfall: N } when inputs fall short of outputs + fee' do
+      action_id = fund_and_lock(satoshis: 5_000)
+      payment_script = SecureRandom.random_bytes(25)
+
+      result = generate_change(
+        action_id: action_id,
+        # Deliberately overspend: 5_000 input vs 5_000 output means surplus = 0,
+        # but a 1-input/2-output P2PKH tx still needs a positive fee.
+        caller_outputs: [{ satoshis: 5_000, locking_script: payment_script }]
+      )
+
+      expect(result).to match(shortfall: a_value > 0)
+      expect(result[:shortfall]).to be_a(Integer)
+    end
+
+    it 'reports the exact deficit as required_fee - surplus' do
+      action_id = fund_and_lock(satoshis: 10_000)
+      payment_script = SecureRandom.random_bytes(25)
+
+      # First call: succeed and learn the required fee. Surplus on this run
+      # is 10_000 - 4_000 = 6_000; sum of change outputs equals surplus - fee.
+      ok = generate_change(
+        action_id: action_id,
+        caller_outputs: [{ satoshis: 4_000, locking_script: payment_script }]
+      )
+      change_total = ok[:change_outputs].sum { |c| c[:satoshis] }
+      required_fee = (10_000 - 4_000) - change_total
+
+      # Second action with inputs that fall short by 1 sat.
+      short_action_id = fund_and_lock(satoshis: required_fee + 4_000 - 1)
+      result = generate_change(
+        action_id: short_action_id,
+        caller_outputs: [{ satoshis: 4_000, locking_script: payment_script }]
+      )
+
+      # Shortfall should be exactly 1 sat (within size estimate variance).
+      # The two transactions have the same shape, so the required_fee is
+      # identical and the surplus differs by 1.
+      expect(result[:shortfall]).to eq(1)
+    end
+
+    it 'raises ArgumentError when change_count is zero' do
+      action_id = fund_and_lock(satoshis: 10_000)
+      expect do
+        generate_change(
+          action_id: action_id,
+          caller_outputs: [{ satoshis: 100, locking_script: SecureRandom.random_bytes(25) }],
+          change_count: 0
+        )
+      end.to raise_error(ArgumentError, /change_count must be >= 1/)
+    end
+
+    it 'derives BRC-42 change outputs the wallet can re-derive' do
+      action_id = fund_and_lock(satoshis: 10_000)
+
+      result = generate_change(
+        action_id: action_id,
+        caller_outputs: [{ satoshis: 4_000, locking_script: SecureRandom.random_bytes(25) }]
+      )
+
+      change = result[:change_outputs].first
+      derived = key_deriver.derive_private_key(
+        protocol_id: [2, change[:derivation_prefix]],
+        key_id: change[:derivation_suffix],
+        counterparty: 'self'
+      )
+      pubkey_hash = BSV::Primitives::Digest.hash160(derived.public_key.compressed)
+      expected_script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
+      expect(change[:locking_script]).to eq(expected_script)
+    end
+  end
+
   # --- Input Resolution and P2PKH Signing (#22) ---
 
   describe '#build_inputs (private)' do
@@ -2575,6 +2792,9 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'single-input P2PKH' do
       it 'constructs a valid signed Bitcoin transaction end-to-end' do
+        # Reserve UTXO keeps the headroom check satisfied while a small
+        # caller UTXO drives the e2e signing path.
+        fund_wallet(satoshis: 100_000, prefix: 'reserve', suffix: 'reserve', basket: 'reserve')
         fund_wallet(satoshis: 1000)
 
         listed = engine_with_keys.list_outputs(basket: 'default')
@@ -2599,11 +2819,14 @@ RSpec.describe BSV::Wallet::Engine do
         expect(result[:txid].bytesize).to eq(32)
         expect(result[:tx]).to be_a(String)
 
-        # Deserialize and verify wire format
+        # Caller output (900 sats) + change outputs absorb the surplus
+        # (#210 — caller-inputs now receive change for the fee remainder).
         parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(1)
-        expect(parsed.outputs.length).to eq(1)
-        expect(parsed.outputs[0].satoshis).to eq(900)
+        expect(parsed.outputs.length).to be >= 2
+        caller_output = parsed.outputs.find { |o| o.locking_script.to_binary == output_script }
+        expect(caller_output).not_to be_nil
+        expect(caller_output.satoshis).to eq(900)
 
         # Verify result[:txid] = wire-order wtxid (double-SHA-256 of serialized tx)
         expected_wtxid = parse_beef_tx(result[:tx]).wtxid
@@ -2628,7 +2851,9 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'multi-input transaction' do
       it 'spends multiple outputs in a single transaction' do
-        # Fund with three separate calls so each output has a distinct, predictable suffix
+        # Reserve UTXO covers headroom while three small UTXOs feed the
+        # caller-inputs path. Each output has a distinct, predictable suffix.
+        fund_wallet(satoshis: 100_000, prefix: 'reserve', suffix: 'reserve', basket: 'reserve')
         fund_wallet(satoshis: 500, suffix: 'multi0')
         fund_wallet(satoshis: 500, suffix: 'multi1')
         fund_wallet(satoshis: 500, suffix: 'multi2')
@@ -2653,8 +2878,11 @@ RSpec.describe BSV::Wallet::Engine do
 
         parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(3)
-        expect(parsed.outputs.length).to eq(1)
-        expect(parsed.outputs[0].satoshis).to eq(1400)
+        # Caller output + change outputs (surplus absorbed) per #210.
+        expect(parsed.outputs.length).to be >= 2
+        caller_output = parsed.outputs.find { |o| o.locking_script.to_binary == output_script }
+        expect(caller_output).not_to be_nil
+        expect(caller_output.satoshis).to eq(1400)
 
         # Verify each input signature using the matching derivation suffix
         %w[multi0 multi1 multi2].each_with_index do |suffix, i|
@@ -2674,6 +2902,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'multi-output transaction' do
       it 'creates multiple outputs from a single input' do
+        fund_wallet(satoshis: 100_000, prefix: 'reserve', suffix: 'reserve', basket: 'reserve')
         fund_wallet(satoshis: 2000)
 
         listed = engine_with_keys.list_outputs(basket: 'default')
@@ -2683,16 +2912,22 @@ RSpec.describe BSV::Wallet::Engine do
         key2 = derive_key(suffix: 'out2')
         key3 = derive_key(suffix: 'out3')
 
+        caller_scripts = [
+          p2pkh_locking_script_for(key1).to_binary,
+          p2pkh_locking_script_for(key2).to_binary,
+          p2pkh_locking_script_for(key3).to_binary
+        ]
+
         result = engine_with_keys.create_action(
           description: 'multi output test',
           no_send: true,
           inputs: [{ output_id: output_id }],
           outputs: [
-            { satoshis: 600, locking_script: p2pkh_locking_script_for(key1).to_binary,
+            { satoshis: 600, locking_script: caller_scripts[0],
               output_description: 'first', basket: 'payments' },
-            { satoshis: 700, locking_script: p2pkh_locking_script_for(key2).to_binary,
+            { satoshis: 700, locking_script: caller_scripts[1],
               output_description: 'second', basket: 'payments' },
-            { satoshis: 500, locking_script: p2pkh_locking_script_for(key3).to_binary,
+            { satoshis: 500, locking_script: caller_scripts[2],
               output_description: 'third', basket: 'payments' }
           ],
           randomize_outputs: false
@@ -2700,8 +2935,15 @@ RSpec.describe BSV::Wallet::Engine do
 
         parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(1)
-        expect(parsed.outputs.length).to eq(3)
-        expect(parsed.outputs.map(&:satoshis)).to eq([600, 700, 500])
+        # Three caller outputs + change outputs (surplus absorbed) per #210.
+        expect(parsed.outputs.length).to be >= 4
+        # Caller outputs preserved at their satoshi values; change varies.
+        caller_sats = caller_scripts.map do |script|
+          out = parsed.outputs.find { |o| o.locking_script.to_binary == script }
+          expect(out).not_to be_nil
+          out.satoshis
+        end
+        expect(caller_sats).to eq([600, 700, 500])
 
         # Verify input
         parsed.inputs[0].source_satoshis = 2000

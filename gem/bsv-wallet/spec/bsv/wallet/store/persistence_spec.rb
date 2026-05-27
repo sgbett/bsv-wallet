@@ -80,6 +80,106 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
+  describe '#lock_inputs' do
+    it 'locks multiple inputs against an existing action' do
+      action = store.create_action(action: { description: 'parent', nlocktime: 0 })
+      o1 = create_funded_output(satoshis: 1000)
+      o2 = create_funded_output(satoshis: 2000, vout: 1)
+
+      count = store.lock_inputs(
+        action_id: action[:id],
+        inputs: [
+          { output_id: o1.id, vin: 0, nsequence: nil, description: 'first' },
+          { output_id: o2.id, vin: 1, nsequence: nil, description: 'second' }
+        ]
+      )
+
+      expect(count).to eq(2)
+      rows = BSV::Wallet::Store::Models::Input.where(action_id: action[:id]).order(:vin).all
+      expect(rows.map(&:output_id)).to eq([o1.id, o2.id])
+      expect(rows.map(&:vin)).to eq([0, 1])
+      expect(rows.map(&:description)).to eq(%w[first second])
+    end
+
+    it 'returns 0 and locks nothing for empty inputs' do
+      action = store.create_action(action: { description: 'no top-up', nlocktime: 0 })
+
+      count = store.lock_inputs(action_id: action[:id], inputs: [])
+
+      expect(count).to eq(0)
+      expect(BSV::Wallet::Store::Models::Input.where(action_id: action[:id]).count).to eq(0)
+    end
+
+    it 'returns 0 when a single requested output is already locked by another action' do
+      output = create_funded_output(satoshis: 1000)
+      store.create_action(
+        action: { description: 'first owner', nlocktime: 0 },
+        inputs: [{ output_id: output.id, vin: 0 }]
+      )
+      action = store.create_action(action: { description: 'second', nlocktime: 0 })
+
+      count = store.lock_inputs(
+        action_id: action[:id],
+        inputs: [{ output_id: output.id, vin: 0, nsequence: nil, description: nil }]
+      )
+
+      expect(count).to eq(0)
+      expect(BSV::Wallet::Store::Models::Input.where(action_id: action[:id]).count).to eq(0)
+    end
+
+    it 'rolls back the whole batch when one input in a multi-input call is already locked' do
+      contested = create_funded_output(satoshis: 1000)
+      fresh = create_funded_output(satoshis: 2000, vout: 1)
+      store.create_action(
+        action: { description: 'first owner', nlocktime: 0 },
+        inputs: [{ output_id: contested.id, vin: 0 }]
+      )
+      action = store.create_action(action: { description: 'second', nlocktime: 0 })
+
+      count = store.lock_inputs(
+        action_id: action[:id],
+        inputs: [
+          { output_id: fresh.id, vin: 0, nsequence: nil, description: nil },
+          { output_id: contested.id, vin: 1, nsequence: nil, description: nil }
+        ]
+      )
+
+      expect(count).to eq(0)
+      expect(BSV::Wallet::Store::Models::Input.where(action_id: action[:id]).count).to eq(0)
+      # The fresh output is still free for another action to claim.
+      another = store.create_action(
+        action: { description: 'reclaim', nlocktime: 0 },
+        inputs: [{ output_id: fresh.id, vin: 0 }]
+      )
+      expect(another).not_to be_nil
+    end
+
+    it 'raises when action_id does not exist' do
+      output = create_funded_output(satoshis: 1000)
+      missing_id = (BSV::Wallet::Store::Models::Action.max(:id) || 0) + 1_000_000
+
+      expect do
+        store.lock_inputs(
+          action_id: missing_id,
+          inputs: [{ output_id: output.id, vin: 0, nsequence: nil, description: nil }]
+        )
+      end.to raise_error(Sequel::DatabaseError)
+    end
+
+    it 'defaults nsequence to 0xFFFFFFFF when nil is passed' do
+      action = store.create_action(action: { description: 'default seq', nlocktime: 0 })
+      output = create_funded_output(satoshis: 1000)
+
+      store.lock_inputs(
+        action_id: action[:id],
+        inputs: [{ output_id: output.id, vin: 0, nsequence: nil, description: nil }]
+      )
+
+      row = BSV::Wallet::Store::Models::Input.first(action_id: action[:id])
+      expect(row.nsequence).to eq(4_294_967_295)
+    end
+  end
+
   describe '#sign_action' do
     it 'attaches wtxid and raw_tx' do
       result = store.create_action(action: { description: 'to sign', nlocktime: 0 })

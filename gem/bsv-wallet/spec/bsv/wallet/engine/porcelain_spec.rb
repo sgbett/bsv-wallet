@@ -203,17 +203,18 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       end
     end
 
-    context 'backward compatibility' do
-      it 'caller-provided inputs still work unchanged' do
+    context 'caller-provided inputs' do
+      it 'receive change for surplus' do
         fund_wallet_for_auto(satoshis: 100_000, count: 2)
 
         listed = engine_with_keys.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
+        payment_script = SecureRandom.random_bytes(25)
 
         result = engine_with_keys.create_action(
-          description: 'raw mode test',
+          description: 'caller-inputs change',
           inputs: [{ output_id: output_id }],
-          outputs: [{ satoshis: 4000, locking_script: SecureRandom.random_bytes(25),
+          outputs: [{ satoshis: 4000, locking_script: payment_script,
                       derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
                       sender_identity_key: key_deriver.identity_key }],
           no_send: true
@@ -224,8 +225,102 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs.length).to eq(1)
-        expect(parsed.outputs.length).to eq(1)
-        expect(parsed.outputs[0].satoshis).to eq(4000)
+        # Caller output (4k) + change outputs distributed across surplus.
+        expect(parsed.outputs.length).to be >= 2
+
+        caller_output = parsed.outputs.find { |o| o.locking_script.to_binary == payment_script }
+        expect(caller_output).not_to be_nil
+        expect(caller_output.satoshis).to eq(4000)
+
+        # Fee at ~100 sats/kb: surplus minus change roughly equals the fee.
+        total_output = parsed.outputs.sum(&:satoshis)
+        fee = 100_000 - total_output
+        expect(fee).to be > 0
+        expect(fee).to be < 500
+
+        # Change rows persist BRC-42 derivation params for recovery.
+        action_row = BSV::Wallet::Store::Models::Action.first(wtxid: Sequel.blob(result[:txid]))
+        change_rows = BSV::Wallet::Store::Models::Output
+                      .where(Sequel[:outputs][:action_id] => action_row.id)
+                      .join(:output_details, output_id: :id)
+                      .where(Sequel[:output_details][:change] => true)
+                      .select_all(:outputs)
+                      .all
+        expect(change_rows).not_to be_empty
+        change_rows.each do |row|
+          expect(row.derivation_prefix).to be_a(String).and(satisfy { |s| !s.empty? })
+          expect(row.derivation_suffix).to be_a(String).and(satisfy { |s| !s.empty? })
+        end
+      end
+
+      it 'raises InsufficientFundsError on deficit' do
+        # Fund with a large reserve UTXO (keeps headroom intact) plus a
+        # small caller UTXO insufficient to cover the requested output.
+        fund_wallet_for_auto(satoshis: 1_000_000, prefix: 'reserve', suffix: 'reserve')
+        fund_wallet_for_auto(satoshis: 5_000, prefix: 'caller', suffix: 'caller')
+
+        small_output = BSV::Wallet::Store::Models::Output
+                       .spendable
+                       .order(:satoshis)
+                       .first
+        output_id = small_output.id
+
+        expect do
+          engine_with_keys.create_action(
+            description: 'caller-inputs deficit',
+            inputs: [{ output_id: output_id }],
+            outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25),
+                        derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                        sender_identity_key: key_deriver.identity_key }],
+            no_send: true
+          )
+        end.to raise_error(BSV::Wallet::InsufficientFundsError)
+
+        broadcasts = BSV::Wallet::Store::Models::Broadcast.all
+        expect(broadcasts).to be_empty
+      end
+
+      it 'no_send: true with surplus surfaces change in no_send_change' do
+        fund_wallet_for_auto(satoshis: 100_000, count: 2)
+        listed = engine_with_keys.list_outputs(basket: 'default')
+        output_id = listed[:outputs].first[:id]
+
+        result = engine_with_keys.create_action(
+          description: 'caller-inputs nosend',
+          inputs: [{ output_id: output_id }],
+          outputs: [{ satoshis: 4000, locking_script: SecureRandom.random_bytes(25),
+                      derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                      sender_identity_key: key_deriver.identity_key }],
+          no_send: true
+        )
+
+        expect(result[:no_send_change]).to be_an(Array)
+        expect(result[:no_send_change].length).to be >= 1
+        expect(result[:no_send_change]).to all(match(/\A[0-9a-f]{64}\.\d+\z/))
+      end
+
+      it 'honors caller-supplied unlocking_script on the synchronous path' do
+        # Regression for the synchronous caller-inputs path: generate_change
+        # must forward caller_inputs to build_inputs so any caller-provided
+        # unlocking_script overrides the wallet's P2PKH signing.
+        fund_wallet_for_auto(satoshis: 100_000, count: 2)
+
+        listed = engine_with_keys.list_outputs(basket: 'default')
+        output_id = listed[:outputs].first[:id]
+        caller_script = "\x51\x52\x53".b # OP_1 OP_2 OP_3 — distinctive sentinel
+
+        result = engine_with_keys.create_action(
+          description: 'caller unlocking',
+          inputs: [{ output_id: output_id, unlocking_script: caller_script }],
+          outputs: [{ satoshis: 4000, locking_script: SecureRandom.random_bytes(25),
+                      derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                      sender_identity_key: key_deriver.identity_key }],
+          no_send: true
+        )
+
+        parsed = parse_beef_tx(result[:tx])
+        expect(parsed.inputs.length).to eq(1)
+        expect(parsed.inputs[0].unlocking_script.to_binary).to eq(caller_script)
       end
 
       it 'explicit empty inputs (OP_RETURN) still work' do
@@ -238,6 +333,92 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         )
 
         expect(result[:txid]).to be_a(String)
+
+        # Round-trip: empty inputs produces a zero-input tx.
+        parsed = parse_beef_tx(result[:tx])
+        expect(parsed.inputs.length).to eq(0)
+      end
+    end
+
+    context 'BRC-42 round-trip' do
+      it 'change outputs are selectable by a follow-up create_action' do
+        fund_wallet_for_auto
+
+        first = engine_with_keys.create_action(
+          description: 'first action',
+          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
+          no_send: true
+        )
+        expect(first[:no_send_change]).not_to be_empty
+
+        # Spendable pool now consists of change outputs only — the original
+        # funding UTXO was consumed. A second create_action must be able to
+        # select against them, which only works if BRC-42 derivation
+        # metadata was persisted correctly on the change rows.
+        action_row = BSV::Wallet::Store::Models::Action.first(wtxid: Sequel.blob(first[:txid]))
+        change_ids = BSV::Wallet::Store::Models::Output
+                     .where(Sequel[:outputs][:action_id] => action_row.id)
+                     .join(:output_details, output_id: :id)
+                     .where(Sequel[:output_details][:change] => true)
+                     .select_map(Sequel[:outputs][:id])
+        spendable_ids = BSV::Wallet::Store::Models::Output.spendable.select_map(:id)
+        expect(change_ids - spendable_ids).to be_empty
+
+        second = engine_with_keys.create_action(
+          description: 'second action',
+          outputs: [{ satoshis: 1_000, locking_script: SecureRandom.random_bytes(25) }],
+          no_send: true
+        )
+
+        expect(second[:txid]).to be_a(String)
+        parsed = parse_beef_tx(second[:tx])
+        expect(parsed.inputs.length).to be >= 1
+      end
+    end
+
+    context 'auto-fund top-up' do
+      it 'locks an additional UTXO when initial selection misses fee' do
+        # Two UTXOs: the larger exactly meets the output target, leaving
+        # nothing for fees. The funding loop's first generate_change call
+        # returns a shortfall; the engine then top-ups via select_inputs
+        # with the larger UTXO excluded, locking the smaller one.
+        #
+        # find_spendable orders by satoshis DESC and accumulates greedily:
+        # target == big_sats selects only big_sats. The small UTXO is then
+        # picked up via the top-up exclude path. Post-tx balance stays
+        # above the headroom threshold (small_sats ~= change > 50k).
+        big_sats   = 500_000
+        small_sats = 100_000
+
+        derived_key = key_deriver.derive_private_key(
+          protocol_id: [2, 'topup prefix'], key_id: 'b', counterparty: 'self'
+        )
+        script = p2pkh_locking_script_for(derived_key)
+        source_action = store.create_action(
+          action: { description: 'topup funding', broadcast: :none, outgoing: false }
+        )
+        store.sign_action(action_id: source_action[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: dummy_raw_tx)
+        store.promote_action(
+          action_id: source_action[:id],
+          outputs: [
+            { satoshis: big_sats, vout: 0, locking_script: script.to_binary,
+              basket: 'default', derivation_prefix: 'topup prefix', derivation_suffix: 'big',
+              sender_identity_key: 'self' },
+            { satoshis: small_sats, vout: 1, locking_script: script.to_binary,
+              basket: 'default', derivation_prefix: 'topup prefix', derivation_suffix: 'small',
+              sender_identity_key: 'self' }
+          ]
+        )
+
+        result = engine_with_keys.create_action(
+          description: 'topup test',
+          outputs: [{ satoshis: big_sats, locking_script: SecureRandom.random_bytes(25) }],
+          no_send: true
+        )
+
+        action_row = BSV::Wallet::Store::Models::Action.first(wtxid: Sequel.blob(result[:txid]))
+        input_count = BSV::Wallet::Store::Models::Input.where(action_id: action_row.id).count
+        expect(input_count).to eq(2)
       end
     end
   end

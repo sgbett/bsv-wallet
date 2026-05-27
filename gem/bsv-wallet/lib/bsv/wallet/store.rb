@@ -68,17 +68,20 @@ module BSV
             input_beef: action[:input_beef]
           )
 
-          if inputs.any?
-            locked = 0
-            inputs.each do |inp|
-              locked += 1 if try_lock_input(record_id: record.id, inp: inp)
-            end
-
-            raise Sequel::Rollback if locked < inputs.size
-          end
+          raise Sequel::Rollback if inputs.any? && !lock_inputs_atomic?(action_id: record.id, inputs: inputs)
 
           action_to_hash(record)
         end
+      end
+
+      def lock_inputs(action_id:, inputs:)
+        return 0 if inputs.empty?
+
+        @db.transaction do
+          raise Sequel::Rollback unless lock_inputs_atomic?(action_id: action_id, inputs: inputs)
+
+          inputs.size
+        end || 0
       end
 
       def sign_action(action_id:, wtxid:, raw_tx:, outputs: [], change_outputs: [])
@@ -697,6 +700,20 @@ module BSV
         end
       end
 
+      private
+
+      # Attempt to lock every input in +inputs+ against +action_id+.
+      # Returns true iff all rows were inserted (i.e. no contention).
+      # Caller is responsible for wrapping in a transaction and rolling
+      # back when this returns false.
+      def lock_inputs_atomic?(action_id:, inputs:)
+        locked = 0
+        inputs.each do |inp|
+          locked += 1 if try_lock_input(record_id: action_id, inp: inp)
+        end
+        locked == inputs.size
+      end
+
       # Base try_lock_input: performs the insert. Subclasses override to
       # add backend-specific result interpretation.
       def try_lock_input(record_id:, inp:)
@@ -708,8 +725,6 @@ module BSV
           description: inp[:description]
         )
       end
-
-      private
 
       def models
         BSV::Wallet::Store::Models

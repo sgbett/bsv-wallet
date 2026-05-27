@@ -29,6 +29,26 @@ module BSV
           raise NotImplementedError
         end
 
+        # Phase 1 (top-up): Append additional input rows to an existing action.
+        #
+        # Locks each output by inserting an inputs row with ON CONFLICT
+        # DO NOTHING on +output_id+. All-or-nothing: if any input fails
+        # to lock (another action already owns the output), the whole
+        # batch is rolled back and 0 is returned. Mirrors {#create_action}'s
+        # Phase 1 locking semantics so the engine's funding loop can request
+        # additional UTXOs after the initial lock without re-implementing
+        # the contention path.
+        #
+        # An empty +inputs+ array is a no-op and returns 0.
+        #
+        # @param action_id [Integer] target action (must exist)
+        # @param inputs [Array<Hash>] each: :output_id, :vin, :nsequence, :description
+        # @return [Integer] number of input rows locked (size of +inputs+ on
+        #   success, 0 on rollback or empty input)
+        def lock_inputs(action_id:, inputs:)
+          raise NotImplementedError
+        end
+
         # Phase 2: Attach wtxid and signed raw transaction to an action,
         # atomically queueing the broadcast.
         #

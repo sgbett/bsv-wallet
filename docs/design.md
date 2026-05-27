@@ -182,18 +182,18 @@ The most complex method. Follows the schema's four-phase lifecycle. No database 
 **Phase 1 — Lock** (atomic, milliseconds):
 
 1. **Validate** — description present, at least one input or output, descriptions on all inputs/outputs
-2. **UTXO selection** — `UTXOPool#select(satoshis:)` returns candidates
-3. **Atomic persist** — `Store#create_action` inserts the action row and input rows in one transaction. Input locking uses `INSERT ON CONFLICT (output_id) DO NOTHING` — if a concurrent caller already claimed an output, the conflict is detected and the wallet retries with different candidates
-4. **Verify coverage** — if not enough inputs were locked, rollback and retry or raise `InsufficientFundsError`
+2. **Resolve initial input set** — `Engine#select_inputs(target_satoshis:)` queries the pool to cover `sum(outputs)` when `inputs: nil`; caller-supplied inputs (including an explicit empty array for zero-input transactions) are used as-is
+3. **Atomic persist** — `Store#create_action` inserts the action row and input rows in one transaction. Input locking uses `INSERT ON CONFLICT (output_id) DO NOTHING` — if a concurrent caller already claimed an output, the conflict is detected and `Store#create_action` returns `nil`, surfaced as `InsufficientFundsError`
 
 **Phase 2 — Sign** (in memory + atomic commit):
 
-5. **Build transaction** — construct the transaction using the SDK, apply `lock_time`, `version`
-6. **Output randomization** — shuffle output order unless `randomize_outputs: false`
-7. **Sign** (if `sign_and_process: true` and all unlocking scripts provided)
-8. **Persist** — `Store#sign_action(action_id:, txid:, raw_tx:)` attaches the txid and signed transaction
+Phase 2 is a single composition of two encapsulated primitives, driven by a small funding loop inside `create_action`:
 
-If `sign_and_process: false` or any input has `unlocking_script_length` instead of a script, return `{ signable_transaction: { tx:, reference: } }` and stop here. The caller invokes `sign_action` later.
+4. **Generate change + detect shortfall** — `Engine#generate_change` builds the transaction with templated change outputs, computes the exact fee from the templated size, and returns either `{ wtxid, raw_tx, vout_mapping, change_outputs }` or `{ shortfall: N }`
+5. **Top up if needed** — on a shortfall with wallet-selected inputs, `Engine#select_inputs(target_satoshis: shortfall, exclude: locked)` finds extra UTXOs and `Store#lock_inputs` locks them onto the existing action; the loop then re-runs step 4. Caller-supplied input shortfalls raise `InsufficientFundsError` immediately — the wallet does not extend a caller-supplied input set
+6. **Persist** — `Store#sign_action(action_id:, wtxid:, raw_tx:, outputs:, change_outputs:)` attaches the signed transaction, writes the caller and change output rows (`promoted = false` on the send path), and creates the broadcasts row for non-`:none` actions
+
+If `sign_and_process: false` or any input has `unlocking_script_length` instead of a script, the funding loop is skipped — the wallet assembles the unsigned tx, calls `Store#stage_action`, and returns `{ signable_transaction: { tx:, reference: } }` where `tx` is the Atomic BEEF (BRC-95) of the unsigned transaction so the external signer can inspect ancestry without an extra Store lookup. Wallet-selected inputs cannot be deferred (the change template must be evaluated against the actual fee at sign time); deferred signing requires caller-supplied inputs.
 
 **Phase 3 — Broadcast** (send path only):
 
