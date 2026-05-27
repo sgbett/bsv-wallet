@@ -95,9 +95,14 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
-      it 'triggers Phase 4 (promote_action_outputs) on accepted ARC response' do
+      it 'records the broadcast result (which atomically promotes outputs)' do
         broadcast.process(action_id)
-        expect(store).to have_received(:promote_action_outputs).with(action_id: action_id)
+        # Phase 4 is atomic with record_broadcast_result inside the Store
+        # transaction when tx_status is accepted. The engine doesn't call
+        # promote_action_outputs directly anymore.
+        expect(store).to have_received(:record_broadcast_result).with(
+          hash_including(action_id: action_id, tx_status: 'SEEN_ON_NETWORK')
+        )
       end
 
       it 'calls services.call(:broadcast) with the raw_tx' do
@@ -512,9 +517,14 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         expect(succeeded[:latency_ms]).to be_an(Integer)
       end
 
-      it 'triggers Phase 4 (promote_action_outputs) on accepted poll status' do
+      it 'records the broadcast result (which atomically promotes outputs)' do
         broadcast.process(action_id)
-        expect(store).to have_received(:promote_action_outputs).with(action_id: action_id)
+        # Phase 4 is atomic with record_broadcast_result inside the Store
+        # transaction when tx_status is accepted. The engine doesn't call
+        # promote_action_outputs directly anymore.
+        expect(store).to have_received(:record_broadcast_result).with(
+          hash_including(action_id: action_id, tx_status: 'SEEN_ON_NETWORK')
+        )
       end
     end
 

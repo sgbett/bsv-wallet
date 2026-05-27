@@ -474,6 +474,16 @@ module BSV
           raise NotImplementedError
         end
 
+        # Cancel a pending broadcast: delete the broadcasts row and set the
+        # action's broadcast intent to 'none'. Atomic. Used when signAction
+        # is invoked with no_send: true on an action that was originally
+        # created with broadcast intent IN ('delayed', 'inline').
+        #
+        # @param action_id [Integer]
+        def cancel_broadcast(action_id:)
+          raise NotImplementedError
+        end
+
         # --- Reaper ---
 
         # Delete stale unsigned or unbroadcast actions older than the threshold.

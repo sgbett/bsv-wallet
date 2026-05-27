@@ -173,6 +173,17 @@ module BSV
           broadcast_exists = models::Broadcast.where(action_id: action_id).any?
           return 0 if broadcast_exists
 
+          # Refuse if any output is promoted: true. Internal-path actions
+          # (broadcast = 'none') legitimately have no broadcasts row but
+          # their outputs are promoted at create_action time and may be
+          # spendable / spent — deleting them would destroy canonical UTXO
+          # history. abortAction is meant for unfinished work, not for
+          # rewinding already-committed actions.
+          if models::Output.where(action_id: action_id, promoted: true).any?
+            raise BSV::Wallet::CannotAbortPromotedActionError,
+                  "action_id=#{action_id} has promoted outputs; abort refused"
+          end
+
           # outputs.action_id is RESTRICT (#189). The deferred-sign path
           # writes outputs as promoted: false at stage_action time; aborting
           # such an action must clear those rows first.
@@ -593,6 +604,15 @@ module BSV
           fields[:competing_txs] = encode_competing_txs(competing_txs) if competing_txs
 
           broadcast.update(fields)
+
+          # Phase 4 promotion happens inside this transaction when the
+          # broadcast is accepted. This closes a crash-recovery gap:
+          # without atomicity the broadcasts row could carry a terminal
+          # accepted status (so pending_polls won't rediscover it) while
+          # outputs remained promoted: false (so they'd never become
+          # spendable). Single transaction = single recoverable state.
+          promote_action_outputs(action_id: action_id) if Models::Broadcast::ACCEPTED_STATUSES.include?(tx_status.to_s.upcase)
+
           broadcast_to_hash(broadcast)
         end
       end
@@ -621,6 +641,18 @@ module BSV
           .map { |b| broadcast_to_hash(b) }
       end
 
+      # Cancel a pending broadcast: delete the broadcasts row and set the
+      # action's broadcast intent to 'none'. Atomic. Used when signAction
+      # is called with no_send: true on an action that was created with
+      # broadcast intent IN ('delayed', 'inline') — the user is overriding
+      # the original intent and the daemon must not pick this up.
+      def cancel_broadcast(action_id:)
+        @db.transaction do
+          models::Broadcast.where(action_id: action_id).delete
+          models::Action.where(id: action_id).update(broadcast: 'none')
+        end
+      end
+
       def mark_broadcast_attempted(action_id:)
         @db.transaction do
           raise "no broadcasts row for action_id=#{action_id}" unless models::Broadcast.where(action_id: action_id).any?
@@ -633,23 +665,35 @@ module BSV
 
       def reap_stale_actions(threshold:)
         cutoff = Time.now - threshold
-        output_exists = models::Output.where(Sequel[:outputs][:action_id] => Sequel[:actions][:id]).select(1)
+        # Only PROMOTED outputs protect an action from the reaper. Unpromoted
+        # outputs (staged by deferred-sign, never broadcast-accepted) are
+        # disposable -- their action is the kind of leak the reaper exists
+        # to clean up. Under the old predicate, any output row blocked the
+        # reaper, so abandoned deferred actions kept their inputs locked
+        # indefinitely.
+        promoted_output_exists = models::Output
+                                 .where(Sequel[:outputs][:action_id] => Sequel[:actions][:id])
+                                 .where(promoted: true)
+                                 .select(1)
 
-        # Under #184's atomic invariant, signed actions with broadcast != 'none'
-        # always have a broadcasts row. broadcasts.action_id has no CASCADE FK
-        # today (tracked in #189), so we delete the broadcasts row first inside
-        # the same transaction. Both deletes use the stale dataset as a
-        # subquery so the predicate is re-evaluated at delete time -- avoids
-        # a race where a row could be promoted between predicate evaluation
-        # and the delete.
         @db.transaction do
           stale = models::Action
                   .where { created_at < cutoff }
                   .where(Sequel.~(broadcast: 'none'))
                   .where(Sequel.lit('wtxid IS NOT NULL'))
-                  .exclude(output_exists.exists)
+                  .exclude(promoted_output_exists.exists)
 
-          models::Broadcast.where(action_id: stale.select(:id)).delete
+          stale_ids = stale.select(:id)
+          # outputs.action_id is RESTRICT (#189), so unpromoted output rows
+          # and their dependents must be cleared before the action delete.
+          output_ids_in_stale = models::Output.where(action_id: stale_ids).select(:id)
+          models::OutputBasket.where(action_id: stale_ids).delete
+          models::OutputDetail.where(action_id: stale_ids).delete
+          models::OutputTag.where(output_id: output_ids_in_stale).delete
+          models::Output.where(action_id: stale_ids).delete
+          # broadcasts.action_id has no CASCADE FK today (tracked in #189),
+          # so clear the broadcasts row before the action.
+          models::Broadcast.where(action_id: stale_ids).delete
           stale.delete
         end
       end

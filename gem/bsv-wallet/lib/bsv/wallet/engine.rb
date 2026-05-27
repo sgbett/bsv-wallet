@@ -196,6 +196,13 @@ module BSV
         @store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
 
+        # signAction(no_send: true) overrides the action's original broadcast
+        # intent. @store.sign_action already inserted a broadcasts row per
+        # the original intent; cancel it so the daemon doesn't pick it up.
+        # Updates the action's broadcast field to 'none' to keep the
+        # schema invariant ("broadcast != 'none' ⇒ broadcasts row exists").
+        @store.cancel_broadcast(action_id: action[:id]) if no_send && action[:broadcast] != 'none'
+
         # Build Atomic BEEF envelope for the :tx return value
         atomic_beef = build_atomic_beef(raw_tx, action[:id])
 

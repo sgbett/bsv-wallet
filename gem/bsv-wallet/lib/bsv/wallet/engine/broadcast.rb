@@ -14,6 +14,11 @@ module BSV
         include OmqSupport
 
         # ARC txStatus values indicating the transaction was accepted by the network.
+        # Mirror of Models::Broadcast::ACCEPTED_STATUSES — kept as a separate
+        # constant here because resolving the model constant at class load
+        # time requires Sequel to be loaded, which isn't guaranteed when
+        # Engine::Broadcast is autoloaded. Source of truth for both is
+        # BRC-100's ARC status enum; they must stay in lockstep.
         ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK ACCEPTED_BY_NETWORK MINED IMMUTABLE].freeze
 
         # ARC txStatus values indicating a definitive, non-recoverable rejection.
@@ -133,11 +138,11 @@ module BSV
               extra_info: data[:extra_info],
               competing_txs: data[:competing_txs]
             )
-            # Phase 4: ARC accepted the broadcast. Flip the action's outputs
-            # from promoted: false to true and insert their spendable rows.
-            # Idempotent — already-promoted outputs are skipped, so a re-poll
-            # on an action accepted earlier is safe.
-            @store.promote_action_outputs(action_id: action_id) if ACCEPTED_STATUSES.include?(data[:tx_status].to_s.upcase)
+            # Phase 4 promotion is now atomic with the result recording
+            # above — Store#record_broadcast_result promotes outputs in the
+            # same transaction when tx_status is accepted. No separate call
+            # needed here; closes the crash-recovery gap where a process
+            # could die between recording and promotion.
             BSV::Wallet.emit('task.succeeded',
                              task: 'broadcast_push', id: action_id,
                              latency_ms: latency_ms,
@@ -204,10 +209,8 @@ module BSV
               extra_info: data[:extra_info],
               competing_txs: data[:competing_txs]
             )
-            # Phase 4: poll observed an accepted status (the crash-recovery
-            # case where submit returned before recording, or a re-poll on
-            # an action already accepted). Idempotent via the promoted flag.
-            @store.promote_action_outputs(action_id: action_id) if ACCEPTED_STATUSES.include?(data[:tx_status].to_s.upcase)
+            # Phase 4 promotion is atomic with the result recording above
+            # (Store#record_broadcast_result) when tx_status is accepted.
             BSV::Wallet.emit('task.succeeded',
                              task: 'broadcast_push', id: action_id,
                              latency_ms: latency_ms,
