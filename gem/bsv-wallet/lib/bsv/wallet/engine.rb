@@ -212,6 +212,7 @@ module BSV
             action_id: action_result[:id],
             caller_outputs: outputs || [],
             caller_supplied_inputs: caller_supplied_inputs,
+            caller_inputs: caller_supplied_inputs ? inputs : nil,
             initial_locked_output_ids: initial_inputs.map { |i| i[:output_id] },
             change_count: pre_lock_change_count,
             lock_time: lock_time, version: version,
@@ -1850,7 +1851,8 @@ module BSV
       # @return [Array(String, String, Hash, Array<Hash>)] wtxid, raw_tx,
       #   vout_mapping, change_outputs — ready for Store#sign_action.
       def run_funding_loop(action_id:, caller_outputs:,
-                           caller_supplied_inputs:, initial_locked_output_ids:,
+                           caller_supplied_inputs:, caller_inputs:,
+                           initial_locked_output_ids:,
                            change_count:,
                            lock_time:, version:, randomize_outputs:)
         locked_output_ids = initial_locked_output_ids.dup
@@ -1859,6 +1861,7 @@ module BSV
         max_iterations.times do
           result = generate_change(
             action_id: action_id, caller_outputs: caller_outputs,
+            caller_inputs: caller_inputs,
             lock_time: lock_time, version: version, randomize: randomize_outputs,
             change_count: change_count
           )
@@ -1879,7 +1882,15 @@ module BSV
           top_up = extra.each_with_index.map do |spec, i|
             { output_id: spec[:output_id], vin: base_vin + i }
           end
-          @store.lock_inputs(action_id: action_id, inputs: top_up)
+          # Store#lock_inputs returns the count actually locked. Anything less
+          # than top_up.size means at least one row was contended and the whole
+          # batch rolled back. Treat that as a funding failure rather than
+          # silently advancing locked_output_ids (which would desynchronise
+          # base_vin from the real inputs table). Phase-1 contention-retry is
+          # tracked separately (see #213).
+          locked = @store.lock_inputs(action_id: action_id, inputs: top_up)
+          raise BSV::Wallet::InsufficientFundsError unless locked == top_up.size
+
           locked_output_ids.concat(top_up.map { |i| i[:output_id] })
         end
 
@@ -1918,6 +1929,10 @@ module BSV
       #   derive. Precondition: must be >= 1. +@utxo_pool.change_output_count+
       #   clamps to +[1, MAX_CHANGE_PER_TX]+ so in normal operation this is
       #   invariant; the assertion makes the contract explicit.
+      # @param caller_inputs [Array<Hash>, nil] original caller-supplied input
+      #   specs, used by +build_inputs+ to apply custom +unlocking_script+ /
+      #   +sequence_number+ overrides. +nil+ when the wallet selected inputs
+      #   itself (no caller overrides apply).
       # @return [Hash] one of:
       #   - +{ wtxid:, raw_tx:, vout_mapping:, change_outputs: }+ on success.
       #     +change_outputs+ lists only the change rows that survived
@@ -1927,12 +1942,14 @@ module BSV
       #     (+required_fee - surplus+) when inputs do not cover the fee.
       def generate_change(action_id:, caller_outputs:,
                           lock_time:, version:, randomize:,
-                          change_count:)
+                          change_count:, caller_inputs: nil)
         raise ArgumentError, "change_count must be >= 1, got #{change_count}" if change_count < 1
 
-        # A. Resolve inputs + derive signing keys
+        # A. Resolve inputs + derive signing keys. caller_inputs lets
+        # build_inputs apply any caller-supplied unlocking_script / sequence
+        # overrides on the synchronous caller-inputs path.
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
-        tx_inputs, signing_keys = build_inputs(resolved_inputs, nil)
+        tx_inputs, signing_keys = build_inputs(resolved_inputs, caller_inputs)
 
         # B. Derive change output keys (BRC-42 self-payments)
         change_keys = change_count.times.map do |i|

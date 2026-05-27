@@ -700,6 +700,8 @@ module BSV
         end
       end
 
+      private
+
       # Attempt to lock every input in +inputs+ against +action_id+.
       # Returns true iff all rows were inserted (i.e. no contention).
       # Caller is responsible for wrapping in a transaction and rolling
@@ -723,8 +725,6 @@ module BSV
           description: inp[:description]
         )
       end
-
-      private
 
       def models
         BSV::Wallet::Store::Models

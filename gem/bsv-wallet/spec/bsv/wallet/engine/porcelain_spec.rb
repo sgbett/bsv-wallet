@@ -253,7 +253,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         end
       end
 
-      it 'raise InsufficientFundsError on deficit' do
+      it 'raises InsufficientFundsError on deficit' do
         # Fund with a large reserve UTXO (keeps headroom intact) plus a
         # small caller UTXO insufficient to cover the requested output.
         fund_wallet_for_auto(satoshis: 1_000_000, prefix: 'reserve', suffix: 'reserve')
@@ -297,6 +297,30 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         expect(result[:no_send_change]).to be_an(Array)
         expect(result[:no_send_change].length).to be >= 1
         expect(result[:no_send_change]).to all(match(/\A[0-9a-f]{64}\.\d+\z/))
+      end
+
+      it 'honors caller-supplied unlocking_script on the synchronous path' do
+        # Regression for the synchronous caller-inputs path: generate_change
+        # must forward caller_inputs to build_inputs so any caller-provided
+        # unlocking_script overrides the wallet's P2PKH signing.
+        fund_wallet_for_auto(satoshis: 100_000, count: 2)
+
+        listed = engine_with_keys.list_outputs(basket: 'default')
+        output_id = listed[:outputs].first[:id]
+        caller_script = "\x51\x52\x53".b # OP_1 OP_2 OP_3 — distinctive sentinel
+
+        result = engine_with_keys.create_action(
+          description: 'caller unlocking',
+          inputs: [{ output_id: output_id, unlocking_script: caller_script }],
+          outputs: [{ satoshis: 4000, locking_script: SecureRandom.random_bytes(25),
+                      derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                      sender_identity_key: key_deriver.identity_key }],
+          no_send: true
+        )
+
+        parsed = parse_beef_tx(result[:tx])
+        expect(parsed.inputs.length).to eq(1)
+        expect(parsed.inputs[0].unlocking_script.to_binary).to eq(caller_script)
       end
 
       it 'explicit empty inputs (OP_RETURN) still work' do
