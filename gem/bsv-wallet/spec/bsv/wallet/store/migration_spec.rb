@@ -72,12 +72,14 @@ RSpec.describe 'Schema migration', :store do
       values = db.from(
         Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'tx_status'")
       ).select_map(:enumlabel)
-      expect(values).to eq(%w[
-        UNKNOWN QUEUED RECEIVED STORED
-        ANNOUNCED_TO_NETWORK REQUESTED_BY_NETWORK SENT_TO_NETWORK
-        ACCEPTED_BY_NETWORK SEEN_IN_ORPHAN_MEMPOOL SEEN_ON_NETWORK
-        DOUBLE_SPEND_ATTEMPTED REJECTED MINED_IN_STALE_BLOCK MINED IMMUTABLE
-      ])
+      expect(values).to eq(
+        %w[
+          UNKNOWN QUEUED RECEIVED STORED
+          ANNOUNCED_TO_NETWORK REQUESTED_BY_NETWORK SENT_TO_NETWORK
+          ACCEPTED_BY_NETWORK SEEN_IN_ORPHAN_MEMPOOL SEEN_ON_NETWORK
+          DOUBLE_SPEND_ATTEMPTED REJECTED MINED_IN_STALE_BLOCK MINED IMMUTABLE
+        ]
+      )
     end
   end
 
