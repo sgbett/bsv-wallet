@@ -141,7 +141,7 @@ RSpec.describe 'Schema migration', :store do
       expect(action.reference.to_s).to match(/\A[0-9a-f]{8}-[0-9a-f]{4}-/)
     end
 
-    it 'defaults broadcast to delayed' do
+    it 'defaults broadcast_intent to delayed' do
       action_id = insert_action(description: 'broadcast test 1')
       row = db[:actions].where(id: action_id).first
       expect(row[:broadcast_intent]).to eq('delayed')
