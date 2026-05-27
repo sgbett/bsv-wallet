@@ -115,7 +115,12 @@ Sequel.migration do
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       unique :action_id
-      foreign_key %i[action_id intent], :actions, key: %i[id broadcast_intent]
+      # ON UPDATE RESTRICT makes the immutability of actions.broadcast_intent
+      # explicit at the schema level — any path that tries to mutate the
+      # parent's intent while a broadcasts row exists is rejected, rather
+      # than relying on application code to honour the invariant.
+      foreign_key %i[action_id intent], :actions,
+                  key: %i[id broadcast_intent], on_update: :restrict
       constraint(:intent_not_none, "intent != 'none'")
     end
 

@@ -201,7 +201,7 @@ When ARC reports MINED with a `merklePath`, the broadcast handler creates a `tx_
 
 **Constraints:**
 - `UNIQUE (action_id)` — one broadcast record per action
-- `FOREIGN KEY (action_id, intent) REFERENCES actions (id, broadcast_intent)` — composite FK ties the broadcast row to its parent action's intent atomically
+- `FOREIGN KEY (action_id, intent) REFERENCES actions (id, broadcast_intent) ON UPDATE RESTRICT` — composite FK ties the broadcast row to its parent action's intent atomically; `ON UPDATE RESTRICT` makes the immutability of `actions.broadcast_intent` an enforced schema invariant rather than a code-only convention
 - `CHECK intent != 'none'` — actions with `broadcast_intent = 'none'` are internal-path and cannot have a broadcast row
 - `CHECK block_hash IS NULL OR length(block_hash) = 32`
 - `CHECK block_height IS NULL OR block_height >= 0`

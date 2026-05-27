@@ -74,6 +74,24 @@ On first init, `docker/postgres/initdb/01-create-databases.sql` creates three em
 - `bsv_wallet_test` — for `DATABASE_URL=postgres://…/bsv_wallet_test bundle exec rspec` (RSpec runs its own schema migrations)
 - `bsv_wallet_alice` / `bsv_wallet_bob` — for hand-driven CLI sessions against Postgres (the wallet boots and migrates per-process)
 
+#### Pre-production migration model
+
+The wallet is pre-production — there is no installed user base whose data must survive a schema change. Schema work amends the existing migrations in place (`gem/bsv-wallet/db/migrations/001_create_schema.rb` and `003_schema_constraints.rb`) rather than stacking new migrations on top. The trade-off is intentional: a clean migration history while the schema is still being shaped.
+
+What this means in practice: **after pulling a branch that touches the schema, wipe and re-migrate** rather than expecting Sequel to migrate the diff forward.
+
+```bash
+# Postgres
+docker compose down
+rm -rf tmp/postgres-data
+docker compose up -d postgres
+
+# SQLite
+rm -f ~/.bsv-wallet/*.db tmp/*.db   # or whichever DATABASE_URL paths you've used
+```
+
+If `bundle exec rspec` starts failing with constraint/column errors after a `git pull`, this is almost always the cause. The wipe will become a non-issue once the wallet has actual deployments — at that point the project will switch to forward-only migrations.
+
 ## Getting Started
 
 ### Requirements
