@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+### Changed (breaking)
+
+- **`list_actions` response shape: derived status `:nosend` renamed to
+  `:internal`** (#195, part of HLR #183). Actions whose `broadcast` is
+  `'none'` — incoming BEEF, imported root UTXOs, wbikd locks,
+  `send_payment` — now report `status: :internal` in the `list_actions`
+  response. The old `:nosend` value is no longer emitted. Callers reading
+  `:status` from `list_actions` must update accordingly. Disambiguates
+  the internal non-network lifecycle from BRC-100's chained-send
+  `noSend` primitive, which is deferred to #192.
+
+### Changed
+
+- **Send-path output promotion restored to Phase 4** (#194, part of
+  HLR #183). The send path (`broadcast IN ('delayed', 'inline')`) no
+  longer promotes outputs to the canonical UTXO set at sign time.
+  Outputs are persisted at sign time with `promoted = false`; the flag
+  flips to `true` (and spendable rows are inserted) only when ARC
+  returns an accepted status. The internal path
+  (`broadcast == 'none'`) continues to promote synchronously inside
+  `create_action`. The `outputs` table gains a `promoted` boolean
+  column; existing rows backfill as `promoted = true`.
+- **`outputs.action_id` FK is RESTRICT** (#189, part of HLR #183).
+  Outputs cannot be orphaned by an action delete; cleanup paths
+  (`abort_action`, `fail_broadcast_action`, reaper) clear dependent
+  rows before the action delete.
+
+### Removed (breaking)
+
+- **BRC-100 chained-send API surface stripped** (#193, part of HLR #183).
+  The `no_send_change`, `send_with`, and `known_txids` keyword arguments
+  are no longer accepted on `create_action` / `sign_action`.
+  `Engine#process_send_with` is removed. (`known_txids` is still
+  accepted on `internalize_action`, where it serves the `trustSelf`
+  SPV-pruning role and is unrelated to chained-send.) The chained-send
+  subsystem (persistent batch entity, `noSend` chain extension,
+  `sendWith` flushing) is deferred to issue #192. The `no_send` keyword
+  remains on the public API and routes the action onto the internal
+  path; the `no_send_change` key in the `create_action` result hash is
+  also retained.
+
 ## [0.100.0] - 2026-05-13
 
 First release of the Ruby BRC-100 wallet — ground-up implementation.

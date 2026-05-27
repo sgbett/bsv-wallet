@@ -17,6 +17,15 @@ module BSV
             SEEN_ON_NETWORK MINED IMMUTABLE
             REJECTED DOUBLE_SPEND_ATTEMPTED
           ].freeze
+
+          # ARC tx_status values that indicate the network has accepted the
+          # broadcast (Phase 4 trigger). Subset of TERMINAL_STATUSES that
+          # represents success rather than rejection. ACCEPTED_BY_NETWORK is
+          # included because ARC reports it as an interim accepted state
+          # before SEEN_ON_NETWORK in some configurations.
+          ACCEPTED_STATUSES = %w[
+            SEEN_ON_NETWORK ACCEPTED_BY_NETWORK MINED IMMUTABLE
+          ].freeze
         end
       end
     end

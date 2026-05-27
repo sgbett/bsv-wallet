@@ -81,7 +81,7 @@ module BSV
         end
       end
 
-      def sign_action(action_id:, wtxid:, raw_tx:, change_outputs: [])
+      def sign_action(action_id:, wtxid:, raw_tx:, outputs: [], change_outputs: [])
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'sign_action wtxid')
         BSV.logger&.debug { "[Store] sign_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
         @db.transaction do
@@ -90,18 +90,32 @@ module BSV
           intent = models::Action.where(id: action_id).get(:broadcast)
           models::Broadcast.dataset.insert_conflict(target: :action_id).insert(action_id: action_id) if intent && intent != 'none'
 
-          write_change_outputs(action_id: action_id, change_outputs: change_outputs)
+          # Send-path outputs written with promoted: false. spendable rows
+          # deferred until Phase 4 (broadcast acceptance). Internal-path
+          # callers pass an empty outputs array and reach the canonical UTXO
+          # set via promote_action; change_outputs follow the same lifecycle
+          # as the action's broadcast intent.
+          write_pending_outputs(action_id: action_id, outputs: outputs)
+          write_change_outputs(action_id: action_id, change_outputs: change_outputs, internal: intent == 'none')
         end
       end
 
-      def stage_action(action_id:, wtxid:, raw_tx:)
+      def stage_action(action_id:, wtxid:, raw_tx:, outputs: [])
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'stage_action wtxid')
         BSV.logger&.debug { "[Store] stage_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
         @db.transaction do
           write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
+          # Deferred-path outputs persisted with promoted: false. The BRC-100
+          # signAction call later updates raw_tx + wtxid but doesn't reach
+          # the outputs again; their metadata must live in the row from now on.
+          write_pending_outputs(action_id: action_id, outputs: outputs)
         end
       end
 
+      # Internal-path Phase 4: write outputs as already promoted, insert
+      # spendable rows in the same transaction. Used by incoming actions
+      # (internalize_action, import_utxo, wbikd) where broadcast == 'none'
+      # — outputs join the canonical UTXO set immediately.
       def promote_action(action_id:, outputs:)
         @db.transaction do
           outputs.map do |out|
@@ -113,33 +127,40 @@ module BSV
               output_type: out[:output_type],
               derivation_prefix: out[:derivation_prefix],
               derivation_suffix: out[:derivation_suffix],
-              sender_identity_key: out[:sender_identity_key]
+              sender_identity_key: out[:sender_identity_key],
+              promoted: true
             )
 
             wallet_owned = out[:derivation_prefix] || out[:output_type] == 'root'
             models::Spendable.create(output_id: output.id, action_id: action_id) if wallet_owned
 
-            if out[:basket] && out[:basket] != 'default'
-              basket_id = find_or_create_basket(name: out[:basket])
-              models::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: action_id)
-            end
-
-            if out[:description] || out[:custom_instructions]
-              models::OutputDetail.create(
-                output_id: output.id,
-                action_id: action_id,
-                description: out[:description],
-                custom_instructions: out[:custom_instructions]
-              )
-            end
-
-            if out[:tags]&.any?
-              tag_ids = find_or_create_tags(names: out[:tags])
-              tag_ids.each { |tid| models::OutputTag.create(output_id: output.id, tag_id: tid) }
-            end
+            write_output_associations(output: output, action_id: action_id, spec: out)
 
             output.id
           end
+        end
+      end
+
+      # Send-path Phase 4: flip promoted flag on existing output rows and
+      # insert spendable rows for wallet-owned outputs. Idempotent — a
+      # second invocation finds already-promoted rows and is a no-op.
+      # Called when broadcast is accepted (inline or via the daemon).
+      def promote_action_outputs(action_id:)
+        @db.transaction do
+          unpromoted = models::Output.where(action_id: action_id, promoted: false).all
+          return [] if unpromoted.empty?
+
+          unpromoted.each do |output|
+            output.update(promoted: true)
+
+            wallet_owned = output.derivation_prefix || output.output_type == 'root' || change_output?(output_id: output.id)
+            next unless wallet_owned
+
+            existing = models::Spendable.where(output_id: output.id).any?
+            models::Spendable.create(output_id: output.id, action_id: action_id) unless existing
+          end
+
+          unpromoted.map(&:id)
         end
       end
 
@@ -148,14 +169,59 @@ module BSV
       end
 
       def abort_action(action_id:)
-        broadcast_exists = models::Broadcast.where(
-          Sequel[:broadcasts][:action_id] => Sequel[:actions][:id]
-        ).select(1)
-        models::Action.where(id: action_id).exclude(broadcast_exists.exists).delete
+        @db.transaction do
+          broadcast_exists = models::Broadcast.where(action_id: action_id).any?
+          return 0 if broadcast_exists
+
+          # Refuse if any output is promoted: true. Internal-path actions
+          # (broadcast = 'none') legitimately have no broadcasts row but
+          # their outputs are promoted at create_action time and may be
+          # spendable / spent — deleting them would destroy canonical UTXO
+          # history. abortAction is meant for unfinished work, not for
+          # rewinding already-committed actions.
+          if models::Output.where(action_id: action_id, promoted: true).any?
+            raise BSV::Wallet::CannotAbortPromotedActionError,
+                  "action_id=#{action_id} has promoted outputs; abort refused"
+          end
+
+          # outputs.action_id is RESTRICT (#189). The deferred-sign path
+          # writes outputs as promoted: false at stage_action time; aborting
+          # such an action must clear those rows first.
+          output_ids = models::Output.where(action_id: action_id).select_map(:id)
+          if output_ids.any?
+            models::OutputBasket.where(action_id: action_id).delete
+            models::OutputDetail.where(action_id: action_id).delete
+            models::OutputTag.where(output_id: output_ids).delete
+            models::Output.where(id: output_ids).delete
+          end
+          models::Action.where(id: action_id).delete
+        end
       end
 
       def fail_broadcast_action(action_id:)
         @db.transaction do
+          # Refuse if any output is promoted: true. Under #194 the only
+          # reachable outputs for a terminal-broadcast cleanup are
+          # promoted: false send-path rows (Phase 4 hasn't fired). But
+          # defensively guard against a race where an accepted callback
+          # has already promoted while a stale failure event is being
+          # processed — destroying promoted outbound rows would damage
+          # canonical history. Mirrors abort_action's invariant.
+          if models::Output.where(action_id: action_id, promoted: true).any?
+            raise BSV::Wallet::CannotAbortPromotedActionError,
+                  "action_id=#{action_id} has promoted outputs; fail_broadcast_action refused"
+          end
+
+          # outputs.action_id is RESTRICT (#189). Clear unpromoted output
+          # rows and their dependents, then the broadcast row, then the
+          # action.
+          output_ids = models::Output.where(action_id: action_id).select_map(:id)
+          if output_ids.any?
+            models::OutputBasket.where(action_id: action_id).delete
+            models::OutputDetail.where(action_id: action_id).delete
+            models::OutputTag.where(output_id: output_ids).delete
+            models::Output.where(id: output_ids).delete
+          end
           models::Broadcast.where(action_id: action_id).delete
           models::Action.where(id: action_id).delete
         end
@@ -549,6 +615,15 @@ module BSV
           fields[:competing_txs] = encode_competing_txs(competing_txs) if competing_txs
 
           broadcast.update(fields)
+
+          # Phase 4 promotion happens inside this transaction when the
+          # broadcast is accepted. This closes a crash-recovery gap:
+          # without atomicity the broadcasts row could carry a terminal
+          # accepted status (so pending_polls won't rediscover it) while
+          # outputs remained promoted: false (so they'd never become
+          # spendable). Single transaction = single recoverable state.
+          promote_action_outputs(action_id: action_id) if Models::Broadcast::ACCEPTED_STATUSES.include?(tx_status.to_s.upcase)
+
           broadcast_to_hash(broadcast)
         end
       end
@@ -589,23 +664,35 @@ module BSV
 
       def reap_stale_actions(threshold:)
         cutoff = Time.now - threshold
-        output_exists = models::Output.where(Sequel[:outputs][:action_id] => Sequel[:actions][:id]).select(1)
+        # Only PROMOTED outputs protect an action from the reaper. Unpromoted
+        # outputs (staged by deferred-sign, never broadcast-accepted) are
+        # disposable -- their action is the kind of leak the reaper exists
+        # to clean up. Under the old predicate, any output row blocked the
+        # reaper, so abandoned deferred actions kept their inputs locked
+        # indefinitely.
+        promoted_output_exists = models::Output
+                                 .where(Sequel[:outputs][:action_id] => Sequel[:actions][:id])
+                                 .where(promoted: true)
+                                 .select(1)
 
-        # Under #184's atomic invariant, signed actions with broadcast != 'none'
-        # always have a broadcasts row. broadcasts.action_id has no CASCADE FK
-        # today (tracked in #189), so we delete the broadcasts row first inside
-        # the same transaction. Both deletes use the stale dataset as a
-        # subquery so the predicate is re-evaluated at delete time -- avoids
-        # a race where a row could be promoted between predicate evaluation
-        # and the delete.
         @db.transaction do
           stale = models::Action
                   .where { created_at < cutoff }
                   .where(Sequel.~(broadcast: 'none'))
                   .where(Sequel.lit('wtxid IS NOT NULL'))
-                  .exclude(output_exists.exists)
+                  .exclude(promoted_output_exists.exists)
 
-          models::Broadcast.where(action_id: stale.select(:id)).delete
+          stale_ids = stale.select(:id)
+          # outputs.action_id is RESTRICT (#189), so unpromoted output rows
+          # and their dependents must be cleared before the action delete.
+          output_ids_in_stale = models::Output.where(action_id: stale_ids).select(:id)
+          models::OutputBasket.where(action_id: stale_ids).delete
+          models::OutputDetail.where(action_id: stale_ids).delete
+          models::OutputTag.where(output_id: output_ids_in_stale).delete
+          models::Output.where(action_id: stale_ids).delete
+          # broadcasts.action_id has no CASCADE FK today (tracked in #189),
+          # so clear the broadcasts row before the action.
+          models::Broadcast.where(action_id: stale_ids).delete
           stale.delete
         end
       end
@@ -643,7 +730,12 @@ module BSV
 
       # Write change output rows (and their detail rows) for an action.
       # Caller is responsible for wrapping in a transaction.
-      def write_change_outputs(action_id:, change_outputs:)
+      #
+      # +internal: true+ writes outputs as +promoted: true+ for internal-path
+      # actions (broadcast 'none') where Phase 4 is synchronous. +internal:
+      # false+ writes +promoted: false+ for send-path actions awaiting
+      # broadcast acceptance.
+      def write_change_outputs(action_id:, change_outputs:, internal: false)
         change_outputs.each do |chg|
           output = models::Output.create(
             action_id: action_id,
@@ -652,7 +744,8 @@ module BSV
             locking_script: chg[:locking_script],
             derivation_prefix: chg[:derivation_prefix],
             derivation_suffix: chg[:derivation_suffix],
-            sender_identity_key: chg[:sender_identity_key]
+            sender_identity_key: chg[:sender_identity_key],
+            promoted: internal
           )
           models::OutputDetail.create(
             output_id: output.id,
@@ -660,6 +753,55 @@ module BSV
             change: true
           )
         end
+      end
+
+      # Write send-path output rows as promoted: false. Spendable rows are
+      # deferred until Phase 4 (broadcast acceptance). Caller is responsible
+      # for wrapping in a transaction.
+      def write_pending_outputs(action_id:, outputs:)
+        outputs.each do |out|
+          output = models::Output.create(
+            action_id: action_id,
+            satoshis: out[:satoshis],
+            vout: out[:vout],
+            locking_script: out[:locking_script],
+            output_type: out[:output_type],
+            derivation_prefix: out[:derivation_prefix],
+            derivation_suffix: out[:derivation_suffix],
+            sender_identity_key: out[:sender_identity_key],
+            promoted: false
+          )
+          write_output_associations(output: output, action_id: action_id, spec: out)
+        end
+      end
+
+      # Write basket / detail / tag rows for an output. Caller is responsible
+      # for wrapping in a transaction. The spendable row is not handled here —
+      # callers decide when an output joins the canonical UTXO set.
+      def write_output_associations(output:, action_id:, spec:)
+        if spec[:basket] && spec[:basket] != 'default'
+          basket_id = find_or_create_basket(name: spec[:basket])
+          models::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: action_id)
+        end
+
+        if spec[:description] || spec[:custom_instructions]
+          models::OutputDetail.create(
+            output_id: output.id,
+            action_id: action_id,
+            description: spec[:description],
+            custom_instructions: spec[:custom_instructions]
+          )
+        end
+
+        return unless spec[:tags]&.any?
+
+        tag_ids = find_or_create_tags(names: spec[:tags])
+        tag_ids.each { |tid| models::OutputTag.create(output_id: output.id, tag_id: tid) }
+      end
+
+      # True when the output is a change output (has a change=true detail row).
+      def change_output?(output_id:)
+        models::OutputDetail.where(output_id: output_id, change: true).any?
       end
 
       # Convert a value to binary. If already binary-encoded, return as-is;

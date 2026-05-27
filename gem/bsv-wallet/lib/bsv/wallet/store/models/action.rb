@@ -27,12 +27,19 @@ module BSV
           # Derive BRC-100 status from structural state.
           # No status column — the database structure IS the state.
           #
+          # :internal marks actions that never go to ARC — incoming BEEF,
+          # imported UTXOs, wbikd locks, send_payment porcelain. Distinct
+          # from BRC-100's noSend chained-send concept (deferred to #192).
+          #
           # @return [Symbol]
           def derived_status
             return :unsigned   if wtxid.nil?
             return :completed  if tx_proof_id
-            return :nosend     if values[:broadcast] == 'none'
-            return :unproven   unless outputs_dataset.empty?
+            return :internal   if values[:broadcast] == 'none'
+            # Send-path outputs are persisted at sign time with promoted: false
+            # (#194). Only outputs flipped to promoted: true at Phase 4 mean
+            # the broadcast was accepted — the :unproven gate.
+            return :unproven   if outputs_dataset.where(promoted: true).any?
             return :failed     if broadcast_entry&.tx_status == 'REJECTED'
             return :sending    if broadcast_entry
 

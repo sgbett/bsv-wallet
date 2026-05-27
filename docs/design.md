@@ -45,7 +45,7 @@ All interface methods are synchronous and return hashes. Async behavior (backgro
 - American English throughout (matching BRC-100 spec): `internalize_action`, `randomize_outputs`
 - Ruby conventions: `authenticated?` (predicate), `public_key` (drop `get` prefix), `height`/`network`/`version` (drop `get`)
 - String literal unions become symbols: `:mainnet`, `:any`, `:direct`, `:wallet_payment`
-- Nested option hashes are flattened into keyword args — `no_send: false` rather than `options: { no_send: false }`
+- Nested option hashes are flattened into keyword args — `accept_delayed_broadcast: false` rather than `options: { acceptDelayedBroadcast: false }`
 
 ---
 
@@ -136,9 +136,9 @@ Each component service (Layer 2a) is defined as an abstract module under `BSV::W
 
 The BRC-100 spec defines the external contract (28 methods). It says nothing about wallet internals. The four machinery interfaces are architectural decompositions inferred from what the external contract requires.
 
-**BroadcastQueue — direct derivation.** The `acceptDelayedBroadcast` parameter describes two execution models (synchronous vs queued). `sendWith` adds batching. `sendWithResults` carries broadcast lifecycle states (`:unproven`, `:sending`, `:failed`). The spec is describing a queue without using the word.
+**BroadcastQueue — direct derivation.** The `acceptDelayedBroadcast` parameter describes two execution models (synchronous vs queued). The wallet needs a place to hold the queue and a worker to drive it — the spec is describing a queue without using the word. BRC-100's `noSend`/`sendWith`/`sendWithResults` chained-send primitives are not part of this base wallet (deferred to #192); when implemented they will compose with the existing BroadcastQueue rather than redefine it.
 
-**UTXOPool — strong derivation.** The `noSend`/`noSendChange`/`sendWith` chaining mechanism implies UTXO reservation — change outputs from one unsent transaction become inputs to the next. `abortAction` reinforces this: cancellation requires releasing reserved outputs. The pool pattern is an architectural choice for expressing the reservation semantics the spec implies.
+**UTXOPool — strong derivation.** Every `createAction` needs to choose inputs from the wallet's spendable set, and `abortAction` needs to release them again. The pool pattern is the architectural choice for expressing the selection-and-release semantics — independent of any chained-send primitives.
 
 **Store — obvious but unspecified.** Every `list*` method requires persistent state. `internalizeAction` explicitly stores incoming transactions. Labels, tags, baskets, certificates — all must survive between calls. Any wallet needs a store; the spec informed the shape, not the decision.
 
@@ -146,8 +146,8 @@ The BRC-100 spec defines the external contract (28 methods). It says nothing abo
 
 | Component | BRC-100 source | Derivation |
 |-----------|---------------|------------|
-| BroadcastQueue | `acceptDelayedBroadcast`, `noSend`, `sendWith`, `sendWithResults` | Direct |
-| UTXOPool | `noSend`/`noSendChange` chaining, `abortAction`, spendable outputs | Strong |
+| BroadcastQueue | `acceptDelayedBroadcast`, broadcast lifecycle on `createAction` / `signAction` | Direct |
+| UTXOPool | `createAction` input selection, `abortAction`, spendable outputs | Strong |
 | Store | Every `list*`/`query` method, `internalizeAction`, baskets/labels/tags | Obvious |
 | ProofStore | BRC-67/62 sections, `trustSelf`, `getHeaderForHeight` | Inferential |
 
@@ -195,24 +195,31 @@ The most complex method. Follows the schema's four-phase lifecycle. No database 
 
 If `sign_and_process: false` or any input has `unlocking_script_length` instead of a script, return `{ signable_transaction: { tx:, reference: } }` and stop here. The caller invokes `sign_action` later.
 
-**Phase 3 — Broadcast**:
+**Phase 3 — Broadcast** (send path only):
 
-9. **Submit** — `BroadcastQueue#submit(action_id:, raw_tx:, immediate: !accept_delayed_broadcast)`
-10. If inline: the broadcast happens synchronously and returns the network result
-11. If delayed: the broadcast is queued for a background worker
+9. **Submit** — inline: `Engine::Broadcast#submit` POSTs to ARC synchronously and returns the network result. Delayed: the broadcasts row created in Phase 2 sits with `broadcast_at IS NULL`; the daemon's push-discovery loop finds it and calls `Engine::Broadcast#submit`.
+10. **Poll** — for in-flight broadcasts (`broadcast_at IS NOT NULL`, non-terminal status) the daemon's poll-discovery loop calls `Engine::Broadcast#poll_status` to converge on the terminal state via `GET /tx/{txid}`.
 
-**Phase 4 — Promote** (atomic, triggered by broadcast acceptance):
+Internal-path actions (`broadcast: :none`) skip Phase 3 entirely.
 
-12. When the network accepts the transaction, `Store#promote_action` writes outputs to the immutable log, inserts spendable entries, basket memberships, tags, and output details — all in one atomic transaction
-13. If the broadcast response includes a merkle proof (ARC returns MINED), `ProofStore#save_proof` stores it and `Store#link_proof` marks the action as completed
-14. New change outputs are immediately available in the UTXO set
+**Phase 4 — Promote** (atomic, milliseconds):
 
-**Return:** `{ txid:, tx: }` if signed and broadcast, `{ signable_transaction: { tx:, reference: } }` if deferred
+On the **send path**, Phase 4 fires from `Engine::Broadcast#submit` or `#poll_status` when ARC returns an accepted status (`SEEN_ON_NETWORK`, `ACCEPTED_BY_NETWORK`, `MINED`, `IMMUTABLE`). The output rows already exist from Phase 2 with `promoted = false`; `Store#promote_action_outputs` flips them to `promoted = true` and inserts spendable rows for wallet-owned outputs. Idempotent — a re-poll of an already-promoted broadcast is a no-op.
 
-The `noSend` / `noSendChange` / `sendWith` mechanism enables chained transaction batching:
-- `no_send: true` — construct and persist with `broadcast: :none`. Return `no_send_change` outpoints (change outputs from the unsent transaction).
-- Subsequent `create_action` calls can consume those outpoints via `no_send_change`.
-- `send_with: [txid1, txid2]` — submit a batch of previously unsent transactions together via `BroadcastQueue#submit`.
+On the **internal path** (`broadcast: :none`), Phase 4 commits inside the same transaction as Phases 1 and 2 (`Store#promote_action`). Output rows are written with `promoted = true` directly; spendable rows are inserted alongside.
+
+If the broadcast response includes a merkle proof (ARC returns MINED), `ProofStore#save_proof` stores it and `Store#link_proof` marks the action as completed.
+
+**Return:** `{ txid:, tx: }` if signed and broadcast, `{ signable_transaction: { tx:, reference: } }` if deferred.
+
+### Two lifecycles, one schema
+
+The `broadcast` parameter on `create_action` (and the `broadcast` enum on the `actions` table) routes each action into one of two lifecycles:
+
+- **Send path** (`broadcast IN ('delayed', 'inline')`) — pure 4-phase. Output rows are persisted at Phase 2 with `promoted = false`. They are not in the canonical UTXO set until Phase 4 fires on broadcast acceptance.
+- **Internal path** (`broadcast == 'none'`) — Phases 1, 2, and 4 commit synchronously inside `create_action`. Used by `internalize_action` (incoming BEEF), `import_utxo` (root-key UTXO), wbikd address management (slot locks), and `send_payment` (porcelain returning BEEF for out-of-band delivery). No broadcasts row is ever created.
+
+The split is structural — the `promoted` flag on outputs is the membership marker for the canonical UTXO set, and the routing fact is when Phase 4 commits. BRC-100's `noSend` / `sendWith` chained-send primitives are deferred to #192 and not part of this base wallet.
 
 #### sign_action Flow
 
@@ -374,18 +381,17 @@ Key design principles:
 | Table | Character | INSERT | UPDATE | DELETE |
 |-------|-----------|--------|--------|--------|
 | tx_proofs | Append-mostly | proof arrival | upsert on re-proof | never |
-| actions | Mutable lifecycle | createAction | txid (sign), tx_proof_id (proof) | abort, reaper |
-| broadcasts | Broadcast lifecycle | Phase 3 | ARC response updates | CASCADE |
-| baskets | Reference data | on demand | never | soft delete |
-| outputs | **Immutable log** | Phase 4 / internalize | **never** | **never** |
-| spendable | The wallet | Phase 4 / internalize | never | spend / relinquish |
-| output_baskets | Mutable membership | Phase 4 / internalize | basket move | relinquish |
-| output_details | Immutable metadata | Phase 4 / internalize | never | never |
+| actions | Mutable lifecycle | createAction | wtxid (sign), tx_proof_id (proof) | abort, fail_broadcast, reaper |
+| broadcasts | Broadcast lifecycle | Phase 2 (send path) | `broadcast_at`, ARC response | fail_broadcast, CASCADE from action |
+| baskets | Reference data | on demand | never | hard delete |
+| outputs | Append-only log | Phase 2 (send, `promoted=false`) / Phase 4 (internal, `promoted=true`) | `promoted` single-shot false → true at send-path Phase 4 | abort / fail_broadcast / reaper (cleanup paths only) |
+| spendable | The wallet | Phase 4 (both paths) | never | spend / relinquish / cleanup |
+| output_baskets | Mutable membership | Phase 2 (send) / Phase 4 (internal) | basket move | relinquish / cleanup |
+| output_details | Immutable metadata | Phase 2 (send) / Phase 4 (internal) | never | cleanup |
 | inputs | Lock mechanism | Phase 1 | never | CASCADE from action |
-| labels / action_labels | Action categorisation | on demand | never | soft delete |
-| tags / output_tags | Output categorisation | on demand | never | soft delete |
-| certificates / certificate_fields | Identity (BRC-52) | acquire | never | soft delete |
-| tx_reqs | Proof work queue | on demand | status updates | never |
+| labels / action_labels | Action categorisation | on demand | never | hard delete |
+| tags / output_tags | Output categorisation | on demand | never | hard delete |
+| certificates / certificate_fields | Identity (BRC-52) | acquire | never | hard delete |
 | settings | Key-value config | on demand | upsert | never |
 
 ### Database
@@ -397,12 +403,15 @@ PostgreSQL, accessed via Sequel. The Sequel layer provides a low-level interface
 The Store mirrors the schema's phase model:
 
 - `create_action` → Phase 1 (INSERT action + inputs atomically)
-- `sign_action` → Phase 2 (UPDATE action SET txid, raw_tx)
-- `promote_action` → Phase 4 (INSERT outputs, spendable, baskets, details, tags)
+- `sign_action` → Phase 2 (UPDATE action SET wtxid, raw_tx; INSERT outputs with `promoted = false`; INSERT broadcasts row for send-path actions)
+- `stage_action` → Deferred Phase 2 (same as `sign_action` for outputs, but defers the broadcasts row to a later `sign_action` call)
+- `promote_action` → Internal-path Phase 4 (INSERT outputs `promoted = true` and spendable rows in one transaction; only reachable from `broadcast == 'none'` callers)
+- `promote_action_outputs` → Send-path Phase 4 (flip `promoted = false → true` on existing rows and INSERT spendable rows; idempotent)
 - `link_proof` → attach a tx_proof to an action
-- `abort_action` → DELETE action (CASCADE frees inputs)
+- `abort_action` → clear dependent rows under the RESTRICT FK, then DELETE the action (CASCADE frees inputs); no-op if a broadcasts row exists
+- `fail_broadcast_action` → terminal cleanup on ARC rejection (drops broadcasts row and unpromoted output rows alongside the action)
 
-The Store is a data access layer, not a business logic layer. It persists and queries — it doesn't validate BRC-100 rules or orchestrate multi-step flows. That's the wallet engine's job (Layer 3).
+The Store owns multi-table atomicity. The Engine never sees a half-committed lifecycle — every transition is a single `@db.transaction` block. The Store is a data access layer, not a business logic layer: it persists and queries, but doesn't validate BRC-100 rules or orchestrate multi-step flows. That's the wallet engine's job (Layer 3).
 
 ### Broadcast Implementation
 
@@ -477,17 +486,19 @@ A UNIQUE constraint violation in Layer 1 becomes an `InsufficientFundsError` in 
 
 ### State Derivation
 
-Status is never stored. It's derived at query time from structural state:
+Status is never stored. It's derived at query time from structural state. The `promoted` flag on outputs distinguishes the send path's "signed but not yet broadcast-accepted" state from the post-promotion states:
 
 | Structural state | Derived status |
 |---|---|
-| `txid IS NULL` | unsigned |
-| `txid IS NOT NULL`, no broadcast, no outputs | unprocessed |
-| broadcast row exists, no outputs | sending |
-| `broadcast = 'none'`, no proof | nosend |
-| outputs exist, no proof | unproven |
-| `tx_proof_id IS NOT NULL` | completed |
-| broadcast `tx_status = 'REJECTED'` | failed |
+| `wtxid IS NULL` | unsigned |
+| `wtxid IS NOT NULL`, `tx_proof_id IS NOT NULL` | completed |
+| `wtxid IS NOT NULL`, `broadcast = 'none'`, no proof | internal |
+| `wtxid IS NOT NULL`, send path, at least one output with `promoted = true`, no proof | unproven |
+| `wtxid IS NOT NULL`, send path, broadcast `tx_status = 'REJECTED'` | failed |
+| `wtxid IS NOT NULL`, send path, broadcast row exists, no promoted outputs | sending |
+| `wtxid IS NOT NULL`, send path, no broadcast row | unprocessed |
+
+`:internal` replaces the previous `:nosend` label — the new name disambiguates from BRC-100's chained-send concept (deferred to #192).
 
 ### Concurrency
 

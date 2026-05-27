@@ -38,6 +38,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
   before do
     allow(BSV::Wallet).to receive(:emit) { |name, **payload| emitted_events << { name: name, **payload } }
     allow(store).to receive(:mark_broadcast_attempted)
+    # Phase 4 promote is triggered on accepted ARC responses; stub by default
+    # so spec contexts that don't assert on it remain happy.
+    allow(store).to receive(:promote_action_outputs).and_return([])
   end
 
   describe '#process' do
@@ -90,6 +93,16 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
+      end
+
+      it 'records the broadcast result (which atomically promotes outputs)' do
+        broadcast.process(action_id)
+        # Phase 4 is atomic with record_broadcast_result inside the Store
+        # transaction when tx_status is accepted. The engine doesn't call
+        # promote_action_outputs directly anymore.
+        expect(store).to have_received(:record_broadcast_result).with(
+          hash_including(action_id: action_id, tx_status: 'SEEN_ON_NETWORK')
+        )
       end
 
       it 'calls services.call(:broadcast) with the raw_tx' do
@@ -159,6 +172,11 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         broadcast.process(action_id)
         succeeded = emitted_events.find { |e| e[:name] == 'task.succeeded' }
         expect(succeeded).to include(outcome: :pending)
+      end
+
+      it 'does NOT trigger Phase 4 — intermediate status is not network acceptance' do
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:promote_action_outputs)
       end
     end
 
@@ -497,6 +515,16 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         succeeded = emitted_events.find { |e| e[:name] == 'task.succeeded' }
         expect(succeeded).to include(outcome: :accepted, task: 'broadcast_push', id: action_id)
         expect(succeeded[:latency_ms]).to be_an(Integer)
+      end
+
+      it 'records the broadcast result (which atomically promotes outputs)' do
+        broadcast.process(action_id)
+        # Phase 4 is atomic with record_broadcast_result inside the Store
+        # transaction when tx_status is accepted. The engine doesn't call
+        # promote_action_outputs directly anymore.
+        expect(store).to have_received(:record_broadcast_result).with(
+          hash_including(action_id: action_id, tx_status: 'SEEN_ON_NETWORK')
+        )
       end
     end
 

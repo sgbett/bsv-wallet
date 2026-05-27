@@ -152,6 +152,53 @@ RSpec.describe BSV::Wallet::Store, :store do
 
       expect(BSV::Wallet::Store::Models::Broadcast.where(action_id: result[:id]).count).to eq(1)
     end
+
+    it 'writes send-path outputs as promoted: false with no spendable row' do
+      result = store.create_action(action: { description: 'send path', broadcast: :delayed, nlocktime: 0 })
+      store.sign_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+        outputs: [
+          { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+            basket: 'inbox', description: 'pending output' }
+        ]
+      )
+
+      output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+      expect(output.promoted).to be(false)
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output.id).count).to eq(0)
+
+      # Associations (basket, detail) still written so the metadata survives
+      # the sign → broadcast acceptance gap.
+      expect(output.basket&.name).to eq('inbox')
+      expect(output.detail.description).to eq('pending output')
+    end
+
+    it 'writes change outputs as promoted: false on the send path' do
+      result = store.create_action(action: { description: 'change path', broadcast: :delayed, nlocktime: 0 })
+      store.sign_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+        change_outputs: [
+          { satoshis: 100, vout: 0, locking_script: SecureRandom.random_bytes(25),
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: 'c1', sender_identity_key: 'self' }
+        ]
+      )
+      output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+      expect(output.promoted).to be(false)
+    end
+
+    it 'writes change outputs as promoted: true on the internal path' do
+      result = store.create_action(action: { description: 'internal change', broadcast: :none, nlocktime: 0 })
+      store.sign_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+        change_outputs: [
+          { satoshis: 100, vout: 0, locking_script: SecureRandom.random_bytes(25),
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: 'c1', sender_identity_key: 'self' }
+        ]
+      )
+      output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+      expect(output.promoted).to be(true)
+    end
   end
 
   describe '#stage_action' do
@@ -182,6 +229,26 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect do
         store.stage_action(action_id: result[:id], wtxid: hex_dtxid, raw_tx: SecureRandom.random_bytes(100))
       end.to raise_error(ArgumentError, /stage_action wtxid/)
+    end
+
+    it 'persists outputs with promoted: false and their metadata' do
+      result = store.create_action(action: { description: 'staged outputs', broadcast: :delayed, nlocktime: 0 })
+      store.stage_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+        outputs: [
+          { satoshis: 750, vout: 0, locking_script: SecureRandom.random_bytes(25),
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+            basket: 'staged', tags: %w[awaiting], description: 'awaiting signAction' }
+        ]
+      )
+      output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+      expect(output).not_to be_nil
+      expect(output.promoted).to be(false)
+      expect(output.satoshis).to eq(750)
+      expect(output.basket&.name).to eq('staged')
+      expect(output.tags.map(&:tag)).to eq(['awaiting'])
+      expect(output.detail.description).to eq('awaiting signAction')
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output.id).count).to eq(0)
     end
   end
 
@@ -249,6 +316,99 @@ RSpec.describe BSV::Wallet::Store, :store do
       outbound_output = outputs.find { |o| o.vout == 1 }
       expect(spendable_ids).to include(derived_output.id)
       expect(spendable_ids).not_to include(outbound_output.id)
+    end
+
+    it 'sets promoted: true on the output row (internal-path lifecycle)' do
+      result = store.create_action(action: { description: 'internal promote', nlocktime: 0 })
+      store.promote_action(action_id: result[:id], outputs: [
+                             {
+                               satoshis: 500, vout: 0,
+                               locking_script: SecureRandom.random_bytes(25),
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                               sender_identity_key: 'self'
+                             }
+                           ])
+      output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+      expect(output.promoted).to be(true)
+    end
+  end
+
+  describe '#promote_action_outputs' do
+    it 'flips promoted: false to true and inserts spendable rows for wallet-owned outputs' do
+      result = store.create_action(action: { description: 'send path action', broadcast: :delayed, nlocktime: 0 })
+      store.sign_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+        outputs: [
+          { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+            basket: 'inbox' }
+        ]
+      )
+
+      output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+      expect(output.promoted).to be(false)
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output.id).count).to eq(0)
+
+      promoted_ids = store.promote_action_outputs(action_id: result[:id])
+      expect(promoted_ids).to eq([output.id])
+
+      expect(output.reload.promoted).to be(true)
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output.id).count).to eq(1)
+    end
+
+    it 'is idempotent — second call is a no-op' do
+      result = store.create_action(action: { description: 'idempotent test', broadcast: :delayed, nlocktime: 0 })
+      store.sign_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+        outputs: [
+          { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+        ]
+      )
+
+      first = store.promote_action_outputs(action_id: result[:id])
+      expect(first.size).to eq(1)
+
+      second = store.promote_action_outputs(action_id: result[:id])
+      expect(second).to eq([])
+
+      output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output.id).count).to eq(1)
+    end
+
+    it 'skips spendable creation for outbound (non-wallet-owned) outputs' do
+      result = store.create_action(action: { description: 'outbound payment', broadcast: :delayed, nlocktime: 0 })
+      store.sign_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+        outputs: [
+          { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'outbound' }
+        ]
+      )
+
+      output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+      store.promote_action_outputs(action_id: result[:id])
+
+      expect(output.reload.promoted).to be(true)
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output.id).count).to eq(0)
+    end
+
+    it 'promotes change outputs and creates their spendable rows' do
+      result = store.create_action(action: { description: 'with change', broadcast: :delayed, nlocktime: 0 })
+      store.sign_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+        change_outputs: [
+          { satoshis: 250, vout: 1, locking_script: SecureRandom.random_bytes(25),
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: 'c1', sender_identity_key: 'self' }
+        ]
+      )
+
+      change_output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+      expect(change_output.promoted).to be(false)
+
+      store.promote_action_outputs(action_id: result[:id])
+
+      expect(change_output.reload.promoted).to be(true)
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: change_output.id).count).to eq(1)
     end
   end
 
@@ -327,8 +487,84 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(output.reload.spendable?).to be true
     end
 
+    it 'deletes promoted: false outputs and their associations before the action' do
+      input_output = create_funded_output(satoshis: 1000)
+      result = store.create_action(
+        action: { description: 'to fail with outputs', nlocktime: 0 },
+        inputs: [{ output_id: input_output.id, vin: 0 }]
+      )
+      pending_outputs = [{
+        satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
+        derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+        sender_identity_key: 'self', basket: 'my-basket', tags: %w[urgent]
+      }]
+      change_outputs = [{
+        satoshis: 400, vout: 1, locking_script: SecureRandom.random_bytes(25),
+        derivation_prefix: SecureRandom.uuid, derivation_suffix: '2',
+        sender_identity_key: 'self'
+      }]
+      store.sign_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: pending_outputs, change_outputs: change_outputs
+      )
+
+      output_ids = BSV::Wallet::Store::Models::Output.where(action_id: result[:id]).select_map(:id)
+      expect(output_ids.length).to eq(2)
+      expect(BSV::Wallet::Store::Models::Output.where(id: output_ids, promoted: false).count).to eq(2)
+      expect(BSV::Wallet::Store::Models::OutputBasket.where(action_id: result[:id]).any?).to be true
+      expect(BSV::Wallet::Store::Models::OutputDetail.where(action_id: result[:id]).any?).to be true
+      expect(BSV::Wallet::Store::Models::OutputTag.where(output_id: output_ids).any?).to be true
+
+      store.fail_broadcast_action(action_id: result[:id])
+
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
+      expect(BSV::Wallet::Store::Models::Output.where(id: output_ids).any?).to be false
+      expect(BSV::Wallet::Store::Models::OutputBasket.where(action_id: result[:id]).any?).to be false
+      expect(BSV::Wallet::Store::Models::OutputDetail.where(action_id: result[:id]).any?).to be false
+      expect(BSV::Wallet::Store::Models::OutputTag.where(output_id: output_ids).any?).to be false
+      expect(input_output.reload.spendable?).to be true
+    end
+
     it 'is idempotent (no-op when neither row exists)' do
       expect { store.fail_broadcast_action(action_id: 999_999) }.not_to raise_error
+    end
+  end
+
+  describe 'outputs.action_id FK (RESTRICT)' do
+    it 'blocks deleting an action that has promoted outputs' do
+      result = store.create_action(action: { description: 'with outputs', nlocktime: 0 })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      store.promote_action(
+        action_id: result[:id],
+        outputs: [{
+          satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25),
+          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+          sender_identity_key: 'self'
+        }]
+      )
+
+      # Postgres aborts the whole tx on a FK violation; isolate the failing
+      # delete in its own savepoint so the surrounding shared_context tx
+      # stays usable for the post-condition assertion.
+      store.db.transaction(savepoint: true) do
+        expect { BSV::Wallet::Store::Models::Action.where(id: result[:id]).delete }
+          .to raise_error(Sequel::ForeignKeyConstraintViolation)
+        raise Sequel::Rollback
+      end
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
+    end
+
+    it 'rejects inserting an output with NULL action_id' do
+      expect do
+        BSV::Wallet::Store::Models::Output.create(
+          action_id: nil, satoshis: 100, vout: 0,
+          locking_script: SecureRandom.random_bytes(25),
+          derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+          sender_identity_key: 'self'
+        )
+      end.to raise_error(Sequel::NotNullConstraintViolation)
     end
   end
 

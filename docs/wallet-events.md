@@ -55,7 +55,7 @@ Ten canonical events across three layers.
 | `task.discovered` | `task` `count` | Scheduler discovery returned >= 1 items |
 | `task.enqueued` | `task` `id` | Per item pushed onto OMQ PUSH socket |
 | `task.dispatched` | `task` `id` | Entry to the logical model's `#process(id)` |
-| `task.succeeded` | `task` `id` `latency_ms` `outcome` | Work completed successfully |
+| `task.succeeded` | `task` `id` `latency_ms` `outcome` | Work completed successfully. For `broadcast_push`, Phase 4 promotion (flipping the action's outputs from `promoted = false` to `true` and inserting their spendable rows) happens atomically inside `Store#record_broadcast_result` when ARC returns an accepted `tx_status`. This event is emitted by `Engine::Broadcast` immediately after that recording transaction commits, so any subscriber observing `task.succeeded` with `outcome: :accepted` can rely on the promotion having already taken effect. |
 | `task.failed` | `task` `id` `latency_ms` `reason` | Transient failure (re-discoverable next cycle) |
 | `task.aborted` | `task` `id` `reason` `arc_status` | Terminal failure (action aborted, no re-discovery) |
 | `task.skipped` | `task` `id` `reason` | Benign no-op (work no longer applicable) |

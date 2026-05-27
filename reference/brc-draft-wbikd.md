@@ -49,8 +49,8 @@ To generate a receive address, the wallet locks an available slot and derives a 
 
 1. Query the slot basket for an available (unlocked) output using [BRC-100 `listOutputs`](../wallet/0100.md) with `basket = "p wbikd"`
 2. If no slot is available, create one per §1
-3. Lock the slot by creating a non-broadcast action via `createAction` with:
-   - `noSend = true`
+3. Lock the slot by creating a non-broadcast action (`broadcast = 'none'`,
+   an internal-path action that never goes to ARC) with:
    - One input referencing the slot output
    - Zero outputs
    - Label `"wbikd"` attached to the action
@@ -68,7 +68,7 @@ The derivation parameters are deterministic from on-chain data (transaction ID a
 Outstanding addresses are discoverable by querying the wallet's action list.
 
 1. Query actions with label `"wbikd"` using [BRC-100 `listActions`](../wallet/0100.md) with `includeInputs = true`
-2. Filter for actions with `noSend` status (active locks)
+2. Filter for actions with `internal` status (active locks — non-broadcast internal-path actions)
 3. For each active lock, re-derive the address from the input's source transaction ID and output index per §2 steps 4–6
 4. Check each address for unspent outputs using a UTXO lookup service
 
@@ -133,7 +133,7 @@ Sweep scanning addresses the case where a sender makes a second payment to a pre
    [Create Slot]          Broadcast self-payment → slot output in basket "p wbikd"
         |                 OP_RETURN with recovery marker
         v
-   [Generate Address]     Lock slot with zero-output noSend action
+   [Generate Address]     Lock slot with zero-output non-broadcast action
         |                 Derive address from (slot txid, slot vout)
         v
    [Monitor]              Scan derived address for UTXOs
@@ -164,7 +164,7 @@ Sweep scanning addresses the case where a sender makes a second payment to a pre
 
 This specification is designed to be implementable by any [BRC-100](../wallet/0100.md) compliant wallet. It uses only standard wallet primitives:
 
-- `createAction` with baskets, labels, and `noSend`
+- `createAction` with baskets, labels, and the wallet's internal non-broadcast action mechanism
 - `abortAction` for slot recycling
 - `listActions` with label filtering and input inclusion
 - `listOutputs` with basket and tag filtering

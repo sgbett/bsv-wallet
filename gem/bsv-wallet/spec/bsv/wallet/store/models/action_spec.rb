@@ -87,9 +87,9 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
       expect(action.derived_status).to eq(:completed)
     end
 
-    it 'returns :nosend when broadcast is none' do
+    it 'returns :internal when broadcast is none' do
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx, broadcast: 'none')
-      expect(action.derived_status).to eq(:nosend)
+      expect(action.derived_status).to eq(:internal)
     end
 
     it 'returns :unproven when outputs exist but no proof' do

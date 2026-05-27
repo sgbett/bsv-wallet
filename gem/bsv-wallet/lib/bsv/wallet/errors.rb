@@ -40,5 +40,15 @@ module BSV
               "operating threshold #{threshold} sats — receive funds to restore normal operations")
       end
     end
+
+    # Raised by Store#abort_action when the target action has any promoted
+    # outputs. Aborting such an action would delete canonical UTXOs and
+    # their history. abortAction is for unfinished work, not for rewinding
+    # already-committed (internal-path or post-broadcast) actions.
+    class CannotAbortPromotedActionError < Error
+      def initialize(message = 'cannot abort action with promoted outputs')
+        super
+      end
+    end
   end
 end

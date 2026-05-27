@@ -21,7 +21,15 @@ CREATE TYPE broadcast_intent AS ENUM ('delayed', 'inline', 'none');
 CREATE TYPE output_type AS ENUM ('root', 'outbound');
 ```
 
-**broadcast_intent:** Immutable, set at action creation. Controls when/whether the transaction is broadcast to the network.
+**broadcast_intent:** Immutable, set at action creation. Controls when/whether the transaction is broadcast to the network. Three values, two lifecycles:
+
+| value | lifecycle | meaning |
+|---|---|---|
+| `delayed` | send path | daemon submits to ARC asynchronously (default) |
+| `inline` | send path | wallet submits to ARC synchronously and surfaces the network result |
+| `none` | internal path | this action is not destined for the network — incoming BEEF, imported root UTXOs, wbikd address locks, `send_payment` returning BEEF for out-of-band delivery |
+
+The send path runs the full 4-phase lifecycle (lock → sign → broadcast → promote). The internal path runs Phases 1, 2, and 4 synchronously at create_action time — there is no Phase 3 because the transaction is never broadcast. See **Action Lifecycle** below for the database-level detail.
 
 **output_type:** Classifies outputs by ownership and derivation. Three constraint profiles:
 
@@ -121,17 +129,17 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 **Indexes:**
 - `idx_actions_broadcast` on `(broadcast)` — worker queries scan for actions pending broadcast
 
-**No status column.** Status is derived from structural state:
+**No status column.** Status is derived from structural state. The send path (`broadcast IN ('delayed', 'inline')`) and the internal path (`broadcast = 'none'`) share the table, and the derivation distinguishes them via the `promoted` flag on outputs (see **Outputs** below):
 
 | Structural state | Derived status |
 |---|---|
 | `wtxid IS NULL` | unsigned — waiting for signAction |
-| `wtxid IS NOT NULL`, no broadcast row, no outputs | unprocessed — broadcast pending |
-| `wtxid IS NOT NULL`, broadcast row exists, no outputs | sending — broadcast in progress |
-| `broadcast = 'none'`, no `tx_proof_id` | nosend |
-| outputs exist, `tx_proof_id IS NULL` | unproven — waiting for proof |
-| `tx_proof_id IS NOT NULL` | completed |
-| broadcast row has `tx_status = 'REJECTED'` | failed — network rejected |
+| `wtxid IS NOT NULL`, `tx_proof_id IS NOT NULL` | completed |
+| `wtxid IS NOT NULL`, `broadcast = 'none'`, no `tx_proof_id` | internal — non-network action (incoming, wbikd, import, send_payment) |
+| `wtxid IS NOT NULL`, send path, at least one output with `promoted = true`, no `tx_proof_id` | unproven — waiting for proof |
+| `wtxid IS NOT NULL`, send path, broadcast row has `tx_status = 'REJECTED'` | failed — network rejected |
+| `wtxid IS NOT NULL`, send path, broadcast row exists, no promoted outputs | sending — broadcast in progress |
+| `wtxid IS NOT NULL`, send path, no broadcast row | unprocessed — broadcast pending |
 
 ```ruby
 class Wallet::Action < Sequel::Model
@@ -142,16 +150,21 @@ class Wallet::Action < Sequel::Model
   many_to_many :labels, join_table: :action_labels
 
   def derived_status
-    return :unsigned    if wtxid.nil?
-    return :completed   if tx_proof_id
-    return :nosend      if broadcast == 'none'
-    return :unproven    if outputs.any?
-    return :failed      if broadcast_entry&.tx_status == 'REJECTED'
-    return :sending     if broadcast_entry
+    return :unsigned   if wtxid.nil?
+    return :completed  if tx_proof_id
+    return :internal   if values[:broadcast] == 'none'
+    # Send-path outputs are persisted at sign time with promoted: false.
+    # A row flips to promoted: true only when broadcast was accepted —
+    # the :unproven gate.
+    return :unproven   if outputs_dataset.where(promoted: true).any?
+    return :failed     if broadcast_entry&.tx_status == 'REJECTED'
+    return :sending    if broadcast_entry
     :unprocessed
   end
 end
 ```
+
+`:internal` replaces the earlier `:nosend` label (the rename is a breaking change for consumers of `list_actions`). `'none'` is a load-bearing enum value distinct from the BRC-100 chained-send concept; it marks actions whose transaction is never going to ARC because it doesn't need to (incoming BEEF, imported root UTXOs, wbikd address locks, `send_payment` returning BEEF for out-of-band delivery). The BRC-100 noSend / sendWith primitives are deferred to #192 and are not part of this base wallet.
 
 ## 4. Broadcasts
 
@@ -221,49 +234,70 @@ COMMIT
 
 UTXO selection, key derivation, template evaluation, ECDSA signing — all happen in memory between Phase 1 and the Phase 2 commit. If signing fails, the action stays unsigned (inputs remain locked, reaper will clean up).
 
-If `signAndProcess: false`, this phase is deferred — see **Deferred Signing — signAction** below. The deferred path runs the full pipeline (including output promotion) but skips signing and broadcasting.
+If `signAndProcess: false`, this phase is deferred — see **Deferred Signing — signAction** below.
 
 ```
 -- signing happens in memory (key derivation, ECDSA, script templates)
 BEGIN
   UPDATE actions SET wtxid = ?, raw_tx = ? WHERE id = ?
+  -- send path also writes the output rows with promoted = false here
+  INSERT INTO outputs (action_id, satoshis, vout, locking_script,
+                       output_type, derivation_prefix, derivation_suffix,
+                       sender_identity_key, promoted = false)
+  -- broadcasts row appears here too (intent != 'none'), pre-stamped for
+  -- the daemon push-discovery loop
+  INSERT INTO broadcasts (action_id)
 COMMIT
 ```
 
-**Database state after Phase 2:**
+**Database state after Phase 2 (send path):**
 - `actions`: `wtxid` set, `raw_tx` set — the action is signed and ready for broadcast
-- Everything else unchanged
+- `outputs`: rows for every output with `promoted = false` — the immutable record exists but the outputs are **not** in the canonical UTXO set yet
+- `spendable`: untouched — no UTXO claims until Phase 4
+- `broadcasts`: one row, `broadcast_at IS NULL` (the daemon will stamp it before POSTing to ARC)
 
-#### Phase 3: Broadcast (managed by BroadcastQueue)
+**Internal path (`broadcast = 'none'`)** does not produce a Phase 3. Phases 1, 2, and 4 commit synchronously inside `create_action` (see **internalizeAction** and the equivalent porcelain paths below). Internal outputs are written with `promoted = true` and `spendable` rows inserted in the same transaction. No broadcasts row is ever created.
 
-The action calls `broadcast` which creates a `broadcasts` row and conditionally posts to ARC:
+#### Phase 3: Broadcast (managed by Engine::Broadcast)
+
+Phase 3 applies to the send path only (`broadcast IN ('delayed', 'inline')`). Internal-path actions skip it entirely.
+
+The broadcasts row was created during Phase 2 commit. Phase 3 is the network call that drives it through ARC's lifecycle.
 
 ```ruby
-broadcast_entry = BroadcastQueue.create(action_id: id)
-broadcast_entry.post! if broadcast == 'inline'
-# If broadcast == 'delayed', the BroadcastQueueWorker picks it up
-# If broadcast == 'none', no broadcast row is created at all
+# inline path: the wallet POSTs to ARC synchronously
+Engine::Broadcast#submit(action_id:)
+# delayed path: the daemon's push-discovery loop finds the row
+#   (broadcast_at IS NULL) and calls Engine::Broadcast#submit
 ```
 
-The `BroadcastQueue#post!` method:
-1. Sets `broadcast_at` and saves (the intent is recorded)
+`Engine::Broadcast#submit`:
+1. Stamps `broadcast_at = now()` and commits (`Store#mark_broadcast_attempted`) — the row leaves the push-discovery set and joins the poll set
 2. POSTs to ARC (network call — outside any DB transaction)
-3. Updates the row with ARC's response (tx_status, block_hash, etc.)
-4. On acceptance: writes outputs to the immutable log (Phase 4)
+3. On accepted ARC response: persists the status fields and triggers Phase 4 (`Store#promote_action_outputs`)
+4. On terminal rejection: `Store#fail_broadcast_action` deletes the action, its broadcasts row, and its (unpromoted) output rows in one transaction
 
-If the process crashes between steps 1 and 3: the broadcast row has `broadcast_at` set but no `tx_status`. The worker can retry or investigate via ARC's `GET /tx/{txid}`.
+If the process crashes between steps 1 and 2: the row sits with `broadcast_at IS NOT NULL AND tx_status IS NULL`. The daemon's poll loop finds it via `Store#pending_polls` and calls `Engine::Broadcast#poll_status` (`GET /tx/{txid}`) to resolve the outcome.
 
-If the process crashes between steps 3 and 4: the broadcast row has the ARC response. The worker can complete Phase 4 (write outputs) based on the stored response.
+If the process crashes between steps 2 and 3: same recovery — the poll loop converges the row to its terminal state and triggers Phase 4 or `fail_broadcast_action` accordingly.
 
-#### Phase 4: Promote (atomic, milliseconds — triggered by broadcast acceptance)
+`Engine::Broadcast#poll_status` shares the Phase 4 trigger and the terminal-rejection trigger with `submit` — both call sites invoke `Store#promote_action_outputs` (idempotent via the `promoted` flag) or `Store#fail_broadcast_action`. The post-broadcast lifecycle is symmetric across the two entry points.
+
+#### Phase 4: Promote (atomic, milliseconds — triggered by broadcast acceptance on the send path, synchronous on the internal path)
+
+On the **send path**, Phase 4 fires from `Engine::Broadcast#submit` or `#poll_status` when ARC returns an accepted status (`SEEN_ON_NETWORK`, `ACCEPTED_BY_NETWORK`, `MINED`, `IMMUTABLE`). The output rows already exist from Phase 2 — the work is to flip them into the canonical UTXO set:
 
 ```
 BEGIN
-  INSERT INTO outputs (action_id, satoshis, vout, locking_script,
-                       output_type, derivation_prefix, derivation_suffix, sender_identity_key)
-  INSERT INTO spendable (output_id, action_id)   -- wallet-owned outputs only
-  INSERT INTO output_baskets (output_id, basket_id, action_id)
-  INSERT INTO output_details (output_id, action_id, change, description, ...)
+  -- Flip the membership marker on every output of this action.
+  -- Idempotent: a second invocation finds no promoted = false rows.
+  UPDATE outputs SET promoted = true WHERE action_id = ? AND promoted = false
+  -- Wallet-owned outputs join the UTXO set.
+  INSERT INTO spendable (output_id, action_id)
+    SELECT id, action_id FROM outputs
+     WHERE action_id = ?
+       AND output_type IS DISTINCT FROM 'outbound'
+       AND id NOT IN (SELECT output_id FROM spendable)
   -- If ARC returned MINED + merklePath:
   INSERT INTO blocks (height, merkle_root, block_hash)
     VALUES (?, ?, ?) ON CONFLICT (height) DO NOTHING
@@ -273,70 +307,91 @@ BEGIN
 COMMIT
 ```
 
-**Database state after Phase 4:**
-- `outputs`: new rows for all transaction outputs (immutable from this point). Wallet-owned outputs have derivation fields; outbound outputs have `output_type = 'outbound'`.
-- `spendable`: new rows for wallet-owned outputs only. Outbound outputs never get a spendable row (trigger enforced).
-- `tx_proofs`: proof created if ARC returned MINED (proof arrives for free!)
-- `actions`: `tx_proof_id` set if proof arrived with broadcast response
+On the **internal path** (`broadcast = 'none'`), Phase 4 is committed inside the same transaction as Phase 1+2 by `Store#promote_action`. Output rows are written directly with `promoted = true` and spendable rows are inserted alongside them. No broadcast acceptance trigger is involved.
 
-The new wallet-owned outputs are now live in the UTXO set. They're immediately available for the next `createAction`.
+**Database state after Phase 4 (send path):**
+- `outputs`: rows already existed from Phase 2; `promoted` flipped `false → true`.
+- `spendable`: new rows for wallet-owned outputs. Outbound outputs never get a spendable row (trigger enforced).
+- `tx_proofs`: proof created if ARC returned MINED (proof arrives for free).
+- `actions`: `tx_proof_id` set if proof arrived with broadcast response.
+
+**Database state after Phase 4 (internal path):**
+- `outputs`: new rows for all transaction outputs, written with `promoted = true`.
+- `spendable`: new rows for wallet-owned outputs.
+- No broadcasts row, no proof from this path (incoming actions carry their proof; wbikd / send_payment have no on-chain proof requirement at this stage).
+
+The new wallet-owned outputs are live in the UTXO set. They're immediately available for the next `createAction`.
 
 #### Broadcast Failure
 
-If ARC rejects the transaction, the broadcast row records the rejection (tx_status = 'REJECTED', competing_txs, extra_info). The action and its inputs remain — the wallet operator can investigate and decide whether to abort or retry.
+If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Store#fail_broadcast_action` deletes the action, its broadcasts row, and its unpromoted output rows in a single transaction. CASCADE on inputs frees the locked UTXOs. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see `docs/wallet-events.md`).
 
-For automatic cleanup:
 ```
 BEGIN
-  DELETE FROM actions WHERE id = ?
+  -- Send-path outputs are promoted = false at this point, so they
+  -- have no spendable rows. Clear the dependents, then the rows.
+  DELETE FROM output_baskets WHERE action_id = ?
+  DELETE FROM output_details WHERE action_id = ?
+  DELETE FROM output_tags    WHERE output_id IN (
+    SELECT id FROM outputs WHERE action_id = ?
+  )
+  DELETE FROM outputs        WHERE action_id = ?
+  DELETE FROM broadcasts     WHERE action_id = ?
+  DELETE FROM actions        WHERE id = ?
     -- ON DELETE CASCADE removes inputs, freeing the locked UTXOs
 COMMIT
 ```
+
+Under #189 the FK on `outputs.action_id` is RESTRICT, so the explicit deletes above are required — there is no automatic CASCADE on outputs. The deletes are safe because send-path outputs reachable by `fail_broadcast_action` are by construction `promoted = false`, never claimed by another input.
 
 #### Reaper: TTL Cleanup
 
 Two classes of stale actions:
 
-**Never signed** (deferred actions that were abandoned — have outputs but no wtxid):
+**Never signed** (`wtxid IS NULL` — Phase 1 happened, signing never did):
 ```sql
--- Clean up output relationships first
-DELETE FROM spendable WHERE output_id IN (
-  SELECT o.id FROM outputs o JOIN actions a ON o.action_id = a.id
-  WHERE a.wtxid IS NULL AND a.created_at < (now() - interval '?')
-);
-DELETE FROM output_baskets WHERE output_id IN (
-  SELECT o.id FROM outputs o JOIN actions a ON o.action_id = a.id
-  WHERE a.wtxid IS NULL AND a.created_at < (now() - interval '?')
-);
-DELETE FROM output_details WHERE output_id IN (
-  SELECT o.id FROM outputs o JOIN actions a ON o.action_id = a.id
-  WHERE a.wtxid IS NULL AND a.created_at < (now() - interval '?')
-);
--- Then delete the action (CASCADE to inputs, freeing locked UTXOs)
+-- No outputs exist yet (send path defers writes to sign time;
+-- internal path commits in one transaction so wtxid is never NULL).
+-- CASCADE on inputs.action_id frees the locked UTXOs.
 DELETE FROM actions a
 WHERE a.wtxid IS NULL
   AND a.created_at < (now() - interval '?');
 ```
 
-**Never sent** (signed but never broadcast — no outputs because promotion was post-broadcast):
+**Never sent** (`wtxid IS NOT NULL`, send path, no broadcasts row):
 ```sql
+-- Action was signed and outputs were persisted (promoted = false)
+-- but a broadcasts row was never created — sign_action committed
+-- but the broadcast intent never reached Phase 3. RESTRICT FK on
+-- outputs.action_id means the dependents must go first.
+DELETE FROM output_baskets WHERE action_id IN (...stale ids...);
+DELETE FROM output_details WHERE action_id IN (...stale ids...);
+DELETE FROM output_tags    WHERE output_id IN (
+  SELECT id FROM outputs WHERE action_id IN (...stale ids...)
+);
+DELETE FROM outputs        WHERE action_id IN (...stale ids...);
 DELETE FROM actions a
 WHERE a.wtxid IS NOT NULL
   AND a.broadcast != 'none'
-  AND NOT EXISTS (SELECT 1 FROM broadcasts b WHERE b.action_id = a.id)
   AND a.created_at < (now() - interval '?')
-  AND NOT EXISTS (SELECT 1 FROM outputs o WHERE o.action_id = a.id);
+  AND NOT EXISTS (SELECT 1 FROM broadcasts b WHERE b.action_id = a.id);
 ```
 
-**Sent but unresolved** (broadcast row exists, no outputs — needs investigation):
+**Sent but unresolved** (broadcast row exists, outputs not yet promoted — needs ARC poll):
 ```sql
 SELECT a.id, a.wtxid, b.tx_status, b.broadcast_at
 FROM actions a
 JOIN broadcasts b ON b.action_id = a.id
-WHERE NOT EXISTS (SELECT 1 FROM outputs o WHERE o.action_id = a.id)
+WHERE NOT EXISTS (
+  SELECT 1 FROM outputs o WHERE o.action_id = a.id AND o.promoted = true
+)
   AND b.broadcast_at < (now() - interval '?');
--- Worker investigates: GET /tx/{txid} from ARC, then promote or abort
+-- The daemon's poll-discovery loop already handles this via
+-- Store#pending_polls; the reaper query is the manual-investigation
+-- entry point for rows that have lingered beyond the poll TTL.
 ```
+
+Internal-path actions (`broadcast = 'none'`) are not visible to the reaper — they commit atomically with their outputs and never enter a "stuck between phases" state.
 
 #### Proof Arrival (async, via ARC callback or polling)
 
@@ -361,13 +416,22 @@ The action's derived status transitions to `completed` (tx_proof_id is now set).
 
 ```
 BEGIN
-  DELETE FROM actions WHERE id = ? AND wtxid IS NULL
+  -- Abort applies to actions that have not yet been broadcast.
+  -- It is rejected if a broadcasts row exists.
+  -- Under #189 the outputs.action_id FK is RESTRICT, so any deferred
+  -- output rows (promoted = false) must be cleared before the action.
+  DELETE FROM output_baskets WHERE action_id = ?
+  DELETE FROM output_details WHERE action_id = ?
+  DELETE FROM output_tags    WHERE output_id IN (
+    SELECT id FROM outputs WHERE action_id = ?
+  )
+  DELETE FROM outputs        WHERE action_id = ?
+  DELETE FROM actions        WHERE id = ?
     -- CASCADE deletes inputs, freeing locked UTXOs
-    -- only works on unsigned actions (wtxid IS NULL)
 COMMIT
 ```
 
-After broadcast, abort is meaningless — the network has the transaction.
+After a broadcasts row exists, `abortAction` is a no-op — the network may have the transaction. The terminal-rejection path (`Store#fail_broadcast_action`) handles cleanup when ARC definitively rejects.
 
 #### Deferred Signing — signAction
 
@@ -375,24 +439,27 @@ After broadcast, abort is meaningless — the network has the transaction.
 
 **What's deferred:** Only signing and broadcasting. The deferral is about **inputs**, not outputs. The outputs are fully known at `createAction` time — they don't change between `createAction` and `signAction`.
 
-**Deferred createAction** runs the full pipeline except signing and broadcasting:
+The output rows are written to the immutable log at `createAction` time so the caller can see them via `list_outputs(include_*)`, but they are written with `promoted = false`. They do **not** join the canonical UTXO set until the eventual `signAction` is followed by an accepted broadcast (Phase 4 on the send path). No `spendable` rows exist for a deferred action until that point.
+
+**Deferred createAction** runs Phase 1 and a partial Phase 2 (`stage_action`):
 
 ```
 BEGIN
   -- Phase 1: Lock (same as synchronous)
   INSERT INTO actions (broadcast, nlocktime, description, ...)
-    -- wtxid IS NULL
+    -- wtxid IS NULL initially
   INSERT INTO inputs (action_id, output_id, vin, nsequence, description)
     ON CONFLICT (output_id) DO NOTHING RETURNING output_id
 
-  -- Build unsigned transaction in memory
-  -- (resolve inputs, assemble outputs, determine vout ordering — no signing)
-  UPDATE actions SET raw_tx = unsigned_tx WHERE id = ?
-
-  -- Promote outputs (not deferred — outputs are known now)
+  -- Build the unsigned transaction in memory.
+  -- Stage Phase 2 (no signing yet): persist the unsigned raw_tx, its
+  -- hash as the placeholder wtxid, and the output rows with
+  -- promoted = false. No broadcasts row — the broadcast intent only
+  -- materialises at signAction time.
+  UPDATE actions SET wtxid = ?, raw_tx = unsigned_tx WHERE id = ?
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,
-                       output_type, derivation_prefix, derivation_suffix, sender_identity_key)
-  INSERT INTO spendable (output_id, action_id)
+                       output_type, derivation_prefix, derivation_suffix,
+                       sender_identity_key, promoted = false)
   INSERT INTO output_baskets (output_id, basket_id, action_id)
   INSERT INTO output_details (output_id, action_id, change, description, ...)
 COMMIT
@@ -401,50 +468,52 @@ COMMIT
 Returns `{ signable_transaction: { tx: unsigned_raw_tx, reference: action.reference } }`.
 
 **Database state after deferred createAction:**
-- `actions`: `wtxid IS NULL`, `raw_tx` has unsigned transaction bytes
+- `actions`: `wtxid` set (placeholder hash of unsigned bytes), `raw_tx` set
 - `inputs`: locked, same as synchronous Phase 1
-- `outputs`: written — the wallet's outputs are in the immutable log
-- `spendable`: written — outputs are immediately available for BEEF chaining (another `createAction` can spend them before the parent is signed and broadcast)
+- `outputs`: rows exist with `promoted = false` — the immutable record is in place but the outputs are **not** in the canonical UTXO set
+- `spendable`: **untouched** — UTXO claims wait until broadcast acceptance (Phase 4)
+- `broadcasts`: **untouched** — the broadcast row only exists from `signAction` onwards
 
 **signAction** completes the deferred transaction:
 
 ```
--- In memory: deserialize unsigned raw_tx, apply caller unlocking scripts,
--- sign remaining P2PKH inputs with derived keys
+-- In memory: deserialize the unsigned raw_tx, apply caller unlocking
+-- scripts, sign remaining P2PKH inputs with derived keys
 BEGIN
-  UPDATE actions SET wtxid = ?, raw_tx = signed_tx WHERE id = ?
+  UPDATE actions SET wtxid = signed_wtxid, raw_tx = signed_tx WHERE id = ?
+  INSERT INTO broadcasts (action_id)  -- send path only (intent != 'none')
 COMMIT
--- Broadcast (Phase 3 — same as synchronous path)
+-- Phase 3 (broadcast) and Phase 4 (promote on acceptance) — same as
+-- the synchronous send path.
 ```
 
-The outputs, spendable entries, baskets, and details are already written — signAction only touches the action row.
+`signAction` only touches the action row and creates the broadcasts row. The output rows persisted by `stage_action` are not rewritten; their `promoted` flag remains `false` until Phase 4 flips it after the broadcast is accepted.
 
 **Cleanup for abandoned deferred actions:**
 
-If `signAction` is never called, the action sits unsigned with locked inputs and spendable outputs backed by a transaction that will never be broadcast. The reaper cleans up:
+If `signAction` is never called, the action sits with locked inputs and unpromoted output rows for a transaction that will never reach the network. `abortAction` is the supported cleanup path — under #189 the outputs.action_id FK is RESTRICT, so abort must clear the output rows before the action row:
 
 ```sql
 BEGIN
-  -- Remove phantom outputs from the UTXO set
-  DELETE FROM spendable
-    WHERE output_id IN (SELECT id FROM outputs WHERE action_id = ?);
-  DELETE FROM output_baskets
-    WHERE output_id IN (SELECT id FROM outputs WHERE action_id = ?);
-  DELETE FROM output_details
-    WHERE output_id IN (SELECT id FROM outputs WHERE action_id = ?);
-  -- Release locked UTXOs and remove the action
-  DELETE FROM actions WHERE id = ?;
+  -- No spendable rows to clear (promoted = false means none were
+  -- created). Just the output rows and their lightweight dependents.
+  DELETE FROM output_baskets WHERE action_id = ?
+  DELETE FROM output_details WHERE action_id = ?
+  DELETE FROM output_tags    WHERE output_id IN (
+    SELECT id FROM outputs WHERE action_id = ?
+  )
+  DELETE FROM outputs        WHERE action_id = ?
+  -- Release locked UTXOs and remove the action.
+  DELETE FROM actions        WHERE id = ?
     -- CASCADE deletes inputs, freeing locked UTXOs
 COMMIT
 ```
 
-Output rows remain in the immutable log — orphaned but harmless. They have no spendable entry (removed), no basket, and their parent action is gone. They are invisible to the wallet and will be archived with cold partitions.
+The reaper handles the same shape for actions abandoned past their TTL (see **Reaper: TTL Cleanup** above). Either way, no spendable rows existed so nothing has to be removed from the UTXO set — the cleanup is purely about the immutable log and the locked inputs.
 
-**BEEF chain failure cascade:** if a parent action fails broadcast, ARC rejects all descendant transactions. Each failed action is cleaned up independently — delete its spendable entries (removing its outputs from the UTXO set) and delete the action (cascade-deleting its inputs, freeing the locked UTXOs). No tree-walking required.
+**Broadcast failure on the send path:** if ARC returns a terminal rejection after `signAction`, `Store#fail_broadcast_action` runs the same shape of cleanup as `abortAction` plus the broadcasts row. Under the restored 4-phase design, descendants of a failed transaction cannot exist — outputs only join the UTXO set after broadcast acceptance, so no child action could have consumed them. The batch-aware cascade for the future chained-send subsystem is covered by #192.
 
-**Note:** `abortAction` (above) only works for unsigned actions that have not yet written outputs — it relies on a clean CASCADE. For deferred actions that have written outputs, use the reaper cleanup path which explicitly removes the output relationships first.
-
-#### internalizeAction (incoming)
+#### internalizeAction (incoming) — internal path
 
 ```
 BEGIN
@@ -452,15 +521,20 @@ BEGIN
     VALUES (?, ?, ?) ON CONFLICT (height) DO NOTHING
   INSERT INTO tx_proofs (wtxid, block_id, ...) ON CONFLICT DO UPDATE ...
   INSERT INTO actions (tx_proof_id, wtxid, outgoing: false, broadcast: 'none', ...)
+  -- Internal path: outputs written directly with promoted = true,
+  -- spendable rows inserted in the same transaction. No Phase 3.
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,
-                       output_type, derivation_prefix, derivation_suffix, sender_identity_key)
+                       output_type, derivation_prefix, derivation_suffix,
+                       sender_identity_key, promoted = true)
   INSERT INTO spendable (output_id, action_id)
   INSERT INTO output_baskets (output_id, basket_id, action_id)
   INSERT INTO output_details (output_id, action_id, ...)
 COMMIT
 ```
 
-Incoming actions arrive with BEEF — the proof is already available. The action is born with `tx_proof_id` set (derived status: completed). Outputs go directly into the immutable log and the UTXO set in one atomic transaction. No broadcast needed.
+Incoming actions arrive with BEEF — the proof is already available. The action is born with `tx_proof_id` set (derived status: `completed`) or with `broadcast = 'none'` and no proof (derived status: `internal`) depending on the source. Outputs go directly into the immutable log and the UTXO set in one atomic transaction. No broadcasts row, no Phase 3, no broadcast acceptance trigger.
+
+The internal path also serves `import_utxo` (imported root-key UTXO), wbikd address management (slot locks), and `send_payment` (porcelain that returns BEEF for out-of-band delivery). All four callers commit Phases 1, 2, and 4 in a single transaction.
 
 #### relinquishOutput
 
@@ -478,13 +552,13 @@ The output row stays in the log. The wallet forgets about it — no spendable en
 | Table | INSERT | UPDATE | DELETE | Character |
 |-------|--------|--------|--------|-----------|
 | **blocks** | proof arrival / internalize / chain tracker | never | never | Append-only — known block headers |
-| **actions** | createAction | wtxid (sign), tx_proof_id (proof) | abort, reaper | Mutable — the lifecycle entity |
+| **actions** | createAction | wtxid (sign), tx_proof_id (proof) | abort, fail_broadcast, reaper | Mutable — the lifecycle entity |
 | **inputs** | Phase 1 (lock) | never | CASCADE from action delete | Born and dies with its action |
-| **broadcasts** | Phase 3 (broadcast) | ARC response updates | CASCADE from action delete | Broadcast lifecycle |
-| **outputs** | Phase 4 / deferred Phase 1 / internalize | **never** | **never** | **Immutable log** |
-| **spendable** | Phase 4 / deferred Phase 1 / internalize | never | spend / relinquish / reaper | The wallet — INSERT/DELETE only |
-| **output_baskets** | Phase 4 / deferred Phase 1 / internalize | basket move | relinquish / reaper | Mutable membership |
-| **output_details** | Phase 4 / deferred Phase 1 / internalize | never | reaper | Immutable metadata (until reaped) |
+| **broadcasts** | Phase 2 (send path: alongside sign) | `broadcast_at`, ARC response updates | abort never reaches here; fail_broadcast / CASCADE from action | Broadcast lifecycle |
+| **outputs** | Phase 2 (send path, `promoted = false`) / Phase 4 internalize (`promoted = true`) | `promoted` flag (single-shot false → true at send-path Phase 4) | abort / fail_broadcast / reaper (cleanup paths only — never during normal lifecycle) | Append-only log with one carve-out: the `promoted` membership flag |
+| **spendable** | Phase 4 (both paths) | never | spend / relinquish / reaper / fail_broadcast | The wallet — INSERT/DELETE only |
+| **output_baskets** | Phase 2 (send path) / Phase 4 (internal path) | basket move | relinquish / reaper / abort / fail_broadcast | Mutable membership |
+| **output_details** | Phase 2 (send path) / Phase 4 (internal path) | never | reaper / abort / fail_broadcast | Immutable metadata (until reaped) |
 | **tx_proofs** | proof arrival / internalize | upsert on re-proof | never | Append-mostly |
 
 ---
@@ -520,7 +594,9 @@ end
 
 ## 6. Outputs
 
-The immutable log. A permanent, append-only record of every output the wallet has ever participated in — both wallet-owned outputs (with derivation data) and outbound payments (with `output_type = 'outbound'`). **Immutable** — never UPDATE'd, never DELETE'd. Provenance survives in history until cold partitions are archived.
+The append-only log. A permanent record of every output the wallet has ever participated in — both wallet-owned outputs (with derivation data) and outbound payments (with `output_type = 'outbound'`).
+
+The table is immutable in every sense the schema cares about: **no per-row DELETE or UPDATE happens during normal lifecycle**. The only mutation allowed on an existing row is the single-shot `promoted` flag flip (false → true) at send-path Phase 4 — structurally analogous to `actions.tx_proof_id` flipping from NULL to set on proof arrival. Cleanup paths (`abortAction`, `fail_broadcast_action`, reaper) do delete output rows, but they only ever reach rows that never made it into the canonical UTXO set (`promoted = false`). Once an output has been promoted, it stays in the log; lifecycle exit at scale is partition drop, not per-row DELETE.
 
 Derivation data (spending authority) lives here because it's a fact about the output, recorded when the key is derived. This is separate from spendability — an output can have derivation data without being in the UTXO set.
 
@@ -531,7 +607,7 @@ At scale, partition by id range. Old partitions where all outputs have been spen
 | col | type | attributes |
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
-| action_id | bigint | REFERENCES actions (id) ON DELETE SET NULL |
+| action_id | bigint | NOT NULL REFERENCES actions (id) ON DELETE RESTRICT |
 | satoshis | bigint | NOT NULL |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | locking_script | bytea | NOT NULL |
@@ -540,6 +616,7 @@ At scale, partition by id range. Old partitions where all outputs have been spen
 | derivation_prefix | text | |
 | derivation_suffix | text | |
 | sender_identity_key | text | |
+| promoted | bool | NOT NULL DEFAULT true |
 
 **Constraints:**
 - `UNIQUE (action_id, vout)` — an output is uniquely identified by its position in the action that created it
@@ -555,9 +632,11 @@ At scale, partition by id range. Old partitions where all outputs have been spen
   - `CHECK output_type IS NOT NULL OR derivation_suffix IS NOT NULL`
   - `CHECK output_type IS NOT NULL OR sender_identity_key IS NOT NULL`
 
-**Cascade:** `action_id ON DELETE SET NULL` — deleting an action (abort, reaper) orphans output rows rather than cascading the delete. Outputs are the immutable log; orphaned rows have NULL action_id, no spendable entry, and are invisible to the wallet.
+**`promoted` column:** Membership marker for the canonical UTXO set. Written `false` at sign time on the send path; flipped to `true` exactly once at Phase 4 when broadcast acceptance fires. Internal-path inserts (`broadcast = 'none'`) write `promoted = true` directly. The column defaults `true` so any backfill of pre-existing rows lands in the post-promotion state. The send-path Phase 4 update is idempotent — a re-poll of an already-promoted broadcast finds no `promoted = false` rows and is a no-op.
 
-**Note:** No `updated_at` — immutable rows have no updates. No `basket_id` — basket membership is in `output_baskets`. No `wtxid` — derived via `output.action.wtxid`. Column order optimized for alignment: 8-byte columns first, then variable-width, with 4-byte `vout` tucked after `locking_script` to reduce padding.
+**Cascade:** `action_id ON DELETE RESTRICT` (under #189). Outputs cannot be orphaned by an action delete — the delete is rejected unless the dependent output rows are removed first. The cleanup paths (`abort_action`, `fail_broadcast_action`, reaper) handle this explicitly. Under the restored 4-phase design these paths only ever encounter `promoted = false` rows (the send path never DELETEs a row that has joined the UTXO set), so the delete is safe.
+
+**Note:** No `updated_at` — the row is immutable apart from the `promoted` flip. No `basket_id` — basket membership is in `output_baskets`. No `wtxid` — derived via `output.action.wtxid` (always resolvable under the RESTRICT FK, since the parent action cannot be deleted while output rows remain). Column order optimized for alignment: 8-byte columns first, then variable-width, with 4-byte `vout` tucked after `locking_script` to reduce padding.
 
 ```ruby
 class Wallet::Output < Sequel::Model
@@ -952,14 +1031,17 @@ RETURNING output_id;
 DELETE FROM actions WHERE id = ?;
 ```
 
-**Stale action recovery** — find prepared actions (signed, inputs locked, no outputs yet) older than threshold, excluding nosend:
+**Stale action recovery** — find send-path actions stuck between Phase 2 and Phase 3 (signed, inputs locked, no broadcasts row created), excluding internal-path actions:
 
 ```sql
+-- RESTRICT FK on outputs.action_id means dependents must be cleared
+-- before the action delete. The send-path rows reachable here have
+-- promoted = false (Phase 4 never fired).
 DELETE FROM actions a
 WHERE a.wtxid IS NOT NULL
   AND a.broadcast != 'none'
   AND a.created_at < (now() - interval '5 minutes')
-  AND NOT EXISTS (SELECT 1 FROM outputs o WHERE o.action_id = a.id);
+  AND NOT EXISTS (SELECT 1 FROM broadcasts b WHERE b.action_id = a.id);
 ```
 
 **List actions by labels** — BRC-100 `listActions` with label filter:
@@ -994,12 +1076,15 @@ LIMIT ? OFFSET ?;
 ## Resolved Design Questions
 
 - **`change` column placement:** On `output_details` (cosmetic display flag). Change outputs are structurally identical to derived outputs — `output_type` NULL with derivation fields. The `change` flag never participates in UTXO selection or constraints.
-- **Soft delete:** Removed from baskets, labels, tags, certificates, action_labels, output_tags. Plain UNIQUE constraints replaced partial indexes. Hard delete for cleanup. Outputs are never deleted (immutable log).
-- **`relinquishOutput`:** DELETE the `spendable` row (remove from UTXO set). DELETE the `output_baskets` row (remove from basket). The output row stays in the log forever.
+- **Soft delete:** Removed from baskets, labels, tags, certificates, action_labels, output_tags. Plain UNIQUE constraints replaced partial indexes. Hard delete for cleanup.
+- **`relinquishOutput`:** DELETE the `spendable` row (remove from UTXO set). DELETE the `output_baskets` row (remove from basket). The output row stays in the log.
 - **Default basket:** No basket assignment = default basket (implicit). `listOutputs(basket: 'default')` queries spendable outputs with no `output_baskets` row. `CHECK name != 'default'` prevents explicit creation of a 'default' basket entity.
 - **Derivation data placement:** On `outputs`, not `spendable`. Derivation data is a fact about the output (recorded when the key is derived), not a statement of spendability. This preserves the state transition model: output rows record spending authority, spendable rows declare availability. Two facts, two moments in time.
 - **`actions.satoshis`:** Dropped. Derivable from `SUM(outputs.satoshis)`. No BRC-100 method returns it at the action level.
 - **`actions.reference`:** UUID type (was text). NOT NULL with `gen_random_uuid()` default.
+- **Two lifecycles, one schema:** The `broadcast_intent` enum encodes which path an action follows. `delayed`/`inline` run the 4-phase send path with post-broadcast promotion; `none` runs Phases 1, 2, and 4 synchronously inside `create_action`. Both end with output rows present and (for wallet-owned outputs) spendable rows inserted — the routing fact is when Phase 4 commits, and the structural marker is the `promoted` flag on outputs.
+- **`outputs.promoted` carve-out:** The outputs table is append-only with one deliberate exception: the `promoted` flag flips from `false` to `true` exactly once on the send path at Phase 4. Structurally analogous to `actions.tx_proof_id` flipping from NULL to set on proof arrival.
+- **`outputs.action_id` is NOT NULL RESTRICT:** Under #189. Output rows cannot be orphaned. Cleanup paths must clear output rows before the action delete; this is safe because cleanup only ever encounters `promoted = false` rows that never joined the UTXO set.
 
 ---
 
@@ -1007,14 +1092,16 @@ LIMIT ? OFFSET ?;
 
 **Creation:** `createAction` creates an Action (a Bitcoin transaction + metadata). Requires at least one input or output. Inputs require `inputBEEF` for SPV context. Outputs without `basket` are untracked. Can return a `signableTransaction` reference for deferred signing.
 
-**Signing:** `signAction` completes a deferred transaction. The caller provides unlocking scripts for inputs they control; the wallet signs remaining P2PKH inputs with derived keys. Outputs were already written during `createAction` — `signAction` only updates the action row (wtxid, signed raw_tx) and triggers broadcast. See **Deferred Signing — signAction** in the lifecycle section.
+**Signing:** `signAction` completes a deferred transaction. The caller provides unlocking scripts for inputs they control; the wallet signs remaining P2PKH inputs with derived keys. Output rows were already written during `createAction` (`promoted = false`); `signAction` updates the action row (wtxid, signed raw_tx) and creates the broadcasts row. Phase 4 fires later on broadcast acceptance. See **Deferred Signing — signAction** in the lifecycle section.
 
-**Aborting:** `abortAction` cancels an in-progress action. Cascade-deletes inputs, releasing claimed outputs.
+**Aborting:** `abortAction` cancels an in-progress action that has not yet been broadcast. Clears dependent rows under the RESTRICT FK, then deletes the action; CASCADE on inputs frees the locked UTXOs.
 
-**Internalization:** `internalizeAction` accepts incoming BEEF, verifies proofs, creates output rows for outputs the wallet controls.
+**Internalization:** `internalizeAction` accepts incoming BEEF, verifies proofs, creates output rows (`promoted = true`) and spendable rows for outputs the wallet controls — all in one transaction. This is an internal-path action (`broadcast = 'none'`).
 
-**Listing:** `listActions` queries by labels. `listOutputs` queries by basket/tags. Both are read-only with pagination.
+**Listing:** `listActions` queries by labels (the response includes a `:status` symbol drawn from the derived-status table above; `:internal` replaces the previous `:nosend` label). `listOutputs` queries by basket/tags. Both are read-only with pagination.
 
-**Relinquishment:** `relinquishOutput` releases an output from wallet tracking, even if unspent.
+**Relinquishment:** `relinquishOutput` releases an output from wallet tracking, even if unspent. Removes the spendable row and the basket membership; the output row stays in the log.
 
 **Tags vs Labels:** Labels categorize actions (used with `listActions`). Tags categorize outputs (used with `listOutputs`). Both are purely organizational.
+
+**Chained-send / batching:** The BRC-100 `noSend` / `sendWith` / `noSendChange` / `knownTxids` primitives are not implemented in this base wallet. They are deferred to issue #192 as a separate subsystem. See `reference/send_or_nosend.md` for the historical research notes.

@@ -37,10 +37,13 @@ module BSV
         # +broadcasts+ row in the same database transaction. The row begins
         # life with +broadcast_at IS NULL+ (queued, not yet attempted).
         #
-        # When +change_outputs+ is present, writes change output rows
-        # (outputs + output_details) in the same transaction. No spendable
-        # rows — promotion happens after broadcast acceptance. This ensures
-        # signing failure produces zero orphan rows.
+        # When +outputs+ or +change_outputs+ are present, writes the
+        # corresponding output rows (with +promoted: false+) and their
+        # association rows (output_details, output_baskets, output_tags)
+        # in the same transaction. No spendable rows — promotion to the
+        # canonical UTXO set happens at Phase 4 via {#promote_action_outputs}
+        # on broadcast acceptance. This ensures signing failure produces
+        # zero orphan rows in the UTXO set.
         #
         # Used by the real-signing paths (non-deferred +createAction+ and
         # BRC-100 +signAction+). The deferred +createAction+ path calls
@@ -49,14 +52,21 @@ module BSV
         # @param action_id [Integer]
         # @param wtxid [String] 32-byte binary wtxid (wire byte order)
         # @param raw_tx [String] binary-encoded signed transaction
+        # @param outputs [Array<Hash>] optional caller-declared outputs to write
+        #   atomically with +promoted: false+. Each: :satoshis, :vout,
+        #   :locking_script, :output_type, :derivation_prefix,
+        #   :derivation_suffix, :sender_identity_key, :basket, :tags,
+        #   :description, :custom_instructions
         # @param change_outputs [Array<Hash>] optional change outputs to write
-        #   atomically. Each: :satoshis, :vout, :locking_script,
-        #   :derivation_prefix, :derivation_suffix, :sender_identity_key
-        def sign_action(action_id:, wtxid:, raw_tx:, change_outputs: [])
+        #   atomically with +promoted: false+. Each: :satoshis, :vout,
+        #   :locking_script, :derivation_prefix, :derivation_suffix,
+        #   :sender_identity_key
+        def sign_action(action_id:, wtxid:, raw_tx:, outputs: [], change_outputs: [])
           raise NotImplementedError
         end
 
-        # Phase 2 (deferred): Attach placeholder signing artifacts to an action.
+        # Phase 2 (deferred): Attach placeholder signing artifacts and the
+        # caller's declared outputs to an action.
         #
         # Updates the action with +wtxid+ and +raw_tx+ but does NOT create a
         # +broadcasts+ row. Used by the deferred +createAction+ path where
@@ -64,18 +74,32 @@ module BSV
         # must wait for the real {#sign_action} call (via BRC-100
         # +signAction+) to avoid pushing an unsigned transaction to ARC.
         #
+        # Outputs are written with +promoted: false+ (no spendable rows yet)
+        # so the BRC-100 +signAction+ — which does not receive the +outputs+
+        # array again — finds the caller's metadata already persisted. Phase 4
+        # promotion happens later via {#promote_action_outputs} on broadcast
+        # acceptance.
+        #
         # @param action_id [Integer]
         # @param wtxid [String] 32-byte binary wtxid (wire byte order)
         # @param raw_tx [String] binary-encoded transaction with placeholder
         #   unlocking scripts
-        def stage_action(action_id:, wtxid:, raw_tx:)
+        # @param outputs [Array<Hash>] caller's declared outputs to persist
+        #   with +promoted: false+. Each: :satoshis, :vout, :locking_script,
+        #   :output_type, :derivation_prefix, :derivation_suffix,
+        #   :sender_identity_key, :basket, :tags, :description,
+        #   :custom_instructions
+        def stage_action(action_id:, wtxid:, raw_tx:, outputs: [])
           raise NotImplementedError
         end
 
-        # Phase 4: Promote — write outputs after broadcast acceptance.
+        # Internal-path Phase 4: Write outputs as already promoted.
         #
-        # Inserts output rows (immutable log), spendable entries,
-        # basket memberships, output details, and tags in one transaction.
+        # Inserts output rows (+promoted: true+), spendable entries for
+        # wallet-owned outputs, basket memberships, output details, and tags
+        # in one transaction. Used by paths where the action's broadcast
+        # intent is +'none'+ — incoming actions, root UTXO imports, wbikd —
+        # so outputs join the canonical UTXO set immediately.
         #
         # @param action_id [Integer]
         # @param outputs [Array<Hash>] each: :satoshis, :vout, :locking_script,
@@ -83,6 +107,25 @@ module BSV
         #   :basket, :tags, :description, :custom_instructions, :change
         # @return [Array<Integer>] output IDs in the same order as outputs
         def promote_action(action_id:, outputs:)
+          raise NotImplementedError
+        end
+
+        # Send-path Phase 4: Promote pre-existing output rows for an action.
+        #
+        # Flips +outputs.promoted+ from false to true and inserts spendable
+        # rows for wallet-owned outputs (caller outputs with derivation
+        # parameters, root outputs, or change outputs). Idempotent — outputs
+        # already promoted are skipped, and existing spendable rows are not
+        # duplicated.
+        #
+        # Called when ARC accepts a broadcast (inline or via the daemon).
+        # The output rows themselves were written at sign time via
+        # {#sign_action} with +promoted: false+.
+        #
+        # @param action_id [Integer]
+        # @return [Array<Integer>] IDs of outputs newly promoted (empty when
+        #   already promoted — idempotent guard)
+        def promote_action_outputs(action_id:)
           raise NotImplementedError
         end
 

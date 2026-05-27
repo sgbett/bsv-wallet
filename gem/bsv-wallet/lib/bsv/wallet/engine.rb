@@ -73,8 +73,8 @@ module BSV
       def create_action(description:, input_beef: nil, inputs: nil, outputs: nil,
                         lock_time: nil, version: nil, labels: nil,
                         sign_and_process: true, accept_delayed_broadcast: true,
-                        trust_self: nil, known_txids: nil, return_txid_only: false,
-                        no_send: false, no_send_change: nil, send_with: nil,
+                        trust_self: nil, return_txid_only: false,
+                        no_send: false,
                         randomize_outputs: true, originator: nil)
         validate_description!(description)
         validate_create_action_params!(inputs: inputs, outputs: outputs)
@@ -95,7 +95,7 @@ module BSV
             lock_time: lock_time, version: version,
             broadcast: determine_broadcast(no_send, accept_delayed_broadcast),
             labels: labels, randomize_outputs: randomize_outputs,
-            no_send: no_send, send_with: send_with,
+            no_send: no_send,
             return_txid_only: return_txid_only
           )
         end
@@ -121,20 +121,34 @@ module BSV
         deferred = !sign_and_process ||
                    inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
 
+        # Internal-path deferred signing (no_send: true + sign_and_process:
+        # false, or inputs with unlocking_script_length placeholders) is
+        # not implemented in the base wallet — the internal-action Phase 4
+        # currently runs synchronously during create_action, which deferred
+        # signing cannot reach. Tracked in #192.
+        if no_send && deferred
+          raise BSV::Wallet::UnsupportedActionError,
+                'createAction(no_send: true) combined with deferred signing is not implemented in the base wallet; tracked in #192.'
+        end
+
         # Phase 2: Build transaction (sign unless deferred)
         wtxid, raw_tx, vout_mapping = build_transaction(
           action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,
           sign: !deferred
         )
+        # Send-path outputs (broadcast intent :delayed or :inline) are
+        # persisted with promoted: false at sign / stage time. Spendable
+        # rows are deferred until Phase 4 on broadcast acceptance.
+        # Internal-path outputs (broadcast intent :none) are promoted
+        # synchronously via promote_with_outputs below.
+        pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
+
         if deferred
-          # Store unsigned raw_tx (empty unlocking scripts) and promote outputs now.
-          # Outputs are fully known at createAction time — the deferral is about
-          # inputs (waiting for caller-provided unlocking scripts), not outputs.
-          # stage_action (vs sign_action) leaves the broadcasts queue untouched
-          # until the real signAction call completes signing.
-          @store.stage_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
+          @store.stage_action(
+            action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
+            outputs: pending_outputs
+          )
           @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-          promote_with_outputs(action_result[:id], outputs, vout_mapping)
           return {
             signable_transaction: {
               tx: nil,
@@ -143,48 +157,63 @@ module BSV
           }
         end
 
-        @store.sign_action(action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx)
+        @store.sign_action(
+          action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
+          outputs: pending_outputs
+        )
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         BSV.logger&.debug { "[Engine] create_action: dtxid=#{wtxid.reverse.unpack1('H*')} outputs=#{outputs&.length || 0}" }
 
         # Build Atomic BEEF envelope for the :tx return value
         atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
 
-        # No-send path: promote immediately, return change outpoints
+        # Internal-path (no_send): synchronous Phase 4 — promote outputs,
+        # create spendable rows, return change outpoints.
         if no_send
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           change = query_change_outpoints(action_result[:id])
-          result = { txid: wtxid, tx: atomic_beef, no_send_change: change }
-          result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-          return result
+          return { txid: wtxid, tx: atomic_beef, no_send_change: change }
         end
 
-        # Phase 3 + 4: Broadcast inline (delayed broadcasts are picked up by
-        # the daemon's push-discovery loop from the broadcasts row that
-        # sign_action created atomically above).
+        # Phase 3 + 4: Broadcast inline. Phase 4 (output promotion + spendable
+        # row creation) runs on accepted ARC response. Delayed broadcasts are
+        # picked up by the daemon's push-discovery loop from the broadcasts
+        # row that sign_action created atomically above; the daemon triggers
+        # Phase 4 on its own broadcast acceptance.
         if broadcast == :inline
           broadcast_result = inline_broadcast(action_id: action_result[:id], raw_tx: raw_tx)
           if accepted?(broadcast_result)
-            promote_with_outputs(action_result[:id], outputs, vout_mapping)
+            @store.promote_action_outputs(action_id: action_result[:id])
             handle_proof_from_broadcast(action_result[:id], broadcast_result)
           end
         end
 
-        result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
-        result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-        result
+        { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
 
       def sign_action(spends:, reference:, accept_delayed_broadcast: true,
-                      return_txid_only: false, no_send: false, send_with: nil,
+                      return_txid_only: false, no_send: false,
                       originator: nil)
         validate_reference!(reference)
         action = @store.find_action(reference: reference)
         raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
-        # Outputs were already written during create_action — sign_action only
-        # deserializes the unsigned tx, applies caller unlocking scripts, signs
-        # remaining P2PKH inputs, and updates the action with signed raw_tx + wtxid.
+        # Runtime broadcast-override at sign time belongs to the
+        # chained-send subsystem (#192). The base wallet's signAction
+        # only completes the deferred-construction lifecycle per the
+        # original broadcast intent set at createAction time.
+        if no_send && action[:broadcast] != 'none'
+          raise BSV::Wallet::UnsupportedActionError,
+                'signAction(no_send: true) requires the action to have been ' \
+                "created with no_send: true (broadcast intent 'none'). " \
+                'Runtime override at sign time is not implemented in the base ' \
+                'wallet; tracked in #192.'
+        end
+
+        # Outputs were already written during create_action (promoted: false)
+        # so sign_action only deserializes the unsigned tx, applies caller
+        # unlocking scripts, signs remaining P2PKH inputs, and updates the
+        # action with the signed raw_tx + wtxid.
         wtxid, raw_tx = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
@@ -194,20 +223,17 @@ module BSV
 
         broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
 
-        if no_send
-          result = { txid: wtxid, tx: atomic_beef }
-          result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-          return result
-        end
+        return { txid: wtxid, tx: atomic_beef } if no_send
 
         if broadcast == :inline
           broadcast_result = inline_broadcast(action_id: action[:id], raw_tx: raw_tx)
-          handle_proof_from_broadcast(action[:id], broadcast_result) if accepted?(broadcast_result)
+          if accepted?(broadcast_result)
+            @store.promote_action_outputs(action_id: action[:id])
+            handle_proof_from_broadcast(action[:id], broadcast_result)
+          end
         end
 
-        result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
-        result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-        result
+        { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
 
       def abort_action(reference:, originator: nil)
@@ -509,7 +535,7 @@ module BSV
 
       # List outstanding (pending) WBIKD receive addresses.
       #
-      # Queries actions with the 'wbikd' label, filters for :nosend status
+      # Queries actions with the 'wbikd' label, filters for :internal status
       # (active locks), and re-derives the P2PKH address from each slot's
       # source transaction ID and output index (on-chain data).
       #
@@ -520,7 +546,7 @@ module BSV
 
         result = list_actions(labels: ['wbikd'], include_inputs: true, limit: 10_000)
         result[:actions].filter_map do |action|
-          next unless action[:status] == :nosend
+          next unless action[:status] == :internal
 
           input = action[:inputs]&.first
           next unless input
@@ -920,10 +946,23 @@ module BSV
         @store.label_action(action_id: action_id, label_ids: label_ids)
       end
 
+      # Internal-path Phase 4: synchronously promote outputs and create
+      # spendable rows in one shot. Used for incoming actions (broadcast
+      # intent 'none'): internalize_action, import_utxo self-payment, wbikd.
       def promote_with_outputs(action_id, outputs, vout_mapping = nil)
         return unless outputs&.any?
 
-        output_specs = outputs.each_with_index.map do |out, idx|
+        @store.promote_action(
+          action_id: action_id,
+          outputs: build_output_specs(outputs, vout_mapping)
+        )
+      end
+
+      # Translate caller outputs into Store output specs. Used by both the
+      # synchronous internal path ({#promote_with_outputs}) and the
+      # send-path sign-time persistence ({Store#sign_action}).
+      def build_output_specs(outputs, vout_mapping = nil)
+        outputs.each_with_index.map do |out, idx|
           vout = if vout_mapping
                    vout_mapping[idx] || idx
                  else
@@ -949,7 +988,6 @@ module BSV
             sender_identity_key: out[:sender_identity_key]
           }
         end
-        @store.promote_action(action_id: action_id, outputs: output_specs)
       end
 
       def accepted?(broadcast_result)
@@ -1020,33 +1058,6 @@ module BSV
         )
         @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
         BSV.logger&.debug { "[Engine] proof_from_broadcast: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{broadcast_result[:block_height]}" }
-      end
-
-      # Broadcast companion transactions listed in send_with.
-      #
-      # Companion actions arrive signed-but-unbroadcast: their broadcasts
-      # row already exists (from their own sign_action). BRC-100's
-      # sendWith contract is synchronous, so we drive the inline path
-      # for each companion regardless of its own broadcast disposition.
-      #
-      # @param send_with [Array<String>] wtxids (wire order) of companion transactions
-      # @return [Array<Hash>] :txid (wire-order wtxid, BRC-100 key name), :status
-      def process_send_with(send_with)
-        return unless send_with
-
-        send_with.filter_map do |sw_wtxid|
-          BSV::Primitives::Hex.validate_wtxid!(sw_wtxid, name: 'send_with entry')
-          sw_action = @store.find_action(wtxid: sw_wtxid)
-          BSV.logger&.debug { "[Engine] process_send_with: dtxid=#{sw_wtxid.reverse.unpack1('H*')} found=#{!sw_action.nil?}" }
-          next unless sw_action
-
-          br = inline_broadcast(
-            action_id: sw_action[:id],
-            raw_tx: sw_action[:raw_tx] || ''.b
-          )
-          status = br&.dig(:tx_status)&.downcase&.tr('_', ' ')&.to_sym || :sending
-          { txid: sw_wtxid, status: status }
-        end
       end
 
       def query_change_outpoints(action_id)
@@ -1734,7 +1745,7 @@ module BSV
       # @return [Hash] same shape as create_action's return value
       def auto_fund_action(description:, outputs:, lock_time:, version:,
                            broadcast:, labels:, randomize_outputs:,
-                           no_send:, send_with:, return_txid_only:)
+                           no_send:, return_txid_only:)
         # Estimate satoshis needed (outputs + conservative fee margin).
         # Assumes 1 input for the estimate — if the pool returns multiple
         # UTXOs, each extra input adds ~15 sats of fee but contributes its
@@ -1772,10 +1783,14 @@ module BSV
           change_count: estimated_change_count
         )
 
-        # Phase 2b: Atomic sign + change output creation
+        # Phase 2b: Atomic sign + outputs/change persistence (promoted: false).
+        # Send-path caller outputs and change outputs both written here; the
+        # internal path (no_send) leaves caller outputs to the synchronous
+        # promote_with_outputs call below.
+        pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
         @store.sign_action(
           action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
-          change_outputs: change_outputs
+          outputs: pending_outputs, change_outputs: change_outputs
         )
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         BSV.logger&.debug do
@@ -1785,31 +1800,28 @@ module BSV
 
         atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
 
-        # No-send path: promote all outputs, return change outpoints
+        # Internal-path (no_send): synchronous Phase 4 — promote caller
+        # outputs and change-to-spendable, return change outpoints.
         if no_send
           promote_with_outputs(action_result[:id], outputs, vout_mapping)
           @store.promote_change_to_spendable(action_id: action_result[:id])
           change = query_change_outpoints(action_result[:id])
-          result = { txid: wtxid, tx: atomic_beef, no_send_change: change }
-          result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-          return result
+          return { txid: wtxid, tx: atomic_beef, no_send_change: change }
         end
 
-        # Phase 3 + 4: Broadcast inline (change output rows already written
-        # in Phase 2b, but spendable rows deferred until now). Delayed
-        # broadcasts are picked up by the daemon's push-discovery loop.
+        # Phase 3 + 4: Broadcast inline. Send-path Phase 4 promotes outputs
+        # (flips promoted: true) and inserts spendable rows in a single
+        # transaction. Delayed broadcasts are picked up by the daemon's
+        # push-discovery loop.
         if broadcast == :inline
           broadcast_result = inline_broadcast(action_id: action_result[:id], raw_tx: raw_tx)
           if accepted?(broadcast_result)
-            promote_with_outputs(action_result[:id], outputs, vout_mapping)
-            @store.promote_change_to_spendable(action_id: action_result[:id])
+            @store.promote_action_outputs(action_id: action_result[:id])
             handle_proof_from_broadcast(action_result[:id], broadcast_result)
           end
         end
 
-        result = { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
-        result[:send_with_results] = process_send_with(send_with) if send_with&.any?
-        result
+        { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
 
       # Build a funded transaction with SDK fee computation and change.

@@ -97,7 +97,8 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
       broadcast_status: nil,
       mark_broadcast_attempted: nil,
       save_proof: 99,
-      link_proof: nil
+      link_proof: nil,
+      promote_action_outputs: []
     )
 
     # --- Services stubs ---
