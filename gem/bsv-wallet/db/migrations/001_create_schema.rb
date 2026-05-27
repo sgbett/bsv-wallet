@@ -15,11 +15,24 @@ Sequel.migration do
     c[:bytea] = postgres ? :bytea : :blob
     c[:timestamptz] = postgres ? :timestamptz : :datetime
     c[:broadcast_intent] = postgres ? :broadcast_intent : :text
+    c[:tx_status] = postgres ? :tx_status : :text
     c[:now] = postgres ? Sequel.function(:now) : Sequel::CURRENT_TIMESTAMP
+
+    # ARC tx_status vocabulary, per
+    # https://github.com/bitcoin-sv/arc internal/metamorph/metamorph_api/metamorph_api.proto.
+    # IMMUTABLE appended for the wallet's TERMINAL_STATUSES (anticipates an
+    # ARC addition; #198/#220 design intent).
+    arc_tx_statuses = %w[
+      UNKNOWN QUEUED RECEIVED STORED
+      ANNOUNCED_TO_NETWORK REQUESTED_BY_NETWORK SENT_TO_NETWORK
+      ACCEPTED_BY_NETWORK SEEN_IN_ORPHAN_MEMPOOL SEEN_ON_NETWORK
+      DOUBLE_SPEND_ATTEMPTED REJECTED MINED_IN_STALE_BLOCK MINED IMMUTABLE
+    ]
 
     if postgres
       extension :pg_enum
       create_enum(:broadcast_intent, %w[delayed inline none])
+      create_enum(:tx_status, arc_tx_statuses)
     end
 
     # 1. blocks — known block headers (chain tracker's local view)
@@ -83,8 +96,8 @@ Sequel.migration do
       foreign_key :action_id, :actions, type: :bigint, null: false, unique: true
       column :broadcast_at, c[:timestamptz]
       column :callback_token, :text
-      column :tx_status, :text
       column :arc_status, :integer
+      column :tx_status, c[:tx_status]
       column :block_hash, c[:bytea]
       column :block_height, :integer
       column :merkle_path, c[:bytea]
@@ -301,6 +314,7 @@ Sequel.migration do
 
     if postgres
       extension :pg_enum
+      drop_enum(:tx_status)
       drop_enum(:broadcast_intent)
     end
   end

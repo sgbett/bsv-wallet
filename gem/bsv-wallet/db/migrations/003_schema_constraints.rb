@@ -56,6 +56,18 @@ Sequel.migration do
     alter_table(:broadcasts) do
       add_constraint(:block_hash_length, 'block_hash IS NULL OR length(block_hash) = 32')
       add_constraint(:block_height_range, 'block_height IS NULL OR block_height >= 0')
+      # Postgres uses the tx_status ENUM; SQLite gets an equivalent CHECK
+      # to keep parity. List mirrors arc_tx_statuses in 001 (ARC's metamorph
+      # Status enum plus IMMUTABLE, #198/#220).
+      if !postgres
+        add_constraint(
+          :tx_status_values,
+          "tx_status IS NULL OR tx_status IN ('UNKNOWN', 'QUEUED', 'RECEIVED', 'STORED', " \
+          "'ANNOUNCED_TO_NETWORK', 'REQUESTED_BY_NETWORK', 'SENT_TO_NETWORK', " \
+          "'ACCEPTED_BY_NETWORK', 'SEEN_IN_ORPHAN_MEMPOOL', 'SEEN_ON_NETWORK', " \
+          "'DOUBLE_SPEND_ATTEMPTED', 'REJECTED', 'MINED_IN_STALE_BLOCK', 'MINED', 'IMMUTABLE')"
+        )
+      end
     end
 
     # --- 5. baskets ---
@@ -283,6 +295,7 @@ Sequel.migration do
     alter_table(:broadcasts) do
       drop_constraint :block_hash_length
       drop_constraint :block_height_range
+      drop_constraint :tx_status_values if !postgres
     end
 
     # --- 3. actions ---

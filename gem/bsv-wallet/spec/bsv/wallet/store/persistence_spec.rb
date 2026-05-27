@@ -1397,10 +1397,10 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     it 'returns broadcast status for an action' do
       BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id)
-      store.record_broadcast_result(action_id: action.id, tx_status: 'SENDING')
+      store.record_broadcast_result(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
 
       result = store.broadcast_status(action_id: action.id)
-      expect(result[:tx_status]).to eq('SENDING')
+      expect(result[:tx_status]).to eq('SEEN_ON_NETWORK')
     end
 
     it 'returns nil when no broadcast exists' do

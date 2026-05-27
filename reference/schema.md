@@ -19,6 +19,12 @@
 ```sql
 CREATE TYPE broadcast_intent AS ENUM ('delayed', 'inline', 'none');
 CREATE TYPE output_type AS ENUM ('root', 'outbound');
+CREATE TYPE tx_status AS ENUM (
+  'UNKNOWN', 'QUEUED', 'RECEIVED', 'STORED',
+  'ANNOUNCED_TO_NETWORK', 'REQUESTED_BY_NETWORK', 'SENT_TO_NETWORK',
+  'ACCEPTED_BY_NETWORK', 'SEEN_IN_ORPHAN_MEMPOOL', 'SEEN_ON_NETWORK',
+  'DOUBLE_SPEND_ATTEMPTED', 'REJECTED', 'MINED_IN_STALE_BLOCK', 'MINED', 'IMMUTABLE'
+);
 ```
 
 **broadcast_intent:** Immutable, set at action creation. Controls when/whether the transaction is broadcast to the network. Three values, two lifecycles:
@@ -180,8 +186,8 @@ When ARC reports MINED with a `merklePath`, the broadcast handler creates a `tx_
 | action_id | bigint | NOT NULL REFERENCES actions (id) UNIQUE |
 | broadcast_at | timestamptz | |
 | callback_token | text | |
-| tx_status | text | |
 | arc_status | integer | |
+| tx_status | tx_status | |
 | block_hash | bytea | |
 | block_height | integer | |
 | merkle_path | bytea | |
@@ -196,6 +202,8 @@ When ARC reports MINED with a `merklePath`, the broadcast handler creates a `tx_
 - `CHECK block_height IS NULL OR block_height >= 0`
 
 **`callback_token`:** Wallet-generated opaque string sent to ARC in the `X-CallbackToken` header at submission time. ARC's `/events` SSE endpoint echoes the token on each status event — the listener uses it to look up the originating broadcast row without round-tripping a txid lookup. Nullable: rows broadcast before the SSE listener landed have none.
+
+**`tx_status`:** ARC's transaction lifecycle status. Postgres uses the `tx_status` ENUM (`CREATE TYPE` above) — the canonical vocabulary lives in ARC's `metamorph_api.proto`. SQLite gets an equivalent CHECK constraint with the same set. `IMMUTABLE` is appended for the wallet's terminal-status set (anticipates an ARC addition; referenced by `Broadcast::TERMINAL_STATUSES`). Column positioned after `arc_status` for efficient row padding in Postgres.
 
 **ARC tx_status lifecycle:**
 ```
