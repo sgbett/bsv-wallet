@@ -648,9 +648,13 @@ RSpec.describe BSV::Wallet::Store, :store do
       # Postgres aborts the whole tx on a FK violation; isolate the failing
       # delete in its own savepoint so the surrounding shared_context tx
       # stays usable for the post-condition assertion.
+      #
+      # Match on Sequel::DatabaseError + message: Postgres 18 reports RESTRICT
+      # violations with SQLSTATE 23001 (PG::RestrictViolation), which Sequel
+      # doesn't map to ForeignKeyConstraintViolation.
       store.db.transaction(savepoint: true) do
         expect { BSV::Wallet::Store::Models::Action.where(id: result[:id]).delete }
-          .to raise_error(Sequel::ForeignKeyConstraintViolation)
+          .to raise_error(Sequel::DatabaseError, /foreign key/i)
         raise Sequel::Rollback
       end
       expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
