@@ -178,6 +178,7 @@ When ARC reports MINED with a `merklePath`, the broadcast handler creates a `tx_
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
 | action_id | bigint | NOT NULL REFERENCES actions (id) UNIQUE |
 | broadcast_at | timestamptz | |
+| callback_token | text | |
 | tx_status | text | |
 | arc_status | integer | |
 | block_hash | bytea | |
@@ -192,6 +193,8 @@ When ARC reports MINED with a `merklePath`, the broadcast handler creates a `tx_
 - `UNIQUE (action_id)` — one broadcast record per action
 - `CHECK block_hash IS NULL OR length(block_hash) = 32`
 - `CHECK block_height IS NULL OR block_height >= 0`
+
+**`callback_token`:** Wallet-generated opaque string sent to ARC in the `X-CallbackToken` header at submission time. ARC's `/events` SSE endpoint echoes the token on each status event — the listener uses it to look up the originating broadcast row without round-tripping a txid lookup. Nullable: rows broadcast before the SSE listener landed have none.
 
 **ARC tx_status lifecycle:**
 ```
@@ -214,7 +217,7 @@ Every `createAction` is a series of small atomic database transactions. No datab
 
 ```
 BEGIN
-  INSERT INTO actions (broadcast, nlocktime, description, ...)
+  INSERT INTO actions (broadcast_intent, nlocktime, description, ...)
     -- wtxid IS NULL, raw_tx IS NULL — the action is unsigned
   INSERT INTO inputs (action_id, output_id, vin, nsequence, description)
     ON CONFLICT (output_id) DO NOTHING RETURNING output_id
@@ -447,7 +450,7 @@ The output rows are written to the immutable log at `createAction` time so the c
 ```
 BEGIN
   -- Phase 1: Lock (same as synchronous)
-  INSERT INTO actions (broadcast, nlocktime, description, ...)
+  INSERT INTO actions (broadcast_intent, nlocktime, description, ...)
     -- wtxid IS NULL initially
   INSERT INTO inputs (action_id, output_id, vin, nsequence, description)
     ON CONFLICT (output_id) DO NOTHING RETURNING output_id
@@ -521,7 +524,7 @@ BEGIN
   INSERT INTO blocks (height, merkle_root, block_hash)
     VALUES (?, ?, ?) ON CONFLICT (height) DO NOTHING
   INSERT INTO tx_proofs (wtxid, block_id, ...) ON CONFLICT DO UPDATE ...
-  INSERT INTO actions (tx_proof_id, wtxid, outgoing: false, broadcast: 'none', ...)
+  INSERT INTO actions (tx_proof_id, wtxid, outgoing: false, broadcast_intent: 'none', ...)
   -- Internal path: outputs written directly with promoted = true,
   -- spendable rows inserted in the same transaction. No Phase 3.
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,

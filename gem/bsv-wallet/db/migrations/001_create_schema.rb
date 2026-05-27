@@ -82,6 +82,7 @@ Sequel.migration do
       primary_key :id if !postgres
       foreign_key :action_id, :actions, type: :bigint, null: false, unique: true
       column :broadcast_at, c[:timestamptz]
+      column :callback_token, :text
       column :tx_status, :text
       column :arc_status, :integer
       column :block_hash, c[:bytea]
