@@ -27,7 +27,10 @@ module BSV
       # @param height [Integer] block height
       # @return [Boolean]
       def valid_root_for_height?(root, height)
-        root_bin = [root].pack('H*')
+        # +root+ is the SDK's display-order hex output from MerklePath#compute_root_hex.
+        # The DB stores wire-order bytes (the wtxid convention). Convert at this
+        # boundary: display hex -> display bytes -> wire bytes (reverse).
+        root_bin = [root].pack('H*').reverse
 
         # Fast path: local store
         block = @store.find_block(height: height)
@@ -41,10 +44,14 @@ module BSV
         fetched_root = result.data['merkleroot'] || result.data['merkleRoot'] || result.data['merkle_root']
         return false unless fetched_root
 
+        # Provider hex is display-order; persist wire-order to match the
+        # internal convention. block_hash gets the same treatment below.
+        fetched_wire = [fetched_root].pack('H*').reverse
         block_hash = result.data['hash'] || result.data['blockHash'] || result.data['block_hash']
-        persist_block(height: height, merkle_root: fetched_root, block_hash: block_hash)
+        block_hash_wire = block_hash ? [block_hash].pack('H*').reverse : nil
+        persist_block(height: height, merkle_root: fetched_wire, block_hash: block_hash_wire)
 
-        [fetched_root].pack('H*') == root_bin
+        fetched_wire == root_bin
       rescue StandardError => e
         BSV.logger&.warn { "[ChainTracker] valid_root_for_height? error: #{e.message}" }
         false
