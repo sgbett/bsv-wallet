@@ -28,12 +28,8 @@ end
 
 Dir[File.join(__dir__, 'support', '*.rb')].each { |f| require f }
 
-RSpec.configure do |config|
-  config.before(:suite) do
-    if ENV['BSV_WALLET_WIF_SDK'].to_s.strip.empty?
-      warn 'Skipping e2e suite: BSV_WALLET_WIF_SDK is not set'
-      warn 'Set it in .env or your shell profile to enable the e2e harness.'
-      RSpec.world.example_groups.each { |g| g.skip = 'BSV_WALLET_WIF_SDK not set' }
-    end
-  end
-end
+# Per-spec skip is handled inside each phase's +before+ block via
+# +E2E::WalletHarness.missing_env+ — the message lists exactly which
+# env vars are unset rather than a blanket "BSV_WALLET_WIF_SDK is
+# missing". This keeps responsibility with the phase that needs the
+# env, and lets the support unit specs (no env required) run alongside.

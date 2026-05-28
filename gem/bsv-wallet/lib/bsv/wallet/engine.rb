@@ -686,8 +686,13 @@ module BSV
       #
       # @param recipient [String] 66-char compressed public key hex (02/03 prefix)
       # @param satoshis [Integer] amount to send
+      # @param no_send [Boolean] when true (the default) the action is built
+      #   and signed but never reaches ARC — the BEEF is returned for
+      #   peer-to-peer handoff. Set false for on-chain broadcast.
+      # @param accept_delayed_broadcast [Boolean] only consulted when
+      #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash] { beef:, sender_identity_key:, outputs: [{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }] }
-      def send_payment(recipient:, satoshis:)
+      def send_payment(recipient:, satoshis:, no_send: true, accept_delayed_broadcast: true)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -708,7 +713,8 @@ module BSV
         result = create_action(
           description: "send #{satoshis} sats",
           outputs: [{ satoshis: satoshis, locking_script: locking_script }],
-          no_send: true, randomize_outputs: false
+          no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
+          randomize_outputs: false
         )
 
         {
@@ -764,9 +770,14 @@ module BSV
       # requires +change_count >= 1+).
       #
       # @param recipient [String] 66-char compressed pubkey hex (02/03)
+      # @param no_send [Boolean] when true (the default) the action is built
+      #   and signed but never reaches ARC — the BEEF is returned for
+      #   peer-to-peer handoff. Set false for on-chain broadcast.
+      # @param accept_delayed_broadcast [Boolean] only consulted when
+      #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash, nil] the +create_action+ result, or +nil+ when the
       #   wallet has no spendable outputs.
-      def sweep(recipient:)
+      def sweep(recipient:, no_send: true, accept_delayed_broadcast: true)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -814,7 +825,8 @@ module BSV
             description: 'sweep',
             inputs: input_specs,
             outputs: [{ satoshis: total - fee, locking_script: locking_script }],
-            no_send: true, randomize_outputs: false,
+            no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
+            randomize_outputs: false,
             change_count: 1
           )
         ensure
