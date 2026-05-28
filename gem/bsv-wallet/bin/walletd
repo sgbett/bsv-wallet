@@ -35,8 +35,9 @@ db_url = BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet_name) ||
 store = BSV::Wallet::Store.connect(db_url)
 store.migrate!
 
-provider = BSV::Network::Providers::WhatsOnChain.send(network)
-services = BSV::Network::Services.new(providers: [provider])
+services = BSV::Network::Services.new(
+  providers: BSV::Wallet::ProviderStack.build(network: network)
+)
 
 BSV.logger.info { "[walletd] Starting for #{wallet_name || 'default'} (#{network})..." }
 

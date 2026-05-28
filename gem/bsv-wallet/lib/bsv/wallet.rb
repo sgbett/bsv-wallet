@@ -36,6 +36,9 @@ module BSV
     require_relative 'network/services'
     require_relative 'network/chain_tracker'
 
+    # Provider stack builder (env-driven multi-provider Services wiring).
+    autoload :ProviderStack, 'bsv/wallet/provider_stack'
+
     # Default store (SQLite-backed persistence)
     autoload :Store, 'bsv/wallet/store'
 
