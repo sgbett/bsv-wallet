@@ -83,16 +83,19 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
       (received[:total_outputs] || received[:total] || 0)
   end
 
-  # Count actions by description directly against the wallet's sqlite
-  # tmpdir file. Action counts are deterministic — consolidation rounds
-  # and sweeps land as discrete rows — while output counts (the brittle
-  # measure) depend on the SDK's dust-drop / Benford behavior on the
-  # final change distribution. HLR #130's acceptance criterion is
-  # "action records reflect the expected count" exactly because of this.
+  # Count actions by description directly against the wallet's DB. Action
+  # counts are deterministic — consolidation rounds and sweeps land as
+  # discrete rows — while output counts (the brittle measure) depend on
+  # the SDK's dust-drop / Benford behavior on the final change
+  # distribution. HLR #130's acceptance criterion is "action records
+  # reflect the expected count" exactly because of this.
+  #
+  # Uses the same +db_urls+ the bin/ subprocesses inherit, so this stays
+  # backend-agnostic (sqlite tmpdir today; Postgres if a future
+  # DATABASE_URL_* override points there).
   def action_counts(wallet)
     require 'sequel'
-    db_path = File.join(tmpdir, "#{wallet}.db")
-    db = Sequel.connect("sqlite://#{db_path}")
+    db = Sequel.connect(db_urls[wallet])
     begin
       {
         total: db[:actions].count,

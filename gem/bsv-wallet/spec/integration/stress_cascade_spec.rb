@@ -101,10 +101,13 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
   # distribution, and multi-input spends once own-change drops below
   # the payment unit — non-deterministic across runs. Action counts are
   # exact: one outbound per send_payment, one inbound per internalize.
+  #
+  # Uses the same +db_urls+ the bin/ subprocesses inherit, so this stays
+  # backend-agnostic (sqlite tmpdir today; Postgres if a future
+  # DATABASE_URL_* override points there).
   def action_counts(wallet)
     require 'sequel'
-    db_path = File.join(tmpdir, "#{wallet}.db")
-    db = Sequel.connect("sqlite://#{db_path}")
+    db = Sequel.connect(db_urls[wallet])
     begin
       {
         total: db[:actions].count,
