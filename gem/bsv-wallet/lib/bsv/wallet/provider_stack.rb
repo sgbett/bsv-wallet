@@ -56,7 +56,7 @@ module BSV
       end
 
       def whats_on_chain(network)
-        BSV::Network::Providers::WhatsOnChain.send(network)
+        BSV::Network::Providers::WhatsOnChain.default(network: network)
       end
 
       def taal_key_present?

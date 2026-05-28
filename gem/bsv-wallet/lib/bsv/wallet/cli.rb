@@ -61,7 +61,7 @@ module BSV
         # call it for +get_tx+ / +get_utxos+ / +get_merkle_path+ — a
         # pre-existing bypass of +Services+). The Services layer is the
         # write-path with multi-provider fan-out via +ProviderStack+.
-        network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
+        network_provider = BSV::Network::Providers::WhatsOnChain.default(network: network)
         network_services = BSV::Network::Services.new(
           providers: BSV::Wallet::ProviderStack.build(network: network)
         )
