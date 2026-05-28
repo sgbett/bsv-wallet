@@ -232,4 +232,160 @@ RSpec.describe BSV::Wallet::Scheduler do
       end
     end
   end
+
+  describe 'in-flight tracking' do
+    it 'starts at zero' do
+      expect(scheduler.in_flight).to eq(0)
+    end
+
+    it 'increments on task.dispatched and decrements on task.succeeded' do
+      Async do |task|
+        OMQ::PULL.bind('inproc://broadcasts.pull')
+        OMQ::PULL.bind('inproc://proofs.pull')
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
+
+        scheduler.run!(task: task)
+        BSV::Wallet.emit('task.dispatched', task: 'broadcast_push', id: 1)
+        expect(scheduler.in_flight).to eq(1)
+
+        BSV::Wallet.emit('task.succeeded', task: 'broadcast_push', id: 1, latency_ms: 10, outcome: :accepted)
+        expect(scheduler.in_flight).to eq(0)
+      ensure
+        task.stop
+      end
+    end
+
+    %w[task.failed task.aborted task.skipped].each do |terminal|
+      it "decrements on #{terminal}" do
+        Async do |task|
+          OMQ::PULL.bind('inproc://broadcasts.pull')
+          OMQ::PULL.bind('inproc://proofs.pull')
+          allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+          allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
+
+          scheduler.run!(task: task)
+          BSV::Wallet.emit('task.dispatched', task: 'broadcast_push', id: 1)
+          BSV::Wallet.emit(terminal, task: 'broadcast_push', id: 1)
+          expect(scheduler.in_flight).to eq(0)
+        ensure
+          task.stop
+        end
+      end
+    end
+
+    it 'ignores non-lifecycle events' do
+      Async do |task|
+        OMQ::PULL.bind('inproc://broadcasts.pull')
+        OMQ::PULL.bind('inproc://proofs.pull')
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
+
+        scheduler.run!(task: task)
+        BSV::Wallet.emit('daemon.started', wallet: 'alice', network: 'mainnet')
+        BSV::Wallet.emit('task.enqueued', task: 'broadcast_push', id: 1)
+        BSV::Wallet.emit('task.discovered', task: 'broadcast_push', count: 1)
+        expect(scheduler.in_flight).to eq(0)
+      ensure
+        task.stop
+      end
+    end
+  end
+
+  describe '#shutdown' do
+    it 'returns true immediately when no work is in flight' do
+      Async do |task|
+        OMQ::PULL.bind('inproc://broadcasts.pull')
+        OMQ::PULL.bind('inproc://proofs.pull')
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
+
+        scheduler.run!(task: task)
+        elapsed_start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        result = scheduler.shutdown(timeout: 5.0)
+        elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - elapsed_start
+
+        expect(result).to be(true)
+        expect(elapsed).to be < 0.5
+      ensure
+        task.stop
+      end
+    end
+
+    it 'waits for in-flight work to drain and returns true' do
+      Async do |task|
+        OMQ::PULL.bind('inproc://broadcasts.pull')
+        OMQ::PULL.bind('inproc://proofs.pull')
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
+
+        scheduler.run!(task: task)
+        BSV::Wallet.emit('task.dispatched', task: 'broadcast_push', id: 1)
+
+        # Simulate the in-flight task completing partway through the drain.
+        task.async do
+          sleep 0.2
+          BSV::Wallet.emit('task.succeeded', task: 'broadcast_push', id: 1, outcome: :accepted)
+        end
+
+        result = scheduler.shutdown(timeout: 2.0)
+        expect(result).to be(true)
+        expect(scheduler.in_flight).to eq(0)
+      ensure
+        task.stop
+      end
+    end
+
+    it 'returns false on timeout when in-flight work never settles' do
+      Async do |task|
+        OMQ::PULL.bind('inproc://broadcasts.pull')
+        OMQ::PULL.bind('inproc://proofs.pull')
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
+
+        scheduler.run!(task: task)
+        BSV::Wallet.emit('task.dispatched', task: 'broadcast_push', id: 1)
+
+        result = scheduler.shutdown(timeout: 0.3)
+        expect(result).to be(false)
+        expect(scheduler.in_flight).to eq(1)
+      ensure
+        task.stop
+      end
+    end
+
+    it 'flips stopping? to true' do
+      Async do |task|
+        OMQ::PULL.bind('inproc://broadcasts.pull')
+        OMQ::PULL.bind('inproc://proofs.pull')
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
+
+        scheduler.run!(task: task)
+        expect(scheduler.stopping?).to be(false)
+        scheduler.shutdown(timeout: 1.0)
+        expect(scheduler.stopping?).to be(true)
+      ensure
+        task.stop
+      end
+    end
+
+    it 'deregisters its lifecycle observer (does not leak observers across instances)' do
+      Async do |task|
+        OMQ::PULL.bind('inproc://broadcasts.pull')
+        OMQ::PULL.bind('inproc://proofs.pull')
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
+
+        baseline = BSV::Wallet.event_observer_count
+        scheduler.run!(task: task)
+        expect(BSV::Wallet.event_observer_count).to eq(baseline + 1)
+
+        scheduler.shutdown(timeout: 1.0)
+        expect(BSV::Wallet.event_observer_count).to eq(baseline)
+      ensure
+        task.stop
+      end
+    end
+  end
 end

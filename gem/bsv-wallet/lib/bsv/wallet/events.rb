@@ -67,8 +67,54 @@ module BSV
       end
     end
 
+    # In-process observer registry. Each observer is a callable that
+    # receives +(name, payload)+ for every emit call. Used by
+    # {Scheduler#shutdown} to drive a drain-tracking counter without
+    # coupling to +Engine::Broadcast+ / +Engine::TxProof+ internals.
+    #
+    # Observers run synchronously on the emitting fiber; keep them
+    # non-blocking and exception-safe. Exceptions from observers are
+    # caught and logged at +:warn+ — a faulty observer must not break
+    # event emission.
+    @event_observers = []
+    @event_observers_mutex = Mutex.new
+
+    # Register an observer for every subsequent +emit+ call.
+    #
+    # @yieldparam name [String] event name (e.g. +'task.dispatched'+)
+    # @yieldparam payload [Hash] the keyword payload passed to +emit+
+    # @return [Proc] the registered observer (use as +handle+ for {.off_event})
+    def self.on_event(&block)
+      raise ArgumentError, 'block required' unless block
+
+      @event_observers_mutex.synchronize { @event_observers << block }
+      block
+    end
+
+    # Deregister a previously-registered observer.
+    #
+    # @param handle [Proc] the proc returned by {.on_event}
+    # @return [Proc, nil] the removed observer, or nil if not found
+    def self.off_event(handle)
+      @event_observers_mutex.synchronize { @event_observers.delete(handle) }
+    end
+
+    # Snapshot of registered observers (testing).
+    def self.event_observer_count
+      @event_observers_mutex.synchronize { @event_observers.length }
+    end
+
+    # Clear the process-wide observer registry. Test helper — do not
+    # call from production code. Specs that boot a Scheduler / Daemon
+    # without a matching shutdown leak observers across examples; the
+    # spec_helper hook uses this to keep examples isolated.
+    def self.reset_event_observers!
+      @event_observers_mutex.synchronize { @event_observers.clear }
+    end
+
     def self.emit(name, **payload)
-      return if BSV.logger.nil? && @event_log.nil?
+      observers = @event_observers_mutex.synchronize { @event_observers.dup }
+      return if BSV.logger.nil? && @event_log.nil? && observers.empty?
 
       fields = payload.map { |k, v| format_field(k, v) }.compact.join(' ')
       message = "[event] #{name}"
@@ -76,6 +122,11 @@ module BSV
 
       BSV.logger&.info(message)
       @event_log&.info(message)
+      observers.each do |observer|
+        observer.call(name, payload)
+      rescue StandardError => e
+        BSV.logger&.warn { "[BSV::Wallet.emit] observer raised: #{e.message}" }
+      end
     end
 
     # Format a single key=value pair for structured log output.
