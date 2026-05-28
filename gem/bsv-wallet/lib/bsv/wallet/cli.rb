@@ -57,8 +57,14 @@ module BSV
         private_key = BSV::Primitives::PrivateKey.from_wif(wif)
         key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
 
+        # WoC is the read-path provider (Engine direct lookups still
+        # call it for +get_tx+ / +get_utxos+ / +get_merkle_path+ — a
+        # pre-existing bypass of +Services+). The Services layer is the
+        # write-path with multi-provider fan-out via +ProviderStack+.
         network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
-        network_services = BSV::Network::Services.new(providers: [network_provider])
+        network_services = BSV::Network::Services.new(
+          providers: BSV::Wallet::ProviderStack.build(network: network)
+        )
         chain_tracker = BSV::Network::ChainTracker.new(store: store, services: network_services)
 
         limp_threshold_raw = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD)
