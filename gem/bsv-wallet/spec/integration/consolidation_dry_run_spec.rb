@@ -85,16 +85,16 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
 
   it 'consolidates and sweeps every wallet to zero spendable' do
     # Phase 1: import funding UTXOs. The default-basket balance after
-    # import is the imported root UTXO's value (minus a 1-sat fee for the
-    # bootstrap self-payment). Anything less means import returned empty
-    # — usually a transient network error worth surfacing immediately.
+    # import is the imported root UTXO's value (~1m sats) minus the
+    # bootstrap self-payment's network fee (a few dozen sats). Allow a
+    # 1000-sat margin to absorb fee variance across SDK version bumps.
     wallet_names.each do |wallet|
       _, _, status = run_cli('import', wallet)
       expect(status).to be_success, "import #{wallet} failed"
       balance_stdout, _, status = run_cli('balance', wallet)
       expect(status).to be_success, "post-import balance #{wallet} failed"
       bal = balance_stdout.strip.to_i
-      expect(bal).to be >= 100_000, "#{wallet} starting balance #{bal} < 100k sats — import likely returned empty"
+      expect(bal).to be >= 999_000, "#{wallet} starting balance #{bal} < 999k sats (import likely failed)"
     end
 
     # Phase 2: mini-cascade. Each wallet sends a few no_send payments to

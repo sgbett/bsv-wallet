@@ -510,7 +510,12 @@ module BSV
           @bypass_limp_mode = false
         end
 
-        BSV.logger&.debug { "[Engine] import_utxo complete: #{satoshis} sats imported (less fee)" }
+        # +satoshis+ here is the on-chain UTXO's value (gross). The wallet's
+        # spendable balance is slightly less — the Phase 2 self-payment paid
+        # a small network fee for the derived output. Callers querying the
+        # wallet's balance see the net; this return reports what was
+        # imported from chain.
+        BSV.logger&.debug { "[Engine] import_utxo complete: #{satoshis} sats imported from #{dtxid}" }
         { imported: true, satoshis: satoshis, dtxid: dtxid }
       end
 
@@ -771,15 +776,6 @@ module BSV
         total = all_spendable.sum { |o| o[:satoshis] }
         input_specs = all_spendable.each_with_index.map { |o, i| { output_id: o[:id], vin: i } }
 
-        # Estimate fee from the templated tx +generate_change+ will build:
-        #   tx overhead (~10 B) + N P2PKH inputs (~148 B each) + 1 caller
-        #   output (~34 B) + 1 change-key output (~34 B, dust-dropped on
-        #   success but counted by +compute_fee+).
-        # Matches the FeeModel the funding loop uses so the exact-fee check
-        # finds either zero or near-zero surplus.
-        estimated_size = 10 + (all_spendable.length * 148) + 34 + 34
-        fee = (estimated_size / 1000.0 * 100).ceil
-
         derivation_prefix = random_derivation
         derivation_suffix = '1'
         derived_pub = @key_deriver.derive_public_key(
@@ -789,6 +785,18 @@ module BSV
         locking_script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(derived_pub)
         ).to_binary
+
+        # Compute the fee with the same FeeModel + templated-tx shape
+        # +generate_change+ uses, so the funding loop's exact-fee check
+        # finds zero or near-zero surplus and InsufficientFundsError can't
+        # fire after Phase 1 lock. Mirrors the input count, caller output,
+        # and one change-key output the funding loop will produce.
+        fee = estimate_sweep_fee(input_count: all_spendable.length, recipient_script: locking_script)
+
+        # Dust-only wallet: the fee exceeds the available sats. Fail fast
+        # before Phase 1 locks any inputs; an InsufficientFundsError after
+        # the lock would orphan rows until the reaper cleans up.
+        raise BSV::Wallet::InsufficientFundsError if total <= fee
 
         # Sweep is an explicit "drain everything" operation — by definition it
         # takes the balance below the limp threshold. Bypass the guard here;
@@ -812,6 +820,39 @@ module BSV
         ensure
           @bypass_limp_mode = false
         end
+      end
+
+      # Build a templated skeleton tx with the same shape +generate_change+
+      # will produce (N P2PKH-templated inputs + 1 caller output + 1 change
+      # output) and run +compute_fee+ against it. Inputs are sourceless
+      # stand-ins — only the unlocking-script template size matters for
+      # fee estimation; +source_satoshis+ does not enter the size formula.
+      def estimate_sweep_fee(input_count:, recipient_script:)
+        fee_model = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
+        skeleton = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+
+        signing_key = @key_deriver.root_private_key
+        input_count.times do
+          input = BSV::Transaction::TransactionInput.new(
+            prev_wtxid: "\x00".b * 32, prev_tx_out_index: 0
+          )
+          input.unlocking_script_template = BSV::Transaction::P2PKH.new(signing_key)
+          skeleton.add_input(input)
+        end
+
+        recipient_script_obj = BSV::Script::Script.from_binary(recipient_script)
+        skeleton.add_output(
+          BSV::Transaction::TransactionOutput.new(satoshis: 0, locking_script: recipient_script_obj)
+        )
+        # +generate_change+ adds a change-key output even though sweep
+        # expects it to be dust-dropped. Mirror that for size parity.
+        skeleton.add_output(
+          BSV::Transaction::TransactionOutput.new(
+            satoshis: 0, locking_script: recipient_script_obj, change: true
+          )
+        )
+
+        fee_model.compute_fee(skeleton)
       end
 
       # --- Public Key Management (codes 8-10) ---

@@ -150,6 +150,49 @@ RSpec.describe BSV::Network::Services do
     end
   end
 
+  # --- Per-Provider Backoff Retry ---
+
+  describe 'backoff retry on retryable responses' do
+    it 'retries the same provider up to RETRYABLE_ATTEMPTS times before falling back' do
+      provider = instance_double(BSV::Network::Provider, name: 'P1',
+                                                         commands: Set.new([:get_tx]),
+                                                         rate_limit: nil)
+      retryable_error = error('rate limited', retryable: true)
+      allow(provider).to receive(:call).with(:get_tx, any_args).and_return(retryable_error)
+      services = described_class.new(providers: [provider])
+
+      services.call(:get_tx, 'txid')
+
+      expect(provider).to have_received(:call).exactly(BSV::Network::Services::RETRYABLE_ATTEMPTS).times
+    end
+
+    it 'returns immediately on a non-retryable response (no backoff sleep)' do
+      provider = stub_provider('P1', { get_tx: error('bad request', retryable: false) })
+      services = described_class.new(providers: [provider])
+      allow(services).to receive(:backoff_sleep)
+
+      services.call(:get_tx, 'txid')
+
+      expect(services).not_to have_received(:backoff_sleep)
+    end
+
+    it 'falls back to the next provider after the first one exhausts its retries' do
+      failing = instance_double(BSV::Network::Provider, name: 'P1',
+                                                        commands: Set.new([:get_tx]),
+                                                        rate_limit: nil)
+      allow(failing).to receive(:call).with(:get_tx, any_args)
+                                      .and_return(error('rate limited', retryable: true))
+      working = stub_provider('P2', { get_tx: success('from_p2') })
+      services = described_class.new(providers: [failing, working])
+
+      result = services.call(:get_tx, 'txid')
+
+      expect(result.http_success?).to be true
+      expect(result.data).to eq('from_p2')
+      expect(failing).to have_received(:call).exactly(BSV::Network::Services::RETRYABLE_ATTEMPTS).times
+    end
+  end
+
   # --- Normalization ---
 
   describe 'broadcast normalization' do

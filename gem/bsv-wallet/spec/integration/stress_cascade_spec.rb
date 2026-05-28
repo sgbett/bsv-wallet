@@ -97,12 +97,16 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
   end
 
   it 'cascades no_send payments across all wallets' do
-    # Phase 1 — Import: scan each wallet's root address for the 1m-sat seed UTXO.
+    # Phase 1 — Import: scan each wallet's root address for the 1m-sat seed
+    # UTXO. import_utxo's Phase 2 self-payment pays a small network fee for
+    # the derived output, so the post-import default-basket balance is ~1m
+    # sats minus a few dozen sats. Allow a 1000-sat margin to absorb fee
+    # variance across SDK version bumps.
     wallet_names.each do |wallet|
       _, _, status = run_cli('import', wallet)
       expect(status).to be_success, "import #{wallet} failed"
       bal = balance(wallet)
-      expect(bal).to be >= 1_000_000, "#{wallet} starting balance #{bal} < 1m sats"
+      expect(bal).to be >= 999_000, "#{wallet} starting balance #{bal} < 999k sats (import likely failed)"
     end
 
     starting = wallet_names.to_h { |w| [w, total_balance(w)] }
