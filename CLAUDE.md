@@ -37,18 +37,32 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 
 `Transaction#wtxid` returns wire order (SDK v0.17.0+). `Transaction#txid` returns display order — a convenience method, never used in the data path. The `DisplayTxid` module provides `dtxid` on Sequel models.
 
+## Database: Postgres is Primary
+
+This is a **Postgres-based** wallet. SQLite exists as a convenience for fast logic-only specs that don't depend on DB invariants — it is not the production target.
+
+The schema chooses Postgres-native features deliberately: `bytea` for everything hash-shaped, native `uuid` for `actions.reference`, ENUM types (`broadcast_intent`), CHECK constraints, RESTRICT FK semantics. See `reference/schema-intent.md`.
+
+**Conventions:**
+
+- When the user says "the database" or "the wallet" without qualifying, assume Postgres.
+- The local `.env` (loaded by `BSV::Wallet::CLI.boot` via `dotenv/load`) provides per-wallet Postgres URLs (`DATABASE_URL_ALICE`, etc.) — anything that shells out to `bin/` inherits these. Tests must not override them with sqlite paths.
+- Unit specs branch on `DATABASE_URL`: unset / sqlite → SQLite, `postgres://...` → Postgres. Both run in CI (matrix job).
+- Integration specs run against Postgres locally (via `.env`) and Postgres in CI. New DB-touching test helpers must read the configured DB URL, never hardcode `sqlite://`.
+- Postgres-specific behaviour (CHECK violations, ENUM rejections, RESTRICT FK semantics, the `prevent_outbound_spendable` trigger) MUST have a spec that runs against Postgres — SQLite carries those via translation and won't surface a regression.
+
 ## Running Specs
 
 Specs must run from the gem directory, not the repo root.
 
 ```bash
-# Wallet unit specs (fast, SQLite, no infra)
-cd gem/bsv-wallet && bundle exec rspec spec/bsv spec/bin
-
-# Wallet unit specs against Postgres
+# Wallet unit specs (Postgres — primary target)
 cd gem/bsv-wallet && DATABASE_URL=postgres://localhost/bsv_wallet_test bundle exec rspec spec/bsv spec/bin
 
-# Wallet integration specs (require BSV_WALLET_WIF_ALICE/BOB + Alice funded with >= 1m sats)
+# Wallet unit specs against SQLite (augmentation — proves SQLite still works)
+cd gem/bsv-wallet && bundle exec rspec spec/bsv spec/bin
+
+# Wallet integration specs (require BSV_WALLET_WIF_ALICE/BOB/CAROL + each funded with >= 1m sats)
 cd gem/bsv-wallet && bundle exec rspec spec/integration
 
 # All wallet specs (unit + integration)
