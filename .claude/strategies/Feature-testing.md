@@ -141,10 +141,12 @@ We will use 5 wallets
 ```ruby
 require "openssl"
 WALLET_COUNT = 5
-BSV_WALLET_WIF_SDK = ENV["BSV_WALLET_WIF_SDK"]
-root = OpenSSL::BN.new([BSV_WALLET_WIF_SDK].pack("H*"), 2)
+# BSV_WALLET_WIF_SDK is a WIF string (base58check), matching the convention
+# used by BSV_WALLET_WIF_ALICE / _BOB / _CAROL elsewhere in the repo.
+sdk_pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch("BSV_WALLET_WIF_SDK"))
+root = sdk_pk.bn
 n = OpenSSL::BN.new("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
-BSV_WALLET_WIF=[]
+BSV_WALLET_WIF = []
 WALLET_COUNT.times do |i|
   child_bn = (root * OpenSSL::BN.new(i + 2)) % n
   child_key = BSV::Primitives::PrivateKey.new(child_bn)
@@ -167,7 +169,14 @@ This will result in approx 73 outputs of 50k (payments), and 512 outputs of 12k 
 To fragment those 50k outputs, we conduct one more level of fanout (ancestry depth n=4): 73 x payments of 12k.
   L5 change = 73 payments (50k - 12k payment - 100 fees) / 8 change outputs => approx 4700 sats
 
-This will result in 585 outputs of approx 12k (due to the benford random change distribution), with 73 outputs just under 5k. There will have been 146 total payments, and (generously) assuming 100 sats per output, the initial 10m balance will have only reduced by 14.6k in fees.
+Per-wallet output count after L5 (sender's perspective):
+
+- 512 L4 change retained (~12k each) — L5 spends the 50k inbound payments, not these
+- ~73 inbound L5 payments (~12k each) from the other wallets' L5 fragmentations
+- 584 L5 change (~4700 each — 73 L5 spends × 8 Benford change outputs)
+- ≈ **1169 spendable outputs per wallet**, of which ~585 are ~12k and ~584 are ~4700
+
+Each wallet performed 73 (L2-L4) + 73 (L5) = 146 outbound payments and received roughly the same number inbound. Assuming 100 sats per output, the initial 10m balance has reduced by ~14.6k in fees.
 
 This will all still be unsent.
 
@@ -197,7 +206,9 @@ loop do
   t = time
   25.times do
     - A sending wallet and receiving wallet are chosen at random (not-self)
-    - An amount is selected at random (normal distribution: mean 5000, std deviation 1000)
+    - An amount is selected at random: clamp(round(Normal(mean=5000, sd=1000)), 1000, 9000)
+      — rounded to integer sats, clamped to [1000, 9000] so the test never
+      attempts a dust-threshold or negative-amount payment
     - the `create` specifies `accept_delayed_broadcast: false`, and does not specify `no_send: true`
     - the BEEF from `create` is given to `internalize` for the receiver
   end
