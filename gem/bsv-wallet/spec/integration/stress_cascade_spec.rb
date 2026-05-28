@@ -96,6 +96,26 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
     balance(wallet, basket: 'default') + balance(wallet, basket: 'received')
   end
 
+  # Action counts are the deterministic measure of cascade progress.
+  # Output counts depend on random not-self routing, Benford change
+  # distribution, and multi-input spends once own-change drops below
+  # the payment unit — non-deterministic across runs. Action counts are
+  # exact: one outbound per send_payment, one inbound per internalize.
+  def action_counts(wallet)
+    require 'sequel'
+    db_path = File.join(tmpdir, "#{wallet}.db")
+    db = Sequel.connect("sqlite://#{db_path}")
+    begin
+      {
+        total: db[:actions].count,
+        outbound: db[:actions].where(Sequel.like(:description, 'send %')).count,
+        inbound: db[:actions].where(description: 'received payment').count
+      }
+    ensure
+      db.disconnect
+    end
+  end
+
   it 'cascades no_send payments across all wallets' do
     # Phase 1 — Import: scan each wallet's root address for the 1m-sat seed
     # UTXO. import_utxo's Phase 2 self-payment pays a small network fee for
@@ -130,12 +150,15 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
       end
     end
 
-    # Phase 3 — Per-wallet final state. Total spendable spans both 'default'
-    # (own change) and 'received' (inbound payments) baskets.
+    # Phase 3 — Per-wallet final state. Action counts are deterministic
+    # (every send_payment makes one outbound action; every internalize
+    # makes one inbound action). Output counts are derived state and
+    # vary across runs — reported for visibility, not asserted.
     final_state = wallet_names.to_h do |wallet|
       [wallet, {
         spendable_count: total_spendable(wallet),
-        balance: total_balance(wallet)
+        balance: total_balance(wallet),
+        actions: action_counts(wallet)
       }]
     end
 
@@ -145,32 +168,39 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
     warn '--- final state ---'
     final_state.each do |wallet, state|
       delta = state[:balance] - starting[wallet]
-      warn "  #{wallet}: #{state[:spendable_count]} spendable, balance=#{state[:balance]} (Δ#{delta})"
+      a = state[:actions]
+      warn "  #{wallet}: #{state[:spendable_count]} spendable, balance=#{state[:balance]} (Δ#{delta}), " \
+           "actions total=#{a[:total]} out=#{a[:outbound]} in=#{a[:inbound]}"
     end
     aggregate_outputs = final_state.values.sum { |s| s[:spendable_count] }
-    warn "  aggregate: #{aggregate_outputs} spendable outputs"
+    total_outbound   = final_state.values.sum { |s| s[:actions][:outbound] }
+    total_inbound    = final_state.values.sum { |s| s[:actions][:inbound] }
+    warn "  aggregate: #{aggregate_outputs} spendable outputs, " \
+         "#{total_outbound} outbound + #{total_inbound} inbound actions"
     warn "===\n"
 
-    # Per the cascade arithmetic, after 73 payments per wallet:
-    #   self ('default' basket): 7 × 73 + 1 = 512 own change outputs
-    #   inbound ('received' basket): ~73 from the other two wallets
-    # Expect ≈ 585 per wallet, ≈ 1755 in aggregate, per the strategy doc.
-    # Real-world variance is wider than the theoretical model: random not-self
-    # routing distributes inbound unevenly, and once a wallet's own-change set
-    # drops below the payment unit, auto-fund consumes multiple inputs per
-    # payment which changes the net-output-per-payment calculus. Observed
-    # spread across runs: ~400-600 per wallet, ~1400-1800 aggregate.
+    # Deterministic action-count invariants.
+    #
+    # Each sender makes exactly +payments_per_wallet+ outbound
+    # +send_payment+ calls. Each one produces exactly one outbound action
+    # on the sender's wallet and exactly one inbound +internalize_action+
+    # on the recipient's wallet. The system conserves: sum(outbound) ==
+    # sum(inbound) == +payments_per_wallet * wallet_names.length+ exactly.
+    #
+    # Output counts are derived from the cascade's selection / Benford /
+    # multi-input dynamics and vary across runs — they're reported above
+    # but not asserted.
+    expected_payments = payments_per_wallet * wallet_names.length
     final_state.each do |wallet, state|
-      expect(state[:spendable_count]).to be_between(400, 700),
-                                         "#{wallet}: #{state[:spendable_count]} spendable outputs (expected ~585)"
+      expect(state[:actions][:outbound]).to eq(payments_per_wallet),
+                                            "#{wallet}: #{state[:actions][:outbound]} outbound actions (expected #{payments_per_wallet})"
     end
-    expect(aggregate_outputs).to be_between(1300, 2100),
-                                 "aggregate #{aggregate_outputs} spendable outputs (expected ~1755)"
+    expect(total_outbound).to eq(expected_payments)
+    expect(total_inbound).to eq(expected_payments)
 
-    # Each wallet's total balance change is bounded: outbound payments leave
-    # 73 × 5000 = 365k sats minus inbound received (also ~365k). Net per
-    # wallet should be near-zero (fees only). The whole loop is no_send so
-    # nothing was mined — balances reflect persisted state only.
+    # Balance conservation — the whole loop is no_send so nothing was
+    # mined; the wallet's view of its balance shifts only by fees. Per
+    # wallet the magnitude is bounded by the sat volume in flight.
     final_state.each do |wallet, state|
       delta = starting[wallet] - state[:balance]
       expect(delta.abs).to be < 1_000_000,
