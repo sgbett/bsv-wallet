@@ -39,7 +39,7 @@ module BSV
       LIMP_THRESHOLD     = 50_000  # default: 50K sats
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
-      attr_reader :limp_threshold
+      attr_reader :limp_threshold, :services
 
       def initialize(store:, utxo_pool:,
                      services: nil, key_deriver: nil, chain_tracker: nil,

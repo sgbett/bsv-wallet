@@ -36,15 +36,6 @@ RSpec.describe 'e2e Phase 1 — drain + fund + confirm' do # rubocop:disable RSp
   # ARC status values that mean "in a block" (per BIP270 / ARC docs).
   let(:mined_statuses) { %w[MINED IMMUTABLE].freeze }
 
-  # Dedicated Services for chain-status polling, separate from each
-  # wallet's own Engine. Lets +wait_for_mined+ query +get_tx_status+
-  # without poking at +Engine#@services+ internals.
-  let(:chain_services) do
-    BSV::Network::Services.new(
-      providers: BSV::Wallet::ProviderStack.build(network: :mainnet)
-    )
-  end
-
   before do
     missing = E2E::WalletHarness.missing_env
     skip "Phase 1 requires env: #{missing.join(', ')}" unless missing.empty?
@@ -131,15 +122,20 @@ RSpec.describe 'e2e Phase 1 — drain + fund + confirm' do # rubocop:disable RSp
     dtxid
   end
 
-  # Poll the funding tx's status via +chain_services+ until it shows
-  # up in a block — or +confirmation_timeout_s+ elapses. Returns the
-  # final status string.
-  def wait_for_mined(dtxid:)
+  # Poll the funding tx's status via the SDK Engine's Services until
+  # it shows up in a block — or +confirmation_timeout_s+ elapses.
+  # Reusing the SDK's Services (rather than a fresh one) preserves
+  # broadcast affinity: the provider that accepted the funding tx is
+  # tried first on each poll, so MINED detection lands on the right
+  # ARC instance immediately.
+  #
+  # Returns the final status string.
+  def wait_for_mined(sdk:, dtxid:)
     deadline = monotonic_now + confirmation_timeout_s
     last_status = nil
 
     while monotonic_now < deadline
-      result = chain_services.call(:get_tx_status, txid: dtxid)
+      result = sdk[:engine].services.call(:get_tx_status, txid: dtxid)
       last_status = result&.data&.dig(:tx_status) || result&.data&.dig('tx_status')
 
       BSV::Wallet.emit('e2e.confirm.poll', dtxid: dtxid, status: last_status)
@@ -189,7 +185,7 @@ RSpec.describe 'e2e Phase 1 — drain + fund + confirm' do # rubocop:disable RSp
 
     # Step 5 — wait for confirmation on every funding tx
     final_statuses = funding_dtxids.each_with_object({}) do |(name, dtxid), acc|
-      acc[name] = wait_for_mined(dtxid: dtxid)
+      acc[name] = wait_for_mined(sdk: sdk, dtxid: dtxid)
     end
 
     BSV::Wallet.emit('e2e.phase1.complete',
