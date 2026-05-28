@@ -1,0 +1,239 @@
+# frozen_string_literal: true
+
+# CI integration stress-test: 3-wallet no_send payment cascade (HLR #129).
+#
+# Drives ~219 no_send payments across ALICE / BOB / CAROL using the
+# "Predicted Change Fanout" pattern from .claude/strategies/Feature-testing.md.
+# Each payment is 5_000 sats, recipient chosen at random (not-self), BEEF
+# handed off via Engine#internalize_action.
+#
+# Cascade per wallet (auto-fund picks largest spendable first via
+# Store#find_spendable's `ORDER BY satoshis DESC`):
+#   - Payment 1     consumes the 1m-sat root → 8 change × ~124k
+#   - Payments 2-9  consume each ~124k change → 8 change × ~14k each (× 8 → 64 × 14k)
+#   - Payments 10-73 consume each ~14k change → 8 change × ~1.1k each (× 64 → 512 × 1.1k)
+# Final per wallet: ~512 own L4 change + ~73 inbound from other wallets ≈ 585.
+# Across 3 wallets: ~1755 spendable outputs.
+#
+# Required environment:
+#   BSV_WALLET_WIF_ALICE  — Alice's wallet private key (WIF)
+#   BSV_WALLET_WIF_BOB    — Bob's wallet private key (WIF)
+#   BSV_WALLET_WIF_CAROL  — Carol's wallet private key (WIF)
+#
+# Each wallet address must hold ≥ 1_000_000 sats on chain. No payments
+# are broadcast — `no_send: true` throughout — so balances do not decay.
+
+require 'open3'
+require 'json'
+require 'securerandom'
+require 'sequel'
+require 'bsv-wallet'
+
+# Match BSV::Wallet::CLI.boot: load the repo-root .env so the spec process
+# sees the same DATABASE_URL_* / WIF_* the bin/ subprocesses do. Specs run
+# from gem/bsv-wallet, .env lives at the repo root.
+begin
+  require 'dotenv'
+  Dotenv.load(File.expand_path('../../../../.env', __dir__))
+rescue LoadError
+  # optional — env can come from shell profile or CI workflow
+end
+
+RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/DescribeClass
+  let(:payments_per_wallet) { (ENV['STRESS_PAYMENTS'] || 73).to_i }
+  let(:payment_sats)        { 5_000 }
+  let(:wallet_names)        { %w[alice bob carol].freeze }
+
+  let(:bin_dir) { File.expand_path('../../bin', __dir__) }
+  let(:identity_keys) do
+    wallet_names.to_h do |name|
+      wif = ENV.fetch("BSV_WALLET_WIF_#{name.upcase}")
+      pk = BSV::Primitives::PrivateKey.from_wif(wif)
+      [name, BSV::Wallet::KeyDeriver.new(private_key: pk).identity_key]
+    end
+  end
+
+  # Required env vars per wallet:
+  #   BSV_WALLET_WIF_{NAME}   — the wallet's private key (WIF)
+  #   DATABASE_URL_{NAME}     — Postgres URL (per-wallet DB)
+  # The wallet is Postgres-based by design; integration specs run against
+  # whatever +DATABASE_URL_*+ is in env (local +.env+ / direnv / CI). We do
+  # not override these — overriding strips the user's configuration.
+  before do
+    required_env = wallet_names.flat_map do |n|
+      %W[BSV_WALLET_WIF_#{n.upcase} DATABASE_URL_#{n.upcase}]
+    end
+    missing = required_env.reject { |k| ENV[k].to_s.strip.length.positive? }
+    skip "Missing env: #{missing.join(', ')}" unless missing.empty?
+
+    # Per-test isolation: TRUNCATE every table in each wallet's DB so each
+    # spec example starts from a clean slate. Sequel-level TRUNCATE works
+    # across Postgres + SQLite; CASCADE is Postgres-specific, but we don't
+    # need it here because the dependency order is handled by truncating
+    # all tables at once.
+    wallet_names.each { |w| reset_wallet_db(w) }
+  end
+
+  def reset_wallet_db(wallet)
+    db = Sequel.connect(ENV.fetch("DATABASE_URL_#{wallet.upcase}"))
+    begin
+      tables = db.tables - %i[schema_migrations schema_info]
+      return if tables.empty?
+
+      if db.database_type == :postgres
+        db.run("TRUNCATE TABLE #{tables.join(',')} RESTART IDENTITY CASCADE")
+      else
+        tables.each { |t| db[t].delete }
+      end
+    ensure
+      db.disconnect
+    end
+  end
+
+  def run_cli(tool, *args, stdin_data: nil)
+    cmd = [File.join(bin_dir, tool)] + args
+    # No env hash — Open3 inherits the parent's environment. The bin/
+    # subprocess's CLI.boot reads DATABASE_URL_* from .env / shell env.
+    stdout, stderr, status = Open3.capture3(*cmd, stdin_data: stdin_data, binmode: true)
+    unless status.success?
+      warn "  [#{tool} #{args.join(' ')}] failed (exit #{status.exitstatus}):"
+      warn stderr.gsub(/^/, '    ')
+    end
+    [stdout, stderr, status]
+  end
+
+  def balance(wallet, basket: 'default')
+    stdout, _, status = run_cli('balance', wallet, '--basket', basket)
+    expect(status).to be_success, "balance #{wallet} (#{basket}) failed"
+    stdout.strip.to_i
+  end
+
+  def list_outputs(wallet, basket: 'default', limit: 10_000)
+    stdout, _, status = run_cli('list_outputs', wallet, '--basket', basket, '--limit', limit.to_s)
+    expect(status).to be_success, "list_outputs #{wallet} (#{basket}) failed"
+    JSON.parse(stdout, symbolize_names: true)
+  end
+
+  # Total spendable across both baskets touched by the cascade — 'default'
+  # holds the wallet's own change, 'received' holds inbound payments.
+  def total_spendable(wallet)
+    default_outputs = list_outputs(wallet, basket: 'default')
+    received_outputs = list_outputs(wallet, basket: 'received')
+    (default_outputs[:total_outputs] || default_outputs[:total] || 0) +
+      (received_outputs[:total_outputs] || received_outputs[:total] || 0)
+  end
+
+  def total_balance(wallet)
+    balance(wallet, basket: 'default') + balance(wallet, basket: 'received')
+  end
+
+  # Action counts are the deterministic measure of cascade progress.
+  # Output counts depend on random not-self routing, Benford change
+  # distribution, and multi-input spends once own-change drops below
+  # the payment unit — non-deterministic across runs. Action counts are
+  # exact: one outbound per send_payment, one inbound per internalize.
+  def action_counts(wallet)
+    db = Sequel.connect(ENV.fetch("DATABASE_URL_#{wallet.upcase}"))
+    begin
+      {
+        total: db[:actions].count,
+        outbound: db[:actions].where(Sequel.like(:description, 'send %')).count,
+        inbound: db[:actions].where(description: 'received payment').count
+      }
+    ensure
+      db.disconnect
+    end
+  end
+
+  it 'cascades no_send payments across all wallets' do
+    # Phase 1 — Import: scan each wallet's root address for the 1m-sat seed
+    # UTXO. import_utxo's Phase 2 self-payment pays a small network fee for
+    # the derived output, so the post-import default-basket balance is ~1m
+    # sats minus a few dozen sats. Allow a 1000-sat margin to absorb fee
+    # variance across SDK version bumps.
+    wallet_names.each do |wallet|
+      _, _, status = run_cli('import', wallet)
+      expect(status).to be_success, "import #{wallet} failed"
+      bal = balance(wallet)
+      expect(bal).to be >= 999_000, "#{wallet} starting balance #{bal} < 999k sats (import likely failed)"
+    end
+
+    starting = wallet_names.to_h { |w| [w, total_balance(w)] }
+
+    # Phase 2 — Cascade: each wallet sends payments_per_wallet no_send payments
+    # to a randomly chosen not-self recipient. Auto-fund's largest-first selection
+    # produces the L2 → L3 → L4 fanout described in the strategy doc.
+    payment_log = Hash.new(0) # "alice→bob" => count
+    wallet_names.each do |sender|
+      others = wallet_names - [sender]
+      payments_per_wallet.times do |i|
+        recipient = others.sample
+        envelope, _, status = run_cli('create', sender, identity_keys[recipient], payment_sats.to_s)
+        expect(status).to be_success, "create #{sender}→#{recipient} (#{i + 1}/#{payments_per_wallet}) failed"
+        expect(envelope.bytesize).to be > 0
+
+        _, _, status = run_cli('receive', recipient, '--basket', 'received', stdin_data: envelope)
+        expect(status).to be_success, "receive #{sender}→#{recipient} (#{i + 1}/#{payments_per_wallet}) failed"
+
+        payment_log["#{sender}→#{recipient}"] += 1
+      end
+    end
+
+    # Phase 3 — Per-wallet final state. Action counts are deterministic
+    # (every send_payment makes one outbound action; every internalize
+    # makes one inbound action). Output counts are derived state and
+    # vary across runs — reported for visibility, not asserted.
+    final_state = wallet_names.to_h do |wallet|
+      [wallet, {
+        spendable_count: total_spendable(wallet),
+        balance: total_balance(wallet),
+        actions: action_counts(wallet)
+      }]
+    end
+
+    # Summary report (visible in test output for retrospective analysis).
+    warn "\n=== Stress cascade summary ==="
+    payment_log.sort.each { |route, n| warn "  #{route}: #{n} payments" }
+    warn '--- final state ---'
+    final_state.each do |wallet, state|
+      delta = state[:balance] - starting[wallet]
+      a = state[:actions]
+      warn "  #{wallet}: #{state[:spendable_count]} spendable, balance=#{state[:balance]} (Δ#{delta}), " \
+           "actions total=#{a[:total]} out=#{a[:outbound]} in=#{a[:inbound]}"
+    end
+    aggregate_outputs = final_state.values.sum { |s| s[:spendable_count] }
+    total_outbound   = final_state.values.sum { |s| s[:actions][:outbound] }
+    total_inbound    = final_state.values.sum { |s| s[:actions][:inbound] }
+    warn "  aggregate: #{aggregate_outputs} spendable outputs, " \
+         "#{total_outbound} outbound + #{total_inbound} inbound actions"
+    warn "===\n"
+
+    # Deterministic action-count invariants.
+    #
+    # Each sender makes exactly +payments_per_wallet+ outbound
+    # +send_payment+ calls. Each one produces exactly one outbound action
+    # on the sender's wallet and exactly one inbound +internalize_action+
+    # on the recipient's wallet. The system conserves: sum(outbound) ==
+    # sum(inbound) == +payments_per_wallet * wallet_names.length+ exactly.
+    #
+    # Output counts are derived from the cascade's selection / Benford /
+    # multi-input dynamics and vary across runs — they're reported above
+    # but not asserted.
+    expected_payments = payments_per_wallet * wallet_names.length
+    final_state.each do |wallet, state|
+      expect(state[:actions][:outbound]).to eq(payments_per_wallet),
+                                            "#{wallet}: #{state[:actions][:outbound]} outbound actions (expected #{payments_per_wallet})"
+    end
+    expect(total_outbound).to eq(expected_payments)
+    expect(total_inbound).to eq(expected_payments)
+
+    # Balance conservation — the whole loop is no_send so nothing was
+    # mined; the wallet's view of its balance shifts only by fees. Per
+    # wallet the magnitude is bounded by the sat volume in flight.
+    final_state.each do |wallet, state|
+      delta = starting[wallet] - state[:balance]
+      expect(delta.abs).to be < 1_000_000,
+                           "#{wallet}: balance moved by #{delta} (likely a fee or accounting bug)"
+    end
+  end
+end

@@ -23,11 +23,19 @@ RSpec.describe BSV::Network::ChainTracker do
   # Non-palindromic hex fixtures — reversing byte order produces a different
   # value, which catches byte-order bugs that palindromic strings (e.g. 'aa...')
   # would miss.
-  let(:merkle_root_hex) { '0123456789abcdef' * 4 }
-  let(:merkle_root_bin) { [merkle_root_hex].pack('H*') }
-  let(:wrong_root_hex) { 'fedcba9876543210' * 4 }
-  let(:block_hash_hex) { 'abcdef0123456789' * 4 }
-  let(:height) { 800_000 }
+  #
+  # Convention:
+  #   - +merkle_root_hex+: display-order hex (the SDK's MerklePath#compute_root_hex
+  #     output and WoC's API payload — what the ChainTracker accepts at its boundaries).
+  #   - +merkle_root_wire+: wire-order bytes (reverse) — what the +blocks+ table stores
+  #     internally, matching the wtxid convention.
+  let(:merkle_root_hex)   { '0123456789abcdef' * 4 }
+  let(:merkle_root_wire)  { [merkle_root_hex].pack('H*').reverse }
+  let(:wrong_root_hex)    { 'fedcba9876543210' * 4 }
+  let(:wrong_root_wire)   { [wrong_root_hex].pack('H*').reverse }
+  let(:block_hash_hex)    { 'abcdef0123456789' * 4 }
+  let(:block_hash_wire)   { [block_hash_hex].pack('H*').reverse }
+  let(:height)            { 800_000 }
 
   let(:services) { instance_double(BSV::Network::Services, call: nil) }
 
@@ -43,22 +51,21 @@ RSpec.describe BSV::Network::ChainTracker do
     context 'when the block exists in the store' do
       it 'returns true when the merkle root matches' do
         allow(store).to receive(:find_block).with(height: height)
-                                            .and_return(merkle_root: merkle_root_bin)
+                                            .and_return(merkle_root: merkle_root_wire)
 
         expect(tracker.valid_root_for_height?(merkle_root_hex, height)).to be true
       end
 
       it 'returns false when the merkle root does not match' do
-        other_bin = [wrong_root_hex].pack('H*')
         allow(store).to receive(:find_block).with(height: height)
-                                            .and_return(merkle_root: other_bin)
+                                            .and_return(merkle_root: wrong_root_wire)
 
         expect(tracker.valid_root_for_height?(merkle_root_hex, height)).to be false
       end
 
       it 'does not call the network' do
         allow(store).to receive(:find_block).with(height: height)
-                                            .and_return(merkle_root: merkle_root_bin)
+                                            .and_return(merkle_root: merkle_root_wire)
 
         tracker.valid_root_for_height?(merkle_root_hex, height)
         expect(services).not_to have_received(:call)
@@ -74,8 +81,8 @@ RSpec.describe BSV::Network::ChainTracker do
         expect(tracker.valid_root_for_height?(merkle_root_hex, height)).to be true
         expect(store).to have_received(:record_block_header).with(
           height: height,
-          merkle_root: merkle_root_hex,
-          block_hash: block_hash_hex
+          merkle_root: merkle_root_wire,
+          block_hash: block_hash_wire
         )
       end
 
@@ -107,7 +114,7 @@ RSpec.describe BSV::Network::ChainTracker do
       it 'hits the store on the second call, not the network' do
         # First call: store miss, network fetch
         allow(store).to receive(:find_block).with(height: height)
-                                            .and_return(nil, { merkle_root: merkle_root_bin })
+                                            .and_return(nil, { merkle_root: merkle_root_wire })
         allow(services).to receive(:call).with(:get_block_header, height).and_return(
           success('merkleroot' => merkle_root_hex, 'hash' => block_hash_hex, 'height' => height)
         )
@@ -137,7 +144,7 @@ RSpec.describe BSV::Network::ChainTracker do
         expect(tracker.valid_root_for_height?(merkle_root_hex, height)).to be true
         expect(store).to have_received(:record_block_header).with(
           height: height,
-          merkle_root: merkle_root_hex,
+          merkle_root: merkle_root_wire,
           block_hash: nil
         )
       end

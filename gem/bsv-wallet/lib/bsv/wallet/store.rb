@@ -900,6 +900,10 @@ module BSV
 
         paths = BSV::Transaction::MerklePath.from_binary(merkle_path_binary)
         mp = paths.is_a?(Array) ? paths.first : paths
+        # SDK's MerklePath#compute_root returns wire-order (LE) bytes —
+        # the canonical internal byte order for the blocks table (same
+        # convention as wtxid). Display-order conversion happens at
+        # boundaries (ChainTracker on SDK/WoC ingress, logging, JSON).
         mp&.compute_root
       rescue StandardError
         nil

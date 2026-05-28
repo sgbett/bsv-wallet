@@ -969,6 +969,38 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(record.block_id).not_to be_nil
       expect(record.merkle_path).to be_nil
     end
+
+    it 'derives the merkle root in wire-order bytes (chain_tracker alignment)' do
+      # Two writers touch the blocks table:
+      #   - find_or_create_block (this path) via derive_merkle_root
+      #   - chain_tracker.persist_block via WoC's display-order hex
+      # Both must agree on the DB's canonical byte order: wire-order
+      # (the wtxid convention — display-order conversion happens at the
+      # ChainTracker boundary on ingress and on SDK-output comparison).
+      # Regression for the bug surfaced by HLR #129's 3-wallet cascade:
+      # the chain_tracker's WoC path was storing display-order bytes
+      # while this writer stored wire-order. ChainTracker now converts
+      # both at ingress, so both writers now agree on wire-order in DB.
+      wtxid_bin = SecureRandom.random_bytes(32)
+      sibling = SecureRandom.random_bytes(32)
+      mp = BSV::Transaction::MerklePath.new(
+        block_height: 800_000,
+        path: [[
+          BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid_bin, txid: true),
+          BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling)
+        ]]
+      )
+
+      proof_with_path = proof_data
+                        .except(:merkle_root)
+                        .merge(merkle_path: mp.to_binary, height: 800_000)
+      store.save_proof(wtxid: wtxid, proof: proof_with_path)
+
+      record = BSV::Wallet::Store::Models::Block.first(height: 800_000)
+      # Mirror Store#derive_merkle_root's call shape: compute_root with no args,
+      # which picks the first hashed leaf from path[0] (matches production).
+      expect(record.merkle_root).to eq(mp.compute_root)
+    end
   end
 
   describe '#find_proof' do
