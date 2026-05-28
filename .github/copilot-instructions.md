@@ -11,14 +11,16 @@ The wallet is laid out as four collaborating layers. Engine-level "logical model
 - **`BSV::Wallet::Engine`** — Layer 3 orchestrator for the 28 BRC-100 methods. Pure logic, no SQL, no network I/O. Composes the funding primitives (`select_inputs`, `generate_change`), drives the 4-phase action lifecycle, and dispatches to `Engine::Broadcast` / `Engine::TxProof` for OMQ-shaped background work.
 - **`BSV::Wallet::Engine::Broadcast`** — logical model wrapping a `broadcasts` row. Lifecycle: `submit` (inline POST to ARC) and `poll_status` (delayed-broadcast catch-up). The OMQ entry points (`pull!`, `reply!`) are how the daemon's scheduler dispatches work. Outcome categorization (`categorize_outcome`, `categorize_reason`) lives here.
 - **`BSV::Wallet::Engine::TxProof`** — logical model wrapping a `tx_proofs` row. Lifecycle: `pull!` ingests proofs from ARC/network, normalizes merkle paths (binary / hex / TSC), and links proofs back to actions.
-- **`BSV::Wallet::Store`** — Layer 2a persistence. Owns multi-table atomicity (`@db.transaction do ... end`); never exposed to the Engine as Sequel models. SQLite and Postgres backends; selected via `DATABASE_URL`.
+- **`BSV::Wallet::Store`** — Layer 2a persistence. Owns multi-table atomicity (`@db.transaction do ... end`); never exposed to the Engine as Sequel models. **Postgres is the primary backend** (`bytea`, native `uuid`, ENUM types, CHECK constraints, RESTRICT FK semantics); SQLite is a convenience for local iteration and CI-without-services runs. Selected via `DATABASE_URL`.
 - **`BSV::Wallet::Store::UTXOPool`** — Layer 2a UTXO selection. Three-tier evolution (simple select → pre-split → TxCache) — current code is tier 1.
 - **`BSV::Network::Services`** — Layer 2a network routing. Capability-based provider dispatch, per-provider rate limiting (TokenBucket), bounded backoff on retryable responses (429 / 5xx). Multiple providers can serve the same command; failover is automatic.
 - **`BSV::Network::ChainTracker`** — Layer 2a write-through cache for block headers. Backs SDK's `Transaction#verify` for SPV.
 - **`BSV::Wallet::Daemon`** + **`Scheduler`** — Layer 2a concurrency. Async reactor hosting `Engine::Broadcast#pull!`, `Engine::Broadcast#reply!`, `Engine::TxProof#pull!` as fibers fed by the scheduler's discovery loops (`pending_pushes`, `pending_polls`, `pending` proofs).
 - **Sequel models** under `Store::Models::*` (`Action`, `Output`, `Input`, `Spendable`, `Broadcast`, `TxProof`, `Block`, …) — Layer 2b atomic DB rows. Engine never reaches across the boundary to a model.
 
-Single gem (`bsv-wallet`) supports both SQLite and PostgreSQL backends through `DATABASE_URL`. Tests default to SQLite; integration specs can opt into Postgres.
+Single gem (`bsv-wallet`) supports both Postgres (primary) and SQLite (convenience) through `DATABASE_URL`. The wallet is Postgres-based by design — schema features and constraints assume Postgres semantics. SQLite carries them via translation for fast logic-only specs.
+
+Unit specs branch on `DATABASE_URL` — unset / sqlite → SQLite, `postgres://` → Postgres — and CI runs both in a matrix. Integration specs run against Postgres (locally via `.env`-supplied `DATABASE_URL_*` URLs, in CI via the Postgres service container). Anything Postgres-specific (CHECK violations, ENUM rejections, RESTRICT FK, the `prevent_outbound_spendable` trigger) MUST be covered by a spec running against Postgres.
 
 ## The 4-Phase Action Lifecycle
 
@@ -127,6 +129,13 @@ Engine ↔ Store communication uses plain hashes — no Sequel models cross the 
 - Store methods return `Hash` / `Array<Hash>`, never `Sequel::Model`
 - Engine never calls `.reload`, `.dataset`, `.update` (model methods)
 - Binary columns (`wtxid`, `raw_tx`, `locking_script`, `merkle_root`, `block_hash`) stay `Encoding::BINARY` through the boundary
+
+### Postgres-Primary Backend
+
+Postgres is the production target; SQLite is a convenience for fast logic-only specs. Review changes that touch persistence with that order in mind:
+- New schema features should use Postgres-native types where the design calls for them (`bytea`, `uuid`, ENUM, CHECK). SQLite carries them via translation.
+- New behaviour that relies on a Postgres-specific constraint (NOT NULL CHECK, ENUM rejection, RESTRICT FK, the `prevent_outbound_spendable` trigger) MUST have a spec that runs against Postgres — SQLite carries the schema via translation and won't surface the regression.
+- New DB-touching test helpers must read the configured DB URL, never hardcode `sqlite://`. Integration specs use the `.env`-supplied `DATABASE_URL_*` URLs (Postgres) locally and the CI Postgres service in CI — overriding with sqlite tmpdir paths silently strips Postgres coverage from the bin/ porcelain layer.
 
 ## What NOT to Flag
 
