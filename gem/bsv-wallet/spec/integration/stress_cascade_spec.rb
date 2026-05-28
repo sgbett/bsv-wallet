@@ -24,11 +24,20 @@
 # are broadcast — `no_send: true` throughout — so balances do not decay.
 
 require 'open3'
-require 'tmpdir'
-require 'fileutils'
 require 'json'
 require 'securerandom'
+require 'sequel'
 require 'bsv-wallet'
+
+# Match BSV::Wallet::CLI.boot: load the repo-root .env so the spec process
+# sees the same DATABASE_URL_* / WIF_* the bin/ subprocesses do. Specs run
+# from gem/bsv-wallet, .env lives at the repo root.
+begin
+  require 'dotenv'
+  Dotenv.load(File.expand_path('../../../../.env', __dir__))
+rescue LoadError
+  # optional — env can come from shell profile or CI workflow
+end
 
 RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/DescribeClass
   let(:payments_per_wallet) { (ENV['STRESS_PAYMENTS'] || 73).to_i }
@@ -36,13 +45,6 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
   let(:wallet_names)        { %w[alice bob carol].freeze }
 
   let(:bin_dir) { File.expand_path('../../bin', __dir__) }
-  let(:tmpdir)  { Dir.mktmpdir("bsv_wallet_stress_#{SecureRandom.hex(4)}_") }
-  let(:db_urls) do
-    wallet_names.to_h { |name| [name, "sqlite://#{File.join(tmpdir, "#{name}.db")}"] }
-  end
-  let(:env) do
-    db_urls.each_with_object({}) { |(name, url), acc| acc["DATABASE_URL_#{name.upcase}"] = url }
-  end
   let(:identity_keys) do
     wallet_names.to_h do |name|
       wif = ENV.fetch("BSV_WALLET_WIF_#{name.upcase}")
@@ -51,19 +53,48 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
     end
   end
 
+  # Required env vars per wallet:
+  #   BSV_WALLET_WIF_{NAME}   — the wallet's private key (WIF)
+  #   DATABASE_URL_{NAME}     — Postgres URL (per-wallet DB)
+  # The wallet is Postgres-based by design; integration specs run against
+  # whatever +DATABASE_URL_*+ is in env (local +.env+ / direnv / CI). We do
+  # not override these — overriding strips the user's configuration.
   before do
-    missing = wallet_names.map { |n| "BSV_WALLET_WIF_#{n.upcase}" }
-                          .reject { |k| ENV[k].to_s.strip.length.positive? }
+    required_env = wallet_names.flat_map do |n|
+      %W[BSV_WALLET_WIF_#{n.upcase} DATABASE_URL_#{n.upcase}]
+    end
+    missing = required_env.reject { |k| ENV[k].to_s.strip.length.positive? }
     skip "Missing env: #{missing.join(', ')}" unless missing.empty?
+
+    # Per-test isolation: TRUNCATE every table in each wallet's DB so each
+    # spec example starts from a clean slate. Sequel-level TRUNCATE works
+    # across Postgres + SQLite; CASCADE is Postgres-specific, but we don't
+    # need it here because the dependency order is handled by truncating
+    # all tables at once.
+    wallet_names.each { |w| reset_wallet_db(w) }
   end
 
-  after do
-    FileUtils.rm_rf(tmpdir) if File.directory?(tmpdir)
+  def reset_wallet_db(wallet)
+    db = Sequel.connect(ENV.fetch("DATABASE_URL_#{wallet.upcase}"))
+    begin
+      tables = db.tables - %i[schema_migrations schema_info]
+      return if tables.empty?
+
+      if db.database_type == :postgres
+        db.run("TRUNCATE TABLE #{tables.join(',')} RESTART IDENTITY CASCADE")
+      else
+        tables.each { |t| db[t].delete }
+      end
+    ensure
+      db.disconnect
+    end
   end
 
   def run_cli(tool, *args, stdin_data: nil)
     cmd = [File.join(bin_dir, tool)] + args
-    stdout, stderr, status = Open3.capture3(env, *cmd, stdin_data: stdin_data, binmode: true)
+    # No env hash — Open3 inherits the parent's environment. The bin/
+    # subprocess's CLI.boot reads DATABASE_URL_* from .env / shell env.
+    stdout, stderr, status = Open3.capture3(*cmd, stdin_data: stdin_data, binmode: true)
     unless status.success?
       warn "  [#{tool} #{args.join(' ')}] failed (exit #{status.exitstatus}):"
       warn stderr.gsub(/^/, '    ')
@@ -101,13 +132,8 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
   # distribution, and multi-input spends once own-change drops below
   # the payment unit — non-deterministic across runs. Action counts are
   # exact: one outbound per send_payment, one inbound per internalize.
-  #
-  # Uses the same +db_urls+ the bin/ subprocesses inherit, so this stays
-  # backend-agnostic (sqlite tmpdir today; Postgres if a future
-  # DATABASE_URL_* override points there).
   def action_counts(wallet)
-    require 'sequel'
-    db = Sequel.connect(db_urls[wallet])
+    db = Sequel.connect(ENV.fetch("DATABASE_URL_#{wallet.upcase}"))
     begin
       {
         total: db[:actions].count,

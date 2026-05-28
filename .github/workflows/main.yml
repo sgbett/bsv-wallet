@@ -72,6 +72,20 @@ jobs:
     runs-on: ubuntu-latest
     name: Integration (CLI porcelain pipeline)
 
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v6
 
@@ -84,9 +98,19 @@ jobs:
         run: bundle install
         working-directory: gem/bsv-wallet
 
+      - name: Create per-wallet Postgres databases
+        run: |
+          for db in alice bob carol; do
+            PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -c "CREATE DATABASE bsv_wallet_${db};"
+          done
+
       - name: Run integration specs
         run: bundle exec rspec spec/integration
         working-directory: gem/bsv-wallet
         env:
           BSV_WALLET_WIF_ALICE: ${{ secrets.BSV_WALLET_WIF_ALICE }}
           BSV_WALLET_WIF_BOB: ${{ secrets.BSV_WALLET_WIF_BOB }}
+          BSV_WALLET_WIF_CAROL: ${{ secrets.BSV_WALLET_WIF_CAROL }}
+          DATABASE_URL_ALICE: postgres://postgres:postgres@localhost:5433/bsv_wallet_alice
+          DATABASE_URL_BOB: postgres://postgres:postgres@localhost:5433/bsv_wallet_bob
+          DATABASE_URL_CAROL: postgres://postgres:postgres@localhost:5433/bsv_wallet_carol
