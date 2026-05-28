@@ -150,6 +150,19 @@ RSpec.describe BSV::Wallet::Daemon do
 
       expect(log_output.string).to include('[event] daemon.stopped reason=signal')
     end
+
+    it 'is idempotent — repeat calls emit daemon.stopped only once' do
+      task = instance_double(Async::Task)
+      allow(task).to receive(:stop)
+      daemon.instance_variable_set(:@task, task)
+
+      daemon.stop!
+      daemon.stop!
+      daemon.stop!
+
+      expect(log_output.string.scan('daemon.stopped').size).to eq(1)
+      expect(task).to have_received(:stop).once
+    end
   end
 
   # Trap handlers run in MRI signal-trap context, where Mutex#synchronize
@@ -212,6 +225,24 @@ RSpec.describe BSV::Wallet::Daemon do
         expect(scheduler).to have_received(:shutdown)
         expect(log_output.string).to include('[event] daemon.stopped reason=signal')
       end
+    end
+
+    it 'watcher thread self-terminates when @task finishes without @stop_requested' do
+      thread_count_before = Thread.list.size
+
+      Async do |task|
+        daemon.run!
+        task.stop
+      end
+
+      # Watcher polls every 0.1s. Once @task.finished? becomes true
+      # (after the Async block returns) the next tick exits the loop.
+      # Give it 3 ticks of headroom.
+      deadline = Time.now + 0.5
+      sleep 0.05 until Thread.list.size <= thread_count_before || Time.now > deadline
+
+      expect(Thread.list.size).to eq(thread_count_before)
+      expect(scheduler).not_to have_received(:shutdown)
     end
   end
 end
