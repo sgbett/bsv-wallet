@@ -60,6 +60,75 @@ RSpec.describe BSV::Wallet do # rubocop:disable RSpec/SpecFilePathFormat
       expect { described_class.emit('foo', a: 1) }.not_to raise_error
     end
 
+    context 'with BSV::Wallet.event_log configured' do
+      let(:event_buffer) { StringIO.new }
+      let(:event_log) { Logger.new(event_buffer) }
+
+      around do |example|
+        original = described_class.event_log
+        described_class.event_log = event_log
+        example.run
+      ensure
+        described_class.event_log = original
+      end
+
+      def event_log_output
+        event_buffer.string
+      end
+
+      it 'writes the canonical [event] line to event_log alongside BSV.logger' do
+        described_class.emit('task.succeeded', task: 'broadcast_push', id: 42)
+
+        expect(event_log_output).to match(/\[event\] task\.succeeded task=broadcast_push id=42/)
+        expect(logged_output).to include('[event] task.succeeded task=broadcast_push id=42')
+      end
+
+      it 'event_log lines start with ISO-8601 timestamp (no Logger prefix junk)' do
+        described_class.emit('foo', a: 1)
+
+        # Format: 2026-05-28T12:34:56.789Z [event] foo a=1
+        expect(event_log_output).to match(/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[event\] foo a=1\n\z/)
+      end
+
+      it 'event_log lines have no severity / pid / progname prefix' do
+        described_class.emit('foo')
+
+        # Standard Logger format would include "INFO -- :" or similar.
+        expect(event_log_output).not_to include('INFO')
+        expect(event_log_output).not_to match(/--\s*:/)
+      end
+
+      it 'still emits when BSV.logger is nil but event_log is set' do
+        BSV.logger = nil
+        described_class.emit('foo', a: 1)
+
+        expect(event_log_output).to include('[event] foo a=1')
+      end
+    end
+
+    context 'event_log= setter' do
+      it 'returns the assigned logger' do
+        log = Logger.new(StringIO.new)
+        expect(described_class.event_log = log).to eq(log)
+      ensure
+        described_class.event_log = nil
+      end
+
+      it 'auto-applies the canonical formatter to the assigned logger' do
+        log = Logger.new(StringIO.new)
+        described_class.event_log = log
+        expect(log.formatter).to eq(BSV::Wallet::EVENT_LOG_FORMATTER)
+      ensure
+        described_class.event_log = nil
+      end
+
+      it 'accepts nil to disable the sink' do
+        described_class.event_log = Logger.new(StringIO.new)
+        described_class.event_log = nil
+        expect(described_class.event_log).to be_nil
+      end
+    end
+
     it 'stringifies symbol values via to_s' do
       described_class.emit('foo', outcome: :accepted)
 

@@ -1,10 +1,24 @@
 # frozen_string_literal: true
 
+require 'time'
+
 module BSV
   module Wallet
     # Structured event emission for wallet daemon observability.
     #
-    # Writes a single line to BSV.logger at :info level. Format:
+    # Writes a single line — same content — to up to two sinks:
+    #
+    # 1. +BSV.logger+ (SDK-level, default debug-mode logger). The line
+    #    goes through whatever formatter that logger has, mixed in with
+    #    +[Store]+ / +[Engine]+ / +[Protocol]+ debug spam. Suitable for
+    #    interactive development.
+    #
+    # 2. +BSV::Wallet.event_log+ (opt-in, wallet-scoped). Canonical
+    #    +<ISO-8601> [event] name key=value …+ format with no Logger
+    #    prefix junk; suitable for +tail -f+ / +grep+ over a sustained
+    #    run (per the #126 e2e harness's observability contract).
+    #
+    # Line format:
     #
     #   [event] <name> key=value key=value ...
     #
@@ -27,14 +41,41 @@ module BSV
     #   task.failed          task=X id=N latency_ms=M reason=...
     #   task.aborted         task=X id=N reason=... arc_status=...
     #   task.skipped         task=X id=N reason=...
-    #
+
+    # Canonical formatter for the event_log sink. Produces lines that
+    # tail/grep cleanly without the standard Logger date/severity/PID
+    # prefix.
+    EVENT_LOG_FORMATTER = lambda do |_severity, datetime, _progname, msg|
+      "#{datetime.utc.iso8601(3)} #{msg}\n"
+    end
+
+    class << self
+      # Opt-in per-event log sink. When set, emit writes the canonical
+      # +[event] name key=value …+ line here AND to +BSV.logger+ (if set).
+      # The setter auto-applies {EVENT_LOG_FORMATTER} so the sink's lines
+      # are always tail/grep-friendly regardless of the caller's
+      # +Logger.new+ defaults.
+      #
+      # @example wire a per-run logfile from a harness
+      #   require 'logger'
+      #   BSV::Wallet.event_log = Logger.new('tmp/e2e.log')
+      attr_reader :event_log
+
+      def event_log=(logger)
+        logger.formatter = EVENT_LOG_FORMATTER if logger
+        @event_log = logger
+      end
+    end
+
     def self.emit(name, **payload)
-      return unless BSV.logger
+      return if BSV.logger.nil? && @event_log.nil?
 
       fields = payload.map { |k, v| format_field(k, v) }.compact.join(' ')
       message = "[event] #{name}"
       message = "#{message} #{fields}" unless fields.empty?
-      BSV.logger.info(message)
+
+      BSV.logger&.info(message)
+      @event_log&.info(message)
     end
 
     # Format a single key=value pair for structured log output.
