@@ -4,6 +4,17 @@ require 'net/http'
 require 'base64'
 
 RSpec.describe BSV::Network::Services do
+  # Skip backoff sleeps in tests — retry behaviour is asserted via call counts
+  # and final results; we don't need the real wall-clock delay here. Pinned
+  # to BSV::Network::Services explicitly so the stub doesn't bleed onto the
+  # nested TokenBucket describe (which has no backoff_sleep).
+  before do
+    # Pinned to BSV::Network::Services explicitly (not described_class) so the
+    # stub doesn't bleed onto the nested TokenBucket describe, which has no
+    # backoff_sleep.
+    allow_any_instance_of(BSV::Network::Services).to receive(:backoff_sleep) # rubocop:disable RSpec/AnyInstance,RSpec/DescribedClass
+  end
+
   # --- Test helpers ---
 
   def stub_provider(name, commands_hash, rate_limit: nil)

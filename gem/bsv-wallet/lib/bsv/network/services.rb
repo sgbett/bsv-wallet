@@ -49,9 +49,7 @@ module BSV
         last_error = nil
 
         candidates.each do |provider|
-          acquire_rate_limit!(provider)
-
-          result = provider.call(sym, *args, **kwargs)
+          result = call_with_backoff(provider, sym, args, kwargs)
 
           if result.http_success?
             stash_siblings(sym, result, args, kwargs)
@@ -67,6 +65,39 @@ module BSV
         end
 
         last_error
+      end
+
+      # Backoff attempts for a single provider after the TokenBucket has
+      # released a request slot. Distinguishes "wallet-side spacing"
+      # (TokenBucket) from "provider-side rate-limit / transient 5xx"
+      # (retry-with-backoff). Returns the final +ProtocolResponse+ after
+      # exhausting attempts.
+      RETRYABLE_ATTEMPTS = 3
+      RETRYABLE_BACKOFF_BASE_S = 1.0
+
+      def call_with_backoff(provider, sym, args, kwargs)
+        result = nil
+        RETRYABLE_ATTEMPTS.times do |attempt|
+          acquire_rate_limit!(provider)
+          result = provider.call(sym, *args, **kwargs)
+          return result if result.http_success? || !result.retryable?
+
+          break if attempt == RETRYABLE_ATTEMPTS - 1
+
+          sleep_for = RETRYABLE_BACKOFF_BASE_S * (2**attempt)
+          BSV.logger&.debug do
+            "[Services] provider=#{provider.name} cmd=#{sym} retryable response; " \
+              "backing off #{sleep_for}s (attempt #{attempt + 1}/#{RETRYABLE_ATTEMPTS})"
+          end
+          backoff_sleep(sleep_for)
+        end
+        result
+      end
+
+      # Indirection so specs can stub backoff to zero without monkey-patching
+      # +Kernel#sleep+ globally.
+      def backoff_sleep(seconds)
+        sleep(seconds)
       end
 
       # Union of all commands available across all registered providers.
