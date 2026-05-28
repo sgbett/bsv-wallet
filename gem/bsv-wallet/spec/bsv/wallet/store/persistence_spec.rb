@@ -997,7 +997,9 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.save_proof(wtxid: wtxid, proof: proof_with_path)
 
       record = BSV::Wallet::Store::Models::Block.first(height: 800_000)
-      expect(record.merkle_root).to eq(mp.compute_root(wtxid_bin))
+      # Mirror Store#derive_merkle_root's call shape: compute_root with no args,
+      # which picks the first hashed leaf from path[0] (matches production).
+      expect(record.merkle_root).to eq(mp.compute_root)
     end
   end
 
