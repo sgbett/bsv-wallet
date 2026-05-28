@@ -43,10 +43,37 @@ module BSV
           Models::Output.spendable.count
         end
 
+        def smallest(limit:)
+          ordered_spendable(order: :asc, limit: limit)
+        end
+
+        def largest(limit:)
+          ordered_spendable(order: :desc, limit: limit)
+        end
+
         def change_output_count
           target = [@max_utxo_count, balance / @min_utxo_sats].min
           deficit = target - spendable_count
           deficit.clamp(1, @max_change_per_tx)
+        end
+
+        private
+
+        def ordered_spendable(order:, limit:)
+          return [] if limit <= 0
+
+          ds = Models::Output.spendable
+          ds = order == :asc ? ds.order(:satoshis) : ds.order(Sequel.desc(:satoshis))
+          ds.limit(limit).all.map do |o|
+            {
+              id: o.id, satoshis: o.satoshis,
+              vout: o.vout, action_id: o.action_id,
+              locking_script: o.locking_script,
+              derivation_prefix: o.derivation_prefix,
+              derivation_suffix: o.derivation_suffix,
+              sender_identity_key: o.sender_identity_key
+            }
+          end
         end
       end
     end

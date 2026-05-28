@@ -65,6 +65,29 @@ module BSV
           raise NotImplementedError
         end
 
+        # Return the +limit+ smallest spendable outputs by satoshi value.
+        #
+        # Advisory only — like {#select}, the returned candidates are NOT
+        # locked. Used by consolidation strategies that target the dustier
+        # tail of the UTXO set.
+        #
+        # @param limit [Integer] maximum number of candidates to return
+        # @return [Array<Hash>] candidates ordered by satoshis ASC, same shape as {#select}
+        def smallest(limit:)
+          raise NotImplementedError
+        end
+
+        # Return the +limit+ largest spendable outputs by satoshi value.
+        #
+        # Advisory only. Used alongside {#smallest} by consolidation
+        # strategies (small inputs + one anchor large input).
+        #
+        # @param limit [Integer] maximum number of candidates to return
+        # @return [Array<Hash>] candidates ordered by satoshis DESC, same shape as {#select}
+        def largest(limit:)
+          raise NotImplementedError
+        end
+
         # How many change outputs the next transaction should create.
         #
         # Uses a sizing formula to grow the pool toward a target count:

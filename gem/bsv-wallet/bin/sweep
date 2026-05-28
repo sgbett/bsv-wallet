@@ -1,0 +1,41 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Sweep every spendable output to a single recipient (less fee).
+#
+# Builds one no_send transaction consuming all spendable UTXOs and
+# emitting a single P2PKH output to the recipient's BRC-42 derived
+# address. Used by the #130 consolidation dry-run and the #126 on-chain
+# sweep-back to the SDK identity.
+#
+# Usage:
+#   bin/sweep [wallet] --to <identity_key_hex>
+#
+# Prints sweep summary to stderr; final balance to stdout.
+
+require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+
+options = {}
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/sweep [wallet] --to <identity_key_hex>'
+  opts.on('--to KEY', 'Recipient compressed pubkey (66-char hex, 02/03 prefix)') { |v| options[:to] = v }
+end.parse!(args)
+
+abort 'Missing --to <identity_key_hex>' unless options[:to]
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+engine = ctx[:engine]
+
+result = engine.sweep(recipient: options[:to])
+if result.nil?
+  warn 'nothing to sweep — wallet has no spendable outputs'
+  $stdout.puts 0
+  exit 0
+end
+
+balance = ctx[:utxo_pool].balance
+$stdout.puts balance
+warn "swept to #{options[:to][0..15]}...; dtxid=#{result[:txid].reverse.unpack1('H*')}, remaining balance=#{balance} sats"

@@ -1,0 +1,45 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Consolidate dustier UTXOs into a single self-payment.
+#
+# Loops Engine#consolidate_step until the wallet has fewer than
+# +target_inputs+ spendable outputs. Each step consumes the
+# +target_inputs+ smallest spendable outputs plus the largest as an
+# anchor, producing one BRC-42 self-derived output. All steps are
+# no_send (no broadcast).
+#
+# Usage:
+#   bin/consolidate [wallet] [--target-inputs N]
+#
+# Prints summary to stderr; final spendable count to stdout.
+
+require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+
+options = { target_inputs: 20 }
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/consolidate [wallet] [--target-inputs N]'
+  opts.on('--target-inputs N', Integer, 'Inputs consumed per step (default: 20)') { |v| options[:target_inputs] = v }
+end.parse!(args)
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+engine = ctx[:engine]
+
+steps = 0
+loop do
+  result = engine.consolidate_step(target_inputs: options[:target_inputs])
+  break if result.nil?
+
+  steps += 1
+  warn "consolidation step #{steps}: dtxid=#{result[:txid].reverse.unpack1('H*')}"
+end
+
+# Pool snapshot after consolidation.
+balance = ctx[:utxo_pool].balance
+count = ctx[:utxo_pool].spendable_count
+
+$stdout.puts count
+warn "consolidated #{steps} step(s); #{count} spendable output(s), #{balance} sats"

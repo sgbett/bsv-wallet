@@ -99,7 +99,7 @@ module BSV
                         lock_time: nil, version: nil, labels: nil,
                         sign_and_process: true, accept_delayed_broadcast: true,
                         trust_self: nil, return_txid_only: false,
-                        no_send: false,
+                        no_send: false, change_count: nil,
                         randomize_outputs: true, originator: nil)
         validate_description!(description)
         validate_create_action_params!(inputs: inputs, outputs: outputs)
@@ -149,7 +149,9 @@ module BSV
         # count so target sizing reflects the wallet's full pool.
         output_total = outputs&.sum { |o| o[:satoshis] || 0 } || 0
         pre_lock_balance = @utxo_pool.balance
-        pre_lock_change_count = @utxo_pool.change_output_count
+        # +change_count:+ kwarg overrides the pool's grooming heuristic. Use
+        # cases: consolidation (target a single output), explicit-cap callers.
+        pre_lock_change_count = change_count || @utxo_pool.change_output_count
         enforce_headroom_against!(pre_lock_balance, output_total) unless deferred
 
         # Phase 1: resolve initial inputs and lock the action.
@@ -487,41 +489,29 @@ module BSV
         # Fetch and link merkle proof if mined
         fetch_and_link_proof(import_action[:id], wtxid, dtxid, raw_tx)
 
-        # Phase 2: Self-payment to derived address
-
-        derivation_prefix = random_derivation
-        derivation_suffix = '1'
-        derived_pub = @key_deriver.derive_public_key(
-          protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
-        )
-        derived_script = BSV::Script::Script.p2pkh_lock(
-          BSV::Primitives::Digest.hash160(derived_pub)
-        ).to_binary
-
-        fee = 1 # token fee for no_send self-payment (BRC-67: inputs > outputs)
-        self_payment_sats = satoshis - fee
-        raise BSV::Wallet::Error, "insufficient sats for self-payment (#{satoshis} - #{fee} fee)" if self_payment_sats <= 0
-
-        # Bootstrap self-payment bypasses limp mode — this is how the
-        # wallet gets funded in the first place.
+        # Phase 2: Self-payment to a BRC-42-derived address.
+        #
+        # We delegate change derivation to the funding loop with
+        # +change_count: 1+ and +outputs: []+: +generate_change+ picks a
+        # fresh BRC-42 self-key, computes the exact fee from the templated
+        # tx, and writes a single +sum(inputs) - fee+ output. Bootstrap
+        # bypasses limp mode + headroom since this is how the wallet gets
+        # funded in the first place.
         @bypass_limp_mode = true
         begin
           create_action(
             description: 'import self-payment',
             inputs: [{ output_id: imported_output_id }],
-            outputs: [{
-              satoshis: self_payment_sats, locking_script: derived_script,
-              derivation_prefix: derivation_prefix, derivation_suffix: derivation_suffix,
-              sender_identity_key: @key_deriver.identity_key
-            }],
-            no_send: true, randomize_outputs: false
+            outputs: [],
+            no_send: true, randomize_outputs: false,
+            change_count: 1
           )
         ensure
           @bypass_limp_mode = false
         end
 
-        BSV.logger&.debug { "[Engine] import_utxo complete: #{self_payment_sats} sats on derived address" }
-        { imported: true, satoshis: self_payment_sats, dtxid: dtxid }
+        BSV.logger&.debug { "[Engine] import_utxo complete: #{satoshis} sats imported (less fee)" }
+        { imported: true, satoshis: satoshis, dtxid: dtxid }
       end
 
       # --- Porcelain ---
@@ -726,6 +716,102 @@ module BSV
             derivation_suffix: derivation_suffix
           }]
         }
+      end
+
+      # Consolidate the dustier tail of the UTXO set into a single self-payment.
+      #
+      # Picks the +target_inputs+ smallest spendable outputs plus the 1
+      # largest (as an anchor that guarantees fee coverage even when the
+      # smallest are below the per-input marginal fee), then dispatches a
+      # +no_send+ +create_action+ with +change_count: 1+ so the funding
+      # loop produces a single BRC-42 self-payment.
+      #
+      # @param target_inputs [Integer] minimum smallest outputs to consume per step
+      # @return [Hash, nil] the +create_action+ result, or +nil+ if there are
+      #   fewer than +target_inputs+ spendable outputs (the loop's natural exit).
+      def consolidate_step(target_inputs: 20)
+        require_key_deriver!
+        smallest = @utxo_pool.smallest(limit: target_inputs)
+        return nil if smallest.length < target_inputs
+
+        largest = @utxo_pool.largest(limit: 1)
+        # Dedupe — when the pool has exactly +target_inputs+ outputs, the
+        # largest may already appear in the smallest set.
+        merged = (smallest + largest).uniq { |o| o[:id] }
+        input_specs = merged.each_with_index.map { |o, i| { output_id: o[:id], vin: i } }
+
+        create_action(
+          description: 'consolidation',
+          inputs: input_specs,
+          outputs: [],
+          no_send: true,
+          change_count: 1
+        )
+      end
+
+      # Sweep every spendable output to a single recipient (less fee).
+      #
+      # Selects all spendable outputs, derives a BRC-42 P2PKH locking script
+      # for the recipient, and dispatches a +no_send+ +create_action+ that
+      # consumes all inputs and emits one caller output. Any rounding surplus
+      # against the actual fee is dropped (zero-survival on the single
+      # change-key slot the funding loop derives, since +generate_change+
+      # requires +change_count >= 1+).
+      #
+      # @param recipient [String] 66-char compressed pubkey hex (02/03)
+      # @return [Hash, nil] the +create_action+ result, or +nil+ when the
+      #   wallet has no spendable outputs.
+      def sweep(recipient:)
+        require_key_deriver!
+        validate_recipient_key!(recipient)
+
+        all_spendable = @utxo_pool.largest(limit: @utxo_pool.spendable_count)
+        return nil if all_spendable.empty?
+
+        total = all_spendable.sum { |o| o[:satoshis] }
+        input_specs = all_spendable.each_with_index.map { |o, i| { output_id: o[:id], vin: i } }
+
+        # Estimate fee from the templated tx +generate_change+ will build:
+        #   tx overhead (~10 B) + N P2PKH inputs (~148 B each) + 1 caller
+        #   output (~34 B) + 1 change-key output (~34 B, dust-dropped on
+        #   success but counted by +compute_fee+).
+        # Matches the FeeModel the funding loop uses so the exact-fee check
+        # finds either zero or near-zero surplus.
+        estimated_size = 10 + (all_spendable.length * 148) + 34 + 34
+        fee = (estimated_size / 1000.0 * 100).ceil
+
+        derivation_prefix = random_derivation
+        derivation_suffix = '1'
+        derived_pub = @key_deriver.derive_public_key(
+          protocol_id: [2, derivation_prefix], key_id: derivation_suffix,
+          counterparty: recipient, for_self: true
+        )
+        locking_script = BSV::Script::Script.p2pkh_lock(
+          BSV::Primitives::Digest.hash160(derived_pub)
+        ).to_binary
+
+        # Sweep is an explicit "drain everything" operation — by definition it
+        # takes the balance below the limp threshold. Bypass the guard here;
+        # the caller knows what they asked for.
+        #
+        # The output spec omits +derivation_prefix+ / +sender_identity_key+:
+        # those would make the wallet treat the sweep target as its own
+        # BRC-42 owned output (output_type NULL + derivation = ownership
+        # marker per schema-intent §3). For an outbound payment we want
+        # +output_type = 'outbound'+ so the wallet doesn't insert a
+        # +spendable+ row for it. send_payment follows the same convention.
+        @bypass_limp_mode = true
+        begin
+          create_action(
+            description: 'sweep',
+            inputs: input_specs,
+            outputs: [{ satoshis: total - fee, locking_script: locking_script }],
+            no_send: true, randomize_outputs: false,
+            change_count: 1
+          )
+        ensure
+          @bypass_limp_mode = false
+        end
       end
 
       # --- Public Key Management (codes 8-10) ---
@@ -1445,6 +1531,8 @@ module BSV
       # pre-flight and exact post-loop checks — once inputs are locked,
       # @utxo_pool.balance no longer reflects the wallet's full pool.
       def enforce_headroom_against!(balance, spending)
+        return if @bypass_limp_mode
+
         projected = balance - spending
         return unless projected < @limp_threshold
 
