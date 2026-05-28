@@ -151,4 +151,67 @@ RSpec.describe BSV::Wallet::Daemon do
       expect(log_output.string).to include('[event] daemon.stopped reason=signal')
     end
   end
+
+  # Trap handlers run in MRI signal-trap context, where Mutex#synchronize
+  # and Kernel#sleep raise ThreadError. Scheduler#shutdown uses both, so
+  # the trap only flips @stop_requested and an off-reactor watcher
+  # performs the drain.
+  describe 'signal handling' do
+    let(:trap_blocks) { {} }
+
+    before do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
+        .with(store: store, services: services).and_return(broadcast)
+      allow(BSV::Wallet::Engine::TxProof).to receive(:new)
+        .with(store: store, services: services).and_return(tx_proof)
+      allow(BSV::Wallet::Scheduler).to receive(:new)
+        .with(store: store).and_return(scheduler)
+
+      allow(broadcast).to receive_messages(pull!: broadcast, reply!: broadcast)
+      allow(tx_proof).to receive(:pull!).and_return(tx_proof)
+      allow(scheduler).to receive(:run!)
+      allow(scheduler).to receive(:shutdown).and_return(true)
+
+      allow(Signal).to receive(:trap) do |signal, &block|
+        trap_blocks[signal] = block
+      end
+    end
+
+    it 'INT trap only flips @stop_requested (trap-context safe)' do
+      Async do |task|
+        daemon.run!
+        trap_blocks.fetch('INT').call
+
+        expect(daemon.instance_variable_get(:@stop_requested)).to be true
+      ensure
+        task.stop
+      end
+    end
+
+    it 'TERM trap only flips @stop_requested (trap-context safe)' do
+      Async do |task|
+        daemon.run!
+        trap_blocks.fetch('TERM').call
+
+        expect(daemon.instance_variable_get(:@stop_requested)).to be true
+      ensure
+        task.stop
+      end
+    end
+
+    it 'watcher thread drives stop! once @stop_requested is set' do
+      Async do |_task|
+        daemon.run!
+        daemon.instance_variable_set(:@stop_requested, true)
+
+        # Watcher polls every 0.1s. Wait long enough for one tick +
+        # the drain emit to land.
+        deadline = Time.now + 2
+        sleep 0.05 until log_output.string.include?('daemon.stopped') || Time.now > deadline
+
+        expect(scheduler).to have_received(:shutdown)
+        expect(log_output.string).to include('[event] daemon.stopped reason=signal')
+      end
+    end
+  end
 end

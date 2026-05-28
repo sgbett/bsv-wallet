@@ -104,6 +104,14 @@ module BSV
       @event_observers_mutex.synchronize { @event_observers.length }
     end
 
+    # Clear the process-wide observer registry. Test helper — do not
+    # call from production code. Specs that boot a Scheduler / Daemon
+    # without a matching shutdown leak observers across examples; the
+    # spec_helper hook uses this to keep examples isolated.
+    def self.reset_event_observers!
+      @event_observers_mutex.synchronize { @event_observers.clear }
+    end
+
     def self.emit(name, **payload)
       observers = @event_observers_mutex.synchronize { @event_observers.dup }
       return if BSV.logger.nil? && @event_log.nil? && observers.empty?

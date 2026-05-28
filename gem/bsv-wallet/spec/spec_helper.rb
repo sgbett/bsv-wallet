@@ -29,7 +29,13 @@ RSpec.configure do |config|
   # would hit ArgumentError on bind. The fix at the engine layer (#176)
   # makes that failure visible rather than silent — this hook keeps
   # specs that exercise the daemon from tripping it.
+  #
+  # Also reset BSV::Wallet's process-wide event observer registry.
+  # Scheduler#run! registers an observer and only Scheduler#shutdown
+  # deregisters it — specs that boot a scheduler without a matching
+  # shutdown leak observers across examples.
   config.before do
     OMQ::Transport::Inproc.reset! if defined?(OMQ::Transport::Inproc)
+    BSV::Wallet.reset_event_observers! if defined?(BSV::Wallet) && BSV::Wallet.respond_to?(:reset_event_observers!)
   end
 end

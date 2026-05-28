@@ -33,6 +33,8 @@ module BSV
         @shutdown_timeout = shutdown_timeout
         @task = nil
         @scheduler = nil
+        @stop_requested = false
+        @stop_watcher = nil
       end
 
       # Start the Async reactor. Blocks until stop! is called or interrupted.
@@ -52,6 +54,19 @@ module BSV
           @scheduler = Scheduler.new(store: @store)
           @scheduler.run!(task: task)
 
+          # Trap-safe shutdown watcher. The signal trap (see
+          # {#setup_signal_traps}) can't call Mutex#synchronize or
+          # Kernel#sleep, both of which Scheduler#shutdown does — so
+          # the trap only flips @stop_requested and this thread
+          # observes the flag and drives the cooperative drain. A
+          # thread (not a reactor fiber) because a fiber's first
+          # yield in an otherwise-idle reactor would suspend the
+          # parent setup fiber with nothing to wake it.
+          @stop_watcher = Thread.new do
+            sleep(SHUTDOWN_POLL_INTERVAL_S) until @stop_requested
+            stop!
+          end
+
           BSV::Wallet.emit('daemon.started', wallet: @wallet_name, network: @network)
         end
       end
@@ -60,6 +75,12 @@ module BSV
       # proof acquisitions first, then halt the Async task. Drain
       # timeout is +@shutdown_timeout+; on timeout the reactor stops
       # anyway and any still-in-flight work is killed mid-fibre.
+      #
+      # Safe to call from any thread or fiber EXCEPT a signal trap —
+      # Scheduler#shutdown uses Mutex and sleep, which raise
+      # ThreadError in trap context. Signal traps must set
+      # +@stop_requested+ instead; the watcher thread installed by
+      # {#run!} picks it up and calls +stop!+ off-trap.
       def stop!
         drained = @scheduler&.shutdown(timeout: @shutdown_timeout)
         BSV::Wallet.emit('daemon.stopped', reason: 'signal', drained: drained)
@@ -68,9 +89,12 @@ module BSV
 
       private
 
+      SHUTDOWN_POLL_INTERVAL_S = 0.1
+      private_constant :SHUTDOWN_POLL_INTERVAL_S
+
       def setup_signal_traps
         %w[INT TERM].each do |signal|
-          Signal.trap(signal) { stop! }
+          Signal.trap(signal) { @stop_requested = true }
         end
       end
     end
