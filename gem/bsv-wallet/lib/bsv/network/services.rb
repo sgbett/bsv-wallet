@@ -58,7 +58,15 @@ module BSV
             return normalized
           end
 
-          return result if result.http_not_found?
+          if result.http_not_found?
+            # For chain-read commands, 404 means "this provider doesn't
+            # have it yet" — fall through. For everything else, it's
+            # definitive ("the entity doesn't exist on chain").
+            return result unless FALLTHROUGH_ON_NOT_FOUND.include?(sym)
+
+            last_error = result
+            next
+          end
 
           last_error = result
           break unless result.retryable?
@@ -66,6 +74,37 @@ module BSV
 
         last_error
       end
+
+      # Commands where a +404 Not Found+ from one provider means
+      # "I haven't indexed this yet" rather than "this doesn't exist
+      # on chain". For these, fall through to the next provider in
+      # the stack instead of returning the 404 to the caller.
+      #
+      # Block-header lookups are the load-bearing case: GorillaPool's
+      # Chaintracks lags behind WoC for new blocks, and the harness
+      # surfaced a verification failure where Chaintracks returned
+      # 404 for a freshly-mined block that WoC had. Treating that 404
+      # as definitive ate the multi-provider benefit.
+      #
+      # +:get_tx+ is included for the symmetric reason: a tx mined
+      # seconds ago can 404 on one indexer and 200 on another. Same
+      # indexer-lag race as block headers — the recipient calling
+      # +get_tx+ immediately after a fresh broadcast would hit it.
+      #
+      # +:broadcast+ is NOT in this list: a 404 from an ARC means
+      # the broadcast was definitively rejected (bad tx, policy
+      # failure) and is not going to succeed on a different ARC.
+      # +:get_utxos+ is also out: address-keyed UTXO indexing is
+      # not the indexer-lag pattern we are guarding against here.
+      FALLTHROUGH_ON_NOT_FOUND = %i[
+        get_block_header
+        get_block_headers
+        get_chain_tip
+        current_height
+        get_merkle_path
+        get_tx
+        get_tx_details
+      ].freeze
 
       # Backoff attempts for a single provider after the TokenBucket has
       # released a request slot. Distinguishes "wallet-side spacing"

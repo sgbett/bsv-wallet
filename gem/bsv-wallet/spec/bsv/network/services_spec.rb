@@ -121,13 +121,41 @@ RSpec.describe BSV::Network::Services do
       expect(result.error_message).to eq('bad request')
     end
 
-    it 'treats NotFound as terminal' do
-      nf = stub_provider('P1', { get_tx: not_found })
-      working = stub_provider('P2', { get_tx: success('from_p2') })
+    it 'treats NotFound as terminal for :broadcast (ARC rejected the tx)' do
+      nf = stub_provider('ARC1', { broadcast: not_found })
+      working = stub_provider('ARC2', { broadcast: success({ 'txid' => 'x' }) })
       services = described_class.new(providers: [nf, working])
 
-      result = services.call(:get_tx, 'txid')
+      result = services.call(:broadcast, 'rawtx')
       expect(result.http_not_found?).to be true
+    end
+
+    # Chain-read / indexer-keyed commands (see +FALLTHROUGH_ON_NOT_FOUND+) —
+    # 404 from one provider means "I haven't indexed this yet" rather than
+    # "this doesn't exist on chain". The harness surfaced this when
+    # GorillaPool's Chaintracks lagged WoC for a fresh block; the same
+    # race applies to +get_tx+ for a tx mined seconds before the call.
+    %i[get_block_header get_block_headers get_chain_tip current_height
+       get_merkle_path get_tx get_tx_details].each do |chain_read_cmd|
+      it "falls through NotFound for :#{chain_read_cmd}" do
+        nf = stub_provider('Lagging', { chain_read_cmd => not_found })
+        working = stub_provider('CaughtUp', { chain_read_cmd => success('hit') })
+        services = described_class.new(providers: [nf, working])
+
+        result = services.call(chain_read_cmd, 'arg')
+        expect(result.http_success?).to be true
+        expect(result.data).to eq('hit')
+      end
+    end
+
+    it 'returns the last 404 when every provider falls through' do
+      a = stub_provider('A', { get_block_header: not_found('a missing') })
+      b = stub_provider('B', { get_block_header: not_found('b missing') })
+      services = described_class.new(providers: [a, b])
+
+      result = services.call(:get_block_header, 12_345)
+      expect(result.http_not_found?).to be true
+      expect(result.error_message).to eq('b missing')
     end
 
     it 'returns last error when all providers fail' do
