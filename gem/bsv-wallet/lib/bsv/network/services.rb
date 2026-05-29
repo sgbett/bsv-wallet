@@ -86,15 +86,23 @@ module BSV
       # 404 for a freshly-mined block that WoC had. Treating that 404
       # as definitive ate the multi-provider benefit.
       #
-      # +:broadcast+ / +:get_tx+ / +:get_utxos+ are NOT in this list:
-      # 404 for those genuinely means "the on-chain entity doesn't
-      # exist" and should short-circuit the stack.
+      # +:get_tx+ is included for the symmetric reason: a tx mined
+      # seconds ago can 404 on one indexer and 200 on another. Same
+      # indexer-lag race as block headers — the recipient calling
+      # +get_tx+ immediately after a fresh broadcast would hit it.
+      #
+      # +:broadcast+ is NOT in this list: a 404 from an ARC means
+      # the broadcast was definitively rejected (bad tx, policy
+      # failure) and is not going to succeed on a different ARC.
+      # +:get_utxos+ is also out: address-keyed UTXO indexing is
+      # not the indexer-lag pattern we are guarding against here.
       FALLTHROUGH_ON_NOT_FOUND = %i[
         get_block_header
         get_block_headers
         get_chain_tip
         current_height
         get_merkle_path
+        get_tx
         get_tx_details
       ].freeze
 
