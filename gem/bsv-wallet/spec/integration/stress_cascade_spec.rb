@@ -146,14 +146,6 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
   end
 
   it 'cascades no_send payments across all wallets' do
-    # Skipped: receive triggers SPV verification via
-    # arcade.gorillapool.io/chaintracks/v2/header/height/<n>, which
-    # currently returns HTTP 404 for the proof-bearing block height
-    # — external infrastructure, not a wallet bug. Unskip when
-    # chaintracks serves headers reliably or we route header lookups
-    # through a more stable source.
-    skip 'GorillaPool chaintracks 404 on proof block (external infra)'
-
     # Phase 1 — Import: scan each wallet's root address for the 1m-sat seed
     # UTXO. import_utxo's Phase 2 self-payment pays a small network fee for
     # the derived output, so the post-import default-basket balance is ~1m
