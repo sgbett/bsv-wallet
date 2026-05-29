@@ -57,14 +57,6 @@ RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable R
   end
 
   it 'Alice pays Bob via create | receive pipeline' do
-    # Skipped: receive triggers SPV verification via
-    # arcade.gorillapool.io/chaintracks/v2/header/height/<n>, which
-    # currently returns HTTP 404 for the proof-bearing block height
-    # — external infrastructure, not a wallet bug. Unskip when
-    # chaintracks serves headers reliably or we route header lookups
-    # through a more stable source.
-    skip 'GorillaPool chaintracks 404 on proof block (external infra)'
-
     # Import: scan Alice's root key address for UTXOs
     _stdout, _, status = run_cli('import', 'alice')
     expect(status).to be_success
