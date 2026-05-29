@@ -2315,9 +2315,10 @@ RSpec.describe BSV::Wallet::Engine do
         caller_outputs: [{ satoshis: 4_000, locking_script: payment_script }]
       )
 
-      expect(result.keys).to contain_exactly(:wtxid, :raw_tx, :vout_mapping, :change_outputs)
+      expect(result.keys).to contain_exactly(:wtxid, :raw_tx, :tx, :vout_mapping, :change_outputs)
       expect(result[:wtxid].bytesize).to eq(32)
       expect(result[:raw_tx]).to be_a(String)
+      expect(result[:tx]).to be_a(BSV::Transaction::Transaction)
       expect(result[:vout_mapping]).to eq(0 => 0) # randomize: false, caller out first
       expect(result[:change_outputs].length).to eq(1)
       expect(result[:change_outputs].first[:satoshis]).to be > 0

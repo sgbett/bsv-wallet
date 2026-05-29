@@ -224,7 +224,7 @@ module BSV
           )
           change_outputs = []
         else
-          wtxid, raw_tx, vout_mapping, change_outputs = run_funding_loop(
+          wtxid, raw_tx, vout_mapping, change_outputs, signed_tx = run_funding_loop(
             action_id: action_result[:id],
             caller_outputs: outputs || [],
             caller_supplied_inputs: caller_supplied_inputs,
@@ -266,7 +266,7 @@ module BSV
         # broadcasts are picked up by the daemon's push-discovery loop from
         # the broadcasts row that sign_action created atomically above.
         if broadcast == :inline
-          broadcast_result = inline_broadcast(action_id: action_result[:id], raw_tx: raw_tx)
+          broadcast_result = inline_broadcast(action_id: action_result[:id], tx: signed_tx)
           if accepted?(broadcast_result)
             @store.promote_action_outputs(action_id: action_result[:id])
             handle_proof_from_broadcast(action_result[:id], broadcast_result)
@@ -299,7 +299,7 @@ module BSV
         # so sign_action only deserializes the unsigned tx, applies caller
         # unlocking scripts, signs remaining P2PKH inputs, and updates the
         # action with the signed raw_tx + wtxid.
-        wtxid, raw_tx = apply_spends(action, spends)
+        wtxid, raw_tx, signed_tx = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
 
@@ -311,7 +311,7 @@ module BSV
         return { txid: wtxid, tx: atomic_beef } if no_send
 
         if broadcast == :inline
-          broadcast_result = inline_broadcast(action_id: action[:id], raw_tx: raw_tx)
+          broadcast_result = inline_broadcast(action_id: action[:id], tx: signed_tx)
           if accepted?(broadcast_result)
             @store.promote_action_outputs(action_id: action[:id])
             handle_proof_from_broadcast(action[:id], broadcast_result)
@@ -1272,13 +1272,19 @@ module BSV
       # row exists and only updates it.
       #
       # @param action_id [Integer]
-      # @param raw_tx [String] signed transaction binary
+      # @param tx [BSV::Transaction::Transaction] signed transaction
+      #   with +source_satoshis+ / +source_locking_script+ wired on
+      #   each input. Passed as a Transaction object (not raw bytes)
+      #   so the ARC protocol can serialise to Extended Format (EF)
+      #   via +tx.to_ef_hex+ — TAAL ARC rejects raw-format submits
+      #   with "Missing input scripts: Transaction could not be
+      #   transformed to extended format".
       # @return [Hash, nil] broadcast status from Store
-      def inline_broadcast(action_id:, raw_tx:)
+      def inline_broadcast(action_id:, tx:)
         return @store.broadcast_status(action_id: action_id) unless @services
 
         @store.mark_broadcast_attempted(action_id: action_id)
-        response = @services.call(:broadcast, raw_tx)
+        response = @services.call(:broadcast, tx)
 
         if response.http_success?
           data = response.data
@@ -2020,8 +2026,11 @@ module BSV
       # with no top-up attempted. Auto-fund top-ups that exhaust the pool
       # surface as InsufficientFundsError (wrapping PoolDepletedError).
       #
-      # @return [Array(String, String, Hash, Array<Hash>)] wtxid, raw_tx,
-      #   vout_mapping, change_outputs — ready for Store#sign_action.
+      # @return [Array(String, String, Hash, Array<Hash>, Transaction)]
+      #   wtxid, raw_tx, vout_mapping, change_outputs, tx — the
+      #   trailing +tx+ is the live +BSV::Transaction::Transaction+
+      #   object with +source_satoshis+ / +source_locking_script+ wired
+      #   on each input, ready for +to_ef+ at broadcast time.
       def run_funding_loop(action_id:, caller_outputs:,
                            caller_supplied_inputs:, caller_inputs:,
                            initial_locked_output_ids:,
@@ -2037,7 +2046,10 @@ module BSV
             lock_time: lock_time, version: version, randomize: randomize_outputs,
             change_count: change_count
           )
-          return [result[:wtxid], result[:raw_tx], result[:vout_mapping], result[:change_outputs]] unless result[:shortfall]
+          unless result[:shortfall]
+            return [result[:wtxid], result[:raw_tx], result[:vout_mapping],
+                    result[:change_outputs], result[:tx]]
+          end
 
           raise BSV::Wallet::InsufficientFundsError if caller_supplied_inputs
 
@@ -2208,6 +2220,7 @@ module BSV
         {
           wtxid: tx.wtxid,
           raw_tx: tx.to_binary,
+          tx: tx,
           vout_mapping: vout_mapping,
           change_outputs: change_output_specs
         }
@@ -2281,7 +2294,10 @@ module BSV
         raw_tx = tx.to_binary
         wtxid = tx.wtxid
 
-        [wtxid, raw_tx]
+        # Trailing +tx+ for callers that need EF format at broadcast
+        # time. Source data was wired in the +resolved_inputs.each+
+        # loop above; +tx.to_ef+ now works without DB hits.
+        [wtxid, raw_tx, tx]
       end
 
       def random_derivation
