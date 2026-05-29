@@ -12,8 +12,16 @@ module BSV
     # and as a third-line broadcast fallback.
     #
     # Stack composition (mainnet):
-    #   1. GorillaPool — anonymous-capable ARC; first to try.
-    #   2. TAAL        — added IF +BSV_ARC_TAAL_KEY+ is set.
+    #   1. TAAL         — first IF +BSV_ARC_TAAL_KEY+ is set. Spec-
+    #                     compliant ARC at +/arc/v1/tx+; reliably
+    #                     handles broadcast.
+    #   2. GorillaPool — anonymous-capable. The SDK's GorillaPool
+    #                     provider points its ARC protocol at
+    #                     +/v1/tx+ which is currently a 404
+    #                     (GorillaPool's actual broadcast endpoint is
+    #                     a non-ARC shape at +/tx+); kept in the
+    #                     stack for the chain-read protocols it
+    #                     bundles (Chaintracks, JungleBus, Ordinals).
     #   3. WhatsOnChain — chain queries + last-resort broadcast.
     #
     # Testnet drops TAAL entirely (no published testnet ARC) and uses
@@ -25,7 +33,9 @@ module BSV
     #
     # Env vars consumed:
     #   - +BSV_ARC_TAAL_KEY+ — TAAL ARC API key (e.g. +mainnet_abc...+).
-    #     Optional. When absent, TAAL is omitted from the stack.
+    #     Optional. When absent, TAAL is omitted from the stack and
+    #     GorillaPool moves to first — accepting today's broken-ARC
+    #     behaviour until the SDK provider config is fixed.
     module ProviderStack
       module_function
 
@@ -36,8 +46,8 @@ module BSV
       # @return [Array<BSV::Network::Provider>]
       def build(network: :mainnet)
         providers = []
-        providers << gorilla_pool(network)
         providers << taal(network) if include_taal?(network)
+        providers << gorilla_pool(network)
         providers << whats_on_chain(network)
         providers
       end

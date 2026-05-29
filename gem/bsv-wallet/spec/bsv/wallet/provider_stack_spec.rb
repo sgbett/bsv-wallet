@@ -12,10 +12,10 @@ RSpec.describe BSV::Wallet::ProviderStack do
         ENV['BSV_ARC_TAAL_KEY'] = original
       end
 
-      it 'returns GorillaPool, TAAL, and WhatsOnChain when TAAL key is set' do
+      it 'returns TAAL, GorillaPool, and WhatsOnChain when TAAL key is set' do
         ENV['BSV_ARC_TAAL_KEY'] = 'mainnet_test_key'
         names = described_class.build(network: :mainnet).map(&:name)
-        expect(names).to eq(%w[GorillaPool TAAL WhatsOnChain])
+        expect(names).to eq(%w[TAAL GorillaPool WhatsOnChain])
       end
 
       it 'omits TAAL when the key is unset' do
@@ -30,8 +30,13 @@ RSpec.describe BSV::Wallet::ProviderStack do
         expect(names).to eq(%w[GorillaPool WhatsOnChain])
       end
 
-      it 'puts GorillaPool first so it gets the first broadcast attempt' do
+      it 'puts TAAL first when its key is set so it gets the first broadcast attempt' do
         ENV['BSV_ARC_TAAL_KEY'] = 'mainnet_test_key'
+        expect(described_class.build(network: :mainnet).first.name).to eq('TAAL')
+      end
+
+      it 'falls back to GorillaPool first when no TAAL key is set' do
+        ENV.delete('BSV_ARC_TAAL_KEY')
         expect(described_class.build(network: :mainnet).first.name).to eq('GorillaPool')
       end
 
