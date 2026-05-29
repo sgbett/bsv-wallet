@@ -243,6 +243,88 @@ RSpec.describe BSV::Wallet::Engine do
         expect(status[:broadcast_at]).not_to be_nil
         expect(status[:tx_status]).to eq('SEEN_ON_NETWORK')
       end
+
+      # ARC's synchronous submit response is typically an in-flight
+      # status (RECEIVED / STORED / QUEUED / ANNOUNCED_TO_NETWORK), not
+      # SEEN_ON_NETWORK. The engine promotes outputs on anything that
+      # isn't a definitive REJECTION — otherwise the wallet's spendable
+      # bookkeeping stalls after a successful broadcast, leaving the
+      # next outbound payment to hit a spurious limp-mode error.
+      %w[RECEIVED STORED QUEUED ANNOUNCED_TO_NETWORK REQUESTED_BY_NETWORK
+         SENT_TO_NETWORK].each do |in_flight_status|
+        it "promotes outputs when ARC returns in-flight status :#{in_flight_status}" do
+          allow(services).to receive(:call).with(:broadcast, anything).and_return(
+            double('ProtocolResponse', http_success?: true,
+                                       data: { tx_status: in_flight_status, status: 200 })
+          )
+
+          engine.create_action(
+            description: "in-flight #{in_flight_status}"[0, 50],
+            inputs: [],
+            accept_delayed_broadcast: false,
+            outputs: [
+              { satoshis: 500, locking_script: OP_TRUE,
+                output_description: 'output', basket: 'payments',
+                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                sender_identity_key: 'self' }
+            ]
+          )
+
+          listed = engine.list_outputs(basket: 'payments')
+          expect(listed[:total_outputs]).to eq(1),
+                                            "#{in_flight_status}: expected output promoted, got #{listed[:total_outputs]}"
+        end
+      end
+
+      # MALFORMED is in +REJECTED_STATUSES+ but not in the +tx_status+
+      # Postgres enum, so it can't be exercised through the full
+      # +inline_broadcast+ path here. Coverage for that status is via
+      # the +accepted?+ unit logic — see Engine::Broadcast's tests.
+      %w[REJECTED DOUBLE_SPEND_ATTEMPTED].each do |rejected_status|
+        it "does NOT promote outputs when ARC returns rejection :#{rejected_status}" do
+          allow(services).to receive(:call).with(:broadcast, anything).and_return(
+            double('ProtocolResponse', http_success?: true,
+                                       data: { tx_status: rejected_status, status: 200 })
+          )
+
+          engine.create_action(
+            description: "rejected #{rejected_status}"[0, 50],
+            inputs: [],
+            accept_delayed_broadcast: false,
+            outputs: [
+              { satoshis: 500, locking_script: OP_TRUE,
+                output_description: 'output', basket: 'payments',
+                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                sender_identity_key: 'self' }
+            ]
+          )
+
+          listed = engine.list_outputs(basket: 'payments')
+          expect(listed[:total_outputs]).to eq(0),
+                                            "#{rejected_status}: expected no promotion, got #{listed[:total_outputs]}"
+        end
+      end
+
+      it 'does NOT promote outputs when ARC returns no tx_status' do
+        allow(services).to receive(:call).with(:broadcast, anything).and_return(
+          double('ProtocolResponse', http_success?: true, data: { tx_status: nil, status: 200 })
+        )
+
+        engine.create_action(
+          description: 'inline broadcast no status',
+          inputs: [],
+          accept_delayed_broadcast: false,
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              output_description: 'output', basket: 'payments',
+              derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+              sender_identity_key: 'self' }
+          ]
+        )
+
+        listed = engine.list_outputs(basket: 'payments')
+        expect(listed[:total_outputs]).to eq(0)
+      end
     end
 
     context 'with delayed broadcast (accept_delayed_broadcast: true)' do
