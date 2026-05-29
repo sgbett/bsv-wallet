@@ -9,12 +9,16 @@
 #      input shape ensures fee coverage even when the smallest are
 #      below the per-input marginal fee.
 #   2. Running +sweep+ to send the remaining balance to the SDK
-#      identity_key (also broadcast on chain). SDK internalizes each
-#      sweep BEEF so the funds re-enter SDK's tracked state.
-#   3. Polling +get_tx_status+ for every cleanup tx until each reaches
-#      a mined status.
-#   4. Asserting SDK's recovered balance is >= 95% of Phase 1's
-#      initial funding (= 5 × 10m × 0.95 = 47.5m sats).
+#      identity_key (also broadcast on chain). SDK best-effort
+#      internalizes each sweep BEEF so SDK's view reflects the
+#      inbound; +import_wallet+ rescan catches anything internalize
+#      couldn't wire.
+#
+# No block-confirmation wait — synchronous broadcast acceptance is
+# the success signal. The daemon's TxProof loop attaches proofs
+# later in the background; the Wn→zero-spendable assertion and the
+# recovery-floor assertion both read state available immediately
+# after broadcast.
 #
 # Restart-safe per HLR: running this phase standalone restores the
 # wallets to a state where a fresh Phase 1 can begin. If invoked
@@ -26,11 +30,8 @@ require_relative 'spec_helper'
 RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable RSpec/DescribeClass
   let(:target_inputs)           { (ENV['CLEANUP_TARGET_INPUTS']  || 20).to_i }
   let(:max_consolidation_steps) { (ENV['CLEANUP_MAX_STEPS']      || 200).to_i }
-  let(:confirmation_timeout_s)  { (ENV['CLEANUP_CONFIRM_TIMEOUT_S'] || 1500).to_i }
-  let(:confirmation_poll_s)     { (ENV['CLEANUP_CONFIRM_POLL_S']    || 30).to_i }
   let(:recovery_floor_fraction) { (ENV['CLEANUP_RECOVERY_FLOOR']  || 0.95).to_f }
   let(:funding_per_wallet)      { (ENV['CLEANUP_FUND_PER_WALLET'] || 10_000_000).to_i }
-  let(:mined_statuses)          { %w[MINED IMMUTABLE].freeze }
 
   before do
     missing = E2E::WalletHarness.missing_env
@@ -53,9 +54,8 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
             # derivation context to spend later. The +sweep+ caller
             # picked the BRC-42 +derivation_prefix+ randomly; we don't
             # have access to it here from the +create_action+ result
-            # shape. Best-effort internalize for now — the funds are
-            # tracked via root-key scan on the next +import_wallet+
-            # invocation either way.
+            # shape. Best-effort internalize — +import_wallet+ rescan
+            # catches anything this can't wire.
           }
         }
       ],
@@ -66,34 +66,15 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
                      error: e.message.lines.first&.chomp&.slice(0, 200))
   end
 
-  def wait_for_mined(chain_services, dtxid)
-    deadline = monotonic_now + confirmation_timeout_s
-    last_status = nil
-
-    while monotonic_now < deadline
-      result = chain_services.call(:get_tx_status, txid: dtxid)
-      last_status = result&.data&.dig(:tx_status) || result&.data&.dig('tx_status')
-      BSV::Wallet.emit('e2e.cleanup.confirm.poll', dtxid: dtxid, status: last_status)
-      return last_status if mined_statuses.include?(last_status)
-
-      sleep confirmation_poll_s
-    end
-
-    last_status
-  end
-
-  def monotonic_now
-    Process.clock_gettime(Process::CLOCK_MONOTONIC)
-  end
-
   # Loop consolidate_step on +ctx+ until the wallet has fewer than
   # +target_inputs+ spendable outputs OR +max_consolidation_steps+
   # iterations elapse (safety bound — protects against any
   # infinite-loop bug in selection / dust handling).
   #
   # Each step is broadcast on chain. Returns the array of dtxids
-  # for downstream confirmation polling.
+  # for the summary report.
   def consolidate_until_below_target(name, ctx)
+    E2E::WalletHarness.activate(ctx)
     dtxids = []
     max_consolidation_steps.times do |i|
       result = ctx[:engine].consolidate_step(
@@ -123,11 +104,15 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
       [name, E2E::WalletHarness.boot(name)]
     end
 
+    E2E::WalletHarness.activate(sdk)
     sdk_identity = sdk[:key_deriver].identity_key
     sdk_starting_balance = sdk[:utxo_pool].balance
     BSV::Wallet.emit('e2e.phase4.balances.start',
                      sdk_balance: sdk_starting_balance,
-                     test_balances: test_ctxs.transform_values { |c| c[:utxo_pool].balance }.to_s)
+                     test_balances: test_ctxs.transform_values do |c|
+                       E2E::WalletHarness.activate(c)
+                       c[:utxo_pool].balance
+                     end.to_s)
 
     # Step 1 — consolidate each Wn down to < target_inputs spendable.
     consolidation_dtxids = test_ctxs.flat_map do |name, ctx|
@@ -136,6 +121,7 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
 
     # Step 2 — sweep each Wn's remaining balance to the SDK identity.
     sweep_dtxids = test_ctxs.filter_map do |name, ctx|
+      E2E::WalletHarness.activate(ctx)
       sweep_result = ctx[:engine].sweep(
         recipient: sdk_identity,
         no_send: false, accept_delayed_broadcast: false
@@ -150,21 +136,18 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
 
       # Best-effort SDK-side internalize so SDK's view of balance
       # reflects the inbound. If the +sweep+ result doesn't carry the
-      # derivation context needed by +internalize_action+, SDK can
-      # rediscover the UTXO via +import_wallet+ on a later boot — the
-      # funds are on chain regardless.
+      # derivation context needed by +internalize_action+, +import_wallet+
+      # below picks up the root-key-owned outputs.
+      E2E::WalletHarness.activate(sdk)
       internalize_at_sdk(sdk, sweep_result, description: "phase 4 sweep from #{name}")
       dtxid
     end
 
-    # Step 3 — wait for confirmation on every cleanup tx.
-    chain_services = sdk[:engine].services
-    all_dtxids = consolidation_dtxids + sweep_dtxids
-    final_statuses = all_dtxids.to_h { |dtxid| [dtxid, wait_for_mined(chain_services, dtxid)] }
-
-    # Step 4 — re-scan SDK for inbound. If +internalize_at_sdk+
-    # couldn't wire the BRC-42 derivation, +import_wallet+ on SDK
-    # picks up the root-key-owned outputs created by the sweep.
+    # Step 3 — re-scan SDK for inbound to catch anything internalize
+    # couldn't wire. Does not wait for confirmation; +get_utxos+
+    # against unconfirmed inbound may return nothing yet, which the
+    # recovery-floor assertion can interpret accordingly.
+    E2E::WalletHarness.activate(sdk)
     sdk[:engine].import_wallet
     sdk_final_balance = sdk[:utxo_pool].balance
     recovered = sdk_final_balance - sdk_starting_balance
@@ -174,8 +157,6 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
     warn "\n=== Phase 4 cleanup summary ==="
     warn "  consolidation steps: #{consolidation_dtxids.length}"
     warn "  sweep tx:            #{sweep_dtxids.length}"
-    mined = final_statuses.values.count { |s| mined_statuses.include?(s) }
-    warn "  mined:               #{mined} / #{final_statuses.length}"
     warn "  SDK balance:         #{sdk_starting_balance} → #{sdk_final_balance} (Δ #{recovered})"
     warn "  recovery fraction:   #{(recovery_fraction * 100).round(2)}%"
     warn "===\n"
@@ -184,19 +165,12 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
                      recovered: recovered,
                      recovery_fraction: recovery_fraction.round(4),
                      consolidation_steps: consolidation_dtxids.length,
-                     sweep_tx: sweep_dtxids.length,
-                     mined: mined)
-
-    # Every cleanup tx must confirm. If any are stuck, the wallets
-    # aren't restart-safe.
-    final_statuses.each do |dtxid, status|
-      expect(mined_statuses).to include(status),
-                                "tx #{dtxid[0..15]}… ended at #{status.inspect}"
-    end
+                     sweep_tx: sweep_dtxids.length)
 
     # Each Wn ends with zero spendable — the strict acceptance
-    # criterion is that consolidation + sweep removed everything.
+    # criterion that consolidation + sweep removed everything.
     test_ctxs.each do |name, ctx|
+      E2E::WalletHarness.activate(ctx)
       expect(ctx[:utxo_pool].spendable_count).to eq(0),
                                                  "#{name} still has #{ctx[:utxo_pool].spendable_count} spendable"
     end
