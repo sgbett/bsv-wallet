@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require 'bsv-wallet'
+require_relative '../../../lib/bsv/wallet/cli'
+require_relative 'wallet_derivation'
 
 module E2E
   # Boot in-process Engines for the funding wallet (+sdk+) and the five
@@ -40,6 +42,32 @@ module E2E
     def boot(name, network: :mainnet)
       install_derived_wifs!
       BSV::Wallet::CLI.boot(wallet_name: name, network: network)
+    end
+
+    # Switch the process-global +Sequel::Model.db+ AND every model
+    # subclass's cached dataset to +ctx+'s database.
+    #
+    # +CLI.boot+ / +Store.connect+ overwrites the global on every call,
+    # so a process that boots more than one wallet (the harness does)
+    # ends up with all +Sequel::Model+ operations routed to whichever
+    # wallet booted last. The CLI tools dodge this because each one is
+    # its own process — see the warning in +CLAUDE.md+.
+    #
+    # Setting +Sequel::Model.db = newdb+ alone is NOT enough: subclasses
+    # like +Models::Action+ cache their own dataset at class load time,
+    # and that dataset is bound to the original db. We have to rebind
+    # each subclass's dataset explicitly.
+    #
+    # Call this before every +ctx[:engine]+ / +ctx[:utxo_pool]+
+    # operation that touches the DB.
+    def activate(ctx)
+      Sequel::Model.db = ctx[:db]
+      BSV::Wallet::Store::Models.constants.each do |const|
+        klass = BSV::Wallet::Store::Models.const_get(const)
+        next unless klass.is_a?(Class) && klass < Sequel::Model
+
+        klass.dataset = ctx[:db][klass.table_name]
+      end
     end
 
     # All test wallet names except SDK.
