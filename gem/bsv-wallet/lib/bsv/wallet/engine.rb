@@ -1243,6 +1243,17 @@ module BSV
       # as "not promoted" left the wallet's spendable view stuck on
       # the consumed input with no replacement change, breaking the
       # next outbound payment with a spurious limp-mode error.
+      #
+      # For ACCEPTED_STATUSES, +Store#record_broadcast_result+ has
+      # already promoted atomically with the broadcast row update.
+      # The caller's explicit +promote_action_outputs+ then runs as
+      # an idempotent no-op (filtered by +promoted: false+). For
+      # in-flight statuses the explicit call is the real promotion,
+      # in a separate transaction from the broadcast row write — if
+      # the process crashes between them, the daemon's
+      # +pending_polls+ discovery loop is the recovery backstop:
+      # it re-polls ARC, eventually +record_broadcast_result+ sees
+      # a terminal status, and atomic promotion fires there.
       def accepted?(broadcast_result)
         return false unless broadcast_result
 
