@@ -62,7 +62,7 @@ module BSV
       end
 
       def taal(_network)
-        BSV::Network::Providers::TAAL.mainnet(api_key: ENV.fetch('BSV_ARC_TAAL_KEY'))
+        BSV::Network::Providers::TAAL.mainnet(api_key: taal_api_key)
       end
 
       def whats_on_chain(network)
@@ -70,7 +70,15 @@ module BSV
       end
 
       def taal_key_present?
-        ENV['BSV_ARC_TAAL_KEY'].to_s.strip.length.positive?
+        !taal_api_key.empty?
+      end
+
+      # Single source of truth for the TAAL API key. Stripped so that
+      # an env var with accidental surrounding whitespace produces the
+      # same value at the presence check and at the auth header — no
+      # "stack includes TAAL but auth silently fails" failure mode.
+      def taal_api_key
+        ENV['BSV_ARC_TAAL_KEY'].to_s.strip
       end
     end
   end

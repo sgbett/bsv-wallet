@@ -48,6 +48,20 @@ RSpec.describe BSV::Wallet::ProviderStack do
                                 "#{p.name} cannot serve :broadcast"
         end
       end
+
+      # The presence check strips whitespace; the value handed to
+      # TAAL.mainnet must match, otherwise the stack reports "TAAL
+      # configured" but the auth header carries whitespace and ARC
+      # rejects every request.
+      it 'strips whitespace from the TAAL key before passing it to the provider' do
+        ENV['BSV_ARC_TAAL_KEY'] = "  mainnet_test_key\n"
+        allow(BSV::Network::Providers::TAAL).to receive(:mainnet).and_call_original
+
+        described_class.build(network: :mainnet)
+
+        expect(BSV::Network::Providers::TAAL).to have_received(:mainnet)
+          .with(api_key: 'mainnet_test_key')
+      end
     end
 
     context 'on testnet' do
