@@ -738,9 +738,13 @@ module BSV
       # loop produces a single BRC-42 self-payment.
       #
       # @param target_inputs [Integer] minimum smallest outputs to consume per step
+      # @param no_send [Boolean] when true (the default) the action is built
+      #   and signed but never reaches ARC. Set false for on-chain broadcast.
+      # @param accept_delayed_broadcast [Boolean] only consulted when
+      #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash, nil] the +create_action+ result, or +nil+ if there are
       #   fewer than +target_inputs+ spendable outputs (the loop's natural exit).
-      def consolidate_step(target_inputs: 20)
+      def consolidate_step(target_inputs: 20, no_send: true, accept_delayed_broadcast: true)
         require_key_deriver!
         smallest = @utxo_pool.smallest(limit: target_inputs)
         return nil if smallest.length < target_inputs
@@ -755,7 +759,7 @@ module BSV
           description: 'consolidation',
           inputs: input_specs,
           outputs: [],
-          no_send: true,
+          no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
           change_count: 1
         )
       end
