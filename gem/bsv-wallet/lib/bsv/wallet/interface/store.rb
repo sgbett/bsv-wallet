@@ -165,18 +165,34 @@ module BSV
           raise NotImplementedError
         end
 
-        # Fail a broadcasted action. Removes the broadcast row first
-        # (broadcasts has no cascade FK on action_id) and then deletes
-        # the action. CASCADE on the other action-scoped tables releases
-        # locked UTXOs and removes derivation/spendable records.
+        # Reject a broadcast action whose terminal outcome was REJECTED.
+        # Unwinds speculatively-promoted outputs and cascades forward
+        # through any child action that consumed this action's outputs.
+        # Single outer transaction; partial-cascade failures roll back
+        # the entire walk.
         #
         # Distinct from abort_action -- BRC-100 abortAction targets
-        # actions under construction (no broadcast yet); this method
-        # is for actions that were broadcast and observed terminal
-        # via status polling.
+        # actions under construction (pre-broadcast cancel, refuses on
+        # promoted outputs). reject_action is for the post-broadcast
+        # rejection path where promotion was an optimistic bet now
+        # contradicted by the network.
+        #
+        # Raises +BSV::Wallet::CannotRejectInternalActionError+ if the
+        # target or any cascade descendant has broadcast_intent='none'.
+        # Internal-path actions are not the domain of this method.
         #
         # @param action_id [Integer]
-        def fail_broadcast_action(action_id:)
+        def reject_action(action_id:)
+          raise NotImplementedError
+        end
+
+        # Return action_ids of every action whose inputs spend an
+        # output of +action_id+. The forward-walk for the reject_action
+        # cascade.
+        #
+        # @param action_id [Integer]
+        # @return [Array<Integer>]
+        def child_actions_of(action_id:)
           raise NotImplementedError
         end
 
@@ -448,7 +464,7 @@ module BSV
           raise NotImplementedError
         end
 
-        # Query broadcasts eligible for status polling.
+        # Query broadcasts the resolution loop should poll to terminal.
         #
         # Returns broadcasts that have been attempted (+broadcast_at IS NOT NULL+)
         # and whose +tx_status+ is not in the terminal set (or is still NULL,
@@ -460,7 +476,7 @@ module BSV
         #
         # @param limit [Integer] maximum records to return
         # @return [Array<Hash>] broadcast data hashes
-        def pending_polls(limit: 100)
+        def pending_resolutions(limit: 100)
           raise NotImplementedError
         end
 
@@ -474,7 +490,7 @@ module BSV
         #
         # @param limit [Integer] maximum records to return
         # @return [Array<Hash>] broadcast data hashes
-        def pending_pushes(limit: 100)
+        def pending_submissions(limit: 100)
           raise NotImplementedError
         end
 
@@ -491,6 +507,17 @@ module BSV
         #
         # @param action_id [Integer]
         def mark_broadcast_attempted(action_id:)
+          raise NotImplementedError
+        end
+
+        # Increment broadcasts.retry_count for an action. Called from the
+        # resolution loop when reject_action raises
+        # CannotRejectInternalActionError -- the row stays alive for the
+        # next polling cycle but the counter surfaces stuck rows for
+        # dashboards.
+        #
+        # @param action_id [Integer]
+        def increment_broadcast_retry(action_id:)
           raise NotImplementedError
         end
 

@@ -50,5 +50,20 @@ module BSV
         super
       end
     end
+
+    # Raised by Store#reject_action when the target (or any cascade
+    # descendant) has broadcast_intent='none'. Internal-path actions
+    # produce canonical wallet state by design — reject_action exists
+    # for inline/delayed actions whose speculative promotion has been
+    # contradicted by the network. Encountering a no_send on the cascade
+    # walk means an invariant was violated upstream (a broadcast action
+    # had a no_send descendant); rolling back keeps the row alive for
+    # the resolution loop to retry and surfaces the problem loudly.
+    class CannotRejectInternalActionError < Error
+      def initialize(action_id)
+        super("cannot reject internal-path action_id=#{action_id} " \
+              "(broadcast_intent='none'); cascade rolled back")
+      end
+    end
   end
 end

@@ -26,6 +26,14 @@ module BSV
           ACCEPTED_STATUSES = %w[
             SEEN_ON_NETWORK ACCEPTED_BY_NETWORK MINED IMMUTABLE
           ].freeze
+
+          # ARC tx_status values indicating a definitive, non-recoverable rejection.
+          # Subset of TERMINAL_STATUSES that represents failure. Mirror of
+          # Engine::Broadcast::REJECTED_STATUSES — both must stay in lockstep
+          # (BRC-100 ARC status enum is the source of truth). Resolution
+          # promotion uses this as the negative predicate ("promote on
+          # non-rejection") per #240.
+          REJECTED_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
         end
       end
     end
