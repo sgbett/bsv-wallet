@@ -815,9 +815,17 @@ module BSV
       #   peer-to-peer handoff. Set false for on-chain broadcast.
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
+      # @param derive [Boolean] when true (the default) the output goes to
+      #   a fresh BRC-42-derived P2PKH of +recipient+ — the standard
+      #   peer-to-peer payment shape. When false, the output goes to the
+      #   recipient's own root P2PKH (+hash160(recipient_pubkey)+). The
+      #   non-derived form is for the e2e harness's terminal sweep step:
+      #   funds end up at the recipient's literal +1...+ address, which
+      #   is recoverable from the WIF alone, so the receiving wallet's
+      #   DB can be wiped after the run completes.
       # @return [Hash, nil] the +create_action+ result, or +nil+ when the
       #   wallet has no spendable outputs.
-      def sweep(recipient:, no_send: true, accept_delayed_broadcast: true)
+      def sweep(recipient:, no_send: true, accept_delayed_broadcast: true, derive: true)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -827,14 +835,23 @@ module BSV
         total = all_spendable.sum { |o| o[:satoshis] }
         input_specs = all_spendable.each_with_index.map { |o, i| { output_id: o[:id], vin: i } }
 
-        derivation_prefix = random_derivation
-        derivation_suffix = '1'
-        derived_pub = @key_deriver.derive_public_key(
-          protocol_id: [2, derivation_prefix], key_id: derivation_suffix,
-          counterparty: recipient, for_self: true
-        )
+        if derive
+          derivation_prefix = random_derivation
+          derivation_suffix = '1'
+          recipient_pub = @key_deriver.derive_public_key(
+            protocol_id: [2, derivation_prefix], key_id: derivation_suffix,
+            counterparty: recipient, for_self: true
+          )
+        else
+          # +recipient_pub+ is the recipient's own root pubkey bytes — same
+          # bytes that the original funding UTXO was locked to. The output
+          # script is the literal P2PKH of that pubkey's hash160, so a
+          # future +import_wallet+ on the recipient side rediscovers it
+          # by scanning the root address.
+          recipient_pub = [recipient].pack('H*')
+        end
         locking_script = BSV::Script::Script.p2pkh_lock(
-          BSV::Primitives::Digest.hash160(derived_pub)
+          BSV::Primitives::Digest.hash160(recipient_pub)
         ).to_binary
 
         # Compute the fee with the same FeeModel + templated-tx shape

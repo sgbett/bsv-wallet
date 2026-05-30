@@ -41,31 +41,6 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
 
   after { E2E::EventLog.stop }
 
-  def internalize_at_sdk(sdk_ctx, payment, description:)
-    sdk_ctx[:engine].internalize_action(
-      tx: payment[:tx],
-      outputs: [
-        {
-          output_index: 0,
-          protocol: 'wallet payment',
-          payment_remittance: {
-            # sweep + consolidate use a self-derived destination key,
-            # not the sender's identity_key — but SDK still needs the
-            # derivation context to spend later. The +sweep+ caller
-            # picked the BRC-42 +derivation_prefix+ randomly; we don't
-            # have access to it here from the +create_action+ result
-            # shape. Best-effort internalize — +import_wallet+ rescan
-            # catches anything this can't wire.
-          }
-        }
-      ],
-      description: description
-    )
-  rescue StandardError => e
-    BSV::Wallet.emit('e2e.cleanup.internalize.failed',
-                     error: e.message.lines.first&.chomp&.slice(0, 200))
-  end
-
   # Loop consolidate_step on +ctx+ until the wallet has fewer than
   # +target_inputs+ spendable outputs OR +max_consolidation_steps+
   # iterations elapse (safety bound — protects against any
@@ -119,12 +94,22 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
       consolidate_until_below_target(name, ctx)
     end
 
-    # Step 2 — sweep each Wn's remaining balance to the SDK identity.
+    # Step 2 — final sweep from each Wn to SDK's root address.
+    #
+    # +derive: false+ makes the output pay the literal SDK root P2PKH
+    # (+hash160(sdk_identity)+) rather than a fresh BRC-42 derived
+    # address. The funds land at the same address SDK was originally
+    # funded at, which means SDK recovers them via the next
+    # +import_wallet+ scan with no derivation context to keep — the
+    # wallet's DB carries no information the WIF + the chain don't
+    # already provide. We don't act on that property here, just
+    # preserve it as an architectural invariant the harness honours.
     sweep_dtxids = test_ctxs.filter_map do |name, ctx|
       E2E::WalletHarness.activate(ctx)
       sweep_result = ctx[:engine].sweep(
         recipient: sdk_identity,
-        no_send: false, accept_delayed_broadcast: false
+        no_send: false, accept_delayed_broadcast: false,
+        derive: false
       )
       if sweep_result.nil?
         BSV::Wallet.emit('e2e.cleanup.sweep.skipped', wallet: name, reason: 'no_spendable')
@@ -133,20 +118,14 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
 
       dtxid = sweep_result[:txid].reverse.unpack1('H*')
       BSV::Wallet.emit('e2e.cleanup.sweep', wallet: name, dtxid: dtxid)
-
-      # Best-effort SDK-side internalize so SDK's view of balance
-      # reflects the inbound. If the +sweep+ result doesn't carry the
-      # derivation context needed by +internalize_action+, +import_wallet+
-      # below picks up the root-key-owned outputs.
-      E2E::WalletHarness.activate(sdk)
-      internalize_at_sdk(sdk, sweep_result, description: "phase 4 sweep from #{name}")
       dtxid
     end
 
-    # Step 3 — re-scan SDK for inbound to catch anything internalize
-    # couldn't wire. Does not wait for confirmation; +get_utxos+
-    # against unconfirmed inbound may return nothing yet, which the
-    # recovery-floor assertion can interpret accordingly.
+    # Step 3 — re-scan SDK to pick up the swept inbound outputs.
+    # With +derive: false+ above, the Wn sweeps paid to SDK's literal
+    # root address. +import_wallet+ rediscovers them by scanning that
+    # address against the chain provider — no internalize step needed
+    # because there's no derivation context to wire.
     E2E::WalletHarness.activate(sdk)
     sdk[:engine].import_wallet
     sdk_final_balance = sdk[:utxo_pool].balance
