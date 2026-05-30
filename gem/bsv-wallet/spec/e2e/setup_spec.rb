@@ -143,8 +143,15 @@ RSpec.describe 'e2e Phase 1 — drain + fund' do # rubocop:disable RSpec/Describ
     # Step 3a — bring SDK's on-chain UTXOs under wallet management.
     # After TRUNCATE the SDK DB is empty; +import_wallet+ scans its
     # root address for the funding UTXOs.
+    #
+    # +no_send: false+ broadcasts Phase 2's BRC-42 self-payment to
+    # chain. The smoke is an "everything broadcasts" run — if Phase 2
+    # stayed off-chain (the CI default), every subsequent SDK-side
+    # broadcast would reference a UTXO Teranode has never heard of and
+    # be rejected. The rule is binary: broadcast all, or broadcast none.
     E2E::WalletHarness.activate(sdk)
-    sdk_import = sdk[:engine].import_wallet
+    sdk_import = sdk[:engine].import_wallet(no_send: false,
+                                            accept_delayed_broadcast: false)
     sdk_balance = sdk[:utxo_pool].balance
     BSV::Wallet.emit('e2e.sdk.imported',
                      found: sdk_import[:found] || 0, balance: sdk_balance)
