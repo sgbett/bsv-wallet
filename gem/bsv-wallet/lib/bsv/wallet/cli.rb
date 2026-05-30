@@ -57,8 +57,19 @@ module BSV
         private_key = BSV::Primitives::PrivateKey.from_wif(wif)
         key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
 
-        network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
-        network_services = BSV::Network::Services.new(providers: [network_provider])
+        # Two providers, distinct roles:
+        # - GorillaPool (Arcade protocol — bsv-sdk 0.22.0+) serves broadcast.
+        # - WhatsOnChain serves chain queries (get_tx, get_utxos,
+        #   get_merkle_path, get_block_header) and is also the default
+        #   +@network_provider+ for the direct-lookup paths in Engine
+        #   that bypass Services.
+        # Services routes per command; +candidates_for+ filters to the
+        # provider(s) that declare the capability.
+        network_provider = BSV::Network::Providers::WhatsOnChain.default(network: network)
+        broadcast_provider = BSV::Network::Providers::GorillaPool.default(testnet: network != :mainnet)
+        network_services = BSV::Network::Services.new(
+          providers: [broadcast_provider, network_provider]
+        )
         chain_tracker = BSV::Network::ChainTracker.new(store: store, services: network_services)
 
         limp_threshold_raw = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD)

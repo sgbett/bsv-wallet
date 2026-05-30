@@ -455,8 +455,22 @@ module BSV
       #
       # @param dtxid [String] 64-char hex transaction ID (display order)
       # @param vout [Integer] output index (default: 0)
+      # @param no_send [Boolean] when true (the default), Phase 2's BRC-42
+      #   self-payment is built but not broadcast — its output exists only
+      #   in the wallet's view. CI suites rely on this so test runs cost
+      #   nothing.
+      #
+      #   Set false when the wallet intends to broadcast subsequent
+      #   actions on chain. Phase 2's output then lives on the chain's
+      #   UTXO set so a downstream broadcast referencing it is consensus-
+      #   valid. The rule is binary: either every action in the run
+      #   broadcasts (including this one) or none of them do — broadcasting
+      #   a descendant of a no_send parent gets rejected by the network
+      #   for a non-existent input.
+      # @param accept_delayed_broadcast [Boolean] only consulted when
+      #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash] { imported: true, satoshis:, dtxid: }
-      def import_utxo(dtxid:, vout: 0)
+      def import_utxo(dtxid:, vout: 0, no_send: true, accept_delayed_broadcast: true)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
@@ -515,7 +529,9 @@ module BSV
             description: 'import self-payment',
             inputs: [{ output_id: imported_output_id }],
             outputs: [],
-            no_send: true, randomize_outputs: false,
+            no_send: no_send,
+            accept_delayed_broadcast: accept_delayed_broadcast,
+            randomize_outputs: false,
             change_count: 1
           )
         ensure
@@ -539,8 +555,14 @@ module BSV
       # network for UTXOs, and calls import_utxo for each. This is the
       # bootstrap path — how a wallet gets its initial funding.
       #
+      # @param no_send [Boolean] forwarded to +import_utxo+ for each
+      #   discovered UTXO. Default true (CI invariant — Phase 2 stays
+      #   off chain). Set false when the wallet intends to broadcast
+      #   downstream actions.
+      # @param accept_delayed_broadcast [Boolean] forwarded to
+      #   +import_utxo+. Only consulted when +no_send+ is false.
       # @return [Hash] { imported: Integer, utxos: Array<Hash> }
-      def import_wallet
+      def import_wallet(no_send: true, accept_delayed_broadcast: true)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
@@ -554,7 +576,9 @@ module BSV
         return { imported: 0, utxos: [] } if utxos.nil? || utxos.empty?
 
         imported = utxos.filter_map do |utxo|
-          import_utxo(dtxid: utxo['tx_hash'], vout: utxo['tx_pos'])
+          import_utxo(dtxid: utxo['tx_hash'], vout: utxo['tx_pos'],
+                      no_send: no_send,
+                      accept_delayed_broadcast: accept_delayed_broadcast)
         rescue BSV::Wallet::Error => e
           BSV.logger&.warn { "[Engine] import_wallet: skipping #{utxo['tx_hash']}:#{utxo['tx_pos']} — #{e.message}" }
           nil
