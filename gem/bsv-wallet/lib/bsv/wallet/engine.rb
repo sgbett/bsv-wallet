@@ -1076,7 +1076,7 @@ module BSV
       end
 
       def wait_for_authentication(originator: nil)
-        raise BSV::Wallet::Error.new('wallet is not authenticated', 2) unless @key_deriver
+        raise BSV::Wallet::Error.new('wallet is not authenticated', code: 2) unless @key_deriver
 
         { authenticated: true }
       end
@@ -1598,7 +1598,7 @@ module BSV
       end
 
       def require_key_deriver!
-        raise BSV::Wallet::Error.new('wallet has no key deriver configured', 2) unless @key_deriver
+        raise BSV::Wallet::Error.new('wallet has no key deriver configured', code: 2) unless @key_deriver
       end
 
       def enforce_limp_mode!

@@ -26,7 +26,7 @@ module BSV
 
     class InvalidBeefError < Error
       def initialize(message = 'invalid BEEF data')
-        super(message, 7)
+        super(message, code: 7)
       end
     end
 
