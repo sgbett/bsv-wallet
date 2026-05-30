@@ -181,6 +181,13 @@ module BSV
         # target or any cascade descendant has broadcast_intent='none'.
         # Internal-path actions are not the domain of this method.
         #
+        # Raises +BSV::Wallet::CannotRejectAcceptedActionError+ if the
+        # target or any cascade descendant has a broadcast row whose
+        # tx_status is in +Models::Broadcast::ACCEPTED_STATUSES+. The
+        # network considers the tx accepted; unwind would corrupt the
+        # wallet's view rather than recover it. Operator investigation
+        # is the right response.
+        #
         # @param action_id [Integer]
         def reject_action(action_id:)
           raise NotImplementedError

@@ -750,6 +750,15 @@ module BSV
 
         raise BSV::Wallet::CannotRejectInternalActionError, action_id if action.broadcast_intent == 'none'
 
+        # Refuse if the network told us this tx is accepted. Deletion
+        # would compound a wallet-vs-chain divergence — operator
+        # investigation is the right response, not unwind.
+        broadcast = models::Broadcast.first(action_id: action_id)
+        if broadcast
+          status = broadcast.tx_status.to_s.upcase
+          raise BSV::Wallet::CannotRejectAcceptedActionError.new(action_id, status) if Models::Broadcast::ACCEPTED_STATUSES.include?(status)
+        end
+
         child_actions_of(action_id: action_id).each do |child_id|
           do_reject(child_id, visited: visited)
         end

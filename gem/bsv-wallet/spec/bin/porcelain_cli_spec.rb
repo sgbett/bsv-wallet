@@ -78,6 +78,17 @@ RSpec.describe 'Porcelain CLI tools' do # rubocop:disable RSpec/DescribeClass
     end
   end
 
+  # --- bin/reject ---
+
+  describe 'bin/reject' do
+    it 'aborts with usage when --action-id is missing' do
+      _stdout, stderr, status = run_tool('reject', 'alice')
+
+      expect(status.exitstatus).to eq(1)
+      expect(stderr).to include('Missing --action-id')
+    end
+  end
+
   # --- bin/balance ---
 
   describe 'bin/balance' do

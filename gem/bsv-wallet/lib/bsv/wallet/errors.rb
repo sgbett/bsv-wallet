@@ -65,5 +65,21 @@ module BSV
               "(broadcast_intent='none'); cascade rolled back")
       end
     end
+
+    # Raised by Store#reject_action when the target (or any cascade
+    # descendant) has a broadcast row whose tx_status is in
+    # +Models::Broadcast::ACCEPTED_STATUSES+. That tx_status means the
+    # network told us the tx was accepted (SEEN_ON_NETWORK, MINED, etc.)
+    # — rejecting the action would delete the wallet's record of an
+    # on-chain artefact, compounding a wallet-vs-chain divergence rather
+    # than recovering from it. The right response is operator
+    # investigation, not unwind.
+    class CannotRejectAcceptedActionError < Error
+      def initialize(action_id, tx_status)
+        super("cannot reject action_id=#{action_id} with accepted " \
+              "tx_status=#{tx_status}; chain considers this accepted, " \
+              'wallet-vs-chain divergence — cascade rolled back')
+      end
+    end
   end
 end

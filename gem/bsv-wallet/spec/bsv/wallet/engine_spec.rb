@@ -724,6 +724,46 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
+  describe '#reject_action' do
+    it 'delegates to Store#reject_action and returns a structured result' do
+      result = engine.create_action(
+        description: 'speculative inline',
+        inputs: [],
+        outputs: [{ satoshis: 500, locking_script: OP_TRUE, output_description: 'out' }],
+        no_send: true
+      )
+      action_id = store.find_action(wtxid: [result[:txid]].flatten.pack('a*').unpack1('a*') && result[:txid])&.dig(:id)
+      action_id ||= store.send(:models)::Action.where(description: 'speculative inline').last&.id
+
+      # Manually flip to inline + add broadcasts row to make it a valid
+      # reject_action target (no_send actions raise per design).
+      store.db[:actions].where(id: action_id).update(broadcast_intent: 'inline')
+      store.db[:broadcasts].insert(action_id: action_id, intent: 'inline', tx_status: 'REJECTED')
+
+      response = engine.reject_action(action_id: action_id)
+
+      expect(response).to eq({ rejected: true, action_id: action_id })
+      expect(store.find_action(id: action_id)).to be_nil
+    end
+
+    it 'raises InvalidParameterError when the action_id does not exist' do
+      expect { engine.reject_action(action_id: 999_999_999) }
+        .to raise_error(BSV::Wallet::InvalidParameterError, /not found/)
+    end
+
+    it 'propagates CannotRejectInternalActionError from the store' do
+      engine.create_action(
+        description: 'internal action',
+        inputs: [],
+        outputs: [{ satoshis: 500, locking_script: OP_TRUE, output_description: 'out' }],
+        no_send: true
+      )
+      action_id = store.send(:models)::Action.where(description: 'internal action').last.id
+      expect { engine.reject_action(action_id: action_id) }
+        .to raise_error(BSV::Wallet::CannotRejectInternalActionError)
+    end
+  end
+
   describe '#list_actions' do
     before do
       engine.create_action(

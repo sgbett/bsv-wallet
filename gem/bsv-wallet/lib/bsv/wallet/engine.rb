@@ -341,6 +341,18 @@ module BSV
         { aborted: true }
       end
 
+      # Operator-facing entry to Store#reject_action. The daemon's
+      # resolution loop calls store directly; this wrapper lets bin/
+      # tools target specific stuck rows (action_id is a wallet-local
+      # integer, not a BRC-100 reference — this isn't a spec method).
+      def reject_action(action_id:)
+        action = @store.find_action(id: action_id)
+        raise BSV::Wallet::InvalidParameterError, "action_id=#{action_id} not found" unless action
+
+        @store.reject_action(action_id: action_id)
+        { rejected: true, action_id: action_id }
+      end
+
       def list_actions(labels:, label_query_mode: :any,
                        include_labels: false, include_inputs: false,
                        include_input_source_locking_scripts: false,

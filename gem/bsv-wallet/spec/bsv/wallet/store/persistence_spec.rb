@@ -749,6 +749,49 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(BSV::Wallet::Store::Models::Action[child[:id]]).not_to be_nil
       expect(input_output.reload.spendable?).to be false
     end
+
+    it 'raises CannotRejectAcceptedActionError when target tx_status is in ACCEPTED_STATUSES' do
+      result = store.create_action(action: { description: 'mined target', nlocktime: 0 })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      BSV::Wallet::Store::Models::Broadcast.where(action_id: result[:id]).update(tx_status: 'MINED')
+
+      expect do
+        store.reject_action(action_id: result[:id])
+      end.to raise_error(BSV::Wallet::CannotRejectAcceptedActionError, /tx_status=MINED/)
+
+      # Rollback: row still exists.
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
+    end
+
+    it 'raises CannotRejectAcceptedActionError when a descendant has accepted tx_status' do
+      input_output = create_funded_output(satoshis: 1000)
+      parent = store.create_action(action: { description: 'rejected parent', nlocktime: 0 },
+                                   inputs: [{ output_id: input_output.id, vin: 0 }])
+      store.sign_action(
+        action_id: parent[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: [{ satoshis: 900, vout: 0, locking_script: SecureRandom.random_bytes(25),
+                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                    sender_identity_key: 'self' }]
+      )
+      store.promote_action_outputs(action_id: parent[:id])
+      parent_output_id = BSV::Wallet::Store::Models::Output.where(action_id: parent[:id]).select_map(:id).first
+
+      child = store.create_action(action: { description: 'accepted child', nlocktime: 0 },
+                                  inputs: [{ output_id: parent_output_id, vin: 0 }])
+      store.sign_action(action_id: child[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      BSV::Wallet::Store::Models::Broadcast.where(action_id: child[:id]).update(tx_status: 'SEEN_ON_NETWORK')
+
+      expect do
+        store.reject_action(action_id: parent[:id])
+      end.to raise_error(BSV::Wallet::CannotRejectAcceptedActionError, /tx_status=SEEN_ON_NETWORK/)
+
+      # Rollback: both rows survive.
+      expect(BSV::Wallet::Store::Models::Action[parent[:id]]).not_to be_nil
+      expect(BSV::Wallet::Store::Models::Action[child[:id]]).not_to be_nil
+    end
   end
 
   describe '#child_actions_of' do
