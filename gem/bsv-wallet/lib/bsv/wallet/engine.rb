@@ -267,7 +267,15 @@ module BSV
         # the broadcasts row that sign_action created atomically above.
         if broadcast == :inline
           broadcast_result = inline_broadcast(action_id: action_result[:id], tx: signed_tx)
-          if accepted?(broadcast_result)
+          if rejected?(broadcast_result)
+            # Definitive sync rejection: tx isn't in any mempool. Cascade
+            # forward through any child action that consumed this action's
+            # outputs (none here on the inline path, but reject_action is
+            # the right primitive) and unwind speculative promotion in
+            # one transaction. The +inputs+ rows CASCADE-delete with the
+            # action, freeing locked outputs for the next call to spend.
+            @store.reject_action(action_id: action_result[:id])
+          elsif accepted?(broadcast_result)
             @store.promote_action_outputs(action_id: action_result[:id])
             handle_proof_from_broadcast(action_result[:id], broadcast_result)
           end
@@ -312,7 +320,9 @@ module BSV
 
         if broadcast == :inline
           broadcast_result = inline_broadcast(action_id: action[:id], tx: signed_tx)
-          if accepted?(broadcast_result)
+          if rejected?(broadcast_result)
+            @store.reject_action(action_id: action[:id])
+          elsif accepted?(broadcast_result)
             @store.promote_action_outputs(action_id: action[:id])
             handle_proof_from_broadcast(action[:id], broadcast_result)
           end
@@ -500,6 +510,18 @@ module BSV
 
         BSV.logger&.debug { "[Engine] import_utxo: #{satoshis} sats at vout #{vout}" }
 
+        # Idempotency: if this tx has already been imported (the wtxid
+        # is already on an existing action — UNIQUE constraint on
+        # +actions.wtxid+), short-circuit. Re-running +import_wallet+
+        # over the same on-chain UTXO would otherwise collide on the
+        # +actions_wtxid_index+ during +sign_action+. The skip is
+        # silent — re-imports are a normal consequence of harness
+        # iteration and the action is already in the right state.
+        if @store.find_action(wtxid: wtxid)
+          BSV.logger&.debug { "[Engine] import_utxo: #{dtxid} already imported, skipping" }
+          return { imported: false, satoshis: satoshis, dtxid: dtxid, reason: 'already_imported' }
+        end
+
         # Phase 1: Record the root-key UTXO
         import_action = @store.create_action(
           action: { description: 'imported UTXO', broadcast_intent: :none, outgoing: false }
@@ -561,21 +583,44 @@ module BSV
       #   downstream actions.
       # @param accept_delayed_broadcast [Boolean] forwarded to
       #   +import_utxo+. Only consulted when +no_send+ is false.
+      # @param include_unconfirmed [Boolean] when true, scan WoC's
+      #   +/unspent/all+ endpoint which includes mempool entries.
+      #   Default false uses +/confirmed/unspent+ (safer — confirmed
+      #   UTXOs can't be reorged-away under us). The e2e harness's
+      #   Phase 4 sets true so SDK can see the just-broadcast sweep
+      #   outputs without waiting for a block.
       # @return [Hash] { imported: Integer, utxos: Array<Hash> }
-      def import_wallet(no_send: true, accept_delayed_broadcast: true)
+      def import_wallet(no_send: true, accept_delayed_broadcast: true,
+                        include_unconfirmed: false)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
         address = @key_deriver.root_private_key.public_key.address
         BSV.logger&.debug { "[Engine] import_wallet: scanning #{address}" }
 
-        result = @network_provider.call(:get_utxos, address)
+        command = include_unconfirmed ? :get_utxos_all : :get_utxos
+        result = @network_provider.call(command, address)
+
+        # 404 from WoC's +/confirmed/unspent+ endpoint means "no UTXOs at
+        # this address" — empty result, not an error. Other non-success
+        # responses are still failures.
+        return { imported: 0, utxos: [] } if result.http_not_found?
         raise BSV::Wallet::Error, "failed to fetch UTXOs for #{address}" unless result.http_success?
 
         utxos = result.data
         return { imported: 0, utxos: [] } if utxos.nil? || utxos.empty?
 
-        imported = utxos.filter_map do |utxo|
+        # Defensive dedupe: provider responses have been seen to repeat
+        # a (tx_hash, tx_pos) pair during mempool races. A second
+        # +import_utxo+ on the same UTXO would collide on
+        # +actions_wtxid_index+ (UNIQUE on +actions.wtxid+).
+        seen = Set.new
+        unique_utxos = utxos.reject do |utxo|
+          key = [utxo['tx_hash'], utxo['tx_pos']]
+          seen.include?(key).tap { seen.add(key) }
+        end
+
+        imported = unique_utxos.filter_map do |utxo|
           import_utxo(dtxid: utxo['tx_hash'], vout: utxo['tx_pos'],
                       no_send: no_send,
                       accept_delayed_broadcast: accept_delayed_broadcast)
@@ -1298,6 +1343,27 @@ module BSV
         return false if status.nil? || status.to_s.empty?
 
         !REJECTED_STATUSES.include?(status)
+      end
+
+      # Definitive synchronous rejection. The broadcaster returned a
+      # status that explicitly says "the network refused this tx" —
+      # +REJECTED+ from Arcade / Teranode's catch-all +PROCESSING (4)+
+      # validation failure, or +DOUBLE_SPEND_ATTEMPTED+ / +MALFORMED+
+      # from ARC. These are the cases where the tx is not in any
+      # node's mempool and the wallet's locked inputs need releasing
+      # so subsequent actions can spend them.
+      #
+      # Non-rejection includes both formal acceptance (the wallet
+      # promotes outputs and proceeds) and in-flight / orphaned states
+      # (the wallet still promotes, trusting the daemon's poll loop to
+      # eventually resolve — orphaned txs typically resolve in time).
+      def rejected?(broadcast_result)
+        return false unless broadcast_result
+
+        status = broadcast_result[:tx_status]
+        return false if status.nil? || status.to_s.empty?
+
+        REJECTED_STATUSES.include?(status)
       end
 
       # Inline ARC submission for the synchronous broadcast path.
