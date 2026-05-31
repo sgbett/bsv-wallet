@@ -46,6 +46,7 @@ module BSV
 
         wif = env_fetch('WIF', wallet_name)
         db_url = env_fetch_optional('DATABASE_URL', wallet_name)
+        db_url ||= derive_postgres_url(wallet_name)
         db_url ||= default_sqlite_url(wallet_name)
 
         store = BSV::Wallet::Store.connect(db_url)
@@ -98,6 +99,29 @@ module BSV
           identity_key: key_deriver.identity_key,
           private_key: private_key
         }
+      end
+
+      # Derive a per-wallet Postgres URL from a shared base.
+      #
+      # When +BSV_WALLET_POSTGRES+ holds a base URL (e.g.
+      # +postgres://postgres:postgres@localhost:5433/+), each named
+      # wallet maps to its own database +bsv_wallet_<name>+. This lets a
+      # single env var configure every wallet, removing the need for a
+      # dotenv file or per-wallet DATABASE_URL_<NAME> entries.
+      #
+      # Returns nil when no wallet name is given (the unnamed default
+      # boot falls through to SQLite) or when the base is unset, so an
+      # explicit DATABASE_URL and the SQLite fallback both still apply.
+      #
+      # @param wallet_name [String, nil]
+      # @return [String, nil]
+      def derive_postgres_url(wallet_name)
+        return unless wallet_name
+
+        base = ENV.fetch('BSV_WALLET_POSTGRES', nil)
+        return if base.nil? || base.empty?
+
+        "#{base.chomp('/')}/bsv_wallet_#{wallet_name}"
       end
 
       # Build the default SQLite URL when DATABASE_URL is unset.

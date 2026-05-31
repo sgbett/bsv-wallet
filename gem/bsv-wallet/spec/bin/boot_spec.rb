@@ -41,6 +41,45 @@ RSpec.describe BSV::Wallet::CLI do
     end
   end
 
+  describe '.derive_postgres_url' do
+    around do |example|
+      saved = ENV.fetch('BSV_WALLET_POSTGRES', nil)
+      example.run
+      if saved.nil?
+        ENV.delete('BSV_WALLET_POSTGRES')
+      else
+        ENV['BSV_WALLET_POSTGRES'] = saved
+      end
+    end
+
+    it 'derives a per-wallet database from the base URL' do
+      ENV['BSV_WALLET_POSTGRES'] = 'postgres://postgres:postgres@localhost:5433/'
+      expect(described_class.derive_postgres_url('alice'))
+        .to eq('postgres://postgres:postgres@localhost:5433/bsv_wallet_alice')
+    end
+
+    it 'tolerates a base URL without a trailing slash' do
+      ENV['BSV_WALLET_POSTGRES'] = 'postgres://localhost:5433'
+      expect(described_class.derive_postgres_url('w1'))
+        .to eq('postgres://localhost:5433/bsv_wallet_w1')
+    end
+
+    it 'returns nil when no wallet name is given (default boot uses SQLite)' do
+      ENV['BSV_WALLET_POSTGRES'] = 'postgres://localhost:5433/'
+      expect(described_class.derive_postgres_url(nil)).to be_nil
+    end
+
+    it 'returns nil when the base URL is unset' do
+      ENV.delete('BSV_WALLET_POSTGRES')
+      expect(described_class.derive_postgres_url('alice')).to be_nil
+    end
+
+    it 'returns nil when the base URL is empty' do
+      ENV['BSV_WALLET_POSTGRES'] = ''
+      expect(described_class.derive_postgres_url('alice')).to be_nil
+    end
+  end
+
   describe '.default_sqlite_url' do
     it 'produces a wallet-name-aware SQLite path' do
       url = described_class.default_sqlite_url('alice')
