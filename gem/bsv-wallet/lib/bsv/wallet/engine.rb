@@ -857,12 +857,16 @@ module BSV
         )
       end
 
-      # Sweep every spendable output to a single recipient (less fee).
+      # Sweep every spendable output back to the recipient's root key (less fee).
       #
-      # Selects all spendable outputs, derives a BRC-42 P2PKH locking script
-      # for the recipient, and dispatches a +no_send+ +create_action+ that
-      # consumes all inputs and emits one caller output. Any rounding surplus
-      # against the actual fee is dropped (zero-survival on the single
+      # Selects all spendable outputs, locks one caller output to the
+      # recipient's *root* P2PKH (+hash160(recipient_pubkey)+ — not a
+      # BRC-42-derived address), and dispatches a +no_send+ +create_action+
+      # that consumes all inputs. The literal root P2PKH is recoverable from
+      # the WIF alone, which is the point of a sweep: return funds somewhere a
+      # bare key can reclaim them (e.g. so the receiving wallet's DB can be
+      # wiped and re-imported by scanning the root address). Any rounding
+      # surplus against the actual fee is dropped (zero-survival on the single
       # change-key slot the funding loop derives, since +generate_change+
       # requires +change_count >= 1+).
       #
@@ -872,17 +876,9 @@ module BSV
       #   peer-to-peer handoff. Set false for on-chain broadcast.
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
-      # @param derive [Boolean] when true (the default) the output goes to
-      #   a fresh BRC-42-derived P2PKH of +recipient+ — the standard
-      #   peer-to-peer payment shape. When false, the output goes to the
-      #   recipient's own root P2PKH (+hash160(recipient_pubkey)+). The
-      #   non-derived form is for the e2e harness's terminal sweep step:
-      #   funds end up at the recipient's literal +1...+ address, which
-      #   is recoverable from the WIF alone, so the receiving wallet's
-      #   DB can be wiped after the run completes.
       # @return [Hash, nil] the +create_action+ result, or +nil+ when the
       #   wallet has no spendable outputs.
-      def sweep(recipient:, no_send: true, accept_delayed_broadcast: true, derive: true)
+      def sweep(recipient:, no_send: true, accept_delayed_broadcast: true)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -892,21 +888,11 @@ module BSV
         total = all_spendable.sum { |o| o[:satoshis] }
         input_specs = all_spendable.each_with_index.map { |o, i| { output_id: o[:id], vin: i } }
 
-        if derive
-          derivation_prefix = random_derivation
-          derivation_suffix = '1'
-          recipient_pub = @key_deriver.derive_public_key(
-            protocol_id: [2, derivation_prefix], key_id: derivation_suffix,
-            counterparty: recipient, for_self: true
-          )
-        else
-          # +recipient_pub+ is the recipient's own root pubkey bytes — same
-          # bytes that the original funding UTXO was locked to. The output
-          # script is the literal P2PKH of that pubkey's hash160, so a
-          # future +import_wallet+ on the recipient side rediscovers it
-          # by scanning the root address.
-          recipient_pub = [recipient].pack('H*')
-        end
+        # +recipient_pub+ is the recipient's own root pubkey bytes — same bytes
+        # the original funding UTXO was locked to. The output script is the
+        # literal P2PKH of that pubkey's hash160, so a future +import_wallet+
+        # on the recipient side rediscovers it by scanning the root address.
+        recipient_pub = [recipient].pack('H*')
         locking_script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(recipient_pub)
         ).to_binary
@@ -946,6 +932,47 @@ module BSV
         ensure
           @bypass_limp_mode = false
         end
+      end
+
+      # Drain the entire wallet back to a single root P2PKH, broadcasting
+      # on-chain. The operational "tidy up" step: every spendable output is
+      # returned to the recipient's literal +1...+ address, which is
+      # recoverable from the WIF alone — so once this lands the wallet's DB
+      # can be wiped and the funds re-imported from the root key.
+      #
+      # A single transaction cannot consume an unbounded number of inputs
+      # (tx-size limit), so this first loops +consolidate_step+ to collapse
+      # the wallet down to fewer than +target_inputs+ spendable outputs, then
+      # emits one terminal +sweep+ to the root address. Every transaction is
+      # an inline on-chain broadcast (+no_send: false+,
+      # +accept_delayed_broadcast: false+) — no daemon required.
+      #
+      # @param recipient [String, nil] 66-char compressed pubkey hex (02/03)
+      #   of the root address to drain to. Defaults to the wallet's own
+      #   identity key (the "tidy my own wallet" case). Pass another wallet's
+      #   identity key for the e2e harness's "return borrowed funds to the
+      #   funder" step.
+      # @param target_inputs [Integer] consolidation batch size and the
+      #   spendable-count threshold below which the loop stops and sweeps.
+      # @return [Hash] +{ consolidation_steps:, sweep: }+ where +sweep+ is the
+      #   terminal sweep's +create_action+ result, or +nil+ when the wallet
+      #   had no spendable outputs to sweep.
+      def sweep_to_root(recipient: nil, target_inputs: 20)
+        require_key_deriver!
+        recipient ||= @key_deriver.identity_key
+
+        consolidation_steps = 0
+        until consolidate_step(
+          target_inputs: target_inputs, no_send: false, accept_delayed_broadcast: false
+        ).nil?
+          consolidation_steps += 1
+        end
+
+        sweep_result = sweep(
+          recipient: recipient, no_send: false, accept_delayed_broadcast: false
+        )
+
+        { consolidation_steps: consolidation_steps, sweep: sweep_result }
       end
 
       # Build a templated skeleton tx with the same shape +generate_change+

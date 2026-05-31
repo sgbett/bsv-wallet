@@ -108,7 +108,7 @@ Phase 3 — `broadcast_spec.rb`:
 - `BROADCAST_AMOUNT_MIN` (1000) / `BROADCAST_AMOUNT_MAX` (9000)
 
 Phase 4 — `cleanup_spec.rb`:
-- `CLEANUP_TARGET_INPUTS` (20) / `CLEANUP_MAX_STEPS` (200)
+- `CLEANUP_TARGET_INPUTS` (20)
 - `CLEANUP_CONFIRM_TIMEOUT_S` (1500) / `CLEANUP_CONFIRM_POLL_S` (30)
 - `CLEANUP_RECOVERY_FLOOR` (0.95)
 - `CLEANUP_FUND_PER_WALLET` (10_000_000)
@@ -150,9 +150,8 @@ Per-tx outcomes (Phase 3):
 - `e2e.bcast.failed from=… to=… error_class=… error=…`
 
 Cleanup detail (Phase 4):
-- `e2e.cleanup.consolidate wallet=… step=… dtxid=… remaining=…`
-- `e2e.cleanup.sweep wallet=… dtxid=…`
-- `e2e.cleanup.confirm.poll dtxid=… status=…`
+- `e2e.cleanup.sweep_to_root wallet=… consolidation_steps=… dtxid=… swept=…`
+- `e2e.cleanup.sdk_self_sweep consolidation_steps=… dtxid=…`
 
 Supporting infra:
 - `e2e.engines.booted count=… sdk=…`
