@@ -811,6 +811,10 @@ module BSV
         )
 
         {
+          # :txid is the subject wtxid (wire-order binary) — the BRC-100
+          # spec boundary name, not a byte-order indicator. Surfaced so
+          # callers can log/track the tx without re-parsing the BEEF.
+          txid: result[:txid],
           beef: result[:tx],
           sender_identity_key: @key_deriver.identity_key,
           outputs: [{

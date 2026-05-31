@@ -137,7 +137,9 @@ RSpec.describe 'e2e on-chain harness' do # rubocop:disable RSpec/DescribeClass
   # Clamped normal-distribution amount per HLR §Broadcast Timing.
   # Box-Muller — cheap, no dependency. Two uniforms → one normal.
   def random_amount
-    u1 = rand
+    # 1.0 - rand keeps u1 in (0, 1] — rand can return 0.0, and Math.log(0)
+    # is -Infinity, which would make the rounded amount raise FloatDomainError.
+    u1 = 1.0 - rand
     u2 = rand
     z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math::PI * u2)
     (amount_mean + (z * amount_sd)).round.clamp(amount_min, amount_max)
@@ -226,7 +228,7 @@ RSpec.describe 'e2e on-chain harness' do # rubocop:disable RSpec/DescribeClass
     E2E::WalletHarness.activate(recipient_ctx)
     internalize_funding(recipient_ctx, payment, description: 'harness funding from SDK')
 
-    dtxid = payment[:beef][-32..].reverse.unpack1('H*')
+    dtxid = payment[:txid].reverse.unpack1('H*')
     BSV::Wallet.emit('e2e.fund', dtxid: dtxid,
                                  wallet: recipient_ctx[:key_deriver].identity_key[0..8],
                                  satoshis: fund_satoshis)
@@ -271,7 +273,7 @@ RSpec.describe 'e2e on-chain harness' do # rubocop:disable RSpec/DescribeClass
       )
       E2E::WalletHarness.activate(recipient_ctx)
       internalize_received(recipient_ctx, payment, description: 'broadcast payment')
-      dtxid = payment[:beef][-32..].reverse.unpack1('H*')
+      dtxid = payment[:txid].reverse.unpack1('H*')
       BSV::Wallet.emit('e2e.bcast.accepted',
                        from: sender, to: recipient, satoshis: amount, dtxid: dtxid)
       :accepted

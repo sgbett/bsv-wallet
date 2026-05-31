@@ -9,9 +9,12 @@
 #
 # Loaded explicitly by +bundle exec rspec spec/e2e/...+.
 #
-# The whole tree is skipped at load time unless +BSV_WALLET_WIF_SDK+ is
-# set in the environment — that WIF is the on-chain funding key and the
-# deterministic root for the 5 test wallets (see +support/wallet_derivation.rb+).
+# There is no load-time skip: the support unit specs run without any
+# on-chain env, and the harness itself skips per-example (see the
+# +before+ block in +broadcast_spec.rb+, which gates on +E2E_MODE+ and
+# +E2E::WalletHarness.missing_env+). +BSV_WALLET_WIF_SDK+ is the on-chain
+# funding key and the deterministic root for the 5 test wallets (see
+# +support/wallet_derivation.rb+).
 
 require 'rspec'
 require 'bsv-wallet'

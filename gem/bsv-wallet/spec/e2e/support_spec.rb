@@ -89,9 +89,9 @@ RSpec.describe E2E::EventLog do
       expect(File.read(path)).to include('[event] e2e.test a=1')
     end
 
-    it 'uses an ISO-8601-like prefix in the filename' do
+    it 'uses an ISO-8601 + millisecond + PID prefix in the filename' do
       path = described_class.start(dir: tmpdir)
-      expect(File.basename(path)).to match(/\Ae2e-\d{8}T\d{6}Z\.log\z/)
+      expect(File.basename(path)).to match(/\Ae2e-\d{8}T\d{6}\.\d{3}Z-\d+\.log\z/)
     end
   end
 

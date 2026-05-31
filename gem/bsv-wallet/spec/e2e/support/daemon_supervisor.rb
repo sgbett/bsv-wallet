@@ -3,6 +3,7 @@
 require 'fileutils'
 require 'open3'
 require 'timeout'
+require_relative 'event_log' # for EventLog::DEFAULT_DIR default arg (load-order safe)
 
 module E2E
   # Boots one +bin/walletd+ subprocess per wallet for the e2e harness
@@ -79,7 +80,10 @@ module E2E
       @pids.each do |wallet, pid|
         signal_safely(pid, 'TERM')
         results[wallet] = await_exit?(pid, @shutdown_timeout) ? :drained : :killed
-        signal_safely(pid, 'KILL') if results[wallet] == :killed
+        if results[wallet] == :killed
+          signal_safely(pid, 'KILL')
+          reap(pid) # reap the killed pid so it doesn't linger as a zombie
+        end
       ensure
         @log_files[wallet]&.close
       end
@@ -117,6 +121,15 @@ module E2E
       !status.nil?
     rescue Errno::ECHILD
       true
+    end
+
+    # Block until a SIGKILL'd pid is reaped. SIGKILL is delivered almost
+    # immediately, so this returns promptly and keeps the process table
+    # clean for the rest of the long-lived harness run.
+    def reap(pid)
+      Process.waitpid(pid)
+    rescue Errno::ECHILD
+      # already reaped
     end
 
     def process_alive?(pid)
