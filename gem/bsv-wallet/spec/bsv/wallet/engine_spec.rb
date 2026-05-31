@@ -243,6 +243,34 @@ RSpec.describe BSV::Wallet::Engine do
         expect(status[:broadcast_at]).not_to be_nil
         expect(status[:tx_status]).to eq('SEEN_ON_NETWORK')
       end
+
+      # A definitive sync rejection arrives as a non-2xx body carrying a
+      # terminal (camelCase) txStatus. inline_broadcast must surface it so
+      # the caller's rejected? check unwinds the action via reject_action —
+      # mirroring the daemon submit path. Without this, a failed submit
+      # would leave the action's outputs speculatively promoted and its
+      # inputs locked.
+      it 'rejects the action on a non-2xx response carrying a terminal txStatus' do
+        allow(services).to receive(:call).with(:broadcast, anything).and_return(
+          double('ProtocolResponse', http_success?: false, data: { 'txStatus' => 'REJECTED' })
+        )
+
+        engine.create_action(
+          description: 'inline broadcast rejected',
+          inputs: [],
+          accept_delayed_broadcast: false,
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          ]
+        )
+
+        # reject_action cascade-deletes the action and its inputs, so the
+        # action is gone and no spendable output was promoted.
+        action = store.send(:models)::Action.where(description: 'inline broadcast rejected').last
+        expect(action).to be_nil
+        expect(engine.list_outputs(basket: 'payments')[:total_outputs]).to eq(0)
+      end
     end
 
     context 'with delayed broadcast (accept_delayed_broadcast: true)' do

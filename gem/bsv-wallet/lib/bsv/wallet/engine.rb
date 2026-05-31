@@ -1445,7 +1445,21 @@ module BSV
             competing_txs: data[:competing_txs]
           )
         else
-          @store.broadcast_status(action_id: action_id)
+          # Non-2xx ARC response. A definitive rejection carries a terminal
+          # txStatus in the (raw, camelCase) failure body; surface it so the
+          # caller's +rejected?+ check unwinds the action and releases its
+          # locked inputs, exactly as the daemon's +submit+ path does via
+          # +reject_action+. Transport errors and non-terminal failures
+          # carry no rejecting status and fall through to the stored
+          # (tx_status NULL) row for the poll loop to resolve later. We never
+          # return a non-rejecting status here — that would let +accepted?+
+          # misread a failed submit as success.
+          failure_status = response.data && response.data['txStatus']
+          if failure_status && REJECTED_STATUSES.include?(failure_status.to_s.upcase)
+            { tx_status: failure_status.to_s.upcase }
+          else
+            @store.broadcast_status(action_id: action_id)
+          end
         end
       end
 
