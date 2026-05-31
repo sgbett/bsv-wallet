@@ -32,6 +32,7 @@
 # Phase 1 first (which re-drains + re-funds).
 
 require_relative 'spec_helper'
+require_relative '../support/fanout'
 
 RSpec.describe 'e2e Phase 2 — initial fragmentation (no_send)' do # rubocop:disable RSpec/DescribeClass
   let(:l4_payments) { (ENV['FRAG_L4_PAYMENTS'] || 73).to_i }
@@ -71,30 +72,21 @@ RSpec.describe 'e2e Phase 2 — initial fragmentation (no_send)' do # rubocop:di
     )
   end
 
-  # Drive +count+ outbound +satoshis+-sat no_send payments from each
-  # +sender_ctx+ to a random not-self recipient, internalizing on the
-  # recipient. Returns a per-route count for the summary report.
+  # Drive one +Fanout.pass+ over +ctxs+ with the in-process engine
+  # transport: each hop is a no_send +send_payment+ internalized at the
+  # recipient. +level+ labels the cascade tier for the event stream and
+  # the inbound action description. Returns the per-route count Hash.
   def cascade_pass!(ctxs, count:, satoshis:, level:)
-    payment_log = Hash.new(0)
-    names = ctxs.keys
-
-    ctxs.each do |sender, sender_ctx|
-      others = names - [sender]
-      count.times do |i|
-        recipient = others.sample
-        payment = sender_ctx[:engine].send_payment(
-          recipient: ctxs[recipient][:key_deriver].identity_key,
-          satoshis: satoshis
-          # no_send: true is the default — see Engine#send_payment.
-        )
-        internalize_at(ctxs[recipient], payment, description: "#{level} fragment")
-        payment_log["#{sender}→#{recipient}"] += 1
-        BSV::Wallet.emit("e2e.frag.#{level}",
-                         from: sender, to: recipient, satoshis: satoshis, i: i + 1)
-      end
+    Fanout.pass(wallets: ctxs.keys, count: count, satoshis: satoshis) do |sender, recipient, sats, i|
+      payment = ctxs[sender][:engine].send_payment(
+        recipient: ctxs[recipient][:key_deriver].identity_key,
+        satoshis: sats
+        # no_send: true is the default — see Engine#send_payment.
+      )
+      internalize_at(ctxs[recipient], payment, description: "#{level} fragment")
+      BSV::Wallet.emit("e2e.frag.#{level}",
+                       from: sender, to: recipient, satoshis: sats, i: i + 1)
     end
-
-    payment_log
   end
 
   it 'fragments each wallet via the 5-level no_send cascade' do
