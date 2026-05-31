@@ -81,7 +81,7 @@ module E2E
     end
 
     # The SDK identity key as a hex string — the canonical target for
-    # the cleanup sweep in Phase 4.
+    # the harness's stage-1 reset sweep.
     def sdk_identity_key
       sdk_pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('BSV_WALLET_WIF_SDK'))
       BSV::Wallet::KeyDeriver.new(private_key: sdk_pk).identity_key

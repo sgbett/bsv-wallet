@@ -1,9 +1,21 @@
 # e2e on-chain harness (HLR #126)
 
 Manual on-chain test that takes the wallet from "tested theory" to
-"tested practice". Drives ~10,000 real broadcasts through ARC over
-roughly an hour, then sweeps every test wallet back to a single
-funding key. **Not** part of CI — never run from a workflow.
+"tested practice". One self-contained RSpec example: it resets the
+test wallets, funds them from a single key, fans the funds out into a
+large fragmented spendable set, then drives ~10,000 real broadcasts
+through ARC over roughly an hour. **Not** part of CI — never run from a
+workflow.
+
+The harness is the on-chain *broadcast workload*. The reset, fund, and
+fanout stages are preconditions it builds inline from the same
+`Engine` machinery the rest of the suite already covers:
+
+- the no_send fanout cascade — `spec/integration/stress_cascade_spec.rb` (#129)
+- consolidate / sweep — `rake wallet:cleanup` + the `Engine#sweep_to_root` specs
+
+So they are no longer separate "phase" specs; the harness exercises
+them end-to-end against real chain state.
 
 ## When to run
 
@@ -14,15 +26,16 @@ work end-to-end against real chain state.
 
 ## What it costs
 
-The harness consumes mainnet sats. Phase 1 funds five test wallets
-with 10,000,000 sats each (50m total). Fees over the ~10k Phase 3
-broadcasts add up to a few thousand sats. Phase 4 sweeps the residual
-back to the SDK identity — the recovery floor is 95% (default
-configurable via `CLEANUP_RECOVERY_FLOOR`).
+The harness consumes mainnet sats. Stage 2 funds five test wallets
+with 10,000,000 sats each (50m total) from the SDK key. Fees over the
+~10k broadcasts in stage 4 add up to a few thousand sats. There is no
+end-of-run sweep — stage 1 of the *next* run drains whatever this run
+leaves behind back to the SDK root.
 
-So a clean run round-trips 50m sats minus a few hundred thousand sats
-in fees. An aborted run leaves the residual on the test wallets;
-re-running Phase 4 standalone recovers it.
+So across runs the 50m round-trips through the test wallets and back to
+the SDK key, minus cumulative fees. An aborted run leaves the residual
+on the test wallets; the next run's stage 1 recovers it, or you can
+recover a single wallet standalone with `rake wallet:cleanup[wN]`.
 
 ## Environment
 
@@ -38,14 +51,14 @@ Required:
 | `BSV_WALLET_WIF_SDK`   | Funding key. Must hold >= 50m sats at the start of a fresh run. |
 | `DATABASE_URL_SDK`     | Postgres URL for the funding wallet. |
 | `DATABASE_URL_W1..W5`  | Postgres URLs for the five derived test wallets. |
-| `BSV_ARC_TAAL_KEY`     | Optional. When set, the `ProviderStack` adds TAAL ARC to the broadcast fallback chain (mainnet only). Strongly recommended for Phase 3's sustained throughput. |
+| `BSV_ARC_TAAL_KEY`     | Optional. When set, the `ProviderStack` adds TAAL ARC to the broadcast fallback chain (mainnet only). Strongly recommended for stage 4's sustained throughput. |
 
 `BSV_WALLET_WIF_W1..W5` are **not** required — they're derived
 deterministically from `BSV_WALLET_WIF_SDK` (see
 `support/wallet_derivation.rb`). The harness installs them into ENV
 at boot so `CLI.boot(wallet_name: 'w1')` picks them up.
 
-If any required var is unset, every phase skips cleanly with a
+If any required var is unset, the harness skips cleanly with a
 message listing exactly which vars are missing.
 
 ## Layout
@@ -53,10 +66,7 @@ message listing exactly which vars are missing.
 ```
 spec/e2e/
   spec_helper.rb              — separate from spec/spec_helper.rb; never auto-loaded
-  setup_spec.rb               — Phase 1: drain + fund + confirm
-  fragmentation_spec.rb       — Phase 2: 5-level no_send cascade
-  broadcast_spec.rb           — Phase 3: 25 tx/9s × 400 cycles
-  cleanup_spec.rb             — Phase 4: consolidate + sweep to SDK
+  broadcast_spec.rb           — the harness: reset → fund → fanout → broadcast
   wallet_harness_spec.rb      — unit tests for the WalletHarness helper
   support_spec.rb             — unit tests for the three support modules
   support/
@@ -66,52 +76,47 @@ spec/e2e/
     daemon_supervisor.rb      — spawns + manages one walletd subprocess per wallet
 ```
 
+The fanout cascade itself lives in `spec/support/fanout.rb`, shared
+with the #129 CI stress cascade.
+
 ## Running
 
 ```
 cd gem/bsv-wallet
 
-# Whole harness, end-to-end (~1 hour)
-bundle exec rspec spec/e2e
-
-# Phase by phase (must run in order on a fresh start)
-bundle exec rspec spec/e2e/setup_spec.rb
-bundle exec rspec spec/e2e/fragmentation_spec.rb
+# The whole harness, end-to-end (~1 hour)
 bundle exec rspec spec/e2e/broadcast_spec.rb
-bundle exec rspec spec/e2e/cleanup_spec.rb
 
-# Standalone cleanup (restores wallets after an aborted run)
-bundle exec rspec spec/e2e/cleanup_spec.rb
+# Support unit tests (no env, no chain — safe anywhere)
+bundle exec rspec spec/e2e/support_spec.rb spec/e2e/wallet_harness_spec.rb
 ```
 
-Phase 4 is the only phase that's restart-safe in isolation. The
-others assume the prior phase's end state.
+The harness runs its stages in order within a single example; there is
+no way to run a stage in isolation. To recover an aborted run without
+running the whole thing, sweep each wallet with
+`rake wallet:cleanup[wN]`.
 
 ## Tunables (dev iteration)
 
-Each phase exposes env-var overrides so a developer can iterate
-without committing to the full 1-hour run.
+Env-var overrides let a developer iterate without committing to the
+full 1-hour run.
 
-Phase 1 — `setup_spec.rb`:
-- `SETUP_CONFIRM_TIMEOUT_S` (default 1500)
-- `SETUP_CONFIRM_POLL_S` (default 30)
+Stage 1 — reset:
+- `RESET_TARGET_INPUTS` (default 20) — consolidate floor before the terminal sweep
 
-Phase 2 — `fragmentation_spec.rb`:
-- `FRAG_L4_PAYMENTS` / `FRAG_L5_PAYMENTS` (default 73)
-- `FRAG_L4_SATS` (50000) / `FRAG_L5_SATS` (12000)
+Stage 2 — fund:
+- `FUND_SATS` (default 10_000_000) — per test wallet
 
-Phase 3 — `broadcast_spec.rb`:
+Stage 3 — fanout:
+- `FANOUT_L4_PAYMENTS` / `FANOUT_L5_PAYMENTS` (default 73)
+- `FANOUT_L4_SATS` (50000) / `FANOUT_L5_SATS` (12000)
+
+Stage 4 — broadcast:
 - `BROADCAST_CYCLES` (400) / `BROADCAST_PER_CYCLE` (25)
 - `BROADCAST_INTERVAL_S` (9)
 - `BROADCAST_MIN_TX` (10_000) / `BROADCAST_MIN_BLOCKS` (3)
 - `BROADCAST_AMOUNT_MEAN` (5000) / `BROADCAST_AMOUNT_SD` (1000)
 - `BROADCAST_AMOUNT_MIN` (1000) / `BROADCAST_AMOUNT_MAX` (9000)
-
-Phase 4 — `cleanup_spec.rb`:
-- `CLEANUP_TARGET_INPUTS` (20)
-- `CLEANUP_CONFIRM_TIMEOUT_S` (1500) / `CLEANUP_CONFIRM_POLL_S` (30)
-- `CLEANUP_RECOVERY_FLOOR` (0.95)
-- `CLEANUP_FUND_PER_WALLET` (10_000_000)
 
 ## Observability
 
@@ -127,7 +132,7 @@ grep-friendly:
 tail -f tmp/e2e-*.log
 grep result=stale_beef tmp/e2e-*.log | wc -l
 grep '\[event\] e2e\.bcast\.failed' tmp/e2e-*.log
-grep '\[event\] e2e\.phase3\.cycle' tmp/e2e-*.log | tail
+grep '\[event\] e2e\.broadcast\.cycle' tmp/e2e-*.log | tail
 ```
 
 **Per-wallet walletd logs** at
@@ -142,46 +147,40 @@ inspect actions, outputs, broadcasts, tx_proofs post-run.
 
 ## Event taxonomy
 
-Phase-level lifecycle: `e2e.phase{1..4}.{start,complete}` plus
-`e2e.phase{n}.balances.start`, `e2e.phase{n}.daemons.{up,down}`.
+Stage lifecycle:
+- `e2e.reset.{start,drain,complete}` plus `e2e.reset.drain.failed` / `e2e.reset.import.failed`
+- `e2e.fund` (per wallet) / `e2e.fund.complete`
+- `e2e.fanout.{start,l4,l5,complete}`
+- `e2e.broadcast.{start,cycle,termination,complete}`
+- `e2e.daemons.{up,down}`
 
-Per-tx outcomes (Phase 3):
+Per-tx outcomes (stage 4):
 - `e2e.bcast.accepted from=… to=… satoshis=… dtxid=…`
 - `e2e.bcast.failed from=… to=… error_class=… error=…`
 
-Cleanup detail (Phase 4):
-- `e2e.cleanup.sweep_to_root wallet=… consolidation_steps=… dtxid=… swept=…`
-- `e2e.cleanup.sdk_self_sweep consolidation_steps=… dtxid=…`
-
-Supporting infra:
-- `e2e.engines.booted count=… sdk=…`
-- `e2e.drain dtxid=… satoshis=…` / `e2e.fund dtxid=… satoshis=…`
-- `e2e.confirm.poll dtxid=… status=…`
-
 ## Failure modes
 
-**Phase 1 confirmation timeout** — the funding tx didn't reach a
-mined status within `SETUP_CONFIRM_TIMEOUT_S`. Either ARC is slow
-(blocks > 10min apart) or the provider stack is wedged. Check
-`tmp/walletd-*.log` for repeated rate-limit / 5xx responses.
+**Stage 1 reset can't drain** — a test wallet's tracked state and the
+chain disagree (e.g. a prior run's broadcast never confirmed). The
+sweep emits `e2e.reset.drain.failed`; the wallet is skipped and the
+SDK-balance assertion may then fall short. Inspect the wallet's DB and
+`rake wallet:cleanup[wN]` it by hand.
 
-**Phase 3 stale-BEEF rate climbing** — `grep e2e.bcast.failed` shows
+**Stage 2 funding falls short** — the SDK-balance assertion failed:
+the SDK key holds < 50m at the start. Top it up, or check that stage 1
+actually swept the prior run's residual back (grep `e2e.reset.drain`).
+
+**Stage 4 stale-BEEF rate climbing** — `grep e2e.bcast.failed` shows
 many "BEEF" / "stale" / "invalid merkle" errors. Expected if
 chaintracks lag exceeds the per-tx window. The HLR says log it,
 don't remediate. Eventually the daemon's proof-acquisition refreshes
 proofs and rates recover.
 
-**Phase 4 recovery below floor** — fees ate more than 5% of funded
-balance. Either Phase 3 ran longer than intended (more fees) or the
-fee rate (100 sats/kb) is mis-estimated against current network
-load. Re-running Phase 4 alone won't recover more — the funds are
-spent on miner fees by then.
-
 **Daemon won't shut down** — the supervisor's `stop_all` falls back
 to SIGKILL after `shutdown_timeout` (default 45s). Each daemon's
 cooperative drain relies on `Scheduler#shutdown` (#233); if it
-returns `false`, the harness emits `e2e.phase3.daemons.down
-killed=N` so the cause is visible in the log.
+returns `false`, the harness emits `e2e.daemons.down killed=N` so the
+cause is visible in the log.
 
 ## What we did NOT cover
 
