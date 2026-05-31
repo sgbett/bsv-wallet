@@ -79,13 +79,36 @@ spec/e2e/
 The fanout cascade itself lives in `spec/support/fanout.rb`, shared
 with the #129 CI stress cascade.
 
+## Safety gate: `E2E_MODE`
+
+The harness spends real mainnet sats, so it will not fire just because
+the env vars happen to be present. It is gated on `E2E_MODE`, which
+defaults to a clean skip:
+
+| `E2E_MODE` | Behaviour |
+|---|---|
+| unset / `skip` | Skipped. The default — env presence alone never triggers a live run. |
+| `rehearse` | Every chain-touching send runs `no_send: true`, so nothing reaches ARC. Proves the full plumbing and every stage assert without broadcasting. Skips the `walletd` supervisor and the block-height gate (no real txs → no blocks to wait for). |
+| `live` | The real thing: on-chain broadcasts, `walletd` subprocesses, block-boundary termination. |
+
+`rehearse` is how you test the assert mechanism and the main loop
+without committing to a broadcast — pair it with the small-scale
+tunables below for a few-seconds smoke run.
+
 ## Running
 
 ```
 cd gem/bsv-wallet
 
-# The whole harness, end-to-end (~1 hour)
-bundle exec rspec spec/e2e/broadcast_spec.rb
+# The whole harness, end-to-end, on chain (~1 hour)
+E2E_MODE=live bundle exec rspec spec/e2e/broadcast_spec.rb
+
+# Smoke run — rehearse mode, tiny scale, ~seconds. Proves all four
+# stages wire up and the asserts gate, with zero broadcasts.
+E2E_MODE=rehearse FUND_SATS=100000 \
+  FANOUT_L4_PAYMENTS=10 FANOUT_L5_PAYMENTS=10 FANOUT_MIN_SPENDABLE=20 \
+  BROADCAST_CYCLES=5 BROADCAST_PER_CYCLE=5 BROADCAST_MIN_TX=10 \
+  BROADCAST_MIN_BLOCKS=0 bundle exec rspec spec/e2e/broadcast_spec.rb
 
 # Support unit tests (no env, no chain — safe anywhere)
 bundle exec rspec spec/e2e/support_spec.rb spec/e2e/wallet_harness_spec.rb
@@ -101,6 +124,9 @@ running the whole thing, sweep each wallet with
 Env-var overrides let a developer iterate without committing to the
 full 1-hour run.
 
+Mode:
+- `E2E_MODE` (default `skip`; `rehearse` | `live`) — see the safety gate above
+
 Stage 1 — reset:
 - `RESET_TARGET_INPUTS` (default 20) — consolidate floor before the terminal sweep
 
@@ -110,6 +136,7 @@ Stage 2 — fund:
 Stage 3 — fanout:
 - `FANOUT_L4_PAYMENTS` / `FANOUT_L5_PAYMENTS` (default 73)
 - `FANOUT_L4_SATS` (50000) / `FANOUT_L5_SATS` (12000)
+- `FANOUT_MIN_SPENDABLE` (default 500) — per-wallet spendable floor asserted after fanout
 
 Stage 4 — broadcast:
 - `BROADCAST_CYCLES` (400) / `BROADCAST_PER_CYCLE` (25)
@@ -163,12 +190,15 @@ Per-tx outcomes (stage 4):
 **Stage 1 reset can't drain** — a test wallet's tracked state and the
 chain disagree (e.g. a prior run's broadcast never confirmed). The
 sweep emits `e2e.reset.drain.failed`; the wallet is skipped and the
-SDK-balance assertion may then fall short. Inspect the wallet's DB and
+SDK on-chain balance may then fall short. Inspect the wallet's DB and
 `rake wallet:cleanup[wN]` it by hand.
 
-**Stage 2 funding falls short** — the SDK-balance assertion failed:
-the SDK key holds < 50m at the start. Top it up, or check that stage 1
-actually swept the prior run's residual back (grep `e2e.reset.drain`).
+**Stage 1 SDK balance falls short** — the precondition asserts the
+SDK's *on-chain* root balance (read from WoC, not the DB — the
+blank-slate sweep leaves the SDK DB empty by design) covers the run's
+total funding (5 × `FUND_SATS`). If it fails the SDK key holds too
+little at its root address. Top it up, or check that stage 1 actually
+swept the prior run's residual back (grep `e2e.reset.drain`).
 
 **Stage 4 stale-BEEF rate climbing** — `grep e2e.bcast.failed` shows
 many "BEEF" / "stale" / "invalid merkle" errors. Expected if
