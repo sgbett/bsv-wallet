@@ -267,7 +267,15 @@ module BSV
         # the broadcasts row that sign_action created atomically above.
         if broadcast == :inline
           broadcast_result = inline_broadcast(action_id: action_result[:id], tx: signed_tx)
-          if accepted?(broadcast_result)
+          if rejected?(broadcast_result)
+            # Definitive sync rejection: tx isn't in any mempool. Cascade
+            # forward through any child action that consumed this action's
+            # outputs (none here on the inline path, but reject_action is
+            # the right primitive) and unwind speculative promotion in
+            # one transaction. The +inputs+ rows CASCADE-delete with the
+            # action, freeing locked outputs for the next call to spend.
+            @store.reject_action(action_id: action_result[:id])
+          elsif accepted?(broadcast_result)
             @store.promote_action_outputs(action_id: action_result[:id])
             handle_proof_from_broadcast(action_result[:id], broadcast_result)
           end
@@ -312,7 +320,9 @@ module BSV
 
         if broadcast == :inline
           broadcast_result = inline_broadcast(action_id: action[:id], tx: signed_tx)
-          if accepted?(broadcast_result)
+          if rejected?(broadcast_result)
+            @store.reject_action(action_id: action[:id])
+          elsif accepted?(broadcast_result)
             @store.promote_action_outputs(action_id: action[:id])
             handle_proof_from_broadcast(action[:id], broadcast_result)
           end
@@ -329,6 +339,18 @@ module BSV
         @store.abort_action(action_id: action[:id])
         @utxo_pool.release(outputs: [])
         { aborted: true }
+      end
+
+      # Operator-facing entry to Store#reject_action. The daemon's
+      # resolution loop calls store directly; this wrapper lets bin/
+      # tools target specific stuck rows (action_id is a wallet-local
+      # integer, not a BRC-100 reference — this isn't a spec method).
+      def reject_action(action_id:)
+        action = @store.find_action(id: action_id)
+        raise BSV::Wallet::InvalidParameterError, "action_id=#{action_id} not found" unless action
+
+        @store.reject_action(action_id: action_id)
+        { rejected: true, action_id: action_id }
       end
 
       def list_actions(labels:, label_query_mode: :any,
@@ -500,6 +522,18 @@ module BSV
 
         BSV.logger&.debug { "[Engine] import_utxo: #{satoshis} sats at vout #{vout}" }
 
+        # Idempotency: if this tx has already been imported (the wtxid
+        # is already on an existing action — UNIQUE constraint on
+        # +actions.wtxid+), short-circuit. Re-running +import_wallet+
+        # over the same on-chain UTXO would otherwise collide on the
+        # +actions_wtxid_index+ during +sign_action+. The skip is
+        # silent — re-imports are a normal consequence of harness
+        # iteration and the action is already in the right state.
+        if @store.find_action(wtxid: wtxid)
+          BSV.logger&.debug { "[Engine] import_utxo: #{dtxid} already imported, skipping" }
+          return { imported: false, satoshis: satoshis, dtxid: dtxid, reason: 'already_imported' }
+        end
+
         # Phase 1: Record the root-key UTXO
         import_action = @store.create_action(
           action: { description: 'imported UTXO', broadcast_intent: :none, outgoing: false }
@@ -561,21 +595,44 @@ module BSV
       #   downstream actions.
       # @param accept_delayed_broadcast [Boolean] forwarded to
       #   +import_utxo+. Only consulted when +no_send+ is false.
+      # @param include_unconfirmed [Boolean] when true, scan WoC's
+      #   +/unspent/all+ endpoint which includes mempool entries.
+      #   Default false uses +/confirmed/unspent+ (safer — confirmed
+      #   UTXOs can't be reorged-away under us). The e2e harness's
+      #   Phase 4 sets true so SDK can see the just-broadcast sweep
+      #   outputs without waiting for a block.
       # @return [Hash] { imported: Integer, utxos: Array<Hash> }
-      def import_wallet(no_send: true, accept_delayed_broadcast: true)
+      def import_wallet(no_send: true, accept_delayed_broadcast: true,
+                        include_unconfirmed: false)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
         address = @key_deriver.root_private_key.public_key.address
         BSV.logger&.debug { "[Engine] import_wallet: scanning #{address}" }
 
-        result = @network_provider.call(:get_utxos, address)
+        command = include_unconfirmed ? :get_utxos_all : :get_utxos
+        result = @network_provider.call(command, address)
+
+        # 404 from WoC's +/confirmed/unspent+ endpoint means "no UTXOs at
+        # this address" — empty result, not an error. Other non-success
+        # responses are still failures.
+        return { imported: 0, utxos: [] } if result.http_not_found?
         raise BSV::Wallet::Error, "failed to fetch UTXOs for #{address}" unless result.http_success?
 
         utxos = result.data
         return { imported: 0, utxos: [] } if utxos.nil? || utxos.empty?
 
-        imported = utxos.filter_map do |utxo|
+        # Defensive dedupe: provider responses have been seen to repeat
+        # a (tx_hash, tx_pos) pair during mempool races. A second
+        # +import_utxo+ on the same UTXO would collide on
+        # +actions_wtxid_index+ (UNIQUE on +actions.wtxid+).
+        seen = Set.new
+        unique_utxos = utxos.reject do |utxo|
+          key = [utxo['tx_hash'], utxo['tx_pos']]
+          seen.include?(key).tap { seen.add(key) }
+        end
+
+        imported = unique_utxos.filter_map do |utxo|
           import_utxo(dtxid: utxo['tx_hash'], vout: utxo['tx_pos'],
                       no_send: no_send,
                       accept_delayed_broadcast: accept_delayed_broadcast)
@@ -800,12 +857,16 @@ module BSV
         )
       end
 
-      # Sweep every spendable output to a single recipient (less fee).
+      # Sweep every spendable output back to the recipient's root key (less fee).
       #
-      # Selects all spendable outputs, derives a BRC-42 P2PKH locking script
-      # for the recipient, and dispatches a +no_send+ +create_action+ that
-      # consumes all inputs and emits one caller output. Any rounding surplus
-      # against the actual fee is dropped (zero-survival on the single
+      # Selects all spendable outputs, locks one caller output to the
+      # recipient's *root* P2PKH (+hash160(recipient_pubkey)+ — not a
+      # BRC-42-derived address), and dispatches a +no_send+ +create_action+
+      # that consumes all inputs. The literal root P2PKH is recoverable from
+      # the WIF alone, which is the point of a sweep: return funds somewhere a
+      # bare key can reclaim them (e.g. so the receiving wallet's DB can be
+      # wiped and re-imported by scanning the root address). Any rounding
+      # surplus against the actual fee is dropped (zero-survival on the single
       # change-key slot the funding loop derives, since +generate_change+
       # requires +change_count >= 1+).
       #
@@ -815,17 +876,9 @@ module BSV
       #   peer-to-peer handoff. Set false for on-chain broadcast.
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
-      # @param derive [Boolean] when true (the default) the output goes to
-      #   a fresh BRC-42-derived P2PKH of +recipient+ — the standard
-      #   peer-to-peer payment shape. When false, the output goes to the
-      #   recipient's own root P2PKH (+hash160(recipient_pubkey)+). The
-      #   non-derived form is for the e2e harness's terminal sweep step:
-      #   funds end up at the recipient's literal +1...+ address, which
-      #   is recoverable from the WIF alone, so the receiving wallet's
-      #   DB can be wiped after the run completes.
       # @return [Hash, nil] the +create_action+ result, or +nil+ when the
       #   wallet has no spendable outputs.
-      def sweep(recipient:, no_send: true, accept_delayed_broadcast: true, derive: true)
+      def sweep(recipient:, no_send: true, accept_delayed_broadcast: true)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -835,21 +888,11 @@ module BSV
         total = all_spendable.sum { |o| o[:satoshis] }
         input_specs = all_spendable.each_with_index.map { |o, i| { output_id: o[:id], vin: i } }
 
-        if derive
-          derivation_prefix = random_derivation
-          derivation_suffix = '1'
-          recipient_pub = @key_deriver.derive_public_key(
-            protocol_id: [2, derivation_prefix], key_id: derivation_suffix,
-            counterparty: recipient, for_self: true
-          )
-        else
-          # +recipient_pub+ is the recipient's own root pubkey bytes — same
-          # bytes that the original funding UTXO was locked to. The output
-          # script is the literal P2PKH of that pubkey's hash160, so a
-          # future +import_wallet+ on the recipient side rediscovers it
-          # by scanning the root address.
-          recipient_pub = [recipient].pack('H*')
-        end
+        # +recipient_pub+ is the recipient's own root pubkey bytes — same bytes
+        # the original funding UTXO was locked to. The output script is the
+        # literal P2PKH of that pubkey's hash160, so a future +import_wallet+
+        # on the recipient side rediscovers it by scanning the root address.
+        recipient_pub = [recipient].pack('H*')
         locking_script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(recipient_pub)
         ).to_binary
@@ -889,6 +932,47 @@ module BSV
         ensure
           @bypass_limp_mode = false
         end
+      end
+
+      # Drain the entire wallet back to a single root P2PKH, broadcasting
+      # on-chain. The operational "tidy up" step: every spendable output is
+      # returned to the recipient's literal +1...+ address, which is
+      # recoverable from the WIF alone — so once this lands the wallet's DB
+      # can be wiped and the funds re-imported from the root key.
+      #
+      # A single transaction cannot consume an unbounded number of inputs
+      # (tx-size limit), so this first loops +consolidate_step+ to collapse
+      # the wallet down to fewer than +target_inputs+ spendable outputs, then
+      # emits one terminal +sweep+ to the root address. Every transaction is
+      # an inline on-chain broadcast (+no_send: false+,
+      # +accept_delayed_broadcast: false+) — no daemon required.
+      #
+      # @param recipient [String, nil] 66-char compressed pubkey hex (02/03)
+      #   of the root address to drain to. Defaults to the wallet's own
+      #   identity key (the "tidy my own wallet" case). Pass another wallet's
+      #   identity key for the e2e harness's "return borrowed funds to the
+      #   funder" step.
+      # @param target_inputs [Integer] consolidation batch size and the
+      #   spendable-count threshold below which the loop stops and sweeps.
+      # @return [Hash] +{ consolidation_steps:, sweep: }+ where +sweep+ is the
+      #   terminal sweep's +create_action+ result, or +nil+ when the wallet
+      #   had no spendable outputs to sweep.
+      def sweep_to_root(recipient: nil, target_inputs: 20)
+        require_key_deriver!
+        recipient ||= @key_deriver.identity_key
+
+        consolidation_steps = 0
+        until consolidate_step(
+          target_inputs: target_inputs, no_send: false, accept_delayed_broadcast: false
+        ).nil?
+          consolidation_steps += 1
+        end
+
+        sweep_result = sweep(
+          recipient: recipient, no_send: false, accept_delayed_broadcast: false
+        )
+
+        { consolidation_steps: consolidation_steps, sweep: sweep_result }
       end
 
       # Build a templated skeleton tx with the same shape +generate_change+
@@ -1300,6 +1384,27 @@ module BSV
         !REJECTED_STATUSES.include?(status)
       end
 
+      # Definitive synchronous rejection. The broadcaster returned a
+      # status that explicitly says "the network refused this tx" —
+      # +REJECTED+ from Arcade / Teranode's catch-all +PROCESSING (4)+
+      # validation failure, or +DOUBLE_SPEND_ATTEMPTED+ / +MALFORMED+
+      # from ARC. These are the cases where the tx is not in any
+      # node's mempool and the wallet's locked inputs need releasing
+      # so subsequent actions can spend them.
+      #
+      # Non-rejection includes both formal acceptance (the wallet
+      # promotes outputs and proceeds) and in-flight / orphaned states
+      # (the wallet still promotes, trusting the daemon's poll loop to
+      # eventually resolve — orphaned txs typically resolve in time).
+      def rejected?(broadcast_result)
+        return false unless broadcast_result
+
+        status = broadcast_result[:tx_status]
+        return false if status.nil? || status.to_s.empty?
+
+        REJECTED_STATUSES.include?(status)
+      end
+
       # Inline ARC submission for the synchronous broadcast path.
       #
       # Stamps broadcast_at in a committed transaction *before* the
@@ -1340,7 +1445,21 @@ module BSV
             competing_txs: data[:competing_txs]
           )
         else
-          @store.broadcast_status(action_id: action_id)
+          # Non-2xx ARC response. A definitive rejection carries a terminal
+          # txStatus in the (raw, camelCase) failure body; surface it so the
+          # caller's +rejected?+ check unwinds the action and releases its
+          # locked inputs, exactly as the daemon's +submit+ path does via
+          # +reject_action+. Transport errors and non-terminal failures
+          # carry no rejecting status and fall through to the stored
+          # (tx_status NULL) row for the poll loop to resolve later. We never
+          # return a non-rejecting status here — that would let +accepted?+
+          # misread a failed submit as success.
+          failure_status = response.data && response.data['txStatus']
+          if failure_status && REJECTED_STATUSES.include?(failure_status.to_s.upcase)
+            { tx_status: failure_status.to_s.upcase }
+          else
+            @store.broadcast_status(action_id: action_id)
+          end
         end
       end
 

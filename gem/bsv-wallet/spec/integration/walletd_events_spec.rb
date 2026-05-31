@@ -64,11 +64,13 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
   before do
     # --- Store stubs ---
 
-    # Poll discovery: return one action on first call, empty thereafter.
-    broadcast_call_count = 0
-    allow(store).to receive(:pending_polls) do |**_kwargs|
-      broadcast_call_count += 1
-      broadcast_call_count == 1 ? [{ action_id: 1 }] : []
+    # Submission discovery: return one action on first call, empty thereafter.
+    # The action has no broadcasts row yet (broadcast_status returns nil),
+    # so Engine::Broadcast#process takes the submit branch end-to-end.
+    submission_call_count = 0
+    allow(store).to receive(:pending_submissions) do |**_kwargs|
+      submission_call_count += 1
+      submission_call_count == 1 ? [{ action_id: 1 }] : []
     end
 
     # Proof discovery: return one action on first call, empty thereafter.
@@ -86,13 +88,11 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
       end
     end
 
-    # The poll-discovery loop enqueues action_id=1; broadcast_status is
-    # stubbed to nil so Engine::Broadcast#process takes the submit branch
-    # (no broadcast_at). The smoke covers the submit path end-to-end; a
-    # dedicated poll-path smoke is a separate concern. Push-discovery is
-    # dormant (pending_pushes: []) to keep the test focused.
+    # Resolution discovery is dormant (pending_resolutions: []) so all
+    # broadcast lifecycle events in this smoke come from the submission
+    # path. A dedicated resolution-path smoke is a separate concern.
     allow(store).to receive_messages(
-      pending_pushes: [],
+      pending_resolutions: [],
       record_broadcast_result: nil,
       broadcast_status: nil,
       mark_broadcast_attempted: nil,
@@ -139,10 +139,10 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
     expect(log).to include('[event] daemon.stopped reason=signal')
 
     # Broadcast cycle: discovered -> enqueued -> dispatched -> succeeded
-    expect(log).to include('[event] task.discovered task=broadcast_push count=1')
-    expect(log).to include('[event] task.enqueued task=broadcast_push id=1')
-    expect(log).to include('[event] task.dispatched task=broadcast_push id=1')
-    expect(log).to include('[event] task.succeeded task=broadcast_push id=1')
+    expect(log).to include('[event] task.discovered task=broadcast_submission count=1')
+    expect(log).to include('[event] task.enqueued task=broadcast_submission id=1')
+    expect(log).to include('[event] task.dispatched task=broadcast_submission id=1')
+    expect(log).to include('[event] task.succeeded task=broadcast_submission id=1')
 
     # Proof cycle: discovered -> enqueued -> dispatched -> succeeded
     expect(log).to include('[event] task.discovered task=proof_acquisition count=1')

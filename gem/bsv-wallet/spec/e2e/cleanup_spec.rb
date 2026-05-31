@@ -2,17 +2,20 @@
 
 # Phase 4 of the #126 e2e on-chain harness — sweep back to SDK.
 #
-# Restores each test wallet to zero spendable by:
-#   1. Looping +consolidate_step+ until the wallet has < 20 spendable
-#      outputs. Each step broadcasts on chain (no_send: false,
-#      accept_delayed_broadcast: false). The 20-smallest + 1-largest
-#      input shape ensures fee coverage even when the smallest are
-#      below the per-input marginal fee.
-#   2. Running +sweep+ to send the remaining balance to the SDK
-#      identity_key (also broadcast on chain). SDK best-effort
-#      internalizes each sweep BEEF so SDK's view reflects the
-#      inbound; +import_wallet+ rescan catches anything internalize
-#      couldn't wire.
+# Restores each test wallet to zero spendable via +Engine#sweep_to_root+,
+# which loops +consolidate_step+ until the wallet has < +target_inputs+
+# spendable outputs (the 20-smallest + 1-largest input shape ensures fee
+# coverage even when the smallest are below the per-input marginal fee),
+# then +sweep+s the remainder to the recipient's root P2PKH. Here the
+# recipient is the SDK identity_key, so every test wallet drains to the
+# literal address SDK was originally funded at. Each tx broadcasts on
+# chain (no_send: false, accept_delayed_broadcast: false).
+#
+# After the test wallets drain, SDK self-sweeps its own residual change
+# to root via the same path, then +import_wallet+ rescans to pull in
+# every output now sitting at the root address (the W1..W5 sweeps plus
+# the SDK self-sweep). The recovery-floor assertion checks SDK reclaimed
+# the funded balance.
 #
 # No block-confirmation wait — synchronous broadcast acceptance is
 # the success signal. The daemon's TxProof loop attaches proofs
@@ -22,14 +25,13 @@
 #
 # Restart-safe per HLR: running this phase standalone restores the
 # wallets to a state where a fresh Phase 1 can begin. If invoked
-# without a preceding run, it does no harm — consolidate_step
-# returns nil immediately when the wallet has no spendable outputs.
+# without a preceding run, it does no harm — sweep_to_root drains
+# nothing when the wallet has no spendable outputs.
 
 require_relative 'spec_helper'
 
 RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable RSpec/DescribeClass
-  let(:target_inputs)           { (ENV['CLEANUP_TARGET_INPUTS']  || 20).to_i }
-  let(:max_consolidation_steps) { (ENV['CLEANUP_MAX_STEPS']      || 200).to_i }
+  let(:target_inputs)           { (ENV['CLEANUP_TARGET_INPUTS'] || 20).to_i }
   let(:recovery_floor_fraction) { (ENV['CLEANUP_RECOVERY_FLOOR']  || 0.95).to_f }
   let(:funding_per_wallet)      { (ENV['CLEANUP_FUND_PER_WALLET'] || 10_000_000).to_i }
 
@@ -40,32 +42,6 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
   end
 
   after { E2E::EventLog.stop }
-
-  # Loop consolidate_step on +ctx+ until the wallet has fewer than
-  # +target_inputs+ spendable outputs OR +max_consolidation_steps+
-  # iterations elapse (safety bound — protects against any
-  # infinite-loop bug in selection / dust handling).
-  #
-  # Each step is broadcast on chain. Returns the array of dtxids
-  # for the summary report.
-  def consolidate_until_below_target(name, ctx)
-    E2E::WalletHarness.activate(ctx)
-    dtxids = []
-    max_consolidation_steps.times do |i|
-      result = ctx[:engine].consolidate_step(
-        target_inputs: target_inputs,
-        no_send: false, accept_delayed_broadcast: false
-      )
-      break if result.nil?
-
-      dtxid = result[:txid].reverse.unpack1('H*')
-      dtxids << dtxid
-      BSV::Wallet.emit('e2e.cleanup.consolidate',
-                       wallet: name, step: i + 1, dtxid: dtxid,
-                       remaining: ctx[:utxo_pool].spendable_count)
-    end
-    dtxids
-  end
 
   it 'consolidates and sweeps every test wallet back to SDK with >= 95% recovery' do
     BSV::Wallet.emit('e2e.phase4.start',
@@ -89,53 +65,60 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
                        c[:utxo_pool].balance
                      end.to_s)
 
-    # Step 1 — consolidate each Wn down to < target_inputs spendable.
-    consolidation_dtxids = test_ctxs.flat_map do |name, ctx|
-      consolidate_until_below_target(name, ctx)
-    end
-
-    # Step 2 — final sweep from each Wn to SDK's root address.
-    #
-    # +derive: false+ makes the output pay the literal SDK root P2PKH
-    # (+hash160(sdk_identity)+) rather than a fresh BRC-42 derived
-    # address. The funds land at the same address SDK was originally
-    # funded at, which means SDK recovers them via the next
-    # +import_wallet+ scan with no derivation context to keep — the
-    # wallet's DB carries no information the WIF + the chain don't
-    # already provide. We don't act on that property here, just
-    # preserve it as an architectural invariant the harness honours.
-    sweep_dtxids = test_ctxs.filter_map do |name, ctx|
+    # Step 1 — drain each Wn back to SDK's root address. sweep_to_root
+    # consolidates down to < target_inputs spendable, then sweeps the
+    # remainder to the literal SDK root P2PKH (+hash160(sdk_identity)+).
+    # The funds land at the address SDK was originally funded at, so SDK
+    # recovers them via the next +import_wallet+ scan with no derivation
+    # context to keep — the wallet's DB carries no information the WIF +
+    # the chain don't already provide. Every tx broadcasts on chain.
+    wn_results = test_ctxs.map do |name, ctx|
       E2E::WalletHarness.activate(ctx)
-      sweep_result = ctx[:engine].sweep(
-        recipient: sdk_identity,
-        no_send: false, accept_delayed_broadcast: false,
-        derive: false
-      )
-      if sweep_result.nil?
-        BSV::Wallet.emit('e2e.cleanup.sweep.skipped', wallet: name, reason: 'no_spendable')
-        next nil
-      end
+      result = ctx[:engine].sweep_to_root(recipient: sdk_identity, target_inputs: target_inputs)
+      dtxid = result[:sweep] && result[:sweep][:txid].reverse.unpack1('H*')
+      BSV::Wallet.emit('e2e.cleanup.sweep_to_root',
+                       wallet: name,
+                       consolidation_steps: result[:consolidation_steps],
+                       dtxid: dtxid, swept: !dtxid.nil?)
+      result
+    end
+    consolidation_steps = wn_results.sum { |r| r[:consolidation_steps] }
+    sweep_count = wn_results.count { |r| r[:sweep] }
 
-      dtxid = sweep_result[:txid].reverse.unpack1('H*')
-      BSV::Wallet.emit('e2e.cleanup.sweep', wallet: name, dtxid: dtxid)
-      dtxid
+    # Step 2 — SDK self-sweep: drain SDK's own residual change (the
+    # BRC-42-derived outputs from Phase 1's outbound payments) back to
+    # its root address via the same path. After this every SDK-controlled
+    # UTXO is at the literal root P2PKH — the wallet's DB carries no
+    # derivation context past this point.
+    E2E::WalletHarness.activate(sdk)
+    sdk_result = sdk[:engine].sweep_to_root(recipient: sdk_identity, target_inputs: target_inputs)
+    sdk_sweep_dtxid = sdk_result[:sweep] && sdk_result[:sweep][:txid].reverse.unpack1('H*')
+    if sdk_sweep_dtxid
+      BSV::Wallet.emit('e2e.cleanup.sdk_self_sweep',
+                       consolidation_steps: sdk_result[:consolidation_steps],
+                       dtxid: sdk_sweep_dtxid)
+    else
+      BSV::Wallet.emit('e2e.cleanup.sdk_self_sweep.skipped', reason: 'no_spendable')
     end
 
-    # Step 3 — re-scan SDK to pick up the swept inbound outputs.
-    # With +derive: false+ above, the Wn sweeps paid to SDK's literal
-    # root address. +import_wallet+ rediscovers them by scanning that
-    # address against the chain provider — no internalize step needed
-    # because there's no derivation context to wire.
-    E2E::WalletHarness.activate(sdk)
-    sdk[:engine].import_wallet
+    # Step 3 — re-scan SDK to pick up everything that now sits at the
+    # root address: the W1..W5 sweep outputs from Step 1 plus the SDK
+    # self-sweep output from Step 2. +import_wallet(include_unconfirmed:
+    # true)+ scans WoC's +/unspent/all+ so the just-broadcast outputs
+    # show up immediately (in mempool). +no_send: false+ broadcasts the
+    # per-import Phase 2 self-payment, keeping the wallet's view
+    # consistent with chain (every action carries a real txid).
+    sdk[:engine].import_wallet(include_unconfirmed: true,
+                               no_send: false,
+                               accept_delayed_broadcast: false)
     sdk_final_balance = sdk[:utxo_pool].balance
     recovered = sdk_final_balance - sdk_starting_balance
     total_funded = test_ctxs.size * funding_per_wallet
     recovery_fraction = recovered.to_f / total_funded
 
     warn "\n=== Phase 4 cleanup summary ==="
-    warn "  consolidation steps: #{consolidation_dtxids.length}"
-    warn "  sweep tx:            #{sweep_dtxids.length}"
+    warn "  consolidation steps: #{consolidation_steps}"
+    warn "  sweep tx:            #{sweep_count}"
     warn "  SDK balance:         #{sdk_starting_balance} → #{sdk_final_balance} (Δ #{recovered})"
     warn "  recovery fraction:   #{(recovery_fraction * 100).round(2)}%"
     warn "===\n"
@@ -143,8 +126,8 @@ RSpec.describe 'e2e Phase 4 — consolidate + sweep to SDK' do # rubocop:disable
     BSV::Wallet.emit('e2e.phase4.complete',
                      recovered: recovered,
                      recovery_fraction: recovery_fraction.round(4),
-                     consolidation_steps: consolidation_dtxids.length,
-                     sweep_tx: sweep_dtxids.length)
+                     consolidation_steps: consolidation_steps,
+                     sweep_tx: sweep_count)
 
     # Each Wn ends with zero spendable — the strict acceptance
     # criterion that consolidation + sweep removed everything.

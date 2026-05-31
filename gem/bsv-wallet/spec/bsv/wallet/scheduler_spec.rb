@@ -23,11 +23,11 @@ RSpec.describe BSV::Wallet::Scheduler do
 
   describe '#run!' do
     before do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_pushes).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_submissions).with(store, limit: 10).and_return([])
     end
 
     it 'pushes pending broadcast IDs to the broadcast endpoint' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([1, 2])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions).with(store, limit: 10).and_return([1, 2])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -47,8 +47,8 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'pushes pending push-submission IDs to the broadcast endpoint' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([])
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_pushes).with(store, limit: 10).and_return([3, 4])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_submissions).with(store, limit: 10).and_return([3, 4])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -66,9 +66,9 @@ RSpec.describe BSV::Wallet::Scheduler do
       end
     end
 
-    it 'emits task.discovered with task=broadcast_push_submission when pushes are queued' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([])
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_pushes).with(store, limit: 10).and_return([3, 4])
+    it 'emits task.discovered with task=broadcast_submission when pushes are queued' do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_submissions).with(store, limit: 10).and_return([3, 4])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -78,14 +78,14 @@ RSpec.describe BSV::Wallet::Scheduler do
         scheduler.run!(task: task)
         2.times { broadcast_pull.receive }
 
-        expect(log_output.string).to include('[event] task.discovered task=broadcast_push_submission count=2')
+        expect(log_output.string).to include('[event] task.discovered task=broadcast_submission count=2')
       ensure
         task.stop
       end
     end
 
     it 'pushes pending proof IDs to the proof endpoint' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions).with(store, limit: 10).and_return([])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([10, 20])
 
       Async do |task|
@@ -105,7 +105,7 @@ RSpec.describe BSV::Wallet::Scheduler do
 
     it 'continues when a discovery query raises' do
       call_count = 0
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls) do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions) do
         call_count += 1
         raise 'db error' if call_count == 1
 
@@ -129,7 +129,7 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'does not push anything when no pending work' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions).with(store, limit: 10).and_return([])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -141,7 +141,7 @@ RSpec.describe BSV::Wallet::Scheduler do
         # Give the loops time to run one cycle
         sleep 0.05
 
-        expect(BSV::Wallet::Engine::Broadcast).to have_received(:pending_polls).at_least(:once)
+        expect(BSV::Wallet::Engine::Broadcast).to have_received(:pending_resolutions).at_least(:once)
         expect(BSV::Wallet::Engine::TxProof).to have_received(:pending).at_least(:once)
       ensure
         task.stop
@@ -149,7 +149,7 @@ RSpec.describe BSV::Wallet::Scheduler do
     end
 
     it 'emits task.discovered with count=2 when two ids are returned' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([1, 2])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions).with(store, limit: 10).and_return([1, 2])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -161,14 +161,14 @@ RSpec.describe BSV::Wallet::Scheduler do
         # Wait for messages to be pushed (confirms the loop ran)
         2.times { broadcast_pull.receive }
 
-        expect(log_output.string).to include('[event] task.discovered task=broadcast_push count=2')
+        expect(log_output.string).to include('[event] task.discovered task=broadcast_resolution count=2')
       ensure
         task.stop
       end
     end
 
     it 'emits one task.enqueued per id' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([5, 7])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions).with(store, limit: 10).and_return([5, 7])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -180,15 +180,15 @@ RSpec.describe BSV::Wallet::Scheduler do
         2.times { broadcast_pull.receive }
 
         log = log_output.string
-        expect(log).to include('[event] task.enqueued task=broadcast_push id=5')
-        expect(log).to include('[event] task.enqueued task=broadcast_push id=7')
+        expect(log).to include('[event] task.enqueued task=broadcast_resolution id=5')
+        expect(log).to include('[event] task.enqueued task=broadcast_resolution id=7')
       ensure
         task.stop
       end
     end
 
     it 'emits neither when discovery returns []' do
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions).with(store, limit: 10).and_return([])
       allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
 
       Async do |task|
@@ -209,7 +209,7 @@ RSpec.describe BSV::Wallet::Scheduler do
 
     it 'emits fiber.crashed when discovery raises' do
       call_count = 0
-      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_polls) do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions) do
         call_count += 1
         raise 'db error' if call_count == 1
 
@@ -226,7 +226,7 @@ RSpec.describe BSV::Wallet::Scheduler do
         # Wait for the retry cycle to push a message
         broadcast_pull.receive
 
-        expect(log_output.string).to include('[event] fiber.crashed task=broadcast_push error=db error')
+        expect(log_output.string).to include('[event] fiber.crashed task=broadcast_resolution error=db error')
       ensure
         task.stop
       end
@@ -242,14 +242,14 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
-        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
         scheduler.run!(task: task)
-        BSV::Wallet.emit('task.dispatched', task: 'broadcast_push', id: 1)
+        BSV::Wallet.emit('task.dispatched', task: 'broadcast_resolution', id: 1)
         expect(scheduler.in_flight).to eq(1)
 
-        BSV::Wallet.emit('task.succeeded', task: 'broadcast_push', id: 1, latency_ms: 10, outcome: :accepted)
+        BSV::Wallet.emit('task.succeeded', task: 'broadcast_resolution', id: 1, latency_ms: 10, outcome: :accepted)
         expect(scheduler.in_flight).to eq(0)
       ensure
         task.stop
@@ -261,12 +261,12 @@ RSpec.describe BSV::Wallet::Scheduler do
         Async do |task|
           OMQ::PULL.bind('inproc://broadcasts.pull')
           OMQ::PULL.bind('inproc://proofs.pull')
-          allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+          allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
           allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
           scheduler.run!(task: task)
-          BSV::Wallet.emit('task.dispatched', task: 'broadcast_push', id: 1)
-          BSV::Wallet.emit(terminal, task: 'broadcast_push', id: 1)
+          BSV::Wallet.emit('task.dispatched', task: 'broadcast_resolution', id: 1)
+          BSV::Wallet.emit(terminal, task: 'broadcast_resolution', id: 1)
           expect(scheduler.in_flight).to eq(0)
         ensure
           task.stop
@@ -278,13 +278,13 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
-        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
         scheduler.run!(task: task)
         BSV::Wallet.emit('daemon.started', wallet: 'alice', network: 'mainnet')
-        BSV::Wallet.emit('task.enqueued', task: 'broadcast_push', id: 1)
-        BSV::Wallet.emit('task.discovered', task: 'broadcast_push', count: 1)
+        BSV::Wallet.emit('task.enqueued', task: 'broadcast_resolution', id: 1)
+        BSV::Wallet.emit('task.discovered', task: 'broadcast_resolution', count: 1)
         expect(scheduler.in_flight).to eq(0)
       ensure
         task.stop
@@ -297,7 +297,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
-        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
         scheduler.run!(task: task)
@@ -316,16 +316,16 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
-        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
         scheduler.run!(task: task)
-        BSV::Wallet.emit('task.dispatched', task: 'broadcast_push', id: 1)
+        BSV::Wallet.emit('task.dispatched', task: 'broadcast_resolution', id: 1)
 
         # Simulate the in-flight task completing partway through the drain.
         task.async do
           sleep 0.2
-          BSV::Wallet.emit('task.succeeded', task: 'broadcast_push', id: 1, outcome: :accepted)
+          BSV::Wallet.emit('task.succeeded', task: 'broadcast_resolution', id: 1, outcome: :accepted)
         end
 
         result = scheduler.shutdown(timeout: 2.0)
@@ -340,11 +340,11 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
-        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
         scheduler.run!(task: task)
-        BSV::Wallet.emit('task.dispatched', task: 'broadcast_push', id: 1)
+        BSV::Wallet.emit('task.dispatched', task: 'broadcast_resolution', id: 1)
 
         result = scheduler.shutdown(timeout: 0.3)
         expect(result).to be(false)
@@ -358,7 +358,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
-        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
         scheduler.run!(task: task)
@@ -374,7 +374,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
-        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_pushes: [], pending_polls: [])
+        allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
         baseline = BSV::Wallet.event_observer_count

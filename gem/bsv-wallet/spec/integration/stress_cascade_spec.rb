@@ -28,6 +28,7 @@ require 'json'
 require 'securerandom'
 require 'sequel'
 require 'bsv-wallet'
+require_relative '../support/fanout'
 
 # Match BSV::Wallet::CLI.boot: load the repo-root .env so the spec process
 # sees the same DATABASE_URL_* / WIF_* the bin/ subprocesses do. Specs run
@@ -161,22 +162,19 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
     starting = wallet_names.to_h { |w| [w, total_balance(w)] }
 
     # Phase 2 — Cascade: each wallet sends payments_per_wallet no_send payments
-    # to a randomly chosen not-self recipient. Auto-fund's largest-first selection
-    # produces the L2 → L3 → L4 fanout described in the strategy doc.
-    payment_log = Hash.new(0) # "alice→bob" => count
-    wallet_names.each do |sender|
-      others = wallet_names - [sender]
-      payments_per_wallet.times do |i|
-        recipient = others.sample
-        envelope, _, status = run_cli('create', sender, identity_keys[recipient], payment_sats.to_s)
-        expect(status).to be_success, "create #{sender}→#{recipient} (#{i + 1}/#{payments_per_wallet}) failed"
-        expect(envelope.bytesize).to be > 0
+    # to a randomly chosen not-self recipient via the shared Fanout primitive.
+    # The transport here is the bin/ CLI pipeline (create | receive) — the
+    # coverage #129 exists for. Auto-fund's largest-first selection produces
+    # the L2 → L3 → L4 fanout described in the strategy doc.
+    payment_log = Fanout.pass(
+      wallets: wallet_names, count: payments_per_wallet, satoshis: payment_sats
+    ) do |sender, recipient, sats, i|
+      envelope, _, status = run_cli('create', sender, identity_keys[recipient], sats.to_s)
+      expect(status).to be_success, "create #{sender}→#{recipient} (#{i + 1}/#{payments_per_wallet}) failed"
+      expect(envelope.bytesize).to be > 0
 
-        _, _, status = run_cli('receive', recipient, '--basket', 'received', stdin_data: envelope)
-        expect(status).to be_success, "receive #{sender}→#{recipient} (#{i + 1}/#{payments_per_wallet}) failed"
-
-        payment_log["#{sender}→#{recipient}"] += 1
-      end
+      _, _, status = run_cli('receive', recipient, '--basket', 'received', stdin_data: envelope)
+      expect(status).to be_success, "receive #{sender}→#{recipient} (#{i + 1}/#{payments_per_wallet}) failed"
     end
 
     # Phase 3 — Per-wallet final state. Action counts are deterministic

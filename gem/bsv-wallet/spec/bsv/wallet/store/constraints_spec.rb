@@ -428,6 +428,32 @@ RSpec.describe 'Schema constraints', :postgres, :store do
     end
   end
 
+  # --- internal-action delete guard (008) ---
+
+  describe 'prevent_internal_action_delete' do
+    it 'forbids deleting an internal action that owns a promoted output (received UTXO history)' do
+      action_id = insert_action(broadcast_intent: 'none')
+      create_output(action_id: action_id) # promoted defaults to true
+      expect do
+        db.transaction(savepoint: true) { db[:actions].where(id: action_id).delete }
+      end.to raise_error(Sequel::DatabaseError, /cannot delete internal action/)
+    end
+
+    it 'allows deleting a zero-output internal action (WBIKD address lock)' do
+      action_id = insert_action(broadcast_intent: 'none')
+      expect do
+        db.transaction(savepoint: true) { db[:actions].where(id: action_id).delete }
+      end.not_to raise_error
+    end
+
+    it 'allows deleting an action with a non-none broadcast_intent' do
+      action_id = insert_action(broadcast_intent: 'delayed')
+      expect do
+        db.transaction(savepoint: true) { db[:actions].where(id: action_id).delete }
+      end.not_to raise_error
+    end
+  end
+
   # --- inputs ---
 
   describe 'inputs' do
