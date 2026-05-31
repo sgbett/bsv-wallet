@@ -741,7 +741,15 @@ module BSV
       # violation by construction). Cheap insurance — raises to surface
       # the bug.
       def do_reject(action_id, visited:)
-        raise BSV::Wallet::Error, "reject_action cycle detected at action_id=#{action_id}" if visited.include?(action_id)
+        # Idempotent re-entry guard. Action graphs are DAGs (an input can
+        # only spend an already-existing output, so true cycles are
+        # impossible), but legitimate diamonds occur: when one action D
+        # spends outputs of two siblings B and C that share a parent A,
+        # the forward walk reaches D once via each path. The second visit
+        # must no-op, not raise -- raising would roll back the whole
+        # cascade for a shape that arises naturally (e.g. a consolidation
+        # combining two outputs of a common ancestor).
+        return if visited.include?(action_id)
 
         visited.add(action_id)
 

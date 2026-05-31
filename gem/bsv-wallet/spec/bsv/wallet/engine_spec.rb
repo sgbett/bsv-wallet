@@ -760,8 +760,7 @@ RSpec.describe BSV::Wallet::Engine do
         outputs: [{ satoshis: 500, locking_script: OP_TRUE, output_description: 'out' }],
         no_send: true
       )
-      action_id = store.find_action(wtxid: [result[:txid]].flatten.pack('a*').unpack1('a*') && result[:txid])&.dig(:id)
-      action_id ||= store.send(:models)::Action.where(description: 'speculative inline').last&.id
+      action_id = store.find_action(wtxid: result[:txid])[:id]
 
       # Manually flip to inline + add broadcasts row to make it a valid
       # reject_action target (no_send actions raise per design).
