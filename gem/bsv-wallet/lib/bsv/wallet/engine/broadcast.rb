@@ -13,21 +13,6 @@ module BSV
       class Broadcast
         include OmqSupport
 
-        # ARC txStatus values indicating the transaction was accepted by the network.
-        # Mirror of Models::Broadcast::ACCEPTED_STATUSES — kept as a separate
-        # constant here because resolving the model constant at class load
-        # time requires Sequel to be loaded, which isn't guaranteed when
-        # Engine::Broadcast is autoloaded. Source of truth for both is
-        # BRC-100's ARC status enum; they must stay in lockstep.
-        ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK ACCEPTED_BY_NETWORK MINED IMMUTABLE].freeze
-
-        # ARC txStatus values indicating a definitive, non-recoverable rejection.
-        # Intentionally excludes MINED_IN_STALE_BLOCK (transient -- the tx is
-        # valid, just on a stale chain; daemon re-discovers per #126's self-heal
-        # narrative). Distinct from Models::Broadcast::TERMINAL_STATUSES, which
-        # is the "polling stops" set (includes accepted statuses too).
-        REJECTED_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
-
         def initialize(store:, services:)
           @store = store
           @services = services
@@ -260,9 +245,9 @@ module BSV
         # Categorize a successful ARC txStatus into an outcome bucket.
         def categorize_outcome(tx_status)
           status = tx_status.to_s.upcase
-          if ACCEPTED_STATUSES.include?(status)
+          if ArcStatus::ACCEPTED.include?(status)
             :accepted
-          elsif REJECTED_STATUSES.include?(status)
+          elsif ArcStatus::REJECTED.include?(status)
             :rejected
           else
             :pending
@@ -303,7 +288,7 @@ module BSV
         # and poll (success path with terminal txStatus).
         def terminal_status?(tx_status, extra_info = nil)
           status = tx_status.to_s.upcase
-          return true if REJECTED_STATUSES.include?(status)
+          return true if ArcStatus::REJECTED.include?(status)
 
           info = extra_info.to_s.upcase
           status.include?('ORPHAN') || info.include?('ORPHAN')

@@ -807,7 +807,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(input_output.reload.spendable?).to be false
     end
 
-    it 'raises CannotRejectAcceptedActionError when target tx_status is in ACCEPTED_STATUSES' do
+    it 'raises CannotRejectAcceptedActionError when target tx_status is in ArcStatus::ACCEPTED' do
       result = store.create_action(action: { description: 'mined target', nlocktime: 0 })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))

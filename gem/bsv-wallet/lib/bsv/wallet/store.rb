@@ -644,7 +644,7 @@ module BSV
           # promoted: false. Single transaction = single recoverable
           # state.
           status_upper = tx_status.to_s.upcase
-          promote_action_outputs(action_id: action_id) if !status_upper.empty? && !Models::Broadcast::REJECTED_STATUSES.include?(status_upper)
+          promote_action_outputs(action_id: action_id) if !status_upper.empty? && !BSV::Wallet::ArcStatus::REJECTED.include?(status_upper)
 
           broadcast_to_hash(broadcast)
         end
@@ -660,7 +660,7 @@ module BSV
       def pending_resolutions(limit: 100)
         models::Broadcast
           .exclude(broadcast_at: nil)
-          .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: Models::Broadcast::TERMINAL_STATUSES)))
+          .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: BSV::Wallet::ArcStatus::TERMINAL)))
           .limit(limit)
           .all
           .map { |b| broadcast_to_hash(b) }
@@ -762,7 +762,7 @@ module BSV
         broadcast = models::Broadcast.first(action_id: action_id)
         if broadcast
           status = broadcast.tx_status.to_s.upcase
-          raise BSV::Wallet::CannotRejectAcceptedActionError.new(action_id, status) if Models::Broadcast::ACCEPTED_STATUSES.include?(status)
+          raise BSV::Wallet::CannotRejectAcceptedActionError.new(action_id, status) if BSV::Wallet::ArcStatus::ACCEPTED.include?(status)
         end
 
         child_actions_of(action_id: action_id).each do |child_id|

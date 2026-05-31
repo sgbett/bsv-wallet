@@ -9,31 +9,9 @@ module BSV
 
           many_to_one :action, class: 'BSV::Wallet::Store::Models::Action'
 
-          # Broadcasts with these statuses are considered terminal — no further polling.
-          # MINED_IN_STALE_BLOCK is intentionally excluded: a stale-block tx is valid but
-          # on a fork, and must continue to be re-polled until it re-enters the main chain
-          # (see docs/wallet-events.md and HLR #182).
-          TERMINAL_STATUSES = %w[
-            SEEN_ON_NETWORK MINED IMMUTABLE
-            REJECTED DOUBLE_SPEND_ATTEMPTED
-          ].freeze
-
-          # ARC tx_status values that indicate the network has accepted the
-          # broadcast (Phase 4 trigger). Subset of TERMINAL_STATUSES that
-          # represents success rather than rejection. ACCEPTED_BY_NETWORK is
-          # included because ARC reports it as an interim accepted state
-          # before SEEN_ON_NETWORK in some configurations.
-          ACCEPTED_STATUSES = %w[
-            SEEN_ON_NETWORK ACCEPTED_BY_NETWORK MINED IMMUTABLE
-          ].freeze
-
-          # ARC tx_status values indicating a definitive, non-recoverable rejection.
-          # Subset of TERMINAL_STATUSES that represents failure. Mirror of
-          # Engine::Broadcast::REJECTED_STATUSES — both must stay in lockstep
-          # (BRC-100 ARC status enum is the source of truth). Resolution
-          # promotion uses this as the negative predicate ("promote on
-          # non-rejection") per #240.
-          REJECTED_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
+          # ARC tx_status classification sets live in BSV::Wallet::ArcStatus
+          # (accepted / rejected / terminal) — the single source of truth
+          # shared with the Engine and the background broadcast worker.
         end
       end
     end

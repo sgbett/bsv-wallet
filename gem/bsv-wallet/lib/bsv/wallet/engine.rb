@@ -33,19 +33,6 @@ module BSV
       autoload :TxProof,    'bsv/wallet/engine/tx_proof'
       autoload :OmqSupport, 'bsv/wallet/engine/omq_support'
 
-      # ARC tx_status values where the network has formally accepted
-      # the broadcast.
-      ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK MINED ACCEPTED_BY_NETWORK IMMUTABLE].freeze
-
-      # ARC tx_status values that indicate a definitive, non-recoverable
-      # rejection. Used to gate +inline_broadcast+'s output-promotion
-      # decision: anything NOT in this set means "the tx is on its way"
-      # and the wallet should record its outputs as spendable. ARC's
-      # immediate response on submit is typically +RECEIVED+ / +STORED+
-      # / +QUEUED+ — none of which are in ACCEPTED, but none are in
-      # REJECTED either.
-      REJECTED_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
-
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
       LIMP_THRESHOLD     = 50_000  # default: 50K sats
@@ -1371,21 +1358,20 @@ module BSV
 
       # +inline_broadcast+'s output-promotion decision. Returns true
       # when the tx is "on its way" — either formally accepted
-      # (+ACCEPTED_STATUSES+) OR in an in-flight status that isn't
-      # definitively rejected. The narrower +ACCEPTED_STATUSES+-only
-      # test was wrong for the inline path: ARC's synchronous response
-      # on submit is typically an in-flight status, not SEEN_ON_NETWORK.
-      # Treating in-flight as "not promoted" left the wallet's
-      # spendable view stuck on the consumed input with no replacement
-      # change, breaking the next outbound payment with a spurious
-      # limp-mode error.
+      # (+ArcStatus::ACCEPTED+) OR in an in-flight status that isn't
+      # definitively rejected. The narrower accepted-only test was wrong
+      # for the inline path: ARC's synchronous response on submit is
+      # typically an in-flight status, not SEEN_ON_NETWORK. Treating
+      # in-flight as "not promoted" left the wallet's spendable view
+      # stuck on the consumed input with no replacement change, breaking
+      # the next outbound payment with a spurious limp-mode error.
       def accepted?(broadcast_result)
         return false unless broadcast_result
 
         status = broadcast_result[:tx_status]
         return false if status.nil? || status.to_s.empty?
 
-        !REJECTED_STATUSES.include?(status)
+        !ArcStatus::REJECTED.include?(status)
       end
 
       # Definitive synchronous rejection. The broadcaster returned a
@@ -1406,7 +1392,7 @@ module BSV
         status = broadcast_result[:tx_status]
         return false if status.nil? || status.to_s.empty?
 
-        REJECTED_STATUSES.include?(status)
+        ArcStatus::REJECTED.include?(status)
       end
 
       # Inline ARC submission for the synchronous broadcast path.
@@ -1459,7 +1445,7 @@ module BSV
           # return a non-rejecting status here — that would let +accepted?+
           # misread a failed submit as success.
           failure_status = response.data && response.data['txStatus']
-          if failure_status && REJECTED_STATUSES.include?(failure_status.to_s.upcase)
+          if failure_status && ArcStatus::REJECTED.include?(failure_status.to_s.upcase)
             { tx_status: failure_status.to_s.upcase }
           else
             @store.broadcast_status(action_id: action_id)

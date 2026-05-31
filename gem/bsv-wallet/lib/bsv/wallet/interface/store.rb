@@ -183,7 +183,7 @@ module BSV
         #
         # Raises +BSV::Wallet::CannotRejectAcceptedActionError+ if the
         # target or any cascade descendant has a broadcast row whose
-        # tx_status is in +Models::Broadcast::ACCEPTED_STATUSES+. The
+        # tx_status is in +BSV::Wallet::ArcStatus::ACCEPTED+. The
         # network considers the tx accepted; unwind would corrupt the
         # wallet's view rather than recover it. Operator investigation
         # is the right response.

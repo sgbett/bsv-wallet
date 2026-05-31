@@ -29,6 +29,11 @@ module BSV
     # BRC-100 contract errors (Error, InvalidParameterError, etc.) come from bsv-sdk.
     require_relative 'wallet/errors'
 
+    # ARC tx_status classification sets (accepted / rejected / terminal).
+    # Dependency-free single source of truth shared across Engine, the
+    # background broadcast worker, and the Sequel models.
+    require_relative 'wallet/arc_status'
+
     # Key derivation (BRC-42/43)
     autoload :KeyDeriver, 'bsv/wallet/key_deriver'
 

@@ -68,7 +68,7 @@ module BSV
 
     # Raised by Store#reject_action when the target (or any cascade
     # descendant) has a broadcast row whose tx_status is in
-    # +Models::Broadcast::ACCEPTED_STATUSES+. That tx_status means the
+    # +BSV::Wallet::ArcStatus::ACCEPTED+. That tx_status means the
     # network told us the tx was accepted (SEEN_ON_NETWORK, MINED, etc.)
     # — rejecting the action would delete the wallet's record of an
     # on-chain artefact, compounding a wallet-vs-chain divergence rather
