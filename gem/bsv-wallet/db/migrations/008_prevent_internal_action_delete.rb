@@ -1,13 +1,21 @@
 # frozen_string_literal: true
 
-# Database-level guard mirroring Store#reject_action's internal-action
-# refusal (CannotRejectInternalActionError). Actions with
-# broadcast_intent = 'none' (internalize_action, import_utxo, wbikd) are
-# canonical UTXO history received via channels other than broadcast —
-# nothing should ever delete them. The application layer already refuses
-# (do_reject raises before any DELETE; reap_stale_actions excludes 'none';
-# abort_action refuses via the promoted-output guard), so this BEFORE
-# DELETE trigger is defense-in-depth: it forbids the delete by ANY path.
+# Database-level guard protecting canonical received UTXO history from
+# deletion — defense-in-depth mirroring Store#abort_action's promoted-
+# output refusal (CannotAbortPromotedActionError) and reject_action's
+# internal-action refusal (CannotRejectInternalActionError).
+#
+# The history we protect is embodied by an action's PROMOTED outputs:
+# internalize_action and import_utxo write their outputs promoted: true at
+# create time, so a broadcast_intent = 'none' action that owns a promoted
+# output is received UTXO history and must never be deleted.
+#
+# The criterion is "promoted output", not "broadcast_intent = none" alone:
+# a WBIKD address-lock is also broadcast_intent = 'none' but is a zero-
+# output speculative slot lock — abort_action and slot recycling delete it
+# legitimately, and it carries no UTXO history. Keying on promoted outputs
+# (the same criterion abort_action enforces) protects the history while
+# leaving these ephemeral locks deletable.
 #
 # A CHECK constraint cannot express this — CHECKs fire on INSERT/UPDATE,
 # never DELETE. A BEFORE DELETE trigger is the only DB mechanism that
@@ -20,8 +28,9 @@ Sequel.migration do
       run <<~SQL
         CREATE FUNCTION prevent_internal_action_delete() RETURNS trigger AS $$
         BEGIN
-          IF OLD.broadcast_intent = 'none' THEN
-            RAISE EXCEPTION 'cannot delete internal action % (broadcast_intent=none)', OLD.id
+          IF OLD.broadcast_intent = 'none'
+             AND EXISTS (SELECT 1 FROM outputs WHERE action_id = OLD.id AND promoted) THEN
+            RAISE EXCEPTION 'cannot delete internal action % (broadcast_intent=none with promoted outputs)', OLD.id
               USING ERRCODE = 'check_violation';
           END IF;
           RETURN OLD;
@@ -41,7 +50,8 @@ Sequel.migration do
           FOR EACH ROW
           WHEN OLD.broadcast_intent = 'none'
         BEGIN
-          SELECT RAISE(ABORT, 'cannot delete internal action (broadcast_intent=none)');
+          SELECT RAISE(ABORT, 'cannot delete internal action (broadcast_intent=none with promoted outputs)')
+          WHERE EXISTS (SELECT 1 FROM outputs WHERE action_id = OLD.id AND promoted);
         END;
       SQL
     end
