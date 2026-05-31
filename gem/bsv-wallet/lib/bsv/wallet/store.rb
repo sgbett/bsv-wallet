@@ -736,10 +736,8 @@ module BSV
       # block when this action's outputs are deleted -- the inputs that
       # referenced them are gone via each child's CASCADE on action_id.
       #
-      # +visited+ is a Set of action_ids already entered; re-entering
-      # one indicates a cycle in the dependency graph (DAG invariant
-      # violation by construction). Cheap insurance — raises to surface
-      # the bug.
+      # +visited+ is a Set of action_ids already entered; re-entering one
+      # no-ops (see the diamond rationale in the body) rather than raising.
       def do_reject(action_id, visited:)
         # Idempotent re-entry guard. Action graphs are DAGs (an input can
         # only spend an already-existing output, so true cycles are

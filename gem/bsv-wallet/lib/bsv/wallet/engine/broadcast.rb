@@ -78,20 +78,31 @@ module BSV
           task_name = status && status[:broadcast_at] ? 'broadcast_resolution' : 'broadcast_submission'
           BSV::Wallet.emit('task.dispatched', task: task_name, id: action_id)
 
-          action = @store.find_action(id: action_id)
-          unless action
-            BSV::Wallet.emit('task.skipped', task: task_name, id: action_id, reason: :action_not_found)
-            return
-          end
-          unless action[:raw_tx]
-            BSV::Wallet.emit('task.skipped', task: task_name, id: action_id, reason: :no_raw_tx)
-            return
-          end
+          begin
+            action = @store.find_action(id: action_id)
+            unless action
+              BSV::Wallet.emit('task.skipped', task: task_name, id: action_id, reason: :action_not_found)
+              return
+            end
+            unless action[:raw_tx]
+              BSV::Wallet.emit('task.skipped', task: task_name, id: action_id, reason: :no_raw_tx)
+              return
+            end
 
-          if status && status[:broadcast_at]
-            poll_status(action_id, action, status: status, started_at: started_at)
-          else
-            submit(action_id, action, started_at: started_at)
+            if status && status[:broadcast_at]
+              poll_status(action_id, action, status: status, started_at: started_at)
+            else
+              submit(action_id, action, started_at: started_at)
+            end
+          rescue StandardError => e
+            # Every dispatched task must emit exactly one terminal event so the
+            # Scheduler's in_flight counter (and cooperative drain) stays
+            # balanced -- an exception bubbling out of submit/poll_status would
+            # otherwise leave in_flight stuck >0. Emit the terminal event, then
+            # re-raise so pull!/reply! still log and the REP path answers 'error'.
+            BSV::Wallet.emit('task.failed', task: task_name, id: action_id,
+                                            reason: :exception, error: e.message)
+            raise
           end
         end
 
