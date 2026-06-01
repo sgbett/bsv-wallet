@@ -78,6 +78,17 @@ RSpec.describe BSV::Wallet::CLI do
       ENV['BSV_WALLET_POSTGRES'] = ''
       expect(described_class.derive_postgres_url('alice')).to be_nil
     end
+
+    it 'returns nil when the base URL is whitespace-only' do
+      ENV['BSV_WALLET_POSTGRES'] = '   '
+      expect(described_class.derive_postgres_url('alice')).to be_nil
+    end
+
+    it 'strips surrounding whitespace from the base URL' do
+      ENV['BSV_WALLET_POSTGRES'] = '  postgres://localhost:5433/  '
+      expect(described_class.derive_postgres_url('w1'))
+        .to eq('postgres://localhost:5433/bsv_wallet_w1')
+    end
   end
 
   describe '.default_sqlite_url' do

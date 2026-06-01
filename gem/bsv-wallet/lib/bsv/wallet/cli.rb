@@ -118,7 +118,7 @@ module BSV
       def derive_postgres_url(wallet_name)
         return unless wallet_name
 
-        base = ENV.fetch('BSV_WALLET_POSTGRES', nil)
+        base = ENV.fetch('BSV_WALLET_POSTGRES', nil)&.strip
         return if base.nil? || base.empty?
 
         "#{base.chomp('/')}/bsv_wallet_#{wallet_name}"

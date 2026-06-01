@@ -57,7 +57,7 @@ RSpec.describe BSV::Wallet::ArcStatus do
   # Engine::Broadcast, and Models::Broadcast. Guard against any
   # reintroduced divergence: ACCEPTED and REJECTED are disjoint, and every
   # rejected-or-mined status the resolution loop should stop polling on is
-  # terminal (MALFORMED excepted — see note below).
+  # terminal.
   it 'has disjoint ACCEPTED and REJECTED sets' do
     expect(described_class::ACCEPTED & described_class::REJECTED).to be_empty
   end
