@@ -38,6 +38,19 @@ RSpec.describe BSV::Wallet::ArcStatus do
     it 'excludes MINED_IN_STALE_BLOCK so stale-block rows keep being polled' do
       expect(described_class::TERMINAL).not_to include('MINED_IN_STALE_BLOCK')
     end
+
+    # A rejected tx is never going to be accepted — polling must stop so
+    # reject_action can unwind it. Guards against the prior state where
+    # MALFORMED was rejected-but-not-terminal (re-polled forever).
+    it 'includes every REJECTED status' do
+      expect(described_class::TERMINAL).to include(*described_class::REJECTED)
+    end
+
+    # ACCEPTED_BY_NETWORK is an interim accepted state: promote, but keep
+    # polling until SEEN_ON_NETWORK / MINED yields the final proof.
+    it 'excludes the interim ACCEPTED_BY_NETWORK state' do
+      expect(described_class::TERMINAL).not_to include('ACCEPTED_BY_NETWORK')
+    end
   end
 
   # The three sets were previously hand-mirrored across Engine,

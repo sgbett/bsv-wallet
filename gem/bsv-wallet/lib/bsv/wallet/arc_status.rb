@@ -26,12 +26,16 @@ module BSV
       # later flips to REJECTED (#240).
       REJECTED = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
 
-      # Polling stops here. MINED_IN_STALE_BLOCK is intentionally excluded:
-      # a stale-block tx is valid but on a fork and must keep being polled
-      # until it re-enters the main chain (HLR #182).
+      # Polling stops here. Every REJECTED status is terminal, plus the
+      # accepted statuses that are final (SEEN_ON_NETWORK / MINED /
+      # IMMUTABLE). Two accepted statuses are deliberately NOT terminal:
+      #   - ACCEPTED_BY_NETWORK — an interim accepted state ARC reports
+      #     before SEEN_ON_NETWORK; promote, but keep polling for proof.
+      #   - MINED_IN_STALE_BLOCK — valid but on a fork; keep polling until
+      #     it re-enters the main chain (HLR #182).
       TERMINAL = %w[
         SEEN_ON_NETWORK MINED IMMUTABLE
-        REJECTED DOUBLE_SPEND_ATTEMPTED
+        REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED
       ].freeze
     end
   end
