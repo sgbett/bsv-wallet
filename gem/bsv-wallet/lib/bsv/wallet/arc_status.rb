@@ -24,7 +24,12 @@ module BSV
       # so the wallet promotes its outputs. The resolution loop +
       # Store#reject_action is the safety net if a non-rejected status
       # later flips to REJECTED (#240).
-      REJECTED = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
+      #
+      # These are persistable ARC tx_status values. A malformed tx is NOT
+      # one of them: ARC reports malformation as an HTTP 461/463 error
+      # ("Malformed transaction"), never as a txStatus — see the failure
+      # path in Engine::Broadcast, where it surfaces as a reason bucket.
+      REJECTED = %w[REJECTED DOUBLE_SPEND_ATTEMPTED].freeze
 
       # Polling stops here. Every REJECTED status is terminal, plus the
       # accepted statuses that are final (SEEN_ON_NETWORK / MINED /
@@ -33,9 +38,14 @@ module BSV
       #     before SEEN_ON_NETWORK; promote, but keep polling for proof.
       #   - MINED_IN_STALE_BLOCK — valid but on a fork; keep polling until
       #     it re-enters the main chain (HLR #182).
+      #
+      # Every member is a valid tx_status enum value: this set is matched
+      # against the persisted broadcasts.tx_status column in
+      # Store#pending_resolutions, so a non-enum value here would make
+      # Postgres reject the query.
       TERMINAL = %w[
         SEEN_ON_NETWORK MINED IMMUTABLE
-        REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED
+        REJECTED DOUBLE_SPEND_ATTEMPTED
       ].freeze
     end
   end

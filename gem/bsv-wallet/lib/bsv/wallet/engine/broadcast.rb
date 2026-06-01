@@ -180,7 +180,7 @@ module BSV
         # Status poll -- query ARC for current tx status.
         #
         # Aborts on a terminal txStatus (REJECTED, DOUBLE_SPEND_ATTEMPTED,
-        # MALFORMED, or ORPHAN in extraInfo). Terminal-reject routes through
+        # or ORPHAN in extraInfo). Terminal-reject routes through
         # Store#reject_action, which cascades-forward through any child
         # action that consumed this action's outputs and unwinds the
         # speculative promotion in one transaction. CannotRejectInternalActionError
@@ -276,7 +276,6 @@ module BSV
           status = tx_status.to_s.upcase
           info = extra_info.to_s.upcase
           return :double_spend if status == 'DOUBLE_SPEND_ATTEMPTED'
-          return :malformed if status == 'MALFORMED'
           return :policy_violation if status == 'REJECTED'
           return :policy_violation if status.include?('ORPHAN') || info.include?('ORPHAN')
 

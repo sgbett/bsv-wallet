@@ -15,7 +15,14 @@ RSpec.describe BSV::Wallet::ArcStatus do
 
   describe 'REJECTED' do
     it 'lists the definitive-rejection statuses' do
-      expect(described_class::REJECTED).to contain_exactly('REJECTED', 'DOUBLE_SPEND_ATTEMPTED', 'MALFORMED')
+      expect(described_class::REJECTED).to contain_exactly('REJECTED', 'DOUBLE_SPEND_ATTEMPTED')
+    end
+
+    # MALFORMED is not an ARC txStatus — ARC reports a malformed tx via an
+    # HTTP 461/463 error, never as a status — so it must not leak into the
+    # set that is matched against the persisted tx_status enum column.
+    it 'excludes MALFORMED (an HTTP error, not a txStatus)' do
+      expect(described_class::REJECTED).not_to include('MALFORMED')
     end
 
     it 'is frozen' do
@@ -40,10 +47,16 @@ RSpec.describe BSV::Wallet::ArcStatus do
     end
 
     # A rejected tx is never going to be accepted — polling must stop so
-    # reject_action can unwind it. Guards against the prior state where
-    # MALFORMED was rejected-but-not-terminal (re-polled forever).
+    # reject_action can unwind it.
     it 'includes every REJECTED status' do
       expect(described_class::TERMINAL).to include(*described_class::REJECTED)
+    end
+
+    # TERMINAL is matched against the persisted tx_status enum column in
+    # Store#pending_resolutions; MALFORMED is an HTTP error, not a valid
+    # enum value, so it must stay out or Postgres rejects the query.
+    it 'excludes MALFORMED (not a valid tx_status enum value)' do
+      expect(described_class::TERMINAL).not_to include('MALFORMED')
     end
 
     # ACCEPTED_BY_NETWORK is an interim accepted state: promote, but keep

@@ -364,38 +364,6 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
     end
 
-    context 'when MALFORMED (terminal)' do
-      let(:malformed_response) do
-        BSV::Network::ProtocolResponse.new(
-          nil,
-          http_success: false,
-          data: { 'txid' => 'abc123', 'txStatus' => 'MALFORMED', 'status' => 200 },
-          error_message: 'MALFORMED'
-        )
-      end
-
-      before do
-        allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(malformed_response)
-        allow(store).to receive(:reject_action)
-        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
-      end
-
-      it 'emits task.aborted with reason=malformed and arc_status' do
-        broadcast.process(action_id)
-        aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
-        expect(aborted).to include(
-          reason: :malformed, arc_status: 'MALFORMED',
-          task: 'broadcast_submission', id: action_id
-        )
-      end
-
-      it 'calls reject_action on the store (releases locked inputs)' do
-        broadcast.process(action_id)
-        expect(store).to have_received(:reject_action).with(action_id: action_id)
-      end
-    end
-
     context 'when ORPHAN in extraInfo (terminal)' do
       let(:orphan_response) do
         BSV::Network::ProtocolResponse.new(
@@ -614,40 +582,6 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         broadcast.process(action_id)
         aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
         expect(aborted).to include(reason: :double_spend, arc_status: 'DOUBLE_SPEND_ATTEMPTED')
-      end
-    end
-
-    context 'when status poll returns MALFORMED (terminal)' do
-      let(:wtxid) { SecureRandom.random_bytes(32) }
-      let(:dtxid) { wtxid.reverse.unpack1('H*') }
-      let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
-      let(:existing_status) do
-        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'ACCEPTED_BY_NETWORK' }
-      end
-      let(:malformed_data) do
-        { tx_status: 'MALFORMED', status: 200, block_hash: nil, block_height: nil,
-          merkle_path: nil, extra_info: nil, competing_txs: nil }
-      end
-      let(:malformed_response) do
-        BSV::Network::ProtocolResponse.new(nil, data: malformed_data, http_success: true)
-      end
-
-      before do
-        allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
-        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(malformed_response)
-        allow(store).to receive(:reject_action)
-      end
-
-      it 'calls reject_action' do
-        broadcast.process(action_id)
-        expect(store).to have_received(:reject_action).with(action_id: action_id)
-      end
-
-      it 'emits task.aborted with reason=:malformed' do
-        broadcast.process(action_id)
-        aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
-        expect(aborted).to include(reason: :malformed, arc_status: 'MALFORMED')
       end
     end
 

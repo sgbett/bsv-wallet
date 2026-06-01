@@ -1377,10 +1377,10 @@ module BSV
       # Definitive synchronous rejection. The broadcaster returned a
       # status that explicitly says "the network refused this tx" —
       # +REJECTED+ from Arcade / Teranode's catch-all +PROCESSING (4)+
-      # validation failure, or +DOUBLE_SPEND_ATTEMPTED+ / +MALFORMED+
-      # from ARC. These are the cases where the tx is not in any
-      # node's mempool and the wallet's locked inputs need releasing
-      # so subsequent actions can spend them.
+      # validation failure, or +DOUBLE_SPEND_ATTEMPTED+ from ARC. These
+      # are the cases where the tx is not in any node's mempool and the
+      # wallet's locked inputs need releasing so subsequent actions can
+      # spend them.
       #
       # Non-rejection includes both formal acceptance (the wallet
       # promotes outputs and proceeds) and in-flight / orphaned states
