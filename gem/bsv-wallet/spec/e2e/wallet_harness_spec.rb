@@ -29,7 +29,9 @@ RSpec.describe E2E::WalletHarness do # rubocop:disable RSpec/SpecFilePathFormat
       described_class.install_derived_wifs!
       first = (1..5).map { |i| ENV.fetch("BSV_WALLET_WIF_W#{i}", nil) }
 
-      ENV['BSV_WALLET_WIF_W1'] = ENV['BSV_WALLET_WIF_W2'] = nil
+      # Clear all five so the second pass genuinely re-derives the full set,
+      # guarding against a regression that only re-derives a subset.
+      (1..5).each { |i| ENV.delete("BSV_WALLET_WIF_W#{i}") }
       described_class.install_derived_wifs!
       second = (1..5).map { |i| ENV.fetch("BSV_WALLET_WIF_W#{i}", nil) }
 
