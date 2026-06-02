@@ -55,8 +55,8 @@ Required:
 
 `BSV_WALLET_WIF_W1..W5` are **not** required — they're derived
 deterministically from `BSV_WALLET_WIF_SDK` (see
-`support/wallet_derivation.rb`). The harness installs them into ENV
-at boot so `CLI.boot(wallet_name: 'w1')` picks them up.
+`spec/support/e2e/wallet_derivation.rb`). The harness installs them
+into ENV at boot so `CLI.boot(wallet_name: 'w1')` picks them up.
 
 If any required var is unset, the harness skips cleanly with a
 message listing exactly which vars are missing.
@@ -64,16 +64,18 @@ message listing exactly which vars are missing.
 ## Layout
 
 ```
-spec/e2e/
-  spec_helper.rb              — separate from spec/spec_helper.rb; never auto-loaded
+spec/e2e/                     — on-chain only; excluded from bare rspec via .rspec
+  spec_helper.rb              — separate from spec/spec_helper.rb; loaded only for broadcast_spec
   broadcast_spec.rb           — the harness: reset → fund → fanout → broadcast
+  README.md
+
+spec/support/e2e/             — pure-Ruby; rides the bare rspec suite, no on-chain env
+  wallet_derivation.rb        — child WIFs from SDK via deterministic multiplicative shift
+  wallet_harness.rb           — installs derived WIFs in ENV + delegates to CLI.boot
+  event_log.rb                — wraps BSV::Wallet.event_log into tmp/e2e-{ts}.log
+  daemon_supervisor.rb        — spawns + manages one walletd subprocess per wallet
   wallet_harness_spec.rb      — unit tests for the WalletHarness helper
   support_spec.rb             — unit tests for the three support modules
-  support/
-    wallet_derivation.rb      — child WIFs from SDK via deterministic multiplicative shift
-    wallet_harness.rb         — installs derived WIFs in ENV + delegates to CLI.boot
-    event_log.rb              — wraps BSV::Wallet.event_log into tmp/e2e-{ts}.log
-    daemon_supervisor.rb      — spawns + manages one walletd subprocess per wallet
 ```
 
 The fanout cascade itself lives in `spec/support/fanout.rb`, shared
