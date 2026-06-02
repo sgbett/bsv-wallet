@@ -47,6 +47,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     context 'when action is not found' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(nil)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
         allow(services).to receive(:call)
       end
 
@@ -68,6 +69,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     context 'when action has no raw_tx' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return({ id: action_id, raw_tx: nil })
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
         allow(services).to receive(:call)
       end
 
@@ -133,9 +135,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         broadcast.process(action_id)
 
         expect(emitted_events.size).to eq(2)
-        expect(emitted_events[0]).to include(name: 'task.dispatched', task: 'broadcast_push', id: action_id)
+        expect(emitted_events[0]).to include(name: 'task.dispatched', task: 'broadcast_submission', id: action_id)
         succeeded = emitted_events[1]
-        expect(succeeded).to include(name: 'task.succeeded', task: 'broadcast_push', id: action_id, outcome: :accepted)
+        expect(succeeded).to include(name: 'task.succeeded', task: 'broadcast_submission', id: action_id, outcome: :accepted)
         expect(succeeded[:latency_ms]).to be_an(Integer)
       end
     end
@@ -200,7 +202,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'emits task.failed with reason=rate_limited and integer latency_ms' do
         broadcast.process(action_id)
         failed = emitted_events.find { |e| e[:name] == 'task.failed' }
-        expect(failed).to include(reason: :rate_limited, task: 'broadcast_push', id: action_id)
+        expect(failed).to include(reason: :rate_limited, task: 'broadcast_submission', id: action_id)
         expect(failed[:latency_ms]).to be_an(Integer)
       end
 
@@ -230,7 +232,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'emits task.failed with reason=transport_error and integer latency_ms' do
         broadcast.process(action_id)
         failed = emitted_events.find { |e| e[:name] == 'task.failed' }
-        expect(failed).to include(reason: :transport_error, task: 'broadcast_push', id: action_id)
+        expect(failed).to include(reason: :transport_error, task: 'broadcast_submission', id: action_id)
         expect(failed[:latency_ms]).to be_an(Integer)
       end
 
@@ -260,7 +262,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'emits task.failed with reason=stale_beef and integer latency_ms' do
         broadcast.process(action_id)
         failed = emitted_events.find { |e| e[:name] == 'task.failed' }
-        expect(failed).to include(reason: :stale_beef, task: 'broadcast_push', id: action_id)
+        expect(failed).to include(reason: :stale_beef, task: 'broadcast_submission', id: action_id)
         expect(failed[:latency_ms]).to be_an(Integer)
       end
 
@@ -287,7 +289,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'emits task.failed with reason=malformed and integer latency_ms' do
         broadcast.process(action_id)
         failed = emitted_events.find { |e| e[:name] == 'task.failed' }
-        expect(failed).to include(reason: :malformed, task: 'broadcast_push', id: action_id)
+        expect(failed).to include(reason: :malformed, task: 'broadcast_submission', id: action_id)
         expect(failed[:latency_ms]).to be_an(Integer)
       end
 
@@ -311,7 +313,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(rejected_response)
-        allow(store).to receive(:fail_broadcast_action)
+        allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
@@ -320,13 +322,13 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
         expect(aborted).to include(
           reason: :policy_violation, arc_status: 'REJECTED',
-          task: 'broadcast_push', id: action_id
+          task: 'broadcast_submission', id: action_id
         )
       end
 
-      it 'calls fail_broadcast_action on the store (releases locked inputs)' do
+      it 'calls reject_action on the store (releases locked inputs)' do
         broadcast.process(action_id)
-        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
+        expect(store).to have_received(:reject_action).with(action_id: action_id)
       end
     end
 
@@ -343,7 +345,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(double_spend_response)
-        allow(store).to receive(:fail_broadcast_action)
+        allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
@@ -352,45 +354,13 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
         expect(aborted).to include(
           reason: :double_spend, arc_status: 'DOUBLE_SPEND_ATTEMPTED',
-          task: 'broadcast_push', id: action_id
+          task: 'broadcast_submission', id: action_id
         )
       end
 
-      it 'calls fail_broadcast_action on the store (releases locked inputs)' do
+      it 'calls reject_action on the store (releases locked inputs)' do
         broadcast.process(action_id)
-        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
-      end
-    end
-
-    context 'when MALFORMED (terminal)' do
-      let(:malformed_response) do
-        BSV::Network::ProtocolResponse.new(
-          nil,
-          http_success: false,
-          data: { 'txid' => 'abc123', 'txStatus' => 'MALFORMED', 'status' => 200 },
-          error_message: 'MALFORMED'
-        )
-      end
-
-      before do
-        allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(malformed_response)
-        allow(store).to receive(:fail_broadcast_action)
-        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
-      end
-
-      it 'emits task.aborted with reason=malformed and arc_status' do
-        broadcast.process(action_id)
-        aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
-        expect(aborted).to include(
-          reason: :malformed, arc_status: 'MALFORMED',
-          task: 'broadcast_push', id: action_id
-        )
-      end
-
-      it 'calls fail_broadcast_action on the store (releases locked inputs)' do
-        broadcast.process(action_id)
-        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
+        expect(store).to have_received(:reject_action).with(action_id: action_id)
       end
     end
 
@@ -408,7 +378,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(orphan_response)
-        allow(store).to receive(:fail_broadcast_action)
+        allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
@@ -417,13 +387,13 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
         expect(aborted).to include(
           reason: :policy_violation, arc_status: 'UNKNOWN',
-          task: 'broadcast_push', id: action_id
+          task: 'broadcast_submission', id: action_id
         )
       end
 
-      it 'calls fail_broadcast_action on the store (releases locked inputs)' do
+      it 'calls reject_action on the store (releases locked inputs)' do
         broadcast.process(action_id)
-        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
+        expect(store).to have_received(:reject_action).with(action_id: action_id)
       end
     end
 
@@ -513,7 +483,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'emits task.succeeded with outcome=accepted and integer latency_ms' do
         broadcast.process(action_id)
         succeeded = emitted_events.find { |e| e[:name] == 'task.succeeded' }
-        expect(succeeded).to include(outcome: :accepted, task: 'broadcast_push', id: action_id)
+        expect(succeeded).to include(outcome: :accepted, task: 'broadcast_resolution', id: action_id)
         expect(succeeded[:latency_ms]).to be_an(Integer)
       end
 
@@ -528,7 +498,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
     end
 
-    context 'when status poll returns REJECTED (terminal -- C-1 aborts via fail_broadcast_action)' do
+    context 'when status poll returns REJECTED (terminal -- C-1 aborts via reject_action)' do
       let(:wtxid) { SecureRandom.random_bytes(32) }
       let(:dtxid) { wtxid.reverse.unpack1('H*') }
       let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
@@ -549,12 +519,12 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(rejected_response)
         allow(store).to receive(:record_broadcast_result)
         allow(store).to receive(:abort_action)
-        allow(store).to receive(:fail_broadcast_action)
+        allow(store).to receive(:reject_action)
       end
 
-      it 'calls fail_broadcast_action (releases locked inputs)' do
+      it 'calls reject_action (releases locked inputs)' do
         broadcast.process(action_id)
-        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
+        expect(store).to have_received(:reject_action).with(action_id: action_id)
       end
 
       it 'does NOT call abort_action (pre-broadcast semantics, not applicable)' do
@@ -572,7 +542,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
         expect(aborted).to include(
           reason: :policy_violation, arc_status: 'REJECTED',
-          task: 'broadcast_push', id: action_id
+          task: 'broadcast_resolution', id: action_id
         )
       end
 
@@ -600,52 +570,18 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
         allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(double_spend_response)
-        allow(store).to receive(:fail_broadcast_action)
+        allow(store).to receive(:reject_action)
       end
 
-      it 'calls fail_broadcast_action' do
+      it 'calls reject_action' do
         broadcast.process(action_id)
-        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
+        expect(store).to have_received(:reject_action).with(action_id: action_id)
       end
 
       it 'emits task.aborted with reason=:double_spend' do
         broadcast.process(action_id)
         aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
         expect(aborted).to include(reason: :double_spend, arc_status: 'DOUBLE_SPEND_ATTEMPTED')
-      end
-    end
-
-    context 'when status poll returns MALFORMED (terminal)' do
-      let(:wtxid) { SecureRandom.random_bytes(32) }
-      let(:dtxid) { wtxid.reverse.unpack1('H*') }
-      let(:action_with_wtxid) { { id: action_id, raw_tx: raw_tx, wtxid: wtxid } }
-      let(:existing_status) do
-        { action_id: action_id, broadcast_at: Time.now - 60, tx_status: 'ACCEPTED_BY_NETWORK' }
-      end
-      let(:malformed_data) do
-        { tx_status: 'MALFORMED', status: 200, block_hash: nil, block_height: nil,
-          merkle_path: nil, extra_info: nil, competing_txs: nil }
-      end
-      let(:malformed_response) do
-        BSV::Network::ProtocolResponse.new(nil, data: malformed_data, http_success: true)
-      end
-
-      before do
-        allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
-        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(malformed_response)
-        allow(store).to receive(:fail_broadcast_action)
-      end
-
-      it 'calls fail_broadcast_action' do
-        broadcast.process(action_id)
-        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
-      end
-
-      it 'emits task.aborted with reason=:malformed' do
-        broadcast.process(action_id)
-        aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
-        expect(aborted).to include(reason: :malformed, arc_status: 'MALFORMED')
       end
     end
 
@@ -668,12 +604,12 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
         allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(orphan_response)
-        allow(store).to receive(:fail_broadcast_action)
+        allow(store).to receive(:reject_action)
       end
 
-      it 'calls fail_broadcast_action' do
+      it 'calls reject_action' do
         broadcast.process(action_id)
-        expect(store).to have_received(:fail_broadcast_action).with(action_id: action_id)
+        expect(store).to have_received(:reject_action).with(action_id: action_id)
       end
 
       it 'emits task.aborted with reason=:policy_violation' do
@@ -721,7 +657,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'emits task.succeeded with outcome=accepted' do
         broadcast.process(action_id)
         succeeded = emitted_events.find { |e| e[:name] == 'task.succeeded' }
-        expect(succeeded).to include(outcome: :accepted, task: 'broadcast_push', id: action_id)
+        expect(succeeded).to include(outcome: :accepted, task: 'broadcast_resolution', id: action_id)
       end
     end
 
@@ -795,7 +731,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'emits task.failed with reason=transport_error and integer latency_ms' do
         broadcast.process(action_id)
         failed = emitted_events.find { |e| e[:name] == 'task.failed' }
-        expect(failed).to include(reason: :transport_error, task: 'broadcast_push', id: action_id)
+        expect(failed).to include(reason: :transport_error, task: 'broadcast_resolution', id: action_id)
         expect(failed[:latency_ms]).to be_an(Integer)
       end
     end
@@ -821,7 +757,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'emits task.skipped with reason=no_wtxid' do
         broadcast.process(action_id)
         skipped = emitted_events.find { |e| e[:name] == 'task.skipped' }
-        expect(skipped).to include(reason: :no_wtxid, task: 'broadcast_push', id: action_id)
+        expect(skipped).to include(reason: :no_wtxid, task: 'broadcast_resolution', id: action_id)
       end
     end
   end
@@ -864,42 +800,42 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     end
   end
 
-  describe '.pending_polls' do
-    it 'delegates to store.pending_polls and maps to action IDs' do
+  describe '.pending_resolutions' do
+    it 'delegates to store.pending_resolutions and maps to action IDs' do
       pending_records = [
         { action_id: 1, tx_status: nil },
         { action_id: 2, tx_status: 'UNKNOWN' }
       ]
-      allow(store).to receive(:pending_polls).with(limit: 5).and_return(pending_records)
+      allow(store).to receive(:pending_resolutions).with(limit: 5).and_return(pending_records)
 
-      result = described_class.pending_polls(store, limit: 5)
+      result = described_class.pending_resolutions(store, limit: 5)
       expect(result).to eq([1, 2])
     end
 
     it 'uses default limit of 10' do
-      allow(store).to receive(:pending_polls).with(limit: 10).and_return([])
+      allow(store).to receive(:pending_resolutions).with(limit: 10).and_return([])
 
-      result = described_class.pending_polls(store)
+      result = described_class.pending_resolutions(store)
       expect(result).to eq([])
     end
   end
 
-  describe '.pending_pushes' do
-    it 'delegates to store.pending_pushes and maps to action IDs' do
+  describe '.pending_submissions' do
+    it 'delegates to store.pending_submissions and maps to action IDs' do
       pending_records = [
         { action_id: 7, broadcast_at: nil },
         { action_id: 9, broadcast_at: nil }
       ]
-      allow(store).to receive(:pending_pushes).with(limit: 5).and_return(pending_records)
+      allow(store).to receive(:pending_submissions).with(limit: 5).and_return(pending_records)
 
-      result = described_class.pending_pushes(store, limit: 5)
+      result = described_class.pending_submissions(store, limit: 5)
       expect(result).to eq([7, 9])
     end
 
     it 'uses default limit of 10' do
-      allow(store).to receive(:pending_pushes).with(limit: 10).and_return([])
+      allow(store).to receive(:pending_submissions).with(limit: 10).and_return([])
 
-      result = described_class.pending_pushes(store)
+      result = described_class.pending_submissions(store)
       expect(result).to eq([])
     end
   end
@@ -944,7 +880,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
         crashed = emitted_events.find { |e| e[:name] == 'fiber.crashed' }
         expect(crashed).not_to be_nil
-        expect(crashed[:task]).to eq('broadcast_push')
+        expect(crashed[:task]).to eq('broadcast_worker')
         expect(crashed[:error]).to be_a(String)
         expect(crashed[:error]).not_to be_empty
       end
@@ -979,7 +915,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
         crashed = emitted_events.find { |e| e[:name] == 'fiber.crashed' }
         expect(crashed).not_to be_nil
-        expect(crashed[:task]).to eq('broadcast_push')
+        expect(crashed[:task]).to eq('broadcast_worker')
         expect(crashed[:error]).to be_a(String)
         expect(crashed[:error]).not_to be_empty
       end

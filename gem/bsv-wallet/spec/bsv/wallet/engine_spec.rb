@@ -243,6 +243,34 @@ RSpec.describe BSV::Wallet::Engine do
         expect(status[:broadcast_at]).not_to be_nil
         expect(status[:tx_status]).to eq('SEEN_ON_NETWORK')
       end
+
+      # A definitive sync rejection arrives as a non-2xx body carrying a
+      # terminal (camelCase) txStatus. inline_broadcast must surface it so
+      # the caller's rejected? check unwinds the action via reject_action —
+      # mirroring the daemon submit path. Without this, a failed submit
+      # would leave the action's outputs speculatively promoted and its
+      # inputs locked.
+      it 'rejects the action on a non-2xx response carrying a terminal txStatus' do
+        allow(services).to receive(:call).with(:broadcast, anything).and_return(
+          double('ProtocolResponse', http_success?: false, data: { 'txStatus' => 'REJECTED' })
+        )
+
+        engine.create_action(
+          description: 'inline broadcast rejected',
+          inputs: [],
+          accept_delayed_broadcast: false,
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          ]
+        )
+
+        # reject_action cascade-deletes the action and its inputs, so the
+        # action is gone and no spendable output was promoted.
+        action = store.send(:models)::Action.where(description: 'inline broadcast rejected').last
+        expect(action).to be_nil
+        expect(engine.list_outputs(basket: 'payments')[:total_outputs]).to eq(0)
+      end
     end
 
     context 'with delayed broadcast (accept_delayed_broadcast: true)' do
@@ -721,6 +749,45 @@ RSpec.describe BSV::Wallet::Engine do
       expect do
         engine.abort_action(reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
+    end
+  end
+
+  describe '#reject_action' do
+    it 'delegates to Store#reject_action and returns a structured result' do
+      result = engine.create_action(
+        description: 'speculative inline',
+        inputs: [],
+        outputs: [{ satoshis: 500, locking_script: OP_TRUE, output_description: 'out' }],
+        no_send: true
+      )
+      action_id = store.find_action(wtxid: result[:txid])[:id]
+
+      # Manually flip to inline + add broadcasts row to make it a valid
+      # reject_action target (no_send actions raise per design).
+      store.db[:actions].where(id: action_id).update(broadcast_intent: 'inline')
+      store.db[:broadcasts].insert(action_id: action_id, intent: 'inline', tx_status: 'REJECTED')
+
+      response = engine.reject_action(action_id: action_id)
+
+      expect(response).to eq({ rejected: true, action_id: action_id })
+      expect(store.find_action(id: action_id)).to be_nil
+    end
+
+    it 'raises InvalidParameterError when the action_id does not exist' do
+      expect { engine.reject_action(action_id: 999_999_999) }
+        .to raise_error(BSV::Wallet::InvalidParameterError, /not found/)
+    end
+
+    it 'propagates CannotRejectInternalActionError from the store' do
+      engine.create_action(
+        description: 'internal action',
+        inputs: [],
+        outputs: [{ satoshis: 500, locking_script: OP_TRUE, output_description: 'out' }],
+        no_send: true
+      )
+      action_id = store.send(:models)::Action.where(description: 'internal action').last.id
+      expect { engine.reject_action(action_id: action_id) }
+        .to raise_error(BSV::Wallet::CannotRejectInternalActionError)
     end
   end
 
@@ -2315,9 +2382,10 @@ RSpec.describe BSV::Wallet::Engine do
         caller_outputs: [{ satoshis: 4_000, locking_script: payment_script }]
       )
 
-      expect(result.keys).to contain_exactly(:wtxid, :raw_tx, :vout_mapping, :change_outputs)
+      expect(result.keys).to contain_exactly(:wtxid, :raw_tx, :tx, :vout_mapping, :change_outputs)
       expect(result[:wtxid].bytesize).to eq(32)
       expect(result[:raw_tx]).to be_a(String)
+      expect(result[:tx]).to be_a(BSV::Transaction::Transaction)
       expect(result[:vout_mapping]).to eq(0 => 0) # randomize: false, caller out first
       expect(result[:change_outputs].length).to eq(1)
       expect(result[:change_outputs].first[:satoshis]).to be > 0

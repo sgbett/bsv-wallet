@@ -208,33 +208,37 @@ module BSV
         end
       end
 
-      def fail_broadcast_action(action_id:)
+      # Unwind a broadcast action whose network outcome was terminal-
+      # rejected. Speculatively-promoted outputs (the wallet's optimistic
+      # bet on a non-rejected ARC response) get rolled back along with
+      # every dependent — and cascades forward through any child action
+      # that consumed this action's outputs, recursively.
+      #
+      # Single outer transaction. Children are torn down before the
+      # parent so outputs.action_id RESTRICT doesn't block the parent's
+      # output deletes (a child's input row references this action's
+      # output; deleting the output requires the input gone first, which
+      # happens when the child's action_id CASCADE-deletes its inputs).
+      #
+      # Raises CannotRejectInternalActionError if the target — or any
+      # cascade descendant — has broadcast_intent='none'. Internal-path
+      # actions produce canonical wallet state and are not the domain of
+      # this method; encountering one mid-cascade means an invariant was
+      # violated upstream. Rollback leaves the broadcasts row intact for
+      # the resolution loop to discover next cycle.
+      #
+      # Idempotent: calling on an already-deleted action_id is a no-op.
+      def reject_action(action_id:)
         @db.transaction do
-          # Refuse if any output is promoted: true. Under #194 the only
-          # reachable outputs for a terminal-broadcast cleanup are
-          # promoted: false send-path rows (Phase 4 hasn't fired). But
-          # defensively guard against a race where an accepted callback
-          # has already promoted while a stale failure event is being
-          # processed — destroying promoted outbound rows would damage
-          # canonical history. Mirrors abort_action's invariant.
-          if models::Output.where(action_id: action_id, promoted: true).any?
-            raise BSV::Wallet::CannotAbortPromotedActionError,
-                  "action_id=#{action_id} has promoted outputs; fail_broadcast_action refused"
-          end
-
-          # outputs.action_id is RESTRICT (#189). Clear unpromoted output
-          # rows and their dependents, then the broadcast row, then the
-          # action.
-          output_ids = models::Output.where(action_id: action_id).select_map(:id)
-          if output_ids.any?
-            models::OutputBasket.where(action_id: action_id).delete
-            models::OutputDetail.where(action_id: action_id).delete
-            models::OutputTag.where(output_id: output_ids).delete
-            models::Output.where(id: output_ids).delete
-          end
-          models::Broadcast.where(action_id: action_id).delete
-          models::Action.where(id: action_id).delete
+          do_reject(action_id, visited: Set.new)
         end
+      end
+
+      # Return action_ids of every action whose inputs spend an output
+      # of +action_id+. The forward-walk for reject_action's cascade.
+      def child_actions_of(action_id:)
+        output_ids = models::Output.where(action_id: action_id).select(:id)
+        models::Input.where(output_id: output_ids).distinct.select_map(:action_id)
       end
 
       # --- Queries ---
@@ -627,12 +631,20 @@ module BSV
           broadcast.update(fields)
 
           # Phase 4 promotion happens inside this transaction when the
-          # broadcast is accepted. This closes a crash-recovery gap:
-          # without atomicity the broadcasts row could carry a terminal
-          # accepted status (so pending_polls won't rediscover it) while
-          # outputs remained promoted: false (so they'd never become
-          # spendable). Single transaction = single recoverable state.
-          promote_action_outputs(action_id: action_id) if Models::Broadcast::ACCEPTED_STATUSES.include?(tx_status.to_s.upcase)
+          # broadcast is *not* rejected — speculative-promote on the same
+          # predicate the Engine inline path uses (#240). Both inline and
+          # async loops opportunistically promote so callers and chained
+          # spends unblock as soon as Arcade has the tx; the resolution
+          # loop + Store#reject_action is the safety net when a previously
+          # non-rejected status later flips to REJECTED.
+          #
+          # Atomicity here closes a crash-recovery gap: without it the
+          # broadcasts row could carry a terminal status (so the
+          # resolution loop won't rediscover it) while outputs remained
+          # promoted: false. Single transaction = single recoverable
+          # state.
+          status_upper = tx_status.to_s.upcase
+          promote_action_outputs(action_id: action_id) if !status_upper.empty? && !BSV::Wallet::ArcStatus::REJECTED.include?(status_upper)
 
           broadcast_to_hash(broadcast)
         end
@@ -645,16 +657,16 @@ module BSV
         broadcast_to_hash(broadcast)
       end
 
-      def pending_polls(limit: 100)
+      def pending_resolutions(limit: 100)
         models::Broadcast
           .exclude(broadcast_at: nil)
-          .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: Models::Broadcast::TERMINAL_STATUSES)))
+          .where(Sequel.|({ tx_status: nil }, Sequel.~(tx_status: BSV::Wallet::ArcStatus::TERMINAL)))
           .limit(limit)
           .all
           .map { |b| broadcast_to_hash(b) }
       end
 
-      def pending_pushes(limit: 100)
+      def pending_submissions(limit: 100)
         models::Broadcast
           .where(broadcast_at: nil)
           .limit(limit)
@@ -670,6 +682,16 @@ module BSV
             .where(action_id: action_id, broadcast_at: nil)
             .update(broadcast_at: Time.now)
         end
+      end
+
+      # Bump the broadcasts.retry_count for an action whose reject_action
+      # raised CannotRejectInternalActionError. Visibility into stuck rows
+      # for dashboards; the row itself stays alive so the resolution loop
+      # re-encounters it next cycle.
+      def increment_broadcast_retry(action_id:)
+        models::Broadcast
+          .where(action_id: action_id)
+          .update(retry_count: Sequel[:retry_count] + 1)
       end
 
       def reap_stale_actions(threshold:)
@@ -708,6 +730,69 @@ module BSV
       end
 
       private
+
+      # Recursive inner method for reject_action. Walks children first
+      # (post-order tear-down) so outputs.action_id RESTRICT doesn't
+      # block when this action's outputs are deleted -- the inputs that
+      # referenced them are gone via each child's CASCADE on action_id.
+      #
+      # +visited+ is a Set of action_ids already entered; re-entering one
+      # no-ops (see the diamond rationale in the body) rather than raising.
+      def do_reject(action_id, visited:)
+        # Idempotent re-entry guard. Action graphs are DAGs (an input can
+        # only spend an already-existing output, so true cycles are
+        # impossible), but legitimate diamonds occur: when one action D
+        # spends outputs of two siblings B and C that share a parent A,
+        # the forward walk reaches D once via each path. The second visit
+        # must no-op, not raise -- raising would roll back the whole
+        # cascade for a shape that arises naturally (e.g. a consolidation
+        # combining two outputs of a common ancestor).
+        return if visited.include?(action_id)
+
+        visited.add(action_id)
+
+        action = models::Action[action_id]
+        return unless action # idempotent: nothing left to reject
+
+        raise BSV::Wallet::CannotRejectInternalActionError, action_id if action.broadcast_intent == 'none'
+
+        # Refuse if the network told us this tx is accepted. Deletion
+        # would compound a wallet-vs-chain divergence — operator
+        # investigation is the right response, not unwind.
+        broadcast = models::Broadcast.first(action_id: action_id)
+        if broadcast
+          status = broadcast.tx_status.to_s.upcase
+          raise BSV::Wallet::CannotRejectAcceptedActionError.new(action_id, status) if BSV::Wallet::ArcStatus::ACCEPTED.include?(status)
+        end
+
+        child_actions_of(action_id: action_id).each do |child_id|
+          do_reject(child_id, visited: visited)
+        end
+
+        output_ids = models::Output.where(action_id: action_id).select_map(:id)
+        if output_ids.any?
+          # Drop dependents that reference outputs by output_id (RESTRICT
+          # default on these FKs). action_id-denormalised tables
+          # (spendable / output_baskets / output_details) cascade on the
+          # action delete below — explicit deletes here are belt-and-
+          # braces for code clarity and to guarantee zero leftover rows
+          # in the same transaction.
+          models::Spendable.where(output_id: output_ids).delete
+          models::OutputTag.where(output_id: output_ids).delete
+          models::OutputBasket.where(action_id: action_id).delete
+          models::OutputDetail.where(action_id: action_id).delete
+          models::Output.where(id: output_ids).delete
+        end
+
+        # Defensively clear tx_proof_id so the actions row delete isn't
+        # blocked by any tx_proofs FK quirk; should be NULL on rejected
+        # actions but a stale proof link from a prior optimistic-accept
+        # race would otherwise leak through.
+        models::Action.where(id: action_id).update(tx_proof_id: nil)
+        models::ActionLabel.where(action_id: action_id).delete
+        models::Broadcast.where(action_id: action_id).delete
+        models::Action.where(id: action_id).delete # cascades inputs
+      end
 
       # Attempt to lock every input in +inputs+ against +action_id+.
       # Returns true iff all rows were inserted (i.e. no contention).

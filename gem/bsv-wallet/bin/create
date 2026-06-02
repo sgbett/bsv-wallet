@@ -6,7 +6,7 @@
 # Usage:
 #   bin/create <wallet> <identity_key> <sats>
 #
-# Stdout: JSON envelope { beef: <hex>, sender_identity_key: <hex>, outputs: [...] }
+# Stdout: JSON envelope { beef: <hex>, dtxid: <hex>, sender_identity_key: <hex>, outputs: [...] }
 # Stderr: human-readable summary
 
 require_relative '../lib/bsv/wallet/cli'
@@ -22,8 +22,13 @@ ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 
 result = ctx[:engine].send_payment(recipient: identity_key, satoshis: sats)
 
-# Hex-encode BEEF for JSON transport
-envelope = result.merge(beef: result[:beef].unpack1('H*'))
+# Hex-encode binary fields for JSON transport: BEEF, and the subject txid
+# (send_payment returns it as a wire-order wtxid → expose as a display dtxid).
+envelope = result.merge(
+  beef: result[:beef].unpack1('H*'),
+  dtxid: result[:txid].reverse.unpack1('H*')
+)
+envelope.delete(:txid)
 BSV::Wallet::CLI::Output.write_json(envelope)
 
 warn "sent: #{sats} sats to #{identity_key[0..15]}..."

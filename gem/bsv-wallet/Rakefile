@@ -6,6 +6,24 @@ RSpec::Core::RakeTask.new(:spec)
 
 task default: :spec
 
+namespace :wallet do
+  desc 'Drain a wallet back to its root key (consolidate + on-chain sweep). ' \
+       'Usage: rake wallet:cleanup[alice] or rake wallet:cleanup[alice,<root_pubkey_hex>]'
+  task :cleanup, %i[wallet recipient] do |_t, args|
+    require_relative 'lib/bsv/wallet/cli'
+
+    ctx = BSV::Wallet::CLI.boot(wallet_name: args[:wallet])
+    result = ctx[:engine].sweep_to_root(recipient: args[:recipient])
+
+    if result[:sweep].nil?
+      warn 'cleanup: nothing to sweep — wallet has no spendable outputs'
+    else
+      dtxid = result[:sweep][:txid].reverse.unpack1('H*')
+      warn "cleanup: #{result[:consolidation_steps]} consolidation step(s); swept to root, dtxid=#{dtxid}"
+    end
+  end
+end
+
 namespace :docs do
   desc 'Generate YARD markdown into docs/reference/'
   task :generate do

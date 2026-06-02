@@ -43,16 +43,23 @@ jobs:
         working-directory: gem/bsv-wallet
 
       - name: Run wallet specs (SQLite)
-        run: bundle exec rspec spec/bsv spec/bin
+        run: bundle exec rspec spec/bsv spec/bin spec/support
         working-directory: gem/bsv-wallet
         env:
           COVERAGE: ${{ matrix.ruby == '3.4' && 'true' || '' }}
 
       - name: Run wallet specs (Postgres)
-        run: bundle exec rspec spec/bsv spec/bin
+        run: bundle exec rspec spec/bsv spec/bin spec/support
         working-directory: gem/bsv-wallet
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5433/bsv_wallet_test
+
+      # The e2e on-chain harness never runs in CI, but its helper modules
+      # are pure-Ruby and CI-safe — run their unit specs so regressions in
+      # the harness machinery are caught.
+      - name: Run e2e harness helper specs (no chain)
+        run: bundle exec rspec spec/e2e/support_spec.rb spec/e2e/wallet_harness_spec.rb
+        working-directory: gem/bsv-wallet
 
       - name: Upload coverage
         if: matrix.ruby == '3.4'

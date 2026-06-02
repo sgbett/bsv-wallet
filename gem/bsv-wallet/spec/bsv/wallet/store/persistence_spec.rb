@@ -566,7 +566,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
-  describe '#fail_broadcast_action' do
+  describe '#reject_action' do
     it 'deletes the broadcast row and the action, releasing locked inputs via CASCADE' do
       output = create_funded_output(satoshis: 1000)
       result = store.create_action(
@@ -580,7 +580,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
       expect(output.reload.spendable?).to be false
 
-      store.fail_broadcast_action(action_id: result[:id])
+      store.reject_action(action_id: result[:id])
 
       expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
       expect(BSV::Wallet::Store::Models::Broadcast.first(action_id: result[:id])).to be_nil
@@ -616,7 +616,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(BSV::Wallet::Store::Models::OutputDetail.where(action_id: result[:id]).any?).to be true
       expect(BSV::Wallet::Store::Models::OutputTag.where(output_id: output_ids).any?).to be true
 
-      store.fail_broadcast_action(action_id: result[:id])
+      store.reject_action(action_id: result[:id])
 
       expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
       expect(BSV::Wallet::Store::Models::Output.where(id: output_ids).any?).to be false
@@ -627,7 +627,263 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'is idempotent (no-op when neither row exists)' do
-      expect { store.fail_broadcast_action(action_id: 999_999) }.not_to raise_error
+      expect { store.reject_action(action_id: 999_999) }.not_to raise_error
+    end
+
+    it 'unwinds promoted outputs of an inline action whose speculative promotion is being rolled back' do
+      # Simulates the #240 scenario: Engine speculatively promoted on a
+      # non-rejected ARC response, then the resolution loop discovered
+      # a definitive REJECTED status. The promoted-output guard previously
+      # blocked unwind; reject_action explicitly supports this path.
+      input_output = create_funded_output(satoshis: 1000)
+      result = store.create_action(
+        action: { description: 'inline speculative', nlocktime: 0 },
+        inputs: [{ output_id: input_output.id, vin: 0 }]
+      )
+      pending_outputs = [{
+        satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
+        derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+        sender_identity_key: 'self'
+      }]
+      store.sign_action(
+        action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100), outputs: pending_outputs
+      )
+      # Simulate the speculative-promote that happens on a non-rejected
+      # ARC response.
+      store.promote_action_outputs(action_id: result[:id])
+      output_ids = BSV::Wallet::Store::Models::Output.where(action_id: result[:id]).select_map(:id)
+      expect(BSV::Wallet::Store::Models::Output.where(id: output_ids, promoted: true).count).to eq(1)
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output_ids).count).to eq(1)
+
+      store.reject_action(action_id: result[:id])
+
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
+      expect(BSV::Wallet::Store::Models::Output.where(id: output_ids).any?).to be false
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output_ids).any?).to be false
+      expect(input_output.reload.spendable?).to be true
+    end
+
+    it 'cascades through a three-level chain (X -> Y -> Z), tearing down Z and Y before X' do
+      # Build a chain: X creates output, Y consumes X's output (and creates
+      # its own), Z consumes Y's output. Rejecting X must cascade forward.
+      input_output = create_funded_output(satoshis: 1000)
+
+      x = store.create_action(action: { description: 'X tx node', nlocktime: 0 },
+                              inputs: [{ output_id: input_output.id, vin: 0 }])
+      store.sign_action(
+        action_id: x[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: [{ satoshis: 800, vout: 0, locking_script: SecureRandom.random_bytes(25),
+                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                    sender_identity_key: 'self' }]
+      )
+      store.promote_action_outputs(action_id: x[:id])
+      x_output_id = BSV::Wallet::Store::Models::Output.where(action_id: x[:id]).select_map(:id).first
+
+      y = store.create_action(action: { description: 'Y tx node', nlocktime: 0 },
+                              inputs: [{ output_id: x_output_id, vin: 0 }])
+      store.sign_action(
+        action_id: y[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: [{ satoshis: 700, vout: 0, locking_script: SecureRandom.random_bytes(25),
+                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '2',
+                    sender_identity_key: 'self' }]
+      )
+      store.promote_action_outputs(action_id: y[:id])
+      y_output_id = BSV::Wallet::Store::Models::Output.where(action_id: y[:id]).select_map(:id).first
+
+      z = store.create_action(action: { description: 'Z tx node', nlocktime: 0 },
+                              inputs: [{ output_id: y_output_id, vin: 0 }])
+      store.sign_action(action_id: z[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+
+      store.reject_action(action_id: x[:id])
+
+      expect(BSV::Wallet::Store::Models::Action[x[:id]]).to be_nil
+      expect(BSV::Wallet::Store::Models::Action[y[:id]]).to be_nil
+      expect(BSV::Wallet::Store::Models::Action[z[:id]]).to be_nil
+      expect(input_output.reload.spendable?).to be true
+    end
+
+    it 'cascades through a diamond (A -> {B, C} -> D) without misfiring the cycle guard' do
+      # A has two outputs; B spends one, C the other; D consumes an output
+      # of BOTH B and C, so the forward walk reaches D twice (once per
+      # path). The second visit must no-op, not raise -- a real DAG shape,
+      # not a cycle. Regression for the diamond false-positive.
+      input_output = create_funded_output(satoshis: 2000)
+
+      a = store.create_action(action: { description: 'A diamond root', nlocktime: 0 },
+                              inputs: [{ output_id: input_output.id, vin: 0 }])
+      store.sign_action(
+        action_id: a[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: [
+          { satoshis: 900, vout: 0, locking_script: SecureRandom.random_bytes(25),
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
+          { satoshis: 900, vout: 1, locking_script: SecureRandom.random_bytes(25),
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '2', sender_identity_key: 'self' }
+        ]
+      )
+      store.promote_action_outputs(action_id: a[:id])
+      a_outputs = BSV::Wallet::Store::Models::Output.where(action_id: a[:id]).order(:vout).select_map(:id)
+
+      b = store.create_action(action: { description: 'B diamond left', nlocktime: 0 },
+                              inputs: [{ output_id: a_outputs[0], vin: 0 }])
+      store.sign_action(
+        action_id: b[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: [{ satoshis: 800, vout: 0, locking_script: SecureRandom.random_bytes(25),
+                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '3', sender_identity_key: 'self' }]
+      )
+      store.promote_action_outputs(action_id: b[:id])
+      b_output_id = BSV::Wallet::Store::Models::Output.where(action_id: b[:id]).select_map(:id).first
+
+      c = store.create_action(action: { description: 'C diamond right', nlocktime: 0 },
+                              inputs: [{ output_id: a_outputs[1], vin: 0 }])
+      store.sign_action(
+        action_id: c[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: [{ satoshis: 800, vout: 0, locking_script: SecureRandom.random_bytes(25),
+                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '4', sender_identity_key: 'self' }]
+      )
+      store.promote_action_outputs(action_id: c[:id])
+      c_output_id = BSV::Wallet::Store::Models::Output.where(action_id: c[:id]).select_map(:id).first
+
+      d = store.create_action(action: { description: 'D diamond sink', nlocktime: 0 },
+                              inputs: [{ output_id: b_output_id, vin: 0 }, { output_id: c_output_id, vin: 1 }])
+      store.sign_action(action_id: d[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+
+      expect { store.reject_action(action_id: a[:id]) }.not_to raise_error
+
+      [a, b, c, d].each do |node|
+        expect(BSV::Wallet::Store::Models::Action[node[:id]]).to be_nil
+      end
+      expect(input_output.reload.spendable?).to be true
+    end
+
+    it 'raises CannotRejectInternalActionError on a no_send target and rolls back the cascade' do
+      input_output = create_funded_output(satoshis: 1000)
+      result = store.create_action(
+        action: { description: 'internal', broadcast_intent: :none, nlocktime: 0 },
+        inputs: [{ output_id: input_output.id, vin: 0 }]
+      )
+      expect do
+        store.reject_action(action_id: result[:id])
+      end.to raise_error(BSV::Wallet::CannotRejectInternalActionError)
+
+      # Rollback: row intact.
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
+      expect(input_output.reload.spendable?).to be false
+    end
+
+    it 'raises and rolls back the entire cascade if any descendant has broadcast_intent=none' do
+      # Parent (inline) -> child (no_send). Rejecting the parent walks
+      # into the no_send child and must raise; the parent must remain.
+      input_output = create_funded_output(satoshis: 1000)
+      parent = store.create_action(action: { description: 'parent', nlocktime: 0 },
+                                   inputs: [{ output_id: input_output.id, vin: 0 }])
+      store.sign_action(
+        action_id: parent[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: [{ satoshis: 900, vout: 0, locking_script: SecureRandom.random_bytes(25),
+                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                    sender_identity_key: 'self' }]
+      )
+      store.promote_action_outputs(action_id: parent[:id])
+      parent_output_id = BSV::Wallet::Store::Models::Output.where(action_id: parent[:id]).select_map(:id).first
+
+      child = store.create_action(action: { description: 'child', broadcast_intent: :none, nlocktime: 0 },
+                                  inputs: [{ output_id: parent_output_id, vin: 0 }])
+
+      expect do
+        store.reject_action(action_id: parent[:id])
+      end.to raise_error(BSV::Wallet::CannotRejectInternalActionError)
+
+      # Rollback: both rows survive.
+      expect(BSV::Wallet::Store::Models::Action[parent[:id]]).not_to be_nil
+      expect(BSV::Wallet::Store::Models::Action[child[:id]]).not_to be_nil
+      expect(input_output.reload.spendable?).to be false
+    end
+
+    it 'raises CannotRejectAcceptedActionError when target tx_status is in ArcStatus::ACCEPTED' do
+      result = store.create_action(action: { description: 'mined target', nlocktime: 0 })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      BSV::Wallet::Store::Models::Broadcast.where(action_id: result[:id]).update(tx_status: 'MINED')
+
+      expect do
+        store.reject_action(action_id: result[:id])
+      end.to raise_error(BSV::Wallet::CannotRejectAcceptedActionError, /tx_status=MINED/)
+
+      # Rollback: row still exists.
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
+    end
+
+    it 'raises CannotRejectAcceptedActionError when a descendant has accepted tx_status' do
+      input_output = create_funded_output(satoshis: 1000)
+      parent = store.create_action(action: { description: 'rejected parent', nlocktime: 0 },
+                                   inputs: [{ output_id: input_output.id, vin: 0 }])
+      store.sign_action(
+        action_id: parent[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: [{ satoshis: 900, vout: 0, locking_script: SecureRandom.random_bytes(25),
+                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                    sender_identity_key: 'self' }]
+      )
+      store.promote_action_outputs(action_id: parent[:id])
+      parent_output_id = BSV::Wallet::Store::Models::Output.where(action_id: parent[:id]).select_map(:id).first
+
+      child = store.create_action(action: { description: 'accepted child', nlocktime: 0 },
+                                  inputs: [{ output_id: parent_output_id, vin: 0 }])
+      store.sign_action(action_id: child[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      BSV::Wallet::Store::Models::Broadcast.where(action_id: child[:id]).update(tx_status: 'SEEN_ON_NETWORK')
+
+      expect do
+        store.reject_action(action_id: parent[:id])
+      end.to raise_error(BSV::Wallet::CannotRejectAcceptedActionError, /tx_status=SEEN_ON_NETWORK/)
+
+      # Rollback: both rows survive.
+      expect(BSV::Wallet::Store::Models::Action[parent[:id]]).not_to be_nil
+      expect(BSV::Wallet::Store::Models::Action[child[:id]]).not_to be_nil
+    end
+  end
+
+  describe '#child_actions_of' do
+    it 'returns action_ids whose inputs consume the given action\'s outputs' do
+      input_output = create_funded_output(satoshis: 1000)
+      parent = store.create_action(action: { description: 'parent', nlocktime: 0 },
+                                   inputs: [{ output_id: input_output.id, vin: 0 }])
+      store.sign_action(
+        action_id: parent[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100),
+        outputs: [{ satoshis: 900, vout: 0, locking_script: SecureRandom.random_bytes(25),
+                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                    sender_identity_key: 'self' }]
+      )
+      store.promote_action_outputs(action_id: parent[:id])
+      parent_output_id = BSV::Wallet::Store::Models::Output.where(action_id: parent[:id]).select_map(:id).first
+
+      child = store.create_action(action: { description: 'child', nlocktime: 0 },
+                                  inputs: [{ output_id: parent_output_id, vin: 0 }])
+
+      expect(store.child_actions_of(action_id: parent[:id])).to contain_exactly(child[:id])
+      expect(store.child_actions_of(action_id: child[:id])).to be_empty
+    end
+  end
+
+  describe '#increment_broadcast_retry' do
+    it 'increments the retry_count column for an action\'s broadcast row' do
+      result = store.create_action(action: { description: 'retry test', nlocktime: 0 })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+
+      expect(BSV::Wallet::Store::Models::Broadcast.first(action_id: result[:id]).retry_count).to eq(0)
+      store.increment_broadcast_retry(action_id: result[:id])
+      store.increment_broadcast_retry(action_id: result[:id])
+      expect(BSV::Wallet::Store::Models::Broadcast.first(action_id: result[:id]).retry_count).to eq(2)
     end
   end
 
@@ -1422,6 +1678,30 @@ RSpec.describe BSV::Wallet::Store, :store do
       broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
       expect(broadcast.broadcast_at.to_i).to eq(original.to_i)
     end
+
+    # The resolution loop polls every ~30s and records a result on each pass.
+    # Promotion now fires on every non-rejected status (#240), so the same
+    # action is promoted repeatedly as the tx walks QUEUED -> RECEIVED ->
+    # SEEN_ON_NETWORK -> MINED. That repeated promotion must be idempotent:
+    # exactly one spendable row, the output promoted once, no errors. This
+    # property is load-bearing now that promotion isn't gated on a single
+    # ACCEPTED transition.
+    it 'promotes the output exactly once across repeated non-rejected status updates' do
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed', broadcast_at: Time.now - 60)
+      output = BSV::Wallet::Store::Models::Output.create(
+        action_id: action.id, satoshis: 500, vout: 0,
+        locking_script: SecureRandom.random_bytes(25),
+        derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+        sender_identity_key: 'self', promoted: false
+      )
+
+      %w[QUEUED RECEIVED ANNOUNCED_TO_NETWORK SEEN_ON_NETWORK MINED].each do |status|
+        store.record_broadcast_result(action_id: action.id, tx_status: status)
+      end
+
+      expect(output.reload.promoted).to be(true)
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output.id).count).to eq(1)
+    end
   end
 
   describe '#broadcast_status' do
@@ -1446,7 +1726,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
-  describe '#pending_polls' do
+  describe '#pending_resolutions' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
         outgoing: true, description: 'test action', nlocktime: 0,
@@ -1461,7 +1741,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         broadcast_at: Time.now - 60
       )
 
-      results = store.pending_polls(limit: 10)
+      results = store.pending_resolutions(limit: 10)
       expect(results.size).to eq(1)
       expect(results.first[:action_id]).to eq(action.id)
     end
@@ -1472,7 +1752,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         broadcast_at: Time.now
       )
 
-      results = store.pending_polls(limit: 10)
+      results = store.pending_resolutions(limit: 10)
       expect(results.size).to eq(1)
       expect(results.first[:action_id]).to eq(action.id)
     end
@@ -1484,7 +1764,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         tx_status: nil
       )
 
-      results = store.pending_polls(limit: 10)
+      results = store.pending_resolutions(limit: 10)
       expect(results.size).to eq(1)
       expect(results.first[:action_id]).to eq(action.id)
     end
@@ -1496,7 +1776,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         tx_status: 'MINED'
       )
 
-      results = store.pending_polls(limit: 10)
+      results = store.pending_resolutions(limit: 10)
       expect(results).to be_empty
     end
 
@@ -1510,7 +1790,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         tx_status: 'MINED_IN_STALE_BLOCK'
       )
 
-      results = store.pending_polls(limit: 10)
+      results = store.pending_resolutions(limit: 10)
       expect(results.size).to eq(1)
       expect(results.first[:action_id]).to eq(action.id)
     end
@@ -1518,16 +1798,16 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'excludes queued rows (broadcast_at IS NULL)' do
       BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed')
 
-      results = store.pending_polls(limit: 10)
+      results = store.pending_resolutions(limit: 10)
       expect(results).to be_empty
     end
 
     it 'returns empty array when none pending' do
-      expect(store.pending_polls).to eq([])
+      expect(store.pending_resolutions).to eq([])
     end
   end
 
-  describe '#pending_pushes' do
+  describe '#pending_submissions' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
         outgoing: true, description: 'test action', nlocktime: 0,
@@ -1539,7 +1819,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'returns broadcasts queued for an initial submission (broadcast_at IS NULL)' do
       BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed')
 
-      results = store.pending_pushes(limit: 10)
+      results = store.pending_submissions(limit: 10)
       expect(results.size).to eq(1)
       expect(results.first[:action_id]).to eq(action.id)
       expect(results.first[:broadcast_at]).to be_nil
@@ -1551,7 +1831,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         broadcast_at: Time.now
       )
 
-      expect(store.pending_pushes(limit: 10)).to be_empty
+      expect(store.pending_submissions(limit: 10)).to be_empty
     end
 
     it 'excludes attempted rows regardless of tx_status' do
@@ -1561,7 +1841,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         tx_status: 'SEEN_ON_NETWORK'
       )
 
-      expect(store.pending_pushes(limit: 10)).to be_empty
+      expect(store.pending_submissions(limit: 10)).to be_empty
     end
 
     it 'respects the limit' do
@@ -1574,11 +1854,11 @@ RSpec.describe BSV::Wallet::Store, :store do
         BSV::Wallet::Store::Models::Broadcast.create(action_id: a.id, intent: 'delayed')
       end
 
-      expect(store.pending_pushes(limit: 2).size).to eq(2)
+      expect(store.pending_submissions(limit: 2).size).to eq(2)
     end
 
     it 'returns empty array when none queued' do
-      expect(store.pending_pushes).to eq([])
+      expect(store.pending_submissions).to eq([])
     end
   end
 
@@ -1621,13 +1901,13 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(broadcast.tx_status).to be_nil
     end
 
-    it 'removes the row from pending_pushes results' do
+    it 'removes the row from pending_submissions results' do
       BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed')
-      expect(store.pending_pushes.map { |b| b[:action_id] }).to include(action.id)
+      expect(store.pending_submissions.map { |b| b[:action_id] }).to include(action.id)
 
       store.mark_broadcast_attempted(action_id: action.id)
 
-      expect(store.pending_pushes.map { |b| b[:action_id] }).not_to include(action.id)
+      expect(store.pending_submissions.map { |b| b[:action_id] }).not_to include(action.id)
     end
 
     it 'raises when no broadcasts row exists for the action (invariant violation)' do
