@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 require 'spec_helper'
-require_relative 'support/wallet_derivation'
-require_relative 'support/wallet_harness'
+require_relative 'wallet_derivation'
+require_relative 'wallet_harness'
 
 RSpec.describe E2E::WalletHarness do # rubocop:disable RSpec/SpecFilePathFormat
   let(:sdk_wif) { BSV::Primitives::PrivateKey.generate.to_wif }

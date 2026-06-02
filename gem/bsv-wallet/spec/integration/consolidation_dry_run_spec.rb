@@ -24,15 +24,9 @@ require 'securerandom'
 require 'sequel'
 require 'bsv-wallet'
 
-# Match BSV::Wallet::CLI.boot: load the repo-root .env so the spec process
-# sees the same DATABASE_URL_* / WIF_* the bin/ subprocesses do. Specs run
-# from gem/bsv-wallet, .env lives at the repo root.
-begin
-  require 'dotenv'
-  Dotenv.load(File.expand_path('../../../../.env', __dir__))
-rescue LoadError
-  # optional — env can come from shell profile or CI workflow
-end
+# DATABASE_URL_* / BSV_WALLET_WIF_* come from the shell environment
+# (~/.zshenv locally, +env:+ blocks in CI), inherited by this spec process
+# and the bin/ subprocesses it spawns alike.
 
 RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
   let(:wallet_names) { %w[alice bob carol].freeze }

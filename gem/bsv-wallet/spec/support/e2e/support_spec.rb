@@ -1,20 +1,21 @@
 # frozen_string_literal: true
 
-# Unit specs for the e2e harness's support modules. These run as part of
-# the normal +rspec spec/bsv+ suite — they exercise pure-Ruby helpers
-# (derivation maths, file lifecycle, subprocess management) that don't
-# need BSV_WALLET_WIF_SDK or any on-chain state.
+# Unit specs for the e2e harness's support modules. They live alongside
+# the modules they cover (spec/support/e2e) and run in the normal bare
+# +rspec+ suite — they exercise pure-Ruby helpers (derivation maths, file
+# lifecycle, subprocess management) that need no BSV_WALLET_WIF_SDK or
+# on-chain state.
 #
-# The e2e specs themselves live alongside this file at
-# +spec/e2e/{setup,fragmentation,broadcast,cleanup}_spec.rb+ and are
-# loaded via +spec/e2e/spec_helper.rb+, NOT this gem's main spec_helper.
+# The on-chain harness itself is the sole occupant of spec/e2e
+# (+broadcast_spec.rb+), loaded via +spec/e2e/spec_helper.rb+ and excluded
+# from the bare run by the +--exclude-pattern+ in +.rspec+.
 
 require 'spec_helper'
 require 'fileutils'
 require 'tmpdir'
-require_relative 'support/wallet_derivation'
-require_relative 'support/event_log'
-require_relative 'support/daemon_supervisor'
+require_relative 'wallet_derivation'
+require_relative 'event_log'
+require_relative 'daemon_supervisor'
 
 # Three top-level describe blocks — one per support module — kept flat
 # for navigability rather than nested under a single umbrella.

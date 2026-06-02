@@ -39,8 +39,8 @@ recover a single wallet standalone with `rake wallet:cleanup[wN]`.
 
 ## Environment
 
-The harness reads everything from `.env` at the repo root (loaded via
-`Dotenv` in `spec_helper.rb`). The CLI tools (and any spawned
+The harness reads everything from the shell environment (`~/.zshenv`
+locally, `env:` blocks in CI). The CLI tools (and any spawned
 `walletd` subprocesses) inherit the same env, so the wallets all
 agree on which DB belongs to which name.
 

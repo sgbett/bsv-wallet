@@ -30,15 +30,9 @@ require 'sequel'
 require 'bsv-wallet'
 require_relative '../support/fanout'
 
-# Match BSV::Wallet::CLI.boot: load the repo-root .env so the spec process
-# sees the same DATABASE_URL_* / WIF_* the bin/ subprocesses do. Specs run
-# from gem/bsv-wallet, .env lives at the repo root.
-begin
-  require 'dotenv'
-  Dotenv.load(File.expand_path('../../../../.env', __dir__))
-rescue LoadError
-  # optional — env can come from shell profile or CI workflow
-end
+# DATABASE_URL_* / BSV_WALLET_WIF_* come from the shell environment
+# (~/.zshenv locally, +env:+ blocks in CI), inherited by this spec process
+# and the bin/ subprocesses it spawns alike.
 
 RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/DescribeClass
   let(:payments_per_wallet) { (ENV['STRESS_PAYMENTS'] || 73).to_i }

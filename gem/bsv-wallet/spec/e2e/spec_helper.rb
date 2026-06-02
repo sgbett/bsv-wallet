@@ -2,34 +2,33 @@
 
 # spec_helper for the e2e on-chain harness (HLR #126).
 #
-# Separate from the gem's main +spec/spec_helper.rb+ so that
-# +bundle exec rspec spec/bsv spec/bin+ does NOT load the e2e tree —
-# the e2e specs spawn long-running walletd subprocesses and make real
-# ARC broadcasts, neither of which belongs in the unit-test run.
+# Separate from the gem's main +spec/spec_helper.rb+. +spec/e2e+ holds
+# only the on-chain harness (+broadcast_spec.rb+), which spawns
+# long-running walletd subprocesses and makes real ARC broadcasts —
+# neither belongs in the unit run. The bare +rspec+ run drops it via the
+# +--exclude-pattern+ in +.rspec+; this helper is loaded only when the
+# spec is named explicitly (+bundle exec rspec spec/e2e/broadcast_spec.rb+).
 #
-# Loaded explicitly by +bundle exec rspec spec/e2e/...+.
-#
-# There is no load-time skip: the support unit specs run without any
-# on-chain env, and the harness itself skips per-example (see the
+# There is no load-time skip: the harness skips per-example (see the
 # +before+ block in +broadcast_spec.rb+, which gates on +E2E_MODE+ and
 # +E2E::WalletHarness.missing_env+). +BSV_WALLET_WIF_SDK+ is the on-chain
 # funding key and the deterministic root for the 5 test wallets (see
-# +support/wallet_derivation.rb+).
+# +spec/support/e2e/wallet_derivation.rb+).
 
 require 'rspec'
 require 'bsv-wallet'
 
-# Load .env from repo root so +DATABASE_URL_SDK+ / +BSV_WALLET_WIF_SDK+
-# / per-wallet URLs are visible to the harness (and to its walletd
-# subprocesses, which inherit the parent env).
-begin
-  require 'dotenv'
-  Dotenv.load(File.expand_path('../../../../.env', __dir__))
-rescue LoadError
-  # optional — env can come from shell profile or CI workflow
-end
+# +DATABASE_URL_SDK+ / +BSV_WALLET_WIF_SDK+ / per-wallet URLs come from the
+# shell environment (~/.zshenv locally, +env:+ blocks in CI), inherited by
+# this rspec process and the +walletd+ subprocesses it spawns alike.
 
-Dir[File.join(__dir__, 'support', '*.rb')].each { |f| require f }
+# The harness support modules now live in spec/support/e2e (so their own
+# unit specs ride the bare +rspec+ run). Require them explicitly rather
+# than globbing that directory — a glob would also pull in the co-located
+# +*_spec.rb+ files.
+%w[wallet_derivation event_log wallet_harness daemon_supervisor].each do |mod|
+  require_relative File.join('..', 'support', 'e2e', mod)
+end
 
 # Per-spec skip is handled inside each phase's +before+ block via
 # +E2E::WalletHarness.missing_env+ — the message lists exactly which
