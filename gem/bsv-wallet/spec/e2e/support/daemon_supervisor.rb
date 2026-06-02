@@ -1,8 +1,6 @@
 # frozen_string_literal: true
 
 require 'fileutils'
-require 'open3'
-require 'timeout'
 require_relative 'event_log' # for EventLog::DEFAULT_DIR default arg (load-order safe)
 
 module E2E

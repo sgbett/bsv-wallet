@@ -1368,8 +1368,8 @@ module BSV
       def accepted?(broadcast_result)
         return false unless broadcast_result
 
-        status = broadcast_result[:tx_status]
-        return false if status.nil? || status.to_s.empty?
+        status = broadcast_result[:tx_status].to_s.upcase
+        return false if status.empty?
 
         !ArcStatus::REJECTED.include?(status)
       end
@@ -1389,8 +1389,8 @@ module BSV
       def rejected?(broadcast_result)
         return false unless broadcast_result
 
-        status = broadcast_result[:tx_status]
-        return false if status.nil? || status.to_s.empty?
+        status = broadcast_result[:tx_status].to_s.upcase
+        return false if status.empty?
 
         ArcStatus::REJECTED.include?(status)
       end
