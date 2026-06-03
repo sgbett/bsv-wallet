@@ -24,10 +24,11 @@ module BSV
 
       attr_reader :scheduler
 
-      def initialize(store:, services:, wallet: nil, network: nil,
+      def initialize(store:, services:, broadcaster:, wallet: nil, network: nil,
                      shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT_S)
         @store = store
         @services = services
+        @broadcaster = broadcaster
         @wallet_name = wallet
         @network = network
         @shutdown_timeout = shutdown_timeout
@@ -44,7 +45,7 @@ module BSV
 
           setup_signal_traps
 
-          broadcast = Engine::Broadcast.new(store: @store, services: @services)
+          broadcast = Engine::Broadcast.new(store: @store, services: @services, broadcaster: @broadcaster)
           broadcast.pull!(task: task)
           broadcast.reply!(task: task)
 

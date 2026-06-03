@@ -165,7 +165,7 @@ RSpec.describe BSV::Wallet::Engine do
       subject(:engine) do
         described_class.new(
           store: store, utxo_pool: utxo_pool,
-          services: services, network: :mainnet
+          services: services, broadcaster: broadcaster, network: :mainnet
         )
       end
 
@@ -174,10 +174,11 @@ RSpec.describe BSV::Wallet::Engine do
                  tx_status: 'SEEN_ON_NETWORK', status: 200
                })
       end
-      let(:services) do
-        svc = double('Services')
-        allow(svc).to receive(:call).with(:broadcast, anything).and_return(broadcast_response)
-        svc
+      let(:services) { double('Services') }
+      let(:broadcaster) do
+        b = double('Broadcaster')
+        allow(b).to receive(:broadcast).with(anything, wtxid: anything).and_return(broadcast_response)
+        b
       end
 
       it 'broadcasts inline and promotes on acceptance' do
@@ -192,7 +193,7 @@ RSpec.describe BSV::Wallet::Engine do
         )
 
         expect(result[:txid]).not_to be_nil
-        expect(services).to have_received(:call).with(:broadcast, anything)
+        expect(broadcaster).to have_received(:broadcast).with(anything, wtxid: anything)
 
         # Verify outputs were promoted
         listed = engine.list_outputs(basket: 'payments')
@@ -200,11 +201,11 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it 'stamps broadcast_at before the ARC call (pre-POST timing)' do
-        # Inject a stubbed services.call that raises mid-POST. The row
+        # Inject a stubbed broadcaster.broadcast that raises mid-POST. The row
         # should still have broadcast_at set -- the recognisable
         # crash-recovery state the poll loop subsequently resolves.
         stamped_at_call_time = nil
-        allow(services).to receive(:call).with(:broadcast, anything) do
+        allow(broadcaster).to receive(:broadcast).with(anything, wtxid: anything) do
           action = store.send(:models)::Action.order(:id).last
           stamped_at_call_time = store.broadcast_status(action_id: action.id)
           raise StandardError, 'network down'
@@ -251,7 +252,7 @@ RSpec.describe BSV::Wallet::Engine do
       # would leave the action's outputs speculatively promoted and its
       # inputs locked.
       it 'rejects the action on a non-2xx response carrying a terminal txStatus' do
-        allow(services).to receive(:call).with(:broadcast, anything).and_return(
+        allow(broadcaster).to receive(:broadcast).with(anything, wtxid: anything).and_return(
           double('ProtocolResponse', http_success?: false, data: { 'txStatus' => 'REJECTED' })
         )
 

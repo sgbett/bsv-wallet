@@ -1,0 +1,137 @@
+# frozen_string_literal: true
+
+# Integration spec for HLR #250 acceptance criterion: after a
+# broadcast, +broadcasts.provider+ reflects the responding provider.
+#
+# Exercises both wiring paths end-to-end against a real Postgres store
+# with a stubbed broadcast-capable provider:
+#
+# - Delayed path: enqueue an action with a pre-stamped +broadcasts+ row
+#   (broadcast_at IS NULL), run +Engine::Broadcast#process+ directly
+#   (the same entrypoint the Daemon's PULL fiber drives), assert
+#   +broadcasts.provider+ is populated post-submit.
+# - Inline path: call +Engine#inline_broadcast+ with a signed
+#   +Transaction+, assert +broadcasts.provider+ is populated.
+#
+# Postgres-only — exercises a real DB column added in migration 009.
+
+require 'spec_helper'
+require 'securerandom'
+require 'sequel'
+require 'bsv-wallet'
+require 'bsv/wallet/daemon'
+
+RSpec.describe 'walletd broadcaster.provider end-to-end', :postgres do # rubocop:disable RSpec/DescribeClass
+  let(:database_url) { ENV.fetch('DATABASE_URL') }
+  let(:store) { BSV::Wallet::Store.connect(database_url).tap(&:migrate!) }
+
+  let(:wtxid) { SecureRandom.random_bytes(32) }
+  let(:dtxid) { wtxid.reverse.unpack1('H*') }
+  let(:raw_tx) { SecureRandom.random_bytes(120) }
+
+  # Stub broadcast-capable provider. +ProtocolResponse+ is returned by
+  # +Provider#call+; +Services+ then normalises it. The provider's +name+
+  # is what +Broadcaster+ persists onto +broadcasts.provider+.
+  let(:provider_name) { 'StubGorillaPool' }
+  let(:broadcast_data) do
+    { 'txid' => dtxid, 'txStatus' => 'SEEN_ON_NETWORK', 'status' => 200 }
+  end
+  let(:broadcast_response) do
+    BSV::Network::ProtocolResponse.new(nil, data: broadcast_data, http_success: true)
+  end
+  let(:provider) do
+    p = instance_double(BSV::Network::Provider,
+                        name: provider_name,
+                        commands: Set.new(%i[broadcast]),
+                        rate_limit: nil)
+    allow(p).to receive(:call).with(:broadcast, any_args).and_return(broadcast_response)
+    p
+  end
+  let(:services) { BSV::Network::Services.new(providers: [provider]) }
+  let(:broadcaster) { BSV::Network::Broadcaster.new(providers: [provider], store: store) }
+
+  before do
+    skip 'Postgres-only spec' unless ENV['DATABASE_URL'].to_s.start_with?('postgres')
+
+    # Truncate every table -- these specs write through the real engine
+    # and need a clean slate so the action rows they create dominate
+    # the broadcasts query.
+    store.db.tables.each do |table|
+      next if table == :schema_info
+
+      store.db[table].truncate(cascade: true)
+    end
+  end
+
+  describe 'delayed broadcast path (Engine::Broadcast#submit)' do
+    let(:action_id) do
+      store.db[:actions].insert(
+        description: 'delayed broadcast test',
+        outgoing: true,
+        broadcast_intent: 'delayed',
+        wtxid: Sequel.blob(wtxid),
+        raw_tx: Sequel.blob(raw_tx),
+        nlocktime: 0
+      )
+    end
+
+    before do
+      store.db[:broadcasts].insert(action_id: action_id, intent: 'delayed')
+    end
+
+    it 'populates broadcasts.provider with the responding provider name' do
+      engine_broadcast = BSV::Wallet::Engine::Broadcast.new(
+        store: store, services: services, broadcaster: broadcaster
+      )
+
+      engine_broadcast.process(action_id)
+
+      row = store.db[:broadcasts].where(action_id: action_id).first
+      expect(row[:provider]).to eq(provider_name)
+    end
+  end
+
+  describe 'inline broadcast path (Engine#inline_broadcast)' do
+    # Build a real signed Transaction so +tx.wtxid+ returns a usable
+    # value -- inline_broadcast extracts the wtxid from the transaction
+    # object the caller supplies.
+    let(:signed_tx) do
+      tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      tx.add_output(BSV::Transaction::TransactionOutput.new(
+                      satoshis: 1, locking_script: BSV::Script::Script.from_binary("\x51".b)
+                    ))
+      tx
+    end
+    let(:tx_wtxid) { signed_tx.wtxid }
+
+    let(:action_id) do
+      store.db[:actions].insert(
+        description: 'inline broadcast test',
+        outgoing: true,
+        broadcast_intent: 'inline',
+        wtxid: Sequel.blob(tx_wtxid),
+        raw_tx: Sequel.blob(signed_tx.to_binary),
+        nlocktime: 0
+      )
+    end
+
+    before do
+      store.db[:broadcasts].insert(action_id: action_id, intent: 'inline')
+    end
+
+    it 'populates broadcasts.provider with the responding provider name' do
+      engine = BSV::Wallet::Engine.new(
+        store: store,
+        utxo_pool: BSV::Wallet::Store::UTXOPool.new(store: store),
+        services: services,
+        broadcaster: broadcaster,
+        network: :mainnet
+      )
+
+      engine.send(:inline_broadcast, action_id: action_id, tx: signed_tx)
+
+      row = store.db[:broadcasts].where(action_id: action_id).first
+      expect(row[:provider]).to eq(provider_name)
+    end
+  end
+end

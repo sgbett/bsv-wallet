@@ -38,10 +38,10 @@ module BSV
       LIMP_THRESHOLD     = 50_000  # default: 50K sats
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
-      attr_reader :limp_threshold, :services
+      attr_reader :limp_threshold, :services, :broadcaster
 
       def initialize(store:, utxo_pool:,
-                     services: nil, key_deriver: nil, chain_tracker: nil,
+                     services: nil, broadcaster: nil, key_deriver: nil, chain_tracker: nil,
                      network_provider: nil,
                      network: :mainnet, limp_threshold: LIMP_THRESHOLD)
         raise ArgumentError, "limp_threshold must be >= #{LIMP_THRESHOLD_MIN}" if limp_threshold < LIMP_THRESHOLD_MIN
@@ -49,6 +49,7 @@ module BSV
         @store = store
         @utxo_pool = utxo_pool
         @services = services
+        @broadcaster = broadcaster
         @key_deriver = key_deriver
         @chain_tracker = chain_tracker
         @network_provider = network_provider
@@ -205,7 +206,7 @@ module BSV
         # change generation — already detected above to keep the
         # key_deriver check honest.
         if skip_change
-          wtxid, raw_tx, vout_mapping = build_transaction(
+          wtxid, raw_tx, vout_mapping, signed_tx = build_transaction(
             action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,
             sign: true
           )
@@ -1417,10 +1418,10 @@ module BSV
       #   transformed to extended format".
       # @return [Hash, nil] broadcast status from Store
       def inline_broadcast(action_id:, tx:)
-        return @store.broadcast_status(action_id: action_id) unless @services
+        return @store.broadcast_status(action_id: action_id) unless @broadcaster
 
         @store.mark_broadcast_attempted(action_id: action_id)
-        response = @services.call(:broadcast, tx)
+        response = @broadcaster.broadcast(tx, wtxid: tx.wtxid)
 
         if response.http_success?
           data = response.data
@@ -2142,8 +2143,10 @@ module BSV
       # @param version [Integer, nil] transaction version
       # @param randomize [Boolean] whether to shuffle output order
       # @param sign [Boolean] whether to sign P2PKH inputs (default: true)
-      # @return [Array(String, String, Hash)] wtxid (32-byte wire order),
-      #   raw_tx (binary), and vout_mapping (original index -> new vout)
+      # @return [Array(String, String, Hash, Transaction)] wtxid (32-byte
+      #   wire order), raw_tx (binary), vout_mapping (original index ->
+      #   new vout), and the assembled tx (signed when +sign:+ is true,
+      #   needed by +inline_broadcast+ for EF serialisation).
       def build_transaction(action_id, inputs, outputs, lock_time, version, randomize, sign: true)
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
 
@@ -2163,7 +2166,7 @@ module BSV
         raw_tx = tx.to_binary
         wtxid = tx.wtxid
 
-        [wtxid, raw_tx, vout_mapping]
+        [wtxid, raw_tx, vout_mapping, tx]
       end
 
       # Funding loop (#210): drive generate_change until inputs cover the

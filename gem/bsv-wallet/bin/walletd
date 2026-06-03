@@ -37,8 +37,10 @@ store.migrate!
 
 provider = BSV::Network::Providers::WhatsOnChain.send(network)
 services = BSV::Network::Services.new(providers: [provider])
+broadcaster = BSV::Network::Broadcaster.new(providers: [provider], store: store)
 
 BSV.logger.info { "[walletd] Starting for #{wallet_name || 'default'} (#{network})..." }
 
-daemon = BSV::Wallet::Daemon.new(store: store, services: services, wallet: wallet_name, network: network)
+daemon = BSV::Wallet::Daemon.new(store: store, services: services, broadcaster: broadcaster,
+                                 wallet: wallet_name, network: network)
 daemon.run!

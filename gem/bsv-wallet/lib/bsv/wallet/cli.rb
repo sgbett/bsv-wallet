@@ -71,6 +71,10 @@ module BSV
         network_services = BSV::Network::Services.new(
           providers: [broadcast_provider, network_provider]
         )
+        network_broadcaster = BSV::Network::Broadcaster.new(
+          providers: [broadcast_provider, network_provider],
+          store: store
+        )
         chain_tracker = BSV::Network::ChainTracker.new(store: store, services: network_services)
 
         limp_threshold_raw = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD)
@@ -84,6 +88,7 @@ module BSV
           store: store,
           utxo_pool: utxo_pool,
           services: network_services,
+          broadcaster: network_broadcaster,
           key_deriver: key_deriver,
           chain_tracker: chain_tracker,
           network_provider: network_provider,
