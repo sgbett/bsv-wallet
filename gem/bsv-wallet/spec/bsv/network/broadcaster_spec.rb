@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'net/http'
+require_relative '../wallet/store/shared_context'
 
 RSpec.describe BSV::Network::Broadcaster do
   before do
@@ -124,11 +125,157 @@ RSpec.describe BSV::Network::Broadcaster do
   end
 
   describe '#provider_for' do
-    it 'returns nil until Task 3 wires DB-backed affinity' do
+    it 'returns nil when no store is configured' do
       provider = stub_provider('ARC', { broadcast: success({ 'txid' => 'abc' }) })
       broadcaster = described_class.new(providers: [provider])
 
       expect(broadcaster.provider_for(wtxid)).to be_nil
+    end
+
+    it 'raises on an invalid wtxid' do
+      provider = stub_provider('ARC', { broadcast: success({ 'txid' => 'abc' }) })
+      broadcaster = described_class.new(providers: [provider])
+
+      expect { broadcaster.provider_for('not bytes') }.to raise_error(ArgumentError, /wtxid/)
+    end
+  end
+
+  describe 'affinity persistence', :store do
+    let(:gp) { stub_provider('GorillaPool', { broadcast: success({ 'txid' => 'abc', 'txStatus' => 'SEEN_ON_NETWORK' }) }) }
+    let(:taal) { stub_provider('TAAL', { broadcast: success({ 'txid' => 'xyz', 'txStatus' => 'SEEN_ON_NETWORK' }) }) }
+    let(:woc) { stub_provider('WhatsOnChain', { get_tx: success('deadbeef') }) }
+
+    def insert_signed_action(wtxid:)
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: Sequel.blob(wtxid),
+        raw_tx: SecureRandom.random_bytes(100)
+      ).tap do |action|
+        BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed')
+      end
+    end
+
+    describe '#broadcast' do
+      let(:bound_wtxid) { SecureRandom.random_bytes(32) }
+
+      before { insert_signed_action(wtxid: bound_wtxid) }
+
+      it 'persists the responding provider name onto broadcasts.provider' do
+        broadcaster = described_class.new(providers: [gp, taal], store: store)
+
+        broadcaster.broadcast('rawtx', wtxid: bound_wtxid)
+
+        action_id = BSV::Wallet::Store::Models::Action.where(wtxid: Sequel.blob(bound_wtxid)).get(:id)
+        expect(BSV::Wallet::Store::Models::Broadcast.first(action_id: action_id).provider).to eq('GorillaPool')
+      end
+
+      it 'persists provider on an Arcade-shaped submit success (no txid in response)' do
+        arcade = stub_provider('GorillaPool', { broadcast: success({ 'status' => 'submitted' }) })
+        broadcaster = described_class.new(providers: [arcade], store: store)
+
+        result = broadcaster.broadcast('rawtx', wtxid: bound_wtxid)
+
+        expect(result.http_success?).to be true
+        expect(result.data[:txid]).to be_nil
+        action_id = BSV::Wallet::Store::Models::Action.where(wtxid: Sequel.blob(bound_wtxid)).get(:id)
+        expect(BSV::Wallet::Store::Models::Broadcast.first(action_id: action_id).provider).to eq('GorillaPool')
+      end
+
+      it 'does not persist provider on a failed broadcast' do
+        failing = stub_provider('GorillaPool', { broadcast: error('boom') })
+        broadcaster = described_class.new(providers: [failing], store: store)
+
+        broadcaster.broadcast('rawtx', wtxid: bound_wtxid)
+
+        action_id = BSV::Wallet::Store::Models::Action.where(wtxid: Sequel.blob(bound_wtxid)).get(:id)
+        expect(BSV::Wallet::Store::Models::Broadcast.first(action_id: action_id).provider).to be_nil
+      end
+
+      it 'overwrites a prior affinity on a second successful broadcast (last-broadcaster wins)' do
+        described_class.new(providers: [taal], store: store).broadcast('rawtx', wtxid: bound_wtxid)
+        described_class.new(providers: [gp], store: store).broadcast('rawtx', wtxid: bound_wtxid)
+
+        action_id = BSV::Wallet::Store::Models::Action.where(wtxid: Sequel.blob(bound_wtxid)).get(:id)
+        expect(BSV::Wallet::Store::Models::Broadcast.first(action_id: action_id).provider).to eq('GorillaPool')
+      end
+
+      it 'tolerates a missing action row (race: action deleted post-submit)' do
+        unbound = SecureRandom.random_bytes(32)
+        broadcaster = described_class.new(providers: [gp], store: store)
+
+        expect { broadcaster.broadcast('rawtx', wtxid: unbound) }.not_to raise_error
+      end
+
+      it 'raises on an invalid wtxid kwarg (boundary check)' do
+        broadcaster = described_class.new(providers: [gp], store: store)
+
+        expect { broadcaster.broadcast('rawtx', wtxid: 'not bytes') }
+          .to raise_error(ArgumentError, /wtxid/)
+      end
+    end
+
+    describe '#provider_for' do
+      let(:bound_wtxid) { SecureRandom.random_bytes(32) }
+
+      before { insert_signed_action(wtxid: bound_wtxid) }
+
+      it 'returns the Provider matching the persisted name after a successful broadcast' do
+        broadcaster = described_class.new(providers: [gp, taal], store: store)
+        broadcaster.broadcast('rawtx', wtxid: bound_wtxid)
+
+        expect(broadcaster.provider_for(bound_wtxid)).to equal(gp)
+      end
+
+      it 'returns nil when the persisted name is not present in @providers (config drift)' do
+        described_class.new(providers: [gp], store: store).broadcast('rawtx', wtxid: bound_wtxid)
+
+        fresh = described_class.new(providers: [taal], store: store)
+        expect(fresh.provider_for(bound_wtxid)).to be_nil
+      end
+
+      it 'returns nil when no affinity has been recorded for this wtxid' do
+        broadcaster = described_class.new(providers: [gp, taal], store: store)
+
+        expect(broadcaster.provider_for(bound_wtxid)).to be_nil
+      end
+
+      # Central acceptance: affinity survives daemon restart.
+      it 'survives broadcaster reconstruction (simulated daemon restart)' do
+        broadcaster_a = described_class.new(providers: [gp, taal], store: store)
+        broadcaster_a.broadcast('rawtx', wtxid: bound_wtxid)
+
+        broadcaster_b = described_class.new(providers: [gp, taal], store: store)
+        expect(broadcaster_b.provider_for(bound_wtxid)).to equal(gp)
+      end
+    end
+
+    describe 'affinity-aware selection' do
+      let(:bound_wtxid) { SecureRandom.random_bytes(32) }
+
+      before { insert_signed_action(wtxid: bound_wtxid) }
+
+      it 'moves the affinity-preferred provider to the front of the candidate list' do
+        # First broadcast records TAAL as the affined provider.
+        described_class.new(providers: [taal], store: store).broadcast('rawtx', wtxid: bound_wtxid)
+
+        # On the next call, TAAL is later in the priority list -- affinity must
+        # pull it to the front so it's tried first.
+        broadcaster = described_class.new(providers: [gp, taal], store: store)
+        broadcaster.broadcast('rawtx', wtxid: bound_wtxid)
+
+        expect(taal).to have_received(:call).with(:broadcast, 'rawtx').at_least(:once)
+        expect(gp).not_to have_received(:call).with(:broadcast, 'rawtx')
+      end
+
+      it 'falls through to first-capable when the affinity provider is no longer registered' do
+        described_class.new(providers: [stub_provider('GoneProvider', { broadcast: success({ 'txid' => 'a' }) })],
+                            store: store).broadcast('rawtx', wtxid: bound_wtxid)
+
+        broadcaster = described_class.new(providers: [gp, taal], store: store)
+        broadcaster.broadcast('rawtx', wtxid: bound_wtxid)
+
+        expect(gp).to have_received(:call).with(:broadcast, 'rawtx')
+      end
     end
   end
 end

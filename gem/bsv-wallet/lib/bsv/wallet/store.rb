@@ -657,6 +657,25 @@ module BSV
         broadcast_to_hash(broadcast)
       end
 
+      def record_broadcast_provider(wtxid:, provider:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'record_broadcast_provider wtxid')
+        action_id = models::Action.where(wtxid: Sequel.blob(wtxid)).get(:id)
+        return 0 unless action_id
+
+        # Last-broadcaster wins: re-broadcasting the same wtxid (e.g. retry
+        # after a partial failure on a different provider) overwrites the
+        # column so #provider_for reflects the most recent successful submit.
+        models::Broadcast.where(action_id: action_id).update(provider: provider)
+      end
+
+      def broadcast_provider_for(wtxid:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'broadcast_provider_for wtxid')
+        action_id = models::Action.where(wtxid: Sequel.blob(wtxid)).get(:id)
+        return unless action_id
+
+        models::Broadcast.where(action_id: action_id).get(:provider)
+      end
+
       def pending_resolutions(limit: 100)
         models::Broadcast
           .exclude(broadcast_at: nil)

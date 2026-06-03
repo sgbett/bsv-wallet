@@ -471,6 +471,38 @@ module BSV
           raise NotImplementedError
         end
 
+        # Persist broadcast affinity: the provider that handled this wtxid.
+        #
+        # Looks up the action by wtxid, then sets +broadcasts.provider+ on
+        # the matching broadcast row. Used by +BSV::Network::Broadcaster+
+        # to record which provider accepted the broadcast so a fresh
+        # broadcaster (e.g. after daemon restart) can re-route status
+        # queries to the same provider.
+        #
+        # Idempotent: re-recording the same +(wtxid, provider)+ is a no-op.
+        # A subsequent call with a different provider overwrites the column
+        # (last-broadcaster wins). No-op when no matching action or
+        # broadcast row exists (race with action deletion).
+        #
+        # @param wtxid [String] 32-byte binary wire-order wtxid
+        # @param provider [String] provider name (e.g. +"GorillaPool"+)
+        # @return [Integer] number of rows updated (0 or 1)
+        def record_broadcast_provider(wtxid:, provider:)
+          raise NotImplementedError
+        end
+
+        # Read broadcast affinity: the provider name for a given wtxid.
+        #
+        # Resolves the wtxid to its action then reads
+        # +broadcasts.provider+. Returns +nil+ when no action matches, no
+        # broadcasts row exists, or the column is NULL (no affinity yet).
+        #
+        # @param wtxid [String] 32-byte binary wire-order wtxid
+        # @return [String, nil] provider name, or +nil+ if no affinity recorded
+        def broadcast_provider_for(wtxid:)
+          raise NotImplementedError
+        end
+
         # Query broadcasts the resolution loop should poll to terminal.
         #
         # Returns broadcasts that have been attempted (+broadcast_at IS NOT NULL+)

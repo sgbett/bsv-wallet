@@ -44,6 +44,27 @@ module BSV
         return memo_result if memo_result
 
         candidates = candidates_for(sym, args, kwargs)
+        call_with_candidates(sym, candidates, *args, **kwargs)
+      end
+
+      # Dispatch a command against an explicitly-ordered candidate list.
+      #
+      # Same retry / backoff / fallback / normalisation as +#call+, but the
+      # caller supplies the provider ordering instead of relying on
+      # +#candidates_for+. Used by +BSV::Network::Broadcaster+ to overlay
+      # wtxid-keyed affinity onto the dispatch path without duplicating
+      # the per-provider backoff loop here.
+      #
+      # When a block is given, it is yielded the +Provider+ that produced
+      # the successful response so callers (e.g. Broadcaster) can persist
+      # affinity. The block is not invoked on failure.
+      #
+      # @param command [Symbol] SDK command name
+      # @param candidates [Array<BSV::Network::Provider>] ordered providers
+      # @yield [provider] succeeding provider (success only)
+      # @return [BSV::Network::ProtocolResponse]
+      def call_with_candidates(command, candidates, *args, **kwargs)
+        sym = command.to_sym
         return no_provider_response(sym) if candidates.empty?
 
         last_error = nil
@@ -55,6 +76,7 @@ module BSV
             stash_siblings(sym, result, args, kwargs)
             normalized = normalize(sym, result)
             record_affinity(sym, provider, normalized)
+            yield(provider) if block_given?
             return normalized
           end
 
