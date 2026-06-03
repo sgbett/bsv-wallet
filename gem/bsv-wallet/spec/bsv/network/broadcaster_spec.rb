@@ -140,6 +140,60 @@ RSpec.describe BSV::Network::Broadcaster do
     end
   end
 
+  describe '#get_tx_status' do
+    let(:dtxid) { wtxid.reverse.unpack1('H*') }
+    let(:status_data) { { 'txid' => dtxid, 'txStatus' => 'SEEN_ON_NETWORK', 'status' => 200 } }
+
+    it 'returns the underlying ProtocolResponse (normalised)' do
+      provider = stub_provider('ARC', { get_tx_status: success(status_data) })
+      broadcaster = described_class.new(providers: [provider])
+
+      response = broadcaster.get_tx_status(wtxid: wtxid, dtxid: dtxid)
+
+      expect(response).to be_a(BSV::Network::ProtocolResponse)
+      expect(response.http_success?).to be true
+      expect(response.data[:tx_status]).to eq('SEEN_ON_NETWORK')
+    end
+
+    it 'forwards the dtxid via the +txid:+ kwarg (BRC-100 spec naming)' do
+      provider = stub_provider('ARC', { get_tx_status: success(status_data) })
+      broadcaster = described_class.new(providers: [provider])
+
+      broadcaster.get_tx_status(wtxid: wtxid, dtxid: dtxid)
+
+      expect(provider).to have_received(:call).with(:get_tx_status, txid: dtxid)
+    end
+
+    it 'falls back to the next provider on retryable error' do
+      failing = stub_provider('P1', { get_tx_status: error('rate limited', retryable: true) })
+      working = stub_provider('P2', { get_tx_status: success(status_data) })
+      broadcaster = described_class.new(providers: [failing, working])
+
+      response = broadcaster.get_tx_status(wtxid: wtxid, dtxid: dtxid)
+
+      expect(response.http_success?).to be true
+      expect(response.data[:tx_status]).to eq('SEEN_ON_NETWORK')
+    end
+
+    it 'returns a synthetic no-provider response when no provider serves :get_tx_status' do
+      provider = stub_provider('BroadcastOnly', { broadcast: success({ 'txid' => 'abc' }) })
+      broadcaster = described_class.new(providers: [provider])
+
+      response = broadcaster.get_tx_status(wtxid: wtxid, dtxid: dtxid)
+
+      expect(response.http_success?).to be false
+      expect(response.error_message).to match(/no provider/)
+    end
+
+    it 'requires a valid wtxid' do
+      provider = stub_provider('ARC', { get_tx_status: success(status_data) })
+      broadcaster = described_class.new(providers: [provider])
+
+      expect { broadcaster.get_tx_status(wtxid: 'not bytes', dtxid: dtxid) }
+        .to raise_error(ArgumentError, /wtxid/)
+    end
+  end
+
   describe 'affinity persistence', :store do
     let(:gp) { stub_provider('GorillaPool', { broadcast: success({ 'txid' => 'abc', 'txStatus' => 'SEEN_ON_NETWORK' }) }) }
     let(:taal) { stub_provider('TAAL', { broadcast: success({ 'txid' => 'xyz', 'txStatus' => 'SEEN_ON_NETWORK' }) }) }
@@ -275,6 +329,60 @@ RSpec.describe BSV::Network::Broadcaster do
         broadcaster.broadcast('rawtx', wtxid: bound_wtxid)
 
         expect(gp).to have_received(:call).with(:broadcast, 'rawtx')
+      end
+    end
+
+    describe 'affinity-aware selection for #get_tx_status' do
+      let(:bound_wtxid) { SecureRandom.random_bytes(32) }
+      let(:bound_dtxid) { bound_wtxid.reverse.unpack1('H*') }
+      let(:status_data) { { 'txid' => bound_dtxid, 'txStatus' => 'SEEN_ON_NETWORK', 'status' => 200 } }
+
+      # Both providers serve broadcast (so affinity can record on them) AND
+      # get_tx_status (so the routing overlay has a candidate to reorder).
+      let(:gp_status) do
+        stub_provider('GorillaPool', {
+                        broadcast: success({ 'txid' => bound_dtxid, 'txStatus' => 'SEEN_ON_NETWORK' }),
+                        get_tx_status: success(status_data)
+                      })
+      end
+      let(:taal_status) do
+        stub_provider('TAAL', {
+                        broadcast: success({ 'txid' => bound_dtxid, 'txStatus' => 'SEEN_ON_NETWORK' }),
+                        get_tx_status: success(status_data)
+                      })
+      end
+
+      before { insert_signed_action(wtxid: bound_wtxid) }
+
+      it 'sends the get_tx_status query to the recorded provider first' do
+        # Record TAAL as the affined provider via a prior broadcast.
+        described_class.new(providers: [taal_status], store: store).broadcast('rawtx', wtxid: bound_wtxid)
+
+        # GP is first in priority order, but affinity must pull TAAL forward.
+        broadcaster = described_class.new(providers: [gp_status, taal_status], store: store)
+        broadcaster.get_tx_status(wtxid: bound_wtxid, dtxid: bound_dtxid)
+
+        expect(taal_status).to have_received(:call).with(:get_tx_status, txid: bound_dtxid)
+        expect(gp_status).not_to have_received(:call).with(:get_tx_status, txid: bound_dtxid)
+      end
+
+      it 'falls through to first-capable when no affinity has been recorded' do
+        broadcaster = described_class.new(providers: [gp_status, taal_status], store: store)
+        broadcaster.get_tx_status(wtxid: bound_wtxid, dtxid: bound_dtxid)
+
+        expect(gp_status).to have_received(:call).with(:get_tx_status, txid: bound_dtxid)
+        expect(taal_status).not_to have_received(:call).with(:get_tx_status, txid: bound_dtxid)
+      end
+
+      it 'falls through to first-capable when the recorded provider is no longer registered (config drift)' do
+        # Record a provider that won't be in @providers on the next boot.
+        gone = stub_provider('GoneProvider', { broadcast: success({ 'txid' => bound_dtxid }) })
+        described_class.new(providers: [gone], store: store).broadcast('rawtx', wtxid: bound_wtxid)
+
+        broadcaster = described_class.new(providers: [gp_status, taal_status], store: store)
+        broadcaster.get_tx_status(wtxid: bound_wtxid, dtxid: bound_dtxid)
+
+        expect(gp_status).to have_received(:call).with(:get_tx_status, txid: bound_dtxid)
       end
     end
   end

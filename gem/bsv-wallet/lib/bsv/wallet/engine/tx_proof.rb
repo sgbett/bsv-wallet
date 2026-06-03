@@ -13,9 +13,9 @@ module BSV
       class TxProof
         include OmqSupport
 
-        def initialize(store:, services:)
+        def initialize(store:, broadcaster:)
           @store = store
-          @services = services
+          @broadcaster = broadcaster
         end
 
         # Background queue — Scheduler pushes action IDs here.
@@ -60,7 +60,7 @@ module BSV
           end
 
           dtxid = action[:wtxid].reverse.unpack1('H*')
-          response = @services.call(:get_tx_status, txid: dtxid)
+          response = @broadcaster.get_tx_status(wtxid: action[:wtxid], dtxid: dtxid)
           latency_ms = ((Time.now - started_at) * 1000).round
 
           unless response.http_success?

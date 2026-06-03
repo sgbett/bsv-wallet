@@ -50,7 +50,6 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
            })
   end
 
-  let(:services) { double('Services') }
   let(:broadcaster) { double('Broadcaster') }
 
   around do |example|
@@ -102,13 +101,13 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
       promote_action_outputs: []
     )
 
-    # --- Services stubs ---
-    allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(proof_response)
+    # --- Network stubs ---
+    allow(broadcaster).to receive(:get_tx_status).with(wtxid: wtxid, dtxid: dtxid).and_return(proof_response)
     allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: wtxid).and_return(broadcast_response)
   end
 
   it 'emits the canonical event sequence across one broadcast and one proof cycle' do
-    daemon = BSV::Wallet::Daemon.new(store: store, services: services, broadcaster: broadcaster,
+    daemon = BSV::Wallet::Daemon.new(store: store, broadcaster: broadcaster,
                                      wallet: 'alice', network: :mainnet)
 
     Async do |task|

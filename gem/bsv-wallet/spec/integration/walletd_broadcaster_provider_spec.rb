@@ -81,7 +81,7 @@ RSpec.describe 'walletd broadcaster.provider end-to-end', :postgres do # rubocop
 
     it 'populates broadcasts.provider with the responding provider name' do
       engine_broadcast = BSV::Wallet::Engine::Broadcast.new(
-        store: store, services: services, broadcaster: broadcaster
+        store: store, broadcaster: broadcaster
       )
 
       engine_broadcast.process(action_id)

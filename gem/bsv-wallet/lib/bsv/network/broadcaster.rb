@@ -70,11 +70,29 @@ module BSV
         @providers.find { |p| p.name == name }
       end
 
+      # Query tx status through the affinity-preferred or first capable
+      # provider, with fallback on retryable errors.
+      #
+      # The wallet's bookkeeping key is the binary wtxid; the wire query
+      # uses the display-order +dtxid+ hex string (the +txid:+ keyword on
+      # the SDK call retains BRC-100 spec naming, where +txid+ is the
+      # display-order label rather than a byte-order indicator).
+      #
+      # @param wtxid [String] 32-byte binary wire-order wtxid (affinity key)
+      # @param dtxid [String] 64-char display-order hex (sent to ARC)
+      # @return [BSV::Network::ProtocolResponse]
+      def get_tx_status(wtxid:, dtxid:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'Broadcaster#get_tx_status wtxid')
+
+        candidates = candidates_with_affinity(wtxid, command: :get_tx_status)
+        @services.call_with_candidates(:get_tx_status, candidates, txid: dtxid)
+      end
+
       private
 
-      # Capable providers with affinity-preferred provider moved to front.
-      def candidates_with_affinity(wtxid)
-        capable = @providers.select { |p| p.commands.include?(:broadcast) }
+      # Capable providers with the affinity-preferred provider moved to front.
+      def candidates_with_affinity(wtxid, command: :broadcast)
+        capable = @providers.select { |p| p.commands.include?(command) }
         preferred = provider_for(wtxid)
         return capable unless preferred && capable.include?(preferred)
 

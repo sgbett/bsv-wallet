@@ -13,9 +13,8 @@ module BSV
       class Broadcast
         include OmqSupport
 
-        def initialize(store:, services:, broadcaster:)
+        def initialize(store:, broadcaster:)
           @store = store
-          @services = services
           @broadcaster = broadcaster
         end
 
@@ -200,7 +199,7 @@ module BSV
           end
 
           dtxid = action[:wtxid].reverse.unpack1('H*')
-          response = @services.call(:get_tx_status, txid: dtxid)
+          response = @broadcaster.get_tx_status(wtxid: action[:wtxid], dtxid: dtxid)
           latency_ms = ((Time.now - started_at) * 1000).round
 
           if response.http_success?
