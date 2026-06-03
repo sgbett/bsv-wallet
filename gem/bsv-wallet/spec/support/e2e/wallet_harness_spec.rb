@@ -44,6 +44,45 @@ RSpec.describe E2E::WalletHarness do # rubocop:disable RSpec/SpecFilePathFormat
     end
   end
 
+  describe '.install_derived_db_urls!' do
+    let(:base) { 'postgres://localhost:5432/' }
+
+    it 'populates DATABASE_URL_SDK + W1..W5 derived from BSV_WALLET_POSTGRES' do
+      ENV['BSV_WALLET_POSTGRES'] = base
+      %w[SDK W1 W2 W3 W4 W5].each { |s| ENV.delete("DATABASE_URL_#{s}") }
+      described_class.install_derived_db_urls!
+      expect(ENV.fetch('DATABASE_URL_SDK', nil)).to eq('postgres://localhost:5432/bsv_wallet_sdk')
+      expect(ENV.fetch('DATABASE_URL_W1', nil)).to eq('postgres://localhost:5432/bsv_wallet_w1')
+      expect(ENV.fetch('DATABASE_URL_W5', nil)).to eq('postgres://localhost:5432/bsv_wallet_w5')
+    end
+
+    it 'respects explicit DATABASE_URL_<NAME> overrides' do
+      ENV['BSV_WALLET_POSTGRES'] = base
+      ENV['DATABASE_URL_W3'] = 'postgres://other-host:5432/custom_w3'
+      %w[SDK W1 W2 W4 W5].each { |s| ENV.delete("DATABASE_URL_#{s}") }
+      described_class.install_derived_db_urls!
+      expect(ENV.fetch('DATABASE_URL_W3', nil)).to eq('postgres://other-host:5432/custom_w3')
+      expect(ENV.fetch('DATABASE_URL_W1', nil)).to eq('postgres://localhost:5432/bsv_wallet_w1')
+    end
+
+    it 'treats whitespace-only overrides as unset and fills them' do
+      ENV['BSV_WALLET_POSTGRES'] = base
+      ENV['DATABASE_URL_W2'] = '   '
+      described_class.install_derived_db_urls!
+      expect(ENV.fetch('DATABASE_URL_W2', nil)).to eq('postgres://localhost:5432/bsv_wallet_w2')
+    end
+
+    it 'raises a clear error when BSV_WALLET_POSTGRES is not set' do
+      ENV.delete('BSV_WALLET_POSTGRES')
+      expect { described_class.install_derived_db_urls! }.to raise_error(KeyError)
+    end
+
+    it 'raises a clear error when BSV_WALLET_POSTGRES is blank or whitespace-only' do
+      ENV['BSV_WALLET_POSTGRES'] = '   '
+      expect { described_class.install_derived_db_urls! }.to raise_error(KeyError)
+    end
+  end
+
   describe '.test_wallet_names' do
     it 'returns w1..w5' do
       expect(described_class.test_wallet_names).to eq(%w[w1 w2 w3 w4 w5])
@@ -66,12 +105,10 @@ RSpec.describe E2E::WalletHarness do # rubocop:disable RSpec/SpecFilePathFormat
   end
 
   describe '.required_env' do
-    it 'lists BSV_WALLET_WIF_SDK + DATABASE_URL_SDK + DATABASE_URL_W1..5' do
+    it 'lists BSV_WALLET_WIF_SDK + BSV_WALLET_POSTGRES' do
       expect(described_class.required_env).to contain_exactly(
         'BSV_WALLET_WIF_SDK',
-        'DATABASE_URL_SDK',
-        'DATABASE_URL_W1', 'DATABASE_URL_W2', 'DATABASE_URL_W3',
-        'DATABASE_URL_W4', 'DATABASE_URL_W5'
+        'BSV_WALLET_POSTGRES'
       )
     end
   end
@@ -86,7 +123,7 @@ RSpec.describe E2E::WalletHarness do # rubocop:disable RSpec/SpecFilePathFormat
       described_class.required_env.each { |k| ENV.delete(k) }
       ENV['BSV_WALLET_WIF_SDK'] = sdk_wif
       expect(described_class.missing_env).not_to include('BSV_WALLET_WIF_SDK')
-      expect(described_class.missing_env).to include('DATABASE_URL_SDK')
+      expect(described_class.missing_env).to include('BSV_WALLET_POSTGRES')
     end
 
     it 'treats whitespace-only values as unset' do
