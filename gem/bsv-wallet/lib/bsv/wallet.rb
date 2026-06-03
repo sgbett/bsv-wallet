@@ -41,6 +41,7 @@ module BSV
     require_relative 'network/services'
     require_relative 'network/chain_tracker'
     require_relative 'network/broadcaster'
+    require_relative 'network/sse_listener'
 
     # Default store (SQLite-backed persistence)
     autoload :Store, 'bsv/wallet/store'
