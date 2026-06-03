@@ -58,6 +58,13 @@ module BSV
       # the successful response so callers (e.g. Broadcaster) can persist
       # affinity. The block is not invoked on failure.
       #
+      # Broadcast affinity persistence is +BSV::Network::Broadcaster+'s
+      # contract, not this layer's. Services intentionally does not record
+      # affinity itself — any direct caller of +#call(:broadcast, ...)+
+      # outside Broadcaster will silently skip the affinity hook. Route
+      # broadcast and +:get_tx_status+ through Broadcaster for any flow
+      # where affinity matters.
+      #
       # @param command [Symbol] SDK command name
       # @param candidates [Array<BSV::Network::Provider>] ordered providers
       # @yield [provider] succeeding provider (success only)

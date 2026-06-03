@@ -24,7 +24,7 @@ module BSV
         @services = Services.new(providers: @providers)
       end
 
-      attr_reader :providers, :store
+      attr_reader :providers
 
       # Broadcast a transaction payload through the affinity-preferred or
       # first broadcast-capable provider, with fallback on retryable errors.
@@ -46,7 +46,17 @@ module BSV
         candidates = candidates_with_affinity(wtxid)
 
         @services.call_with_candidates(:broadcast, candidates, payload) do |provider|
+          # Affinity is a best-effort hint. A DB failure here does not unwind
+          # the successful broadcast — the tx is already in the mempool and
+          # the poll loop recovers tx_status on the next pass. Surface it as
+          # a targeted warning so a real broadcast failure (which bubbles)
+          # stays distinguishable from a bookkeeping miss.
           @store&.record_broadcast_provider(wtxid: wtxid, provider: provider.name)
+        rescue StandardError => e
+          BSV.logger&.warn do
+            '[Broadcaster] affinity write failed (broadcast succeeded, hint lost) ' \
+              "wtxid=#{wtxid.unpack1('H*')} provider=#{provider.name}: #{e.message}"
+          end
         end
       end
 

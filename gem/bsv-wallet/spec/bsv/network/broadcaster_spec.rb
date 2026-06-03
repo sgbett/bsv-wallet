@@ -48,12 +48,6 @@ RSpec.describe BSV::Network::Broadcaster do
       expect { described_class.new(providers: nil) }.to raise_error(ArgumentError)
     end
 
-    it 'accepts a store kwarg for affinity persistence (used in Task 3+)' do
-      provider = stub_provider('ARC', { broadcast: success({ 'txid' => 'abc' }) })
-      broadcaster = described_class.new(providers: [provider], store: :fake_store)
-      expect(broadcaster.store).to eq(:fake_store)
-    end
-
     it 'freezes the providers list' do
       provider = stub_provider('ARC', { broadcast: success({ 'txid' => 'abc' }) })
       broadcaster = described_class.new(providers: [provider])
@@ -265,6 +259,28 @@ RSpec.describe BSV::Network::Broadcaster do
 
         expect { broadcaster.broadcast('rawtx', wtxid: 'not bytes') }
           .to raise_error(ArgumentError, /wtxid/)
+      end
+
+      # Affinity write is best-effort: the tx is already in the mempool by the
+      # time the block runs. A DB failure must NOT propagate as if the broadcast
+      # itself had failed — the poll loop recovers tx_status on the next pass,
+      # only the routing hint is lost.
+      it 'returns the successful response and warns (does not raise) when the affinity write fails' do
+        failing_store = instance_double(BSV::Wallet::Store)
+        allow(failing_store).to receive(:broadcast_provider_for).and_return(nil)
+        allow(failing_store).to receive(:record_broadcast_provider)
+          .and_raise(Sequel::DatabaseError.new('connection lost'))
+
+        logger = double('Logger').as_null_object # accepts other log levels emitted along the call path
+        allow(BSV).to receive(:logger).and_return(logger)
+
+        broadcaster = described_class.new(providers: [gp], store: failing_store)
+
+        result = broadcaster.broadcast('rawtx', wtxid: bound_wtxid)
+
+        expect(result.http_success?).to be true
+        expect(result.data[:txid]).to eq('abc')
+        expect(logger).to have_received(:warn)
       end
     end
 
