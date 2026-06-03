@@ -40,6 +40,7 @@ module BSV
     # Network services (porcelain routing layer over SDK providers)
     require_relative 'network/services'
     require_relative 'network/chain_tracker'
+    require_relative 'network/broadcaster'
 
     # Default store (SQLite-backed persistence)
     autoload :Store, 'bsv/wallet/store'

@@ -13,9 +13,9 @@ module BSV
       class Broadcast
         include OmqSupport
 
-        def initialize(store:, services:)
+        def initialize(store:, broadcaster:)
           @store = store
-          @services = services
+          @broadcaster = broadcaster
         end
 
         # Background queue -- fire-and-forget processing.
@@ -117,8 +117,14 @@ module BSV
         # crash-recovery state that the poll loop subsequently resolves
         # via GET /tx/{txid}.
         def submit(action_id, action, started_at:)
+          # wtxid_raw_tx_parity (migration 003) guarantees wtxid is set
+          # whenever raw_tx is — the #process guard above filtered out the
+          # NULL raw_tx case. Validate defensively so a contract violation
+          # surfaces here rather than deep inside Broadcaster.
+          BSV::Primitives::Hex.validate_wtxid!(action[:wtxid], name: 'Engine::Broadcast#submit wtxid')
+
           @store.mark_broadcast_attempted(action_id: action_id)
-          response = @services.call(:broadcast, action[:raw_tx])
+          response = @broadcaster.broadcast(action[:raw_tx], wtxid: action[:wtxid])
           latency_ms = ((Time.now - started_at) * 1000).round
 
           if response.http_success?
@@ -193,7 +199,7 @@ module BSV
           end
 
           dtxid = action[:wtxid].reverse.unpack1('H*')
-          response = @services.call(:get_tx_status, txid: dtxid)
+          response = @broadcaster.get_tx_status(wtxid: action[:wtxid], dtxid: dtxid)
           latency_ms = ((Time.now - started_at) * 1000).round
 
           if response.http_success?

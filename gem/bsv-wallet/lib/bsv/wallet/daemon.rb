@@ -15,7 +15,7 @@ module BSV
     # Async reactor. This is the runtime for walletd.
     #
     # Usage:
-    #   daemon = BSV::Wallet::Daemon.new(store: store, services: services)
+    #   daemon = BSV::Wallet::Daemon.new(store: store, broadcaster: broadcaster)
     #   daemon.run!  # blocks until stopped
     class Daemon
       # Default drain budget — see {Scheduler#shutdown}. Configurable
@@ -24,10 +24,10 @@ module BSV
 
       attr_reader :scheduler
 
-      def initialize(store:, services:, wallet: nil, network: nil,
+      def initialize(store:, broadcaster:, wallet: nil, network: nil,
                      shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT_S)
         @store = store
-        @services = services
+        @broadcaster = broadcaster
         @wallet_name = wallet
         @network = network
         @shutdown_timeout = shutdown_timeout
@@ -44,11 +44,11 @@ module BSV
 
           setup_signal_traps
 
-          broadcast = Engine::Broadcast.new(store: @store, services: @services)
+          broadcast = Engine::Broadcast.new(store: @store, broadcaster: @broadcaster)
           broadcast.pull!(task: task)
           broadcast.reply!(task: task)
 
-          tx_proof = Engine::TxProof.new(store: @store, services: @services)
+          tx_proof = Engine::TxProof.new(store: @store, broadcaster: @broadcaster)
           tx_proof.pull!(task: task)
 
           @scheduler = Scheduler.new(store: @store)

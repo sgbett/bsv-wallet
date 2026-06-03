@@ -657,6 +657,25 @@ module BSV
         broadcast_to_hash(broadcast)
       end
 
+      def record_broadcast_provider(wtxid:, provider:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'record_broadcast_provider wtxid')
+        action_id = models::Action.where(wtxid: Sequel.blob(wtxid)).get(:id)
+        return 0 unless action_id
+
+        # Last-broadcaster wins: re-broadcasting the same wtxid (e.g. retry
+        # after a partial failure on a different provider) overwrites the
+        # column so #provider_for reflects the most recent successful submit.
+        models::Broadcast.where(action_id: action_id).update(provider: provider)
+      end
+
+      def broadcast_provider_for(wtxid:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'broadcast_provider_for wtxid')
+        action_id = models::Action.where(wtxid: Sequel.blob(wtxid)).get(:id)
+        return unless action_id
+
+        models::Broadcast.where(action_id: action_id).get(:provider)
+      end
+
       def pending_resolutions(limit: 100)
         models::Broadcast
           .exclude(broadcast_at: nil)
@@ -678,6 +697,9 @@ module BSV
         @db.transaction do
           raise "no broadcasts row for action_id=#{action_id}" unless models::Broadcast.where(action_id: action_id).any?
 
+          # Set-once: the +broadcast_at: nil+ predicate guards re-stamps on
+          # retry, so the column reflects the first attempt rather than the
+          # most recent one. See reference/schema.md (Phase 3).
           models::Broadcast
             .where(action_id: action_id, broadcast_at: nil)
             .update(broadcast_at: Time.now)
@@ -924,7 +946,7 @@ module BSV
           action_id: record.action_id, tx_status: record.tx_status,
           arc_status: record.arc_status, broadcast_at: record.broadcast_at,
           block_hash: record.block_hash, block_height: record.block_height,
-          merkle_path: record.merkle_path
+          merkle_path: record.merkle_path, provider: record.provider
         }
       end
 

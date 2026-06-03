@@ -5,10 +5,10 @@ require 'logger'
 require_relative '../../../support/console_helpers'
 
 RSpec.describe BSV::Wallet::Engine::TxProof do
-  subject(:tx_proof) { described_class.new(store: store, services: services) }
+  subject(:tx_proof) { described_class.new(store: store, broadcaster: broadcaster) }
 
   let(:store) { double('Store') }
-  let(:services) { double('Services') }
+  let(:broadcaster) { double('Broadcaster') }
 
   let(:action_id) { 42 }
   let(:wtxid) { SecureRandom.random_bytes(32) }
@@ -43,14 +43,14 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(response)
+        allow(broadcaster).to receive(:get_tx_status).with(wtxid: wtxid, dtxid: dtxid).and_return(response)
         allow(store).to receive(:save_proof).and_return(99)
         allow(store).to receive(:link_proof)
       end
 
-      it 'calls get_tx_status with display-order txid' do
+      it 'calls broadcaster.get_tx_status with wtxid + display-order dtxid' do
         tx_proof.process(action_id)
-        expect(services).to have_received(:call).with(:get_tx_status, txid: dtxid)
+        expect(broadcaster).to have_received(:get_tx_status).with(wtxid: wtxid, dtxid: dtxid)
       end
 
       it 'saves the proof with normalized response data' do
@@ -92,7 +92,7 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(store).to receive(:save_proof)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(response)
+        allow(broadcaster).to receive(:get_tx_status).with(wtxid: wtxid, dtxid: dtxid).and_return(response)
       end
 
       it 'does not save a proof' do
@@ -120,7 +120,7 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(store).to receive(:save_proof)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(response)
+        allow(broadcaster).to receive(:get_tx_status).with(wtxid: wtxid, dtxid: dtxid).and_return(response)
       end
 
       it 'does not save a proof' do
@@ -143,13 +143,13 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
     context 'when action not found' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(nil)
-        allow(services).to receive(:call)
+        allow(broadcaster).to receive(:get_tx_status)
       end
 
-      it 'returns nil without calling services' do
+      it 'returns nil without calling the broadcaster' do
         result = tx_proof.process(action_id)
         expect(result).to be_nil
-        expect(services).not_to have_received(:call)
+        expect(broadcaster).not_to have_received(:get_tx_status)
       end
 
       it 'emits task.dispatched then task.skipped with reason=action_not_found' do
@@ -165,13 +165,13 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
       before do
         allow(store).to receive(:find_action).with(id: action_id)
                                              .and_return({ id: action_id, wtxid: nil })
-        allow(services).to receive(:call)
+        allow(broadcaster).to receive(:get_tx_status)
       end
 
-      it 'returns nil without calling services' do
+      it 'returns nil without calling the broadcaster' do
         result = tx_proof.process(action_id)
         expect(result).to be_nil
-        expect(services).not_to have_received(:call)
+        expect(broadcaster).not_to have_received(:get_tx_status)
       end
 
       it 'emits task.dispatched then task.skipped with reason=no_wtxid' do
@@ -187,13 +187,13 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
       before do
         allow(store).to receive(:find_action).with(id: action_id)
                                              .and_return(action_hash.merge(tx_proof_id: 99))
-        allow(services).to receive(:call)
+        allow(broadcaster).to receive(:get_tx_status)
       end
 
-      it 'returns nil without calling services' do
+      it 'returns nil without calling the broadcaster' do
         result = tx_proof.process(action_id)
         expect(result).to be_nil
-        expect(services).not_to have_received(:call)
+        expect(broadcaster).not_to have_received(:get_tx_status)
       end
 
       it 'emits task.dispatched then task.skipped with reason=already_proven' do
@@ -219,7 +219,7 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(response)
+        allow(broadcaster).to receive(:get_tx_status).with(wtxid: wtxid, dtxid: dtxid).and_return(response)
         allow(store).to receive(:save_proof).and_return(99)
         allow(store).to receive(:link_proof)
       end

@@ -7,12 +7,13 @@ require_relative '../../../support/console_helpers'
 
 RSpec.describe BSV::Wallet::Engine::Broadcast do
   let(:store) { double('Store') }
-  let(:services) { double('Services') }
-  let(:broadcast) { described_class.new(store: store, services: services) }
+  let(:broadcaster) { double('Broadcaster') }
+  let(:broadcast) { described_class.new(store: store, broadcaster: broadcaster) }
 
   let(:action_id) { 42 }
   let(:raw_tx) { "\x01\x00".b }
-  let(:action_hash) { { id: action_id, raw_tx: raw_tx } }
+  let(:submit_wtxid) { SecureRandom.random_bytes(32) }
+  let(:action_hash) { { id: action_id, raw_tx: raw_tx, wtxid: submit_wtxid } }
   # Success responses come through BSV::Network::Services which
   # normalizes to symbol + snake_case keys.
   let(:broadcast_data) do
@@ -48,7 +49,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(nil)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
-        allow(services).to receive(:call)
+        allow(broadcaster).to receive(:broadcast)
+        allow(broadcaster).to receive(:get_tx_status)
       end
 
       it 'emits task.dispatched then task.skipped with reason action_not_found' do
@@ -59,10 +61,11 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         expect(emitted_events[1]).to include(name: 'task.skipped', reason: :action_not_found, id: action_id)
       end
 
-      it 'returns nil without calling services' do
+      it 'returns nil without calling the broadcaster' do
         result = broadcast.process(action_id)
         expect(result).to be_nil
-        expect(services).not_to have_received(:call)
+        expect(broadcaster).not_to have_received(:broadcast)
+        expect(broadcaster).not_to have_received(:get_tx_status)
       end
     end
 
@@ -70,7 +73,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return({ id: action_id, raw_tx: nil })
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
-        allow(services).to receive(:call)
+        allow(broadcaster).to receive(:broadcast)
+        allow(broadcaster).to receive(:get_tx_status)
       end
 
       it 'emits task.dispatched then task.skipped with reason no_raw_tx' do
@@ -81,10 +85,11 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         expect(emitted_events[1]).to include(name: 'task.skipped', reason: :no_raw_tx, id: action_id)
       end
 
-      it 'returns nil without calling services' do
+      it 'returns nil without calling the broadcaster' do
         result = broadcast.process(action_id)
         expect(result).to be_nil
-        expect(services).not_to have_received(:call)
+        expect(broadcaster).not_to have_received(:broadcast)
+        expect(broadcaster).not_to have_received(:get_tx_status)
       end
     end
 
@@ -92,7 +97,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     context 'when accepted with SEEN_ON_NETWORK' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -107,9 +112,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         )
       end
 
-      it 'calls services.call(:broadcast) with the raw_tx' do
+      it 'calls broadcaster.broadcast with the raw_tx and submit wtxid' do
         broadcast.process(action_id)
-        expect(services).to have_received(:call).with(:broadcast, raw_tx)
+        expect(broadcaster).to have_received(:broadcast).with(raw_tx, wtxid: submit_wtxid)
       end
 
       it 'records the broadcast result from normalized response data' do
@@ -147,7 +152,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -165,7 +170,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -194,7 +199,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(http_response).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(true)
         allow(http_response).to receive(:is_a?).with(Net::HTTPServerError).and_return(false)
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(error_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(error_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -224,7 +229,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(http_response).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(false)
         allow(http_response).to receive(:is_a?).with(Net::HTTPServerError).and_return(true)
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(error_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(error_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -254,7 +259,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(stale_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(stale_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -281,7 +286,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(malformed_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(malformed_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -312,7 +317,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(rejected_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(rejected_response)
         allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -344,7 +349,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(double_spend_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(double_spend_response)
         allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -377,7 +382,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(orphan_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(orphan_response)
         allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -400,7 +405,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     context 'when broadcast succeeds' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(services).to receive(:call).with(:broadcast, raw_tx).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -447,18 +452,20 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(poll_response)
+        allow(broadcaster).to receive(:get_tx_status)
+          .with(wtxid: wtxid, dtxid: dtxid).and_return(poll_response)
         allow(store).to receive(:record_broadcast_result).and_return(updated_status)
+        allow(broadcaster).to receive(:broadcast)
       end
 
-      it 'calls services.call(:get_tx_status) with the dtxid' do
+      it 'calls broadcaster.get_tx_status with the wtxid + dtxid' do
         broadcast.process(action_id)
-        expect(services).to have_received(:call).with(:get_tx_status, txid: dtxid)
+        expect(broadcaster).to have_received(:get_tx_status).with(wtxid: wtxid, dtxid: dtxid)
       end
 
       it 'does not re-broadcast' do
         broadcast.process(action_id)
-        expect(services).not_to have_received(:call).with(:broadcast, anything)
+        expect(broadcaster).not_to have_received(:broadcast)
       end
 
       it 'records the updated broadcast result' do
@@ -516,7 +523,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(rejected_response)
+        allow(broadcaster).to receive(:get_tx_status)
+          .with(wtxid: wtxid, dtxid: dtxid).and_return(rejected_response)
         allow(store).to receive(:record_broadcast_result)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:reject_action)
@@ -569,7 +577,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(double_spend_response)
+        allow(broadcaster).to receive(:get_tx_status)
+          .with(wtxid: wtxid, dtxid: dtxid).and_return(double_spend_response)
         allow(store).to receive(:reject_action)
       end
 
@@ -603,7 +612,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(orphan_response)
+        allow(broadcaster).to receive(:get_tx_status)
+          .with(wtxid: wtxid, dtxid: dtxid).and_return(orphan_response)
         allow(store).to receive(:reject_action)
       end
 
@@ -638,7 +648,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(mined_response)
+        allow(broadcaster).to receive(:get_tx_status)
+          .with(wtxid: wtxid, dtxid: dtxid).and_return(mined_response)
         allow(store).to receive(:record_broadcast_result)
       end
 
@@ -686,12 +697,12 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
         allow(store).to receive(:record_broadcast_result)
-        allow(services).to receive(:call).and_return(poll_response)
+        allow(broadcaster).to receive(:get_tx_status).and_return(poll_response)
       end
 
-      it 'sends the byte-reversed hex (display order) to :get_tx_status' do
+      it 'sends the byte-reversed hex (display order) to broadcaster.get_tx_status' do
         broadcast.process(action_id)
-        expect(services).to have_received(:call).with(:get_tx_status, txid: expected_dtxid)
+        expect(broadcaster).to have_received(:get_tx_status).with(wtxid: wtxid, dtxid: expected_dtxid)
       end
     end
 
@@ -714,7 +725,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(http_response).to receive(:is_a?).with(Net::HTTPServerError).and_return(true)
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_with_wtxid)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
-        allow(services).to receive(:call).with(:get_tx_status, txid: dtxid).and_return(error_response)
+        allow(broadcaster).to receive(:get_tx_status)
+          .with(wtxid: wtxid, dtxid: dtxid).and_return(error_response)
       end
 
       it 'does not call record_broadcast_result' do
@@ -745,13 +757,13 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(store).to receive(:find_action).with(id: action_id)
                                              .and_return({ id: action_id, raw_tx: raw_tx, wtxid: nil })
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(existing_status)
-        allow(services).to receive(:call)
+        allow(broadcaster).to receive(:get_tx_status)
       end
 
-      it 'returns the broadcast status without calling services' do
+      it 'returns the broadcast status without calling the broadcaster' do
         result = broadcast.process(action_id)
         expect(result).to eq(existing_status)
-        expect(services).not_to have_received(:call)
+        expect(broadcaster).not_to have_received(:get_tx_status)
       end
 
       it 'emits task.skipped with reason=no_wtxid' do
@@ -769,12 +781,12 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       allow(store).to receive(:record_broadcast_result).and_return(status_hash)
     end
 
-    it 'stamps broadcast_at before calling services.call(:broadcast)' do
+    it 'stamps broadcast_at before calling broadcaster.broadcast' do
       call_order = []
       allow(store).to receive(:mark_broadcast_attempted) do |**|
         call_order << :stamp
       end
-      allow(services).to receive(:call).with(:broadcast, raw_tx) do
+      allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid) do
         call_order << :network
         success_response
       end
@@ -784,16 +796,16 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       expect(call_order).to eq(%i[stamp network])
     end
 
-    it 'stamps the broadcast row even when services.call raises' do
-      allow(services).to receive(:call).with(:broadcast, raw_tx).and_raise(StandardError, 'boom')
+    it 'stamps the broadcast row even when broadcaster.broadcast raises' do
+      allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_raise(StandardError, 'boom')
 
       expect { broadcast.process(action_id) }.to raise_error(StandardError, 'boom')
       expect(store).to have_received(:mark_broadcast_attempted).with(action_id: action_id)
     end
 
-    it 'does not call record_broadcast_result when services.call raises (crash-recovery state)' do
+    it 'does not call record_broadcast_result when broadcaster.broadcast raises (crash-recovery state)' do
       allow(store).to receive(:record_broadcast_result)
-      allow(services).to receive(:call).with(:broadcast, raw_tx).and_raise(StandardError, 'boom')
+      allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_raise(StandardError, 'boom')
 
       expect { broadcast.process(action_id) }.to raise_error(StandardError, 'boom')
       expect(store).not_to have_received(:record_broadcast_result)
@@ -845,7 +857,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       allow(store).to receive_messages(find_action: action_hash,
                                        record_broadcast_result: nil,
                                        broadcast_status: status_hash)
-      allow(services).to receive(:call).and_return(success_response)
+      allow(broadcaster).to receive(:broadcast).and_return(success_response)
     end
 
     describe '#pull!' do

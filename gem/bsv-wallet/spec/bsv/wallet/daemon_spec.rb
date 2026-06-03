@@ -9,10 +9,13 @@ RSpec.describe BSV::Wallet::Daemon do
   # Plain double — instance_double(BSV::Wallet::Store) triggers autoloading
   # of Store::Models which requires a live Sequel connection.
   let(:store) { double('store') }
-  let(:services) { instance_double(BSV::Network::Services) }
+  let(:broadcaster) { instance_double(BSV::Network::Broadcaster) }
   let(:wallet_name) { 'alice' }
   let(:network) { :mainnet }
-  let(:daemon) { described_class.new(store: store, services: services, wallet: wallet_name, network: network) }
+  let(:daemon) do
+    described_class.new(store: store, broadcaster: broadcaster,
+                        wallet: wallet_name, network: network)
+  end
 
   let(:broadcast) { instance_double(BSV::Wallet::Engine::Broadcast) }
   let(:tx_proof) { instance_double(BSV::Wallet::Engine::TxProof) }
@@ -31,9 +34,9 @@ RSpec.describe BSV::Wallet::Daemon do
   describe '#run!' do
     before do
       allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
-        .with(store: store, services: services).and_return(broadcast)
+        .with(store: store, broadcaster: broadcaster).and_return(broadcast)
       allow(BSV::Wallet::Engine::TxProof).to receive(:new)
-        .with(store: store, services: services).and_return(tx_proof)
+        .with(store: store, broadcaster: broadcaster).and_return(tx_proof)
       allow(BSV::Wallet::Scheduler).to receive(:new)
         .with(store: store).and_return(scheduler)
 
@@ -42,14 +45,14 @@ RSpec.describe BSV::Wallet::Daemon do
       allow(scheduler).to receive(:run!)
     end
 
-    it 'creates Engine::Broadcast with store and services' do
+    it 'creates Engine::Broadcast with store and broadcaster' do
       Async do |task|
         daemon.run!
         task.stop
       end
 
       expect(BSV::Wallet::Engine::Broadcast).to have_received(:new)
-        .with(store: store, services: services)
+        .with(store: store, broadcaster: broadcaster)
     end
 
     it 'calls pull! and reply! on Broadcast' do
@@ -62,14 +65,14 @@ RSpec.describe BSV::Wallet::Daemon do
       expect(broadcast).to have_received(:reply!)
     end
 
-    it 'creates Engine::TxProof with store and services' do
+    it 'creates Engine::TxProof with store and broadcaster' do
       Async do |task|
         daemon.run!
         task.stop
       end
 
       expect(BSV::Wallet::Engine::TxProof).to have_received(:new)
-        .with(store: store, services: services)
+        .with(store: store, broadcaster: broadcaster)
     end
 
     it 'calls pull! on TxProof' do
@@ -113,7 +116,7 @@ RSpec.describe BSV::Wallet::Daemon do
     end
 
     it 'omits wallet field when wallet_name is nil' do
-      daemon_no_wallet = described_class.new(store: store, services: services, network: network)
+      daemon_no_wallet = described_class.new(store: store, broadcaster: broadcaster, network: network)
 
       Async do |task|
         daemon_no_wallet.run!
@@ -174,9 +177,9 @@ RSpec.describe BSV::Wallet::Daemon do
 
     before do
       allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
-        .with(store: store, services: services).and_return(broadcast)
+        .with(store: store, broadcaster: broadcaster).and_return(broadcast)
       allow(BSV::Wallet::Engine::TxProof).to receive(:new)
-        .with(store: store, services: services).and_return(tx_proof)
+        .with(store: store, broadcaster: broadcaster).and_return(tx_proof)
       allow(BSV::Wallet::Scheduler).to receive(:new)
         .with(store: store).and_return(scheduler)
 

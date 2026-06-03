@@ -345,26 +345,6 @@ RSpec.describe BSV::Network::Services do
     end
   end
 
-  # --- Broadcast affinity ---
-
-  describe 'broadcast affinity' do
-    it 'prefers the broadcast provider for get_tx_status' do
-      arc = stub_provider('ARC', {
-                            broadcast: success({ 'txid' => 'abc', 'txStatus' => 'SEEN_ON_NETWORK' }),
-                            get_tx_status: success({ 'txid' => 'abc', 'txStatus' => 'MINED', 'blockHeight' => 800_000 })
-                          })
-      woc = stub_provider('WoC', {
-                            get_tx_status: success({ 'txid' => 'abc', 'txStatus' => 'UNKNOWN' })
-                          })
-
-      services = described_class.new(providers: [woc, arc])
-      services.call(:broadcast, 'rawtx')
-
-      result = services.call(:get_tx_status, txid: 'abc')
-      expect(result.data[:tx_status]).to eq('MINED')
-    end
-  end
-
   # --- Rate limiting ---
 
   describe 'rate limiting' do

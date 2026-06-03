@@ -1644,6 +1644,15 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(result[:merkle_path]).to eq([merkle_path_hex].pack('H*'))
     end
 
+    it 'returns provider in the result hash (NULL by default)' do
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed', broadcast_at: Time.now - 60)
+
+      result = store.record_broadcast_result(action_id: action.id, tx_status: 'SEEN_ON_NETWORK')
+
+      expect(result).to have_key(:provider)
+      expect(result[:provider]).to be_nil
+    end
+
     # Under the post-T2/T3 invariant, the broadcasts row is created atomically
     # with sign_action and broadcast_at is stamped pre-POST by
     # mark_broadcast_attempted. record_broadcast_result is only ever called
