@@ -66,7 +66,7 @@ RSpec.describe 'Schema migration', :store do
       expect(values).to eq(%w[root outbound])
     end
 
-    # ARC's metamorph Status enum + IMMUTABLE (wallet's TERMINAL_STATUSES).
+    # ARC's metamorph Status enum + IMMUTABLE (wallet's ArcStatus::TERMINAL).
     # See #198/#220 — the canonical source is ARC's metamorph_api.proto.
     it 'tx_status has the correct values' do
       values = db.from(

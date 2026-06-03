@@ -118,4 +118,57 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       end
     end
   end
+
+  # Orchestration over consolidate_step + sweep. Both collaborators are
+  # exercised on-chain (no_send: false) here, so we stub them and assert the
+  # wiring rather than re-broadcasting in a unit spec.
+  describe '#sweep_to_root' do
+    it 'loops consolidate_step until nil, then sweeps to the root P2PKH' do
+      allow(engine_with_keys).to receive(:consolidate_step).and_return({ txid: 'a' }, { txid: 'b' }, nil)
+      allow(engine_with_keys).to receive(:sweep).and_return({ txid: 'z' })
+
+      result = engine_with_keys.sweep_to_root
+
+      expect(engine_with_keys).to have_received(:consolidate_step)
+        .with(target_inputs: 20, no_send: false, accept_delayed_broadcast: false).exactly(3).times
+      expect(engine_with_keys).to have_received(:sweep)
+        .with(recipient: key_deriver.identity_key, no_send: false, accept_delayed_broadcast: false)
+      expect(result).to eq(consolidation_steps: 2, sweep: { txid: 'z' })
+    end
+
+    it 'defaults the recipient to the wallet identity key' do
+      allow(engine_with_keys).to receive_messages(consolidate_step: nil, sweep: { txid: 'z' })
+
+      engine_with_keys.sweep_to_root
+
+      expect(engine_with_keys).to have_received(:sweep)
+        .with(hash_including(recipient: key_deriver.identity_key))
+    end
+
+    it 'honors an explicit recipient override' do
+      override = BSV::Primitives::PrivateKey.generate.public_key.to_hex
+      allow(engine_with_keys).to receive_messages(consolidate_step: nil, sweep: { txid: 'z' })
+
+      engine_with_keys.sweep_to_root(recipient: override)
+
+      expect(engine_with_keys).to have_received(:sweep)
+        .with(hash_including(recipient: override))
+    end
+
+    it 'forwards a custom target_inputs to consolidate_step' do
+      allow(engine_with_keys).to receive_messages(consolidate_step: nil, sweep: nil)
+
+      engine_with_keys.sweep_to_root(target_inputs: 50)
+
+      expect(engine_with_keys).to have_received(:consolidate_step)
+        .with(hash_including(target_inputs: 50))
+    end
+
+    context 'without a key_deriver' do
+      it 'raises' do
+        expect { engine.sweep_to_root }
+          .to raise_error(BSV::Wallet::Error, /key deriver/)
+      end
+    end
+  end
 end

@@ -101,7 +101,7 @@ RSpec.describe BSV::Wallet do
 
   describe BSV::Wallet::Error do
     it 'carries a machine-readable code' do
-      error = described_class.new('something went wrong', 42)
+      error = described_class.new('something went wrong', code: 42)
       expect(error.message).to eq('something went wrong')
       expect(error.code).to eq(42)
     end

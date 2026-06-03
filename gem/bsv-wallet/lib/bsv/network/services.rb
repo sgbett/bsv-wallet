@@ -208,8 +208,29 @@ module BSV
 
       # Canonical broadcast/tx_status response: symbol keys, consistent field names.
       # Handles string keys, symbol keys, camelCase, snake_case — produces one shape.
+      #
+      # Two upstream protocols answer +:broadcast+ / +:get_tx_status+ with
+      # divergent shapes:
+      #
+      # - **ARC** (TAAL):
+      #   +{txid, txStatus, status: <int>, blockHash, blockHeight, merklePath,
+      #     extraInfo, competingTxs}+
+      # - **Arcade** (GorillaPool):
+      #   submit:    +{status: "submitted"}+   (no txid, no txStatus)
+      #   resubmit:  +{status: "already submitted", txid, state: <STATUS>}+
+      #   tx_status: +{txid, txStatus, status: <int>, blockHash, blockHeight,
+      #               merklePath, extraInfo, competingTxs}+  (same shape as ARC's get_tx_status)
+      #
+      # Arcade's +status+ field is a String for broadcast submissions, an
+      # Integer for tx_status queries. The wallet's +arc_status+ column is
+      # an integer — so a String +"submitted"+ here would crash on persist.
+      # Detect Arcade's submit-string shape and map: +status: "submitted"+
+      # → +tx_status: "RECEIVED"+ (the closest ARC equivalent) plus
+      # +arc_status: nil+ to skip the integer column write.
       def normalize_broadcast_response(data)
         return data unless data.is_a?(Hash)
+
+        data = normalize_arcade_submit(data)
 
         {
           txid: extract(data, 'txid', :txid, 'txId', :txId),
@@ -221,6 +242,37 @@ module BSV
           extra_info: extract(data, 'extraInfo', :extraInfo, :extra_info, 'extra_info'),
           competing_txs: extract(data, 'competingTxs', :competingTxs, :competing_txs, 'competing_txs')
         }
+      end
+
+      # Detect Arcade's broadcast submit shape and translate it into
+      # the canonical ARC-like shape the wallet downstream consumes.
+      #
+      # Arcade submit success:    +{"status": "submitted"}+
+      # Arcade submit (resubmit): +{"status": "already submitted",
+      #                              "txid": "...", "state": "<STATUS>"}+
+      # Arcade tx_status query:   +{txid, txStatus, status: <int>, ...}+  (ARC-shaped)
+      #
+      # The distinguishing marker is +status+ being a String — ARC uses
+      # Integer for +status+ (HTTP code). On the Arcade submit branches we
+      # translate to +tx_status: "RECEIVED"+ (the equivalent "in flight"
+      # signal), preserve any +txid+ Arcade returned, and drop the
+      # string status so the downstream +arc_status+ integer column
+      # doesn't try to write +"submitted"+.
+      def normalize_arcade_submit(data)
+        status = data['status'] || data[:status]
+        return data unless status.is_a?(String)
+
+        case status
+        when 'submitted'
+          { 'txStatus' => 'RECEIVED' }
+        when 'already submitted'
+          {
+            'txid' => data['txid'] || data[:txid],
+            'txStatus' => data['state'] || data[:state] || 'RECEIVED'
+          }
+        else
+          data
+        end
       end
 
       # Canonical get_tx response: hex string.

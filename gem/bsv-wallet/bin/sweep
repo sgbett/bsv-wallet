@@ -1,11 +1,14 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Sweep every spendable output to a single recipient (less fee).
+# Sweep every spendable output back to a root key (less fee).
 #
 # Builds one no_send transaction consuming all spendable UTXOs and
-# emitting a single P2PKH output to the recipient's BRC-42 derived
-# address. Used by the #130 consolidation dry-run and the #126 on-chain
+# emitting a single P2PKH output to the recipient's *root* address
+# (+hash160(recipient_pubkey)+, not a BRC-42-derived one). The literal
+# root P2PKH is recoverable from the WIF alone, which is the whole point
+# of a sweep — return the funds somewhere a bare key can reclaim them.
+# Used by the #130 consolidation dry-run and the #126 on-chain
 # sweep-back to the SDK identity.
 #
 # Usage:

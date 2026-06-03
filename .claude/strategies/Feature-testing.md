@@ -128,7 +128,18 @@ The main "Feature" of a wallet is being able to send and receive Bitcoin transac
 
 In our CI tests above ALICE, BOB and CAROL generate many nosend tx to each other, but these are intentionally never broadcast because we are primarily concerned with ensuring that the wallets communicate correctly with each other. End to end testing builds on this peer-to-peer activity by ensuring that we are able to then broadcast transactions, and that any BEEF ancestry that we built along the way is accepted by ARC endpoints.
 
-### On Chain Setup
+### The e2e test vs. its scaffolding
+
+Two different things get conflated here, and they must be kept apart:
+
+- **The e2e test itself** is the *broadcast workload*: a set of wallets, each holding a large number of small outputs, blasting a sustained stream of real on-chain transactions through ARC. It runs in two configurations — **without `walletd`** (raw behaviour under load: acceptance, rejection/abort handling, BEEF verification, block-boundary continuity) and **with `walletd`** (the daemon sweeping/consolidating, acquiring proofs, and pushing broadcasts concurrently — proving the full system holds together, which is the production shape). This is the only part that asserts "does the wallet work on real chain".
+- **Everything else is scaffolding** — funding the wallets, fragmenting balance into many outputs, and sweeping funds back afterward. These are setup/teardown, not the test. They belong in **rake tasks / bin tools / library functions**, and are verified by their **own** unit/integration tests (e.g. `Engine#sweep_to_root` is unit-tested in `consolidation_spec`; the consolidation dry-run #130 proves the cleanup procedure). Their correctness is a *precondition* for the e2e run, not an e2e assertion.
+
+The sections below describe each piece; the headings flag which are scaffolding and which is the test.
+
+### Scaffolding: on-chain setup (fund)
+
+*Setup, not the e2e test — belongs in rake/bin/lib, tested independently.*
 
 A new WIF value has been created for the purposes of on chain testing, this will act as the "funding wallet" and has been seeded with an initial balance of 1BSV (100m sats).
 
@@ -158,7 +169,9 @@ end
 - send each wallet **10 million** sats
 - wait for confirmation
 
-### Initial Fragmentation (no-send)
+### Scaffolding: initial fragmentation (no-send)
+
+*Setup, not the e2e test — belongs in rake/bin/lib, tested independently.*
 
 Conduct a similar "nosend fanout" to that used in the CI test, but apply a 10x multiplier to the payment amounts, with the recipient chosen at random from the other wallets (not-self).
   L2 change = 1 payment (10m - 50k payment - 100 fees) / 8 change outputs => 1.243m
@@ -180,11 +193,14 @@ Each wallet performed 73 (L2-L4) + 73 (L5) = 146 outbound payments and received 
 
 This will all still be unsent.
 
-### Broadcasting phase
+### The e2e test: broadcasting workload
 
-The first of the e2e specs tests on-chain functionality, specifically continuity of operations as the blockchain is extended. i.e. there is a delay between a block being mined and the wallet's proof store being updated to use the new block_height / merkle_root. We need to be sure that broadcasting with stale BEEF does not cause problems (i.e. the broadcast is accepted regardless, or if it fails then it just gets retried later once the proof store has updated).
+**This is the e2e test.** Everything above is scaffolding that gets the wallets into the precondition state (many small outputs); everything below this section's two configurations is teardown. The workload itself tests on-chain functionality, specifically continuity of operations as the blockchain is extended. i.e. there is a delay between a block being mined and the wallet's proof store being updated to use the new block_height / merkle_root. We need to be sure that broadcasting with stale BEEF does not cause problems (i.e. the broadcast is accepted regardless, or if it fails then it just gets retried later once the proof store has updated).
 
-**NB: This requires a wallet daemon to be running for each test wallet**
+The same workload runs in two configurations:
+
+- **Config A — without `walletd`.** Drive the broadcast workload directly, no daemon. Observe raw behaviour under load: acceptance rates, rejection/abort handling, BEEF verification against real proofs, block-boundary transitions. This isolates the broadcast/abort path from the daemon.
+- **Config B — with `walletd` running.** The same workload with one `walletd` per wallet running concurrently — acquiring proofs, sweeping/consolidating as the wallet fragments, pushing delayed broadcasts. This proves the full system works *together* under load, which is the production shape.
 
 We can make approx 2000 x 5k sat payments per wallet, using the L5 change outputs. With 5 wallets that is a total of around 10k tx.
 Whilst blocks should come every 10mins mining distribution is such that this is not guaranteed and an hour between blocks is not unusual. (If the test extends then we will also be stress testing auto fund!)
@@ -249,11 +265,13 @@ Three properties to aim for:
 
 Post-run analysis becomes mechanical: `grep result=stale_beef <log>` for retry frequency, `grep result=accepted <log> | wc -l` for total acceptances, `grep failures=[1-9] <log>` for any reported failures. Watching the run live (`tail -f`) shows the broadcast_queue self-healing in real time — exactly the "stall and recover" behaviour the test is designed to surface.
 
-### Test Cleanup
+### Scaffolding: test cleanup (sweep-back)
 
-All wallets will attempt to return funds to the BSV_WALLET_WIF_SDK address.
+*Teardown, not the e2e test — belongs in rake/bin/lib, tested independently.*
 
-They will first consolidate balances, by selecting the 20 smallest outputs and the largest output and attempting to make a single self payment - the estimated fee.
+All wallets will attempt to return funds to the BSV_WALLET_WIF_SDK address. This is implemented as `Engine#sweep_to_root` (orchestration) and exposed as `rake wallet:cleanup[<wallet>]`; the e2e harness drives the multi-wallet form. It is unit-tested in `consolidation_spec` and proven end-to-end by the #130 consolidation dry-run — it is **not** asserted by the e2e run.
+
+It will first consolidate balances, by selecting the 20 smallest outputs and the largest output and attempting to make a single self payment - the estimated fee.
 
 This will proceed until the wallet has fewer than 20 outputs. At which point it will attempt to send the full balance as a single payment back to the source wallet (less the estimated fee).
 

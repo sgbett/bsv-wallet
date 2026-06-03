@@ -13,21 +13,6 @@ module BSV
       class Broadcast
         include OmqSupport
 
-        # ARC txStatus values indicating the transaction was accepted by the network.
-        # Mirror of Models::Broadcast::ACCEPTED_STATUSES — kept as a separate
-        # constant here because resolving the model constant at class load
-        # time requires Sequel to be loaded, which isn't guaranteed when
-        # Engine::Broadcast is autoloaded. Source of truth for both is
-        # BRC-100's ARC status enum; they must stay in lockstep.
-        ACCEPTED_STATUSES = %w[SEEN_ON_NETWORK ACCEPTED_BY_NETWORK MINED IMMUTABLE].freeze
-
-        # ARC txStatus values indicating a definitive, non-recoverable rejection.
-        # Intentionally excludes MINED_IN_STALE_BLOCK (transient -- the tx is
-        # valid, just on a stale chain; daemon re-discovers per #126's self-heal
-        # narrative). Distinct from Models::Broadcast::TERMINAL_STATUSES, which
-        # is the "polling stops" set (includes accepted statuses too).
-        REJECTED_STATUSES = %w[REJECTED DOUBLE_SPEND_ATTEMPTED MALFORMED].freeze
-
         def initialize(store:, services:)
           @store = store
           @services = services
@@ -37,7 +22,7 @@ module BSV
         # Binds a PULL socket; the Scheduler pushes action IDs here.
         def pull!(task:)
           task.async do
-            pull = bind_or_die('broadcast_push') { OMQ::PULL.bind('inproc://broadcasts.pull') }
+            pull = bind_or_die('broadcast_worker') { OMQ::PULL.bind('inproc://broadcasts.pull') }
             while (msg = pull.receive)
               begin
                 process(msg.first.to_i)
@@ -52,7 +37,7 @@ module BSV
         # Inline request-reply -- caller sends action_id, gets tx_status back.
         def reply!(task:)
           task.async do
-            rep = bind_or_die('broadcast_push') { OMQ::REP.bind('inproc://broadcasts.rep') }
+            rep = bind_or_die('broadcast_worker') { OMQ::REP.bind('inproc://broadcasts.rep') }
             while (msg = rep.receive)
               begin
                 result = process(msg.first.to_i)
@@ -66,47 +51,60 @@ module BSV
           self
         end
 
-        # Process a single action -- submit if not yet broadcast, poll status if already broadcast.
-        #
-        # Emits exactly one task.dispatched on entry, then exactly one of
-        # task.succeeded / task.failed / task.aborted / task.skipped.
+        # Process a single action -- submit if not yet broadcast, poll status
+        # if already broadcast. Emits exactly one task.dispatched on entry,
+        # then exactly one of task.succeeded / task.failed / task.aborted /
+        # task.skipped. The emitted +task+ label reflects which loop's work
+        # this represents: +broadcast_submission+ for a first-attempt push,
+        # +broadcast_resolution+ for status polling.
         def process(action_id)
-          BSV::Wallet.emit('task.dispatched', task: 'broadcast_push', id: action_id)
           started_at = Time.now
-
-          action = @store.find_action(id: action_id)
-          unless action
-            BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: :action_not_found)
-            return
-          end
-          unless action[:raw_tx]
-            BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: :no_raw_tx)
-            return
-          end
-
           status = @store.broadcast_status(action_id: action_id)
+          task_name = status && status[:broadcast_at] ? 'broadcast_resolution' : 'broadcast_submission'
+          BSV::Wallet.emit('task.dispatched', task: task_name, id: action_id)
 
-          if status && status[:broadcast_at]
-            poll_status(action_id, action, status: status, started_at: started_at)
-          else
-            submit(action_id, action, started_at: started_at)
+          begin
+            action = @store.find_action(id: action_id)
+            unless action
+              BSV::Wallet.emit('task.skipped', task: task_name, id: action_id, reason: :action_not_found)
+              return
+            end
+            unless action[:raw_tx]
+              BSV::Wallet.emit('task.skipped', task: task_name, id: action_id, reason: :no_raw_tx)
+              return
+            end
+
+            if status && status[:broadcast_at]
+              poll_status(action_id, action, status: status, started_at: started_at)
+            else
+              submit(action_id, action, started_at: started_at)
+            end
+          rescue StandardError => e
+            # Every dispatched task must emit exactly one terminal event so the
+            # Scheduler's in_flight counter (and cooperative drain) stays
+            # balanced -- an exception bubbling out of submit/poll_status would
+            # otherwise leave in_flight stuck >0. Emit the terminal event, then
+            # re-raise so pull!/reply! still log and the REP path answers 'error'.
+            BSV::Wallet.emit('task.failed', task: task_name, id: action_id,
+                                            reason: :exception, error: e.message)
+            raise
           end
         end
 
         # Discovery query -- returns action IDs of attempted, non-terminal
-        # broadcasts (eligible for status polling). Pre-broadcast actions
-        # (no Broadcasts row, or broadcast_at IS NULL) are not returned
-        # here; submission discovery is via .pending_pushes.
-        def self.pending_polls(store, limit: 10)
-          store.pending_polls(limit: limit).map { |b| b[:action_id] }
+        # broadcasts (eligible for the resolution loop's status poll).
+        # Pre-broadcast actions (no Broadcasts row, or broadcast_at IS NULL)
+        # are not returned here; submission discovery is via .pending_submissions.
+        def self.pending_resolutions(store, limit: 10)
+          store.pending_resolutions(limit: limit).map { |b| b[:action_id] }
         end
 
         # Discovery query -- returns action IDs of broadcasts that have
         # never been attempted (broadcast_at IS NULL). Counterpart to
-        # .pending_polls: this drives the push loop, .pending_polls drives
-        # the poll loop. Both feed the same PULL socket; process routes them.
-        def self.pending_pushes(store, limit: 10)
-          store.pending_pushes(limit: limit).map { |b| b[:action_id] }
+        # .pending_resolutions: this drives the submission loop. Both feed
+        # the same PULL socket; +process+ routes them by broadcast_at presence.
+        def self.pending_submissions(store, limit: 10)
+          store.pending_submissions(limit: limit).map { |b| b[:action_id] }
         end
 
         private
@@ -144,25 +142,35 @@ module BSV
             # needed here; closes the crash-recovery gap where a process
             # could die between recording and promotion.
             BSV::Wallet.emit('task.succeeded',
-                             task: 'broadcast_push', id: action_id,
+                             task: 'broadcast_submission', id: action_id,
                              latency_ms: latency_ms,
                              outcome: categorize_outcome(data[:tx_status]))
             updated
           elsif terminal_failure?(response)
             # Under HLR #182's atomic invariant, the broadcasts row already
-            # exists by submit time -- so Store#abort_action (which only
-            # deletes rows without a broadcasts row) would be a no-op. Use
-            # fail_broadcast_action to delete both the broadcasts row and
-            # the action, releasing locked UTXOs.
-            @store.fail_broadcast_action(action_id: action_id)
-            BSV::Wallet.emit('task.aborted',
-                             task: 'broadcast_push', id: action_id,
-                             reason: categorize_reason(response),
-                             arc_status: response.data['txStatus'])
-            nil
+            # exists by submit time. Use reject_action to cascade-unwind
+            # any speculatively-promoted descendants and release locked
+            # UTXOs. If the cascade hits a no_send descendant the call
+            # raises -- bump retry_count, leave the row alive for the
+            # next resolution-loop pass, and emit a failure event.
+            begin
+              @store.reject_action(action_id: action_id)
+              BSV::Wallet.emit('task.aborted',
+                               task: 'broadcast_submission', id: action_id,
+                               reason: categorize_reason(response),
+                               arc_status: response.data['txStatus'])
+              nil
+            rescue BSV::Wallet::CannotRejectInternalActionError => e
+              @store.increment_broadcast_retry(action_id: action_id)
+              BSV::Wallet.emit('task.failed',
+                               task: 'broadcast_submission', id: action_id,
+                               reason: :cannot_reject_internal_action,
+                               error: e.message)
+              @store.broadcast_status(action_id: action_id)
+            end
           else
             BSV::Wallet.emit('task.failed',
-                             task: 'broadcast_push', id: action_id,
+                             task: 'broadcast_submission', id: action_id,
                              latency_ms: latency_ms,
                              reason: categorize_reason(response))
             @store.broadcast_status(action_id: action_id)
@@ -171,16 +179,16 @@ module BSV
 
         # Status poll -- query ARC for current tx status.
         #
-        # Per the analyst's Task C option C-1, the poll path aborts on a
-        # terminal txStatus (REJECTED, DOUBLE_SPEND_ATTEMPTED, MALFORMED,
-        # or ORPHAN in extraInfo). Store#abort_action is a no-op once a
-        # broadcast row exists, so terminal aborts go through
-        # Store#fail_broadcast_action which deletes both the broadcast row
-        # and the action (cascading to outputs / inputs / spendable rows
-        # so locked UTXOs are released for re-use).
+        # Aborts on a terminal txStatus (REJECTED, DOUBLE_SPEND_ATTEMPTED,
+        # or ORPHAN in extraInfo). Terminal-reject routes through
+        # Store#reject_action, which cascades-forward through any child
+        # action that consumed this action's outputs and unwinds the
+        # speculative promotion in one transaction. CannotRejectInternalActionError
+        # is the no_send-descendant invariant guard -- bump retry_count and
+        # leave the row alive for the next resolution-loop pass.
         def poll_status(action_id, action, status:, started_at:)
           unless action[:wtxid]
-            BSV::Wallet.emit('task.skipped', task: 'broadcast_push', id: action_id, reason: :no_wtxid)
+            BSV::Wallet.emit('task.skipped', task: 'broadcast_resolution', id: action_id, reason: :no_wtxid)
             return status
           end
 
@@ -191,12 +199,21 @@ module BSV
           if response.http_success?
             data = response.data
             if terminal_status?(data[:tx_status], data[:extra_info])
-              @store.fail_broadcast_action(action_id: action_id)
-              BSV::Wallet.emit('task.aborted',
-                               task: 'broadcast_push', id: action_id,
-                               reason: categorize_terminal_reason(data[:tx_status], data[:extra_info]),
-                               arc_status: data[:tx_status])
-              return nil
+              begin
+                @store.reject_action(action_id: action_id)
+                BSV::Wallet.emit('task.aborted',
+                                 task: 'broadcast_resolution', id: action_id,
+                                 reason: categorize_terminal_reason(data[:tx_status], data[:extra_info]),
+                                 arc_status: data[:tx_status])
+                return nil
+              rescue BSV::Wallet::CannotRejectInternalActionError => e
+                @store.increment_broadcast_retry(action_id: action_id)
+                BSV::Wallet.emit('task.failed',
+                                 task: 'broadcast_resolution', id: action_id,
+                                 reason: :cannot_reject_internal_action,
+                                 error: e.message)
+                return status
+              end
             end
 
             updated = @store.record_broadcast_result(
@@ -212,13 +229,13 @@ module BSV
             # Phase 4 promotion is atomic with the result recording above
             # (Store#record_broadcast_result) when tx_status is accepted.
             BSV::Wallet.emit('task.succeeded',
-                             task: 'broadcast_push', id: action_id,
+                             task: 'broadcast_resolution', id: action_id,
                              latency_ms: latency_ms,
                              outcome: categorize_outcome(data[:tx_status]))
             updated
           else
             BSV::Wallet.emit('task.failed',
-                             task: 'broadcast_push', id: action_id,
+                             task: 'broadcast_resolution', id: action_id,
                              latency_ms: latency_ms,
                              reason: categorize_reason(response))
             status
@@ -228,9 +245,9 @@ module BSV
         # Categorize a successful ARC txStatus into an outcome bucket.
         def categorize_outcome(tx_status)
           status = tx_status.to_s.upcase
-          if ACCEPTED_STATUSES.include?(status)
+          if ArcStatus::ACCEPTED.include?(status)
             :accepted
-          elsif REJECTED_STATUSES.include?(status)
+          elsif ArcStatus::REJECTED.include?(status)
             :rejected
           else
             :pending
@@ -259,7 +276,6 @@ module BSV
           status = tx_status.to_s.upcase
           info = extra_info.to_s.upcase
           return :double_spend if status == 'DOUBLE_SPEND_ATTEMPTED'
-          return :malformed if status == 'MALFORMED'
           return :policy_violation if status == 'REJECTED'
           return :policy_violation if status.include?('ORPHAN') || info.include?('ORPHAN')
 
@@ -271,7 +287,7 @@ module BSV
         # and poll (success path with terminal txStatus).
         def terminal_status?(tx_status, extra_info = nil)
           status = tx_status.to_s.upcase
-          return true if REJECTED_STATUSES.include?(status)
+          return true if ArcStatus::REJECTED.include?(status)
 
           info = extra_info.to_s.upcase
           status.include?('ORPHAN') || info.include?('ORPHAN')

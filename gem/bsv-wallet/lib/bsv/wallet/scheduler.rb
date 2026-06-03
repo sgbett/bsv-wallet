@@ -35,14 +35,20 @@ module BSV
 
         # Broadcast submission — newly queued rows (broadcast_at IS NULL).
         # Single-table scan; the most responsive path for delayed sends.
-        schedule(task: task, name: 'broadcast_push_submission',
+        # Users wait on outputs becoming spendable; keep this loop fast.
+        schedule(task: task, name: 'broadcast_submission',
                  endpoint: 'inproc://broadcasts.pull', interval: 5) do
-          Engine::Broadcast.pending_pushes(@store, limit: 10)
+          Engine::Broadcast.pending_submissions(@store, limit: 10)
         end
 
-        # Broadcast retries — every 5 seconds
-        schedule(task: task, name: 'broadcast_push', endpoint: 'inproc://broadcasts.pull', interval: 5) do
-          Engine::Broadcast.pending_polls(@store, limit: 10)
+        # Broadcast resolution — drive in-flight rows to terminal status,
+        # firing Store#reject_action on terminal-reject. By the time we're
+        # here the wallet has already moved on (outputs speculatively
+        # promoted), so slower cadence is fine and avoids unnecessary
+        # poll traffic under load.
+        schedule(task: task, name: 'broadcast_resolution',
+                 endpoint: 'inproc://broadcasts.pull', interval: 30) do
+          Engine::Broadcast.pending_resolutions(@store, limit: 10)
         end
 
         # Proof acquisition — every 30 seconds

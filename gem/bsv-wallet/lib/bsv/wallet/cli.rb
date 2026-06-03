@@ -46,6 +46,7 @@ module BSV
 
         wif = env_fetch('WIF', wallet_name)
         db_url = env_fetch_optional('DATABASE_URL', wallet_name)
+        db_url ||= derive_postgres_url(wallet_name)
         db_url ||= default_sqlite_url(wallet_name)
 
         store = BSV::Wallet::Store.connect(db_url)
@@ -57,8 +58,19 @@ module BSV
         private_key = BSV::Primitives::PrivateKey.from_wif(wif)
         key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
 
-        network_provider = BSV::Network::Providers::WhatsOnChain.send(network)
-        network_services = BSV::Network::Services.new(providers: [network_provider])
+        # Two providers, distinct roles:
+        # - GorillaPool (Arcade protocol — bsv-sdk 0.22.0+) serves broadcast.
+        # - WhatsOnChain serves chain queries (get_tx, get_utxos,
+        #   get_merkle_path, get_block_header) and is also the default
+        #   +@network_provider+ for the direct-lookup paths in Engine
+        #   that bypass Services.
+        # Services routes per command; +candidates_for+ filters to the
+        # provider(s) that declare the capability.
+        network_provider = BSV::Network::Providers::WhatsOnChain.default(network: network)
+        broadcast_provider = BSV::Network::Providers::GorillaPool.default(testnet: network != :mainnet)
+        network_services = BSV::Network::Services.new(
+          providers: [broadcast_provider, network_provider]
+        )
         chain_tracker = BSV::Network::ChainTracker.new(store: store, services: network_services)
 
         limp_threshold_raw = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD)
@@ -87,6 +99,29 @@ module BSV
           identity_key: key_deriver.identity_key,
           private_key: private_key
         }
+      end
+
+      # Derive a per-wallet Postgres URL from a shared base.
+      #
+      # When +BSV_WALLET_POSTGRES+ holds a base URL (e.g.
+      # +postgres://postgres:postgres@localhost:5433/+), each named
+      # wallet maps to its own database +bsv_wallet_<name>+. This lets a
+      # single env var configure every wallet, removing the need for a
+      # dotenv file or per-wallet DATABASE_URL_<NAME> entries.
+      #
+      # Returns nil when no wallet name is given (the unnamed default
+      # boot falls through to SQLite) or when the base is unset, so an
+      # explicit DATABASE_URL and the SQLite fallback both still apply.
+      #
+      # @param wallet_name [String, nil]
+      # @return [String, nil]
+      def derive_postgres_url(wallet_name)
+        return unless wallet_name
+
+        base = ENV.fetch('BSV_WALLET_POSTGRES', nil)&.strip
+        return if base.nil? || base.empty?
+
+        "#{base.chomp('/')}/bsv_wallet_#{wallet_name}"
       end
 
       # Build the default SQLite URL when DATABASE_URL is unset.
