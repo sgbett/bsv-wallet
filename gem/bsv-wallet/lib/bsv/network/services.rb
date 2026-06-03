@@ -26,7 +26,6 @@ module BSV
           h[p] = TokenBucket.new(p.rate_limit) if p.rate_limit
         end
         @sibling_memo = {}
-        @broadcast_affinity = {}
         @mutex = Mutex.new
       end
 
@@ -43,7 +42,7 @@ module BSV
         memo_result = check_sibling_memo(sym, args, kwargs)
         return memo_result if memo_result
 
-        candidates = candidates_for(sym, args, kwargs)
+        candidates = candidates_for(sym)
         call_with_candidates(sym, candidates, *args, **kwargs)
       end
 
@@ -75,7 +74,6 @@ module BSV
           if result.http_success?
             stash_siblings(sym, result, args, kwargs)
             normalized = normalize(sym, result)
-            record_affinity(sym, provider, normalized)
             yield(provider) if block_given?
             return normalized
           end
@@ -181,17 +179,8 @@ module BSV
       # --- Routing ---
 
       # Build the ordered candidate list for a command.
-      # For :get_tx_status, broadcast affinity moves the preferred provider to front.
-      def candidates_for(command, args = [], kwargs = {})
-        capable = @providers.select { |p| p.commands.include?(command) }
-
-        if command == :get_tx_status
-          txid = (kwargs[:txid] || args.first).to_s
-          affinity = @mutex.synchronize { @broadcast_affinity[txid] }
-          capable = [affinity] + (capable - [affinity]) if affinity && capable.include?(affinity)
-        end
-
-        capable
+      def candidates_for(command)
+        @providers.select { |p| p.commands.include?(command) }
       end
 
       # Synthetic error response when no provider serves a command.
@@ -352,23 +341,6 @@ module BSV
         return if Time.now - entry[:stashed_at] > MEMO_TTL
 
         ProtocolResponse.new(nil, data: entry[:data], http_success: true)
-      end
-
-      # --- Broadcast Affinity ---
-
-      MAX_AFFINITY_ENTRIES = 1000
-      private_constant :MAX_AFFINITY_ENTRIES
-
-      def record_affinity(command, provider, result)
-        return unless command == :broadcast && result.http_success?
-
-        txid = result.data[:txid]
-        return unless txid
-
-        @mutex.synchronize do
-          @broadcast_affinity.shift if @broadcast_affinity.size >= MAX_AFFINITY_ENTRIES
-          @broadcast_affinity[txid.to_s] = provider
-        end
       end
 
       # --- Token Bucket ---
