@@ -120,7 +120,7 @@ DOUBLE_SPEND_ATTEMPTED    (from rejected-tx gossip with specific reason)
 
 ### 6.1 Test infrastructure
 
-- **Rename existing `gem/bsv-wallet/spec/e2e/broadcast_spec.rb` → `stress_test_spec.rb`** — that file is the HLR #129 stress cascade, accurately named "stress_test". Frees up `broadcast_spec.rb` for the new SSE-driven scenarios.
+- **Rename existing `gem/bsv-wallet/spec/e2e/broadcast_spec.rb` → `e2e_workload_spec.rb`** — that file is the HLR #126 e2e on-chain workload harness (~10k tx over ~1 hour). The new name reflects the file's actual scope per #126 and avoids the naming collision with the #129 stress cascade (which lives separately at `gem/bsv-wallet/spec/integration/stress_cascade_spec.rb`). Frees up `broadcast_spec.rb` for the new SSE-driven scenarios.
 - **`before(:all)` consolidate/sweep** for e2e tests: each scenario starts from a known wallet state via the existing e2e harness machinery (the sweep_to_root + import_utxos pattern).
 - **MINED-event filtering**: e2e tests filter out MINED frames from assertions (block timing is out of scope per #246's domain). Log them for diagnostics; don't gate test outcomes on them.
 - **Bounded windows**: e2e assertions use timeouts (default 10s for SSE delivery, configurable). The double-spend test specifically asserts on the bound — slow REJECTED defeats the purpose.
@@ -185,7 +185,7 @@ Live funds. `before(:all)` consolidate/sweep. Assertions on bounded windows. MIN
 
 Suggested analyst-phase breakdown:
 
-1. **Rename + scaffold** — rename existing broadcast_spec.rb → stress_test_spec.rb; scaffold the new broadcast_spec.rb file
+1. **Rename + scaffold** — rename existing broadcast_spec.rb → e2e_workload_spec.rb; scaffold the new broadcast_spec.rb file
 2. **Layer 2 extraction** — pull the transport-agnostic core out of `store/broadcast_callback.rb`. ARC webhook spec stays green.
 3. **`sse_cursors` migration** — small, additive.
 4. **Layer 1 listener** — standalone class + Layer 1 unit specs.
@@ -205,4 +205,4 @@ E4 should land first among the e2e tests because if it fails, everything downstr
 - Documentation updated:
   - `reference/schema.md` Phase 3: soften "Set-once invariant" framing to "state flag" (per §4.4); add `sse_cursors` to the schema reference.
   - Store comment on `mark_broadcast_attempted` updated to describe null-on-503 path.
-  - Rename of `broadcast_spec.rb` → `stress_test_spec.rb` reflected anywhere it's referenced.
+  - Rename of `broadcast_spec.rb` → `e2e_workload_spec.rb` reflected anywhere it's referenced.

@@ -6,9 +6,10 @@
 # lifecycle, subprocess management) that need no BSV_WALLET_WIF_SDK or
 # on-chain state.
 #
-# The on-chain harness itself is the sole occupant of spec/e2e
-# (+broadcast_spec.rb+), loaded via +spec/e2e/spec_helper.rb+ and excluded
-# from the bare run by the +--exclude-pattern+ in +.rspec+.
+# The on-chain specs live in spec/e2e (+e2e_workload_spec.rb+ — the #126
+# workload harness — and +broadcast_spec.rb+ — the #251 SSE-driven
+# scenarios), loaded via +spec/e2e/spec_helper.rb+ and excluded from the
+# bare run by the +--exclude-pattern+ in +.rspec+.
 
 require 'spec_helper'
 require 'fileutils'
