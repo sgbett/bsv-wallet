@@ -1021,6 +1021,30 @@ end
 
 ---
 
+## 18. SSE Cursors
+
+Arcade SSE listener resume points. One row per Arcade callbackToken; the row records the high-water `Last-Event-ID` the wallet has successfully pushed onto the in-proc status bus. On reconnect, the listener loads the cursor for its token and reconnects with the `Last-Event-ID` header so Arcade replays events strictly after the cursor — the wallet doesn't redeliver events it has already handed off.
+
+| col | type | attributes |
+| --- | --- | --- |
+| token | text | PRIMARY KEY |
+| last_event_id | bigint | NOT NULL |
+| updated_at | timestamptz | NOT NULL |
+
+**No FK on `token`:** the token is Arcade-issued, not derived from any wallet table.
+
+**`last_event_id`:** Arcade emits SSE `id:` fields as nanosecond timestamps (~19 digits — see Arcade PR #50). `bigint` accommodates the full range.
+
+**Upsert semantics:** writes go through `INSERT ... ON CONFLICT (token) DO UPDATE`. Concurrent listeners booting for the same token (defensive — the daemon should run one) race cleanly; last write wins, no PK violation. The cursor records what has been *bus-pushed*, not necessarily what has been applied — replay-on-reconnect is the safety net for application failures downstream.
+
+```ruby
+class Wallet::SseCursor < Sequel::Model
+  unrestrict_primary_key # token is the PK
+end
+```
+
+---
+
 ## Key Queries
 
 **Spendable outputs in a basket** — the hot path for `createAction`'s funding loop (the `select_inputs` primitive). Enters through `spendable` (the wallet, in memory), PK-joins to `outputs` (the log) for data:

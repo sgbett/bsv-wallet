@@ -716,6 +716,22 @@ module BSV
           .update(retry_count: Sequel[:retry_count] + 1)
       end
 
+      # --- SSE Cursors ---
+
+      def load_sse_cursor(token:)
+        models::SseCursor.where(token: token).get(:last_event_id)
+      end
+
+      def save_sse_cursor(token:, last_event_id:)
+        # Upsert keyed on the token PK. Concurrent listeners booting for
+        # the same token (defensive -- the daemon should run one) race
+        # cleanly: last write wins, no PK violation. See #262.
+        models::SseCursor.dataset
+                         .insert_conflict(target: :token,
+                                          update: { last_event_id: last_event_id, updated_at: Time.now })
+                         .insert(token: token, last_event_id: last_event_id, updated_at: Time.now)
+      end
+
       def reap_stale_actions(threshold:)
         cutoff = Time.now - threshold
         # Only PROMOTED outputs protect an action from the reaper. Unpromoted

@@ -36,6 +36,7 @@ module BSV
         autoload :Certificate,      'bsv/wallet/store/models/certificate'
         autoload :CertificateField, 'bsv/wallet/store/models/certificate_field'
         autoload :Setting,          'bsv/wallet/store/models/setting'
+        autoload :SseCursor,        'bsv/wallet/store/models/sse_cursor'
       end
     end
   end
