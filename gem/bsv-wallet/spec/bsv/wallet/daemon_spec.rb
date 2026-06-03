@@ -33,8 +33,11 @@ RSpec.describe BSV::Wallet::Daemon do
 
   describe '#run!' do
     before do
+      # callback_token: nil reflects the default Daemon constructor (no
+      # token configured) -- the per-context override at line ~69 supplies
+      # a real token when the SSE-listener branch is under test.
       allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
-        .with(store: store, broadcaster: broadcaster).and_return(broadcast)
+        .with(store: store, broadcaster: broadcaster, callback_token: nil).and_return(broadcast)
       allow(BSV::Wallet::Engine::TxProof).to receive(:new)
         .with(store: store, broadcaster: broadcaster).and_return(tx_proof)
       allow(BSV::Wallet::Scheduler).to receive(:new)
@@ -76,6 +79,11 @@ RSpec.describe BSV::Wallet::Daemon do
 
       before do
         allow(BSV::Network::SSEListener).to receive(:new).and_return(listener)
+        # Inner context supplies a real token, so Engine::Broadcast.new is
+        # called with that token rather than the outer-before's nil stub.
+        allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
+          .with(store: store, broadcaster: broadcaster, callback_token: 'tok-abc123')
+          .and_return(broadcast)
       end
 
       # The daemon's PUSH socket connects to +inproc://statuses.pull+ ---
@@ -140,7 +148,24 @@ RSpec.describe BSV::Wallet::Daemon do
       end
 
       expect(BSV::Wallet::Engine::Broadcast).to have_received(:new)
-        .with(store: store, broadcaster: broadcaster)
+        .with(store: store, broadcaster: broadcaster, callback_token: nil)
+    end
+
+    it 'creates Engine::Broadcast with the configured callback_token (#266 plumbing)' do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
+        .with(store: store, broadcaster: broadcaster, callback_token: 'tok-daemon-xyz')
+        .and_return(broadcast)
+      daemon_with_token = described_class.new(store: store, broadcaster: broadcaster,
+                                              wallet: wallet_name, network: network,
+                                              callback_token: 'tok-daemon-xyz')
+
+      Async do |task|
+        daemon_with_token.run!
+        task.stop
+      end
+
+      expect(BSV::Wallet::Engine::Broadcast).to have_received(:new)
+        .with(store: store, broadcaster: broadcaster, callback_token: 'tok-daemon-xyz')
     end
 
     it 'calls pull! and reply! on Broadcast' do
@@ -265,7 +290,7 @@ RSpec.describe BSV::Wallet::Daemon do
 
     before do
       allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
-        .with(store: store, broadcaster: broadcaster).and_return(broadcast)
+        .with(store: store, broadcaster: broadcaster, callback_token: nil).and_return(broadcast)
       allow(BSV::Wallet::Engine::TxProof).to receive(:new)
         .with(store: store, broadcaster: broadcaster).and_return(tx_proof)
       allow(BSV::Wallet::Scheduler).to receive(:new)

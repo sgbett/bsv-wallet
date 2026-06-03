@@ -697,12 +697,39 @@ module BSV
         @db.transaction do
           raise "no broadcasts row for action_id=#{action_id}" unless models::Broadcast.where(action_id: action_id).any?
 
-          # Set-once: the +broadcast_at: nil+ predicate guards re-stamps on
-          # retry, so the column reflects the first attempt rather than the
-          # most recent one. See reference/schema.md (Phase 3).
+          # State marker: stamp +broadcast_at+ as the row enters "submitted,
+          # awaiting outcome". The +broadcast_at: nil+ predicate prevents
+          # racing re-stamps within a single in-flight attempt; the
+          # companion +clear_broadcast_attempted+ nulls the stamp on a 503
+          # response so the row re-enters the queued state for clean retry.
+          # After a 503 + retry, +broadcast_at+ reflects the retry timestamp
+          # rather than the first attempt. See reference/schema.md (Phase 3).
           models::Broadcast
             .where(action_id: action_id, broadcast_at: nil)
             .update(broadcast_at: Time.now)
+        end
+      end
+
+      # Revert +broadcast_at+ to NULL on the 503 / backpressure path so the
+      # row returns to the queued / push-discovery set for clean retry
+      # next cycle. See #266 + plan §4.2.
+      #
+      # Guarded by +tx_status: nil+: if the SSE listener concurrently
+      # delivered SEEN / REJECTED for the same wtxid (Arcade fanned out an
+      # event before responding 503, or a previous attempt actually made it
+      # through), the row has already transitioned and this clear becomes a
+      # no-op. Without the guard, racing the listener could reset state
+      # for an action that has moved on. Material edge case -- specced.
+      #
+      # @param action_id [Integer]
+      # @return [Integer] number of rows updated (0 when guarded out, 1
+      #   when the clear took effect)
+      def clear_broadcast_attempted(action_id:)
+        @db.transaction do
+          models::Broadcast
+            .where(action_id: action_id, tx_status: nil)
+            .exclude(broadcast_at: nil)
+            .update(broadcast_at: nil)
         end
       end
 

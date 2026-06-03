@@ -29,11 +29,14 @@ module BSV
       # @param broadcaster  [BSV::Network::Broadcaster]
       # @param wallet       [String, nil]   wallet name for telemetry
       # @param network      [Symbol, nil]   :mainnet / :testnet for telemetry
-      # @param callback_token [String, nil] Arcade callbackToken (#265).
-      #   When set, the daemon boots the SSE listener fiber to consume
-      #   the live status stream. Token derivation lives in #266 -- this
-      #   constructor just accepts the value. When nil, the listener is
-      #   skipped and resolution falls back entirely to the poll loop.
+      # @param callback_token [String, nil] Arcade callbackToken
+      #   (typically derived via {BSV::Wallet::CallbackToken.derive}).
+      #   When set, the daemon both boots the SSE listener fiber to
+      #   consume the live status stream AND passes the token to
+      #   Engine::Broadcast so every submit's POST carries a matching
+      #   X-CallbackToken header -- the two halves of the same #251 push
+      #   loop. When nil, the listener is skipped, submits go out without
+      #   the header, and resolution falls back entirely to the poll loop.
       # @param shutdown_timeout [Numeric]
       def initialize(store:, broadcaster:, wallet: nil, network: nil,
                      callback_token: nil,
@@ -58,7 +61,14 @@ module BSV
 
           setup_signal_traps
 
-          broadcast = Engine::Broadcast.new(store: @store, broadcaster: @broadcaster)
+          # Pass the callback_token into Engine::Broadcast so every submit
+          # carries the X-CallbackToken header. The SSE listener subscribed
+          # to the same token receives the resulting status frames; without
+          # the header set, Arcade has nowhere to publish the event. See #266.
+          broadcast = Engine::Broadcast.new(
+            store: @store, broadcaster: @broadcaster,
+            callback_token: @callback_token
+          )
           broadcast.pull!(task: task)
           broadcast.reply!(task: task)
           broadcast.statuses_pull!(task: task)

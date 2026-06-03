@@ -28,6 +28,7 @@ require 'bsv-wallet'
 BSV.logger ||= Logger.new($stderr, level: Logger::INFO)
 
 # Resolve wallet credentials via CLI helpers
+wif = BSV::Wallet::CLI.env_fetch('WIF', wallet_name)
 db_url = BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet_name) ||
          BSV::Wallet::CLI.default_sqlite_url(wallet_name)
 
@@ -38,8 +39,14 @@ store.migrate!
 provider = BSV::Network::Providers::WhatsOnChain.send(network)
 broadcaster = BSV::Network::Broadcaster.new(providers: [provider], store: store)
 
+# Deterministic callbackToken: identical to the one CLI.boot derives for
+# inline broadcasts, so the listener subscribed here and the engine-side
+# submit POSTs use the same routing identifier. See #266.
+callback_token = BSV::Wallet::CallbackToken.derive(wif)
+
 BSV.logger.info { "[walletd] Starting for #{wallet_name || 'default'} (#{network})..." }
 
 daemon = BSV::Wallet::Daemon.new(store: store, broadcaster: broadcaster,
-                                 wallet: wallet_name, network: network)
+                                 wallet: wallet_name, network: network,
+                                 callback_token: callback_token)
 daemon.run!

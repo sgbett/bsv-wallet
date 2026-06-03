@@ -116,6 +116,28 @@ RSpec.describe BSV::Network::Broadcaster do
 
       expect { broadcaster.broadcast('rawtx') }.to raise_error(ArgumentError, /wtxid/)
     end
+
+    it 'forwards callback_token: as a kwarg so the underlying ARC/Arcade protocol sets X-CallbackToken' do
+      provider = stub_provider('ARC', { broadcast: success({ 'txid' => 'abc' }) })
+      broadcaster = described_class.new(providers: [provider])
+
+      broadcaster.broadcast('rawtx', wtxid: wtxid, callback_token: 'tok-abc123')
+
+      # The SDK ARC/Arcade protocols both accept callback_token: as a
+      # per-call kwarg and set it as X-CallbackToken on the POST. Asserting
+      # at the Provider#call boundary catches the wiring without needing a
+      # full HTTP fixture; the SDK already specs the header-setting end.
+      expect(provider).to have_received(:call).with(:broadcast, 'rawtx', callback_token: 'tok-abc123')
+    end
+
+    it 'omits callback_token: from the kwargs when not supplied (lenient default)' do
+      provider = stub_provider('ARC', { broadcast: success({ 'txid' => 'abc' }) })
+      broadcaster = described_class.new(providers: [provider])
+
+      broadcaster.broadcast('rawtx', wtxid: wtxid)
+
+      expect(provider).to have_received(:call).with(:broadcast, 'rawtx')
+    end
   end
 
   describe '#provider_for' do

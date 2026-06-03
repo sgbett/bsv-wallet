@@ -84,6 +84,12 @@ module BSV
           abort "LIMP_THRESHOLD must be a valid integer (got #{limp_threshold_raw.inspect})"
         end
 
+        # Arcade callbackToken: deterministic from the WIF so the SSE
+        # listener (daemon-side) and the inline broadcast POST (engine-side)
+        # converge on the same routing identifier without an extra
+        # persistence layer. See #266.
+        callback_token = BSV::Wallet::CallbackToken.derive(wif)
+
         engine = BSV::Wallet::Engine.new(
           store: store,
           utxo_pool: utxo_pool,
@@ -93,7 +99,8 @@ module BSV
           chain_tracker: chain_tracker,
           network_provider: network_provider,
           network: network,
-          limp_threshold: limp_threshold
+          limp_threshold: limp_threshold,
+          callback_token: callback_token
         )
 
         {
@@ -102,7 +109,8 @@ module BSV
           key_deriver: key_deriver,
           db: db,
           identity_key: key_deriver.identity_key,
-          private_key: private_key
+          private_key: private_key,
+          callback_token: callback_token
         }
       end
 

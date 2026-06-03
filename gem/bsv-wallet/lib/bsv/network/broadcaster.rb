@@ -34,18 +34,32 @@ module BSV
       # survives daemon restart and is keyed off the wallet's wtxid (so the
       # Arcade +"submitted"+ response with no +txid+ still records).
       #
+      # The optional +callback_token+ is forwarded to the underlying
+      # provider as the +X-CallbackToken+ HTTP header (see #266 + plan
+      # §4.1). Both ARC and Arcade protocols already accept this as a
+      # per-call kwarg in the SDK, so the value flows straight through
+      # +Provider#call+ to the protocol's +call_broadcast+ without any
+      # additional plumbing here. Lenient default (nil): tests that do
+      # not run an SSE listener can broadcast without the header at the
+      # cost of forgoing status push -- production callers (CLI.boot,
+      # walletd) always supply one.
+      #
       # @param payload [Object] payload accepted by the underlying provider's
       #   +:broadcast+ command (raw bytes for the daemon path, +Transaction+
       #   for the inline path -- no narrowing).
       # @param wtxid [String] 32-byte binary wire-order wtxid the wallet
       #   computed pre-broadcast. Required.
+      # @param callback_token [String, nil] Arcade callbackToken to send
+      #   as +X-CallbackToken+. When set, the SSE listener subscribed to
+      #   the same token receives the resulting status frame.
       # @return [BSV::Network::ProtocolResponse]
-      def broadcast(payload, wtxid:)
+      def broadcast(payload, wtxid:, callback_token: nil)
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'Broadcaster#broadcast wtxid')
 
         candidates = candidates_with_affinity(wtxid)
+        kwargs = callback_token ? { callback_token: callback_token } : {}
 
-        @services.call_with_candidates(:broadcast, candidates, payload) do |provider|
+        @services.call_with_candidates(:broadcast, candidates, payload, **kwargs) do |provider|
           # Affinity is a best-effort hint. A DB failure here does not unwind
           # the successful broadcast — the tx is already in the mempool and
           # the poll loop recovers tx_status on the next pass. Surface it as

@@ -43,7 +43,8 @@ module BSV
       def initialize(store:, utxo_pool:,
                      services: nil, broadcaster: nil, key_deriver: nil, chain_tracker: nil,
                      network_provider: nil,
-                     network: :mainnet, limp_threshold: LIMP_THRESHOLD)
+                     network: :mainnet, limp_threshold: LIMP_THRESHOLD,
+                     callback_token: nil)
         raise ArgumentError, "limp_threshold must be >= #{LIMP_THRESHOLD_MIN}" if limp_threshold < LIMP_THRESHOLD_MIN
 
         @store = store
@@ -55,6 +56,10 @@ module BSV
         @network_provider = network_provider
         @network_name = network
         @limp_threshold = limp_threshold
+        # Arcade callbackToken forwarded to inline_broadcast's POST so the
+        # SSE listener (subscribed to the same token at daemon boot) receives
+        # status frames for inline submissions. See #266.
+        @callback_token = callback_token
       end
 
       # Is the wallet in limp mode? When true, all outbound operations
@@ -1421,7 +1426,12 @@ module BSV
         raise BSV::Wallet::Error, 'inline_broadcast called without broadcaster configured' unless @broadcaster
 
         @store.mark_broadcast_attempted(action_id: action_id)
-        response = @broadcaster.broadcast(tx, wtxid: tx.wtxid)
+        # Mirror Engine::Broadcast#submit (#266): forward callback_token
+        # so Arcade's SSE listener receives the resulting status frame.
+        # Lenient default -- skip the kwarg when no token configured.
+        broadcast_kwargs = { wtxid: tx.wtxid }
+        broadcast_kwargs[:callback_token] = @callback_token if @callback_token
+        response = @broadcaster.broadcast(tx, **broadcast_kwargs)
 
         if response.http_success?
           data = response.data
@@ -1435,16 +1445,27 @@ module BSV
             extra_info: data[:extra_info],
             competing_txs: data[:competing_txs]
           )
+        elsif response.code.to_s == '503'
+          # 503 backpressure path -- mirror Engine::Broadcast#submit's
+          # null-on-503 (plan §4.2). Revert the pre-call broadcast_at
+          # stamp so the row re-enters the queued / push-discovery set
+          # for clean retry. The clear is guarded against the listener
+          # race in Store#clear_broadcast_attempted (no-op when tx_status
+          # has progressed). Return the stored status so the caller's
+          # accepted?/rejected? checks see "still pending" rather than
+          # a stale success.
+          @store.clear_broadcast_attempted(action_id: action_id)
+          @store.broadcast_status(action_id: action_id)
         else
-          # Non-2xx ARC response. A definitive rejection carries a terminal
-          # txStatus in the (raw, camelCase) failure body; surface it so the
-          # caller's +rejected?+ check unwinds the action and releases its
-          # locked inputs, exactly as the daemon's +submit+ path does via
-          # +reject_action+. Transport errors and non-terminal failures
-          # carry no rejecting status and fall through to the stored
-          # (tx_status NULL) row for the poll loop to resolve later. We never
-          # return a non-rejecting status here — that would let +accepted?+
-          # misread a failed submit as success.
+          # Non-2xx, non-503 ARC response. A definitive rejection carries a
+          # terminal txStatus in the (raw, camelCase) failure body; surface
+          # it so the caller's +rejected?+ check unwinds the action and
+          # releases its locked inputs, exactly as the daemon's +submit+
+          # path does via +reject_action+. Transport errors and non-terminal
+          # failures carry no rejecting status and fall through to the
+          # stored (tx_status NULL) row for the poll loop to resolve later.
+          # We never return a non-rejecting status here — that would let
+          # +accepted?+ misread a failed submit as success.
           failure_status = response.data && response.data['txStatus']
           if failure_status && ArcStatus::REJECTED.include?(failure_status.to_s.upcase)
             { tx_status: failure_status.to_s.upcase }

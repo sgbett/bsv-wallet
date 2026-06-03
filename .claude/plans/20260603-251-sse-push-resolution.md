@@ -83,8 +83,6 @@ This is a documentation update that lands with #251 (schema.md and the store.rb 
 
 ### 4.5 `inline_broadcast` NOT deleted in this HLR
 
-### 4.6 `inline_broadcast` NOT deleted in this HLR
-
 Deletion depends on #252 (EF for daemon path). Until daemon-submit can produce EF from `action_id` alone, the inline path keeps the `tx:` kwarg shape (since the caller still has the live `Transaction` object). Once #252 lands, `inline_broadcast` collapses into `submit(action_id)` — a sibling HLR closes that loop.
 
 ## 5. Arcade status taxonomy

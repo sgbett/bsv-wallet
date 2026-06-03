@@ -292,10 +292,11 @@ Engine::Broadcast#submit(action_id:)
 ```
 
 `Engine::Broadcast#submit`:
-1. Stamps `broadcast_at = now()` and commits (`Store#mark_broadcast_attempted`) — the row leaves the push-discovery set and joins the poll set. **Set-once invariant:** the stamp only writes when `broadcast_at IS NULL` (enforced in-query by the `where(broadcast_at: nil)` filter, not at the schema level). A retry after a partial failure does not re-stamp, so `broadcast_at` reflects the first attempt, not the most recent one.
+1. Stamps `broadcast_at = now()` and commits (`Store#mark_broadcast_attempted`) — the row leaves the push-discovery set and joins the poll set. **State flag:** `broadcast_at` is a state marker — NULL means the row is queued for submission; non-NULL means it has been submitted and is awaiting outcome. The `where(broadcast_at: nil)` predicate in `Store#mark_broadcast_attempted` prevents racing re-stamps within a single in-flight attempt; `Store#clear_broadcast_attempted` reverts the stamp on a 503 response so the row re-enters the queued state for clean retry. After a 503 + retry, `broadcast_at` reflects the retry timestamp rather than the first attempt.
 2. POSTs to ARC (network call — outside any DB transaction)
 3. On accepted ARC response: persists the status fields and triggers Phase 4 (`Store#promote_action_outputs`)
 4. On terminal rejection: `Store#fail_broadcast_action` deletes the action, its broadcasts row, and its (unpromoted) output rows in one transaction
+5. On 503 backpressure: `Store#clear_broadcast_attempted` reverts `broadcast_at` to NULL (guarded against the concurrent-SSE-event race by a `tx_status IS NULL` predicate); the daemon's `pending_submissions` discovery picks the row back up next cycle
 
 If the process crashes between steps 1 and 2: the row sits with `broadcast_at IS NOT NULL AND tx_status IS NULL`. The daemon's poll loop finds it via `Store#pending_polls` and calls `Engine::Broadcast#poll_status` (`GET /tx/{txid}`) to resolve the outcome.
 

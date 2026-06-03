@@ -1929,6 +1929,124 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
   end
 
+  describe '#clear_broadcast_attempted' do
+    let(:action) do
+      BSV::Wallet::Store::Models::Action.create(
+        outgoing: true, description: 'test action', nlocktime: 0,
+        wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(100)
+      )
+    end
+
+    it 'reverts broadcast_at to NULL on an in-flight row (tx_status NULL)' do
+      stamped = Time.now - 30
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id, intent: 'delayed', broadcast_at: stamped
+      )
+
+      store.clear_broadcast_attempted(action_id: action.id)
+
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
+      expect(broadcast.broadcast_at).to be_nil
+    end
+
+    it 'returns the row to pending_submissions' do
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id, intent: 'delayed', broadcast_at: Time.now - 30
+      )
+      expect(store.pending_submissions.map { |b| b[:action_id] }).not_to include(action.id)
+
+      store.clear_broadcast_attempted(action_id: action.id)
+
+      expect(store.pending_submissions.map { |b| b[:action_id] }).to include(action.id)
+    end
+
+    it 'guards against the concurrent-SSE race: no-op when tx_status has progressed' do
+      # The listener applied SEEN concurrent with our 503 path -- the row
+      # has moved on. The clear must not roll state back.
+      stamped = Time.now - 30
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id, intent: 'delayed',
+        broadcast_at: stamped, tx_status: 'SEEN_ON_NETWORK'
+      )
+
+      store.clear_broadcast_attempted(action_id: action.id)
+
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
+      expect(broadcast.broadcast_at).not_to be_nil
+      expect(broadcast.tx_status).to eq('SEEN_ON_NETWORK')
+    end
+
+    it 'is a no-op on an already-cleared row (idempotent)' do
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed')
+
+      expect { store.clear_broadcast_attempted(action_id: action.id) }.not_to raise_error
+
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
+      expect(broadcast.broadcast_at).to be_nil
+    end
+
+    it 'is a no-op when no broadcasts row exists for the action' do
+      # Mirrors the lenient shape of pending_submissions / poll discovery:
+      # missing row is not an invariant violation here (caller's 503 path
+      # may be re-running a clear from a partial earlier attempt).
+      expect { store.clear_broadcast_attempted(action_id: action.id) }.not_to raise_error
+    end
+
+    # Listener-wins interleaving: the SSE listener applies SEEN via
+    # record_broadcast_result, THEN the 503 path runs clear. Deterministic
+    # ordering -- transactions are sequential, but the test exercises the
+    # same row-state outcome that a real race would produce when the
+    # listener commits first. End-state: SEEN intact, broadcast_at stays
+    # stamped (row sits in the resolution set, not back in the queued set).
+    it 'listener-wins interleaving: record_broadcast_result then clear leaves SEEN intact' do
+      stamped = Time.now - 30
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id, intent: 'delayed', broadcast_at: stamped
+      )
+
+      # Step 1 -- listener delivers SEEN. This is what
+      # Store::EventApplicator#apply would do off an SSE frame.
+      store.record_broadcast_result(
+        action_id: action.id, tx_status: 'SEEN_ON_NETWORK',
+        arc_status: 200, block_hash: nil, block_height: nil,
+        merkle_path: nil, extra_info: nil, competing_txs: nil
+      )
+
+      # Step 2 -- 503 path runs clear. Must be a no-op under the
+      # tx_status: nil guard.
+      store.clear_broadcast_attempted(action_id: action.id)
+
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
+      expect(broadcast.tx_status).to eq('SEEN_ON_NETWORK')
+      expect(broadcast.broadcast_at).not_to be_nil
+    end
+
+    # Clear-wins interleaving: the 503 path runs clear, THEN the listener
+    # applies SEEN. The row returns to the queued set briefly, then the
+    # listener's record_broadcast_result records SEEN on top of a
+    # cleared-row -- the SEEN status is the ground truth and dominates.
+    # This is a permitted no-loss outcome: the row ends up in the same
+    # eventual state (SEEN tx_status), only the broadcast_at timing
+    # differs from the listener-wins case.
+    it 'clear-wins interleaving: clear then record_broadcast_result still records SEEN' do
+      stamped = Time.now - 30
+      BSV::Wallet::Store::Models::Broadcast.create(
+        action_id: action.id, intent: 'delayed', broadcast_at: stamped
+      )
+
+      store.clear_broadcast_attempted(action_id: action.id)
+      store.record_broadcast_result(
+        action_id: action.id, tx_status: 'SEEN_ON_NETWORK',
+        arc_status: 200, block_hash: nil, block_height: nil,
+        merkle_path: nil, extra_info: nil, competing_txs: nil
+      )
+
+      broadcast = BSV::Wallet::Store::Models::Broadcast.first(action_id: action.id)
+      expect(broadcast.tx_status).to eq('SEEN_ON_NETWORK')
+    end
+  end
+
   # --- Pending Proofs ---
 
   describe '#pending_proofs' do

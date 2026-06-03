@@ -217,10 +217,10 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
     end
 
-    context 'when 503 transport error' do
+    context 'when 503 backpressure (Arcade validator-queue full)' do
       let(:http_response) { instance_double(Net::HTTPServiceUnavailable, code: '503') }
       let(:error_response) do
-        BSV::Network::ProtocolResponse.new(http_response, http_success: false, error_message: 'Service Unavailable')
+        BSV::Network::ProtocolResponse.new(http_response, http_success: false, error_message: 'Arcade backpressure')
       end
 
       before do
@@ -231,14 +231,26 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(error_response)
         allow(store).to receive(:abort_action)
+        allow(store).to receive(:clear_broadcast_attempted)
+        allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
-      it 'emits task.failed with reason=transport_error and integer latency_ms' do
+      it 'emits task.failed with reason=backpressure and integer latency_ms' do
         broadcast.process(action_id)
         failed = emitted_events.find { |e| e[:name] == 'task.failed' }
-        expect(failed).to include(reason: :transport_error, task: 'broadcast_submission', id: action_id)
+        expect(failed).to include(reason: :backpressure, task: 'broadcast_submission', id: action_id)
         expect(failed[:latency_ms]).to be_an(Integer)
+      end
+
+      it 'calls clear_broadcast_attempted so the row re-enters the queued set' do
+        broadcast.process(action_id)
+        expect(store).to have_received(:clear_broadcast_attempted).with(action_id: action_id)
+      end
+
+      it 'does not call reject_action (503 is transient, not terminal)' do
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:reject_action)
       end
 
       it 'does not call abort_action' do
@@ -809,6 +821,106 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       expect { broadcast.process(action_id) }.to raise_error(StandardError, 'boom')
       expect(store).not_to have_received(:record_broadcast_result)
+    end
+  end
+
+  describe 'X-CallbackToken plumbing on submit path' do
+    let(:callback_token) { 'tok-abc123' }
+    let(:broadcast_with_token) do
+      described_class.new(store: store, broadcaster: broadcaster, callback_token: callback_token)
+    end
+
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
+      allow(store).to receive(:record_broadcast_result).and_return(status_hash)
+    end
+
+    it 'forwards the configured callback_token to broadcaster.broadcast' do
+      allow(broadcaster).to receive(:broadcast)
+        .with(raw_tx, wtxid: submit_wtxid, callback_token: callback_token)
+        .and_return(success_response)
+
+      broadcast_with_token.process(action_id)
+
+      expect(broadcaster).to have_received(:broadcast)
+        .with(raw_tx, wtxid: submit_wtxid, callback_token: callback_token)
+    end
+
+    it 'omits callback_token kwarg when not configured (lenient default)' do
+      # Default constructor — no callback_token. Today's behaviour: the
+      # broadcaster call carries only the wtxid kwarg, so existing specs
+      # that assert `.with(raw_tx, wtxid:)` keep working unchanged.
+      allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(success_response)
+
+      broadcast.process(action_id)
+
+      expect(broadcaster).to have_received(:broadcast).with(raw_tx, wtxid: submit_wtxid)
+    end
+  end
+
+  describe 'submit-path HTTP-status dispatch (#266)' do
+    # 400 with a body carrying a terminal txStatus -- preserves today's
+    # behaviour (reject_action cascade). 400 without txStatus exercises the
+    # subtlety in #266's edge-case list (non-cascade transient).
+    let(:http_400) { instance_double(Net::HTTPBadRequest, code: '400') }
+
+    before do
+      allow(http_400).to receive(:is_a?).and_return(false)
+      allow(http_400).to receive(:is_a?).with(Net::HTTPSuccess).and_return(false)
+      allow(http_400).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(false)
+      allow(http_400).to receive(:is_a?).with(Net::HTTPServerError).and_return(false)
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
+      allow(store).to receive(:reject_action)
+      allow(store).to receive(:clear_broadcast_attempted)
+    end
+
+    context 'when 400 carries a terminal txStatus (REJECTED)' do
+      let(:rejected_400) do
+        BSV::Network::ProtocolResponse.new(
+          http_400, http_success: false,
+                    data: { 'txid' => 'abc', 'txStatus' => 'REJECTED' },
+                    error_message: 'REJECTED'
+        )
+      end
+
+      it 'calls reject_action (cascade unwind)' do
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(rejected_400)
+        broadcast.process(action_id)
+        expect(store).to have_received(:reject_action).with(action_id: action_id)
+      end
+
+      it 'does not call clear_broadcast_attempted (terminal, not transient)' do
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(rejected_400)
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:clear_broadcast_attempted)
+      end
+    end
+
+    context 'when 400 carries no txStatus (non-terminal failure)' do
+      # Mirrors the #266 edge case: some ARC 400s are retryable. They must
+      # not auto-cascade into reject_action -- the row stays alive for the
+      # resolution loop / poll path to converge.
+      let(:non_terminal_400) do
+        BSV::Network::ProtocolResponse.new(
+          http_400, http_success: false,
+                    data: { 'detail' => 'rate limit', 'title' => 'Bad Request' },
+                    error_message: 'Bad Request'
+        )
+      end
+
+      it 'does not call reject_action' do
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(non_terminal_400)
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:reject_action)
+      end
+
+      it 'does not call clear_broadcast_attempted (row stays stamped for poll path)' do
+        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(non_terminal_400)
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:clear_broadcast_attempted)
+      end
     end
   end
 

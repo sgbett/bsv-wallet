@@ -34,6 +34,12 @@ module BSV
     # background broadcast worker, and the Sequel models.
     require_relative 'wallet/arc_status'
 
+    # Deterministic Arcade callbackToken derivation (HMAC-from-WIF).
+    # Shared by CLI.boot / walletd (token plumbed into Daemon + every
+    # broadcast POST) and by SSE listener setup -- both sides must
+    # agree on the same token for status events to correlate.
+    require_relative 'wallet/callback_token'
+
     # Key derivation (BRC-42/43)
     autoload :KeyDeriver, 'bsv/wallet/key_deriver'
 
