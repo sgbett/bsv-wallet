@@ -9,13 +9,31 @@ module BSV
       #
       # Owns OMQ sockets for background work (PULL) and inline
       # request-reply (REP). Processes pending broadcasts by calling
-      # Services and recording results in Store.
+      # Services and recording results in Store. Also owns the statuses
+      # PULL socket for SSE-delivered events (#265): the Network-layer
+      # SSE listener PUSHes decoded event hashes here, this fiber PULLs
+      # and hands off to Store::EventApplicator for atomic application.
       class Broadcast
         include OmqSupport
 
-        def initialize(store:, broadcaster:)
+        # @param store        [BSV::Wallet::Store]
+        # @param broadcaster  [BSV::Network::Broadcaster]
+        # @param applicator   [Store::EventApplicator, nil] consumes statuses
+        #   events on +statuses_pull!+. Lazily defaulted to a fresh
+        #   +Store::EventApplicator.new(store: store)+ on first read so
+        #   existing call sites (pre-#265 specs, the inline path) don't
+        #   trigger autoload of Store::EventApplicator (and its Sequel
+        #   dependency chain) at construction time; #265's Daemon wiring
+        #   supplies its own instance.
+        def initialize(store:, broadcaster:, applicator: nil)
           @store = store
           @broadcaster = broadcaster
+          @applicator = applicator
+        end
+
+        # Lazy default — see +#initialize+.
+        def applicator
+          @applicator ||= BSV::Wallet::Store::EventApplicator.new(store: @store)
         end
 
         # Background queue -- fire-and-forget processing.
@@ -28,6 +46,38 @@ module BSV
                 process(msg.first.to_i)
               rescue StandardError => e
                 BSV.logger&.error { "[Engine::Broadcast] pull error: #{e.message}" }
+              end
+            end
+          end
+          self
+        end
+
+        # Statuses queue -- consumes SSE-delivered events. Binds a PULL
+        # socket at +inproc://statuses.pull+; the SSE listener fiber
+        # (Daemon-wired in #265) PUSHes Marshal-encoded event hashes
+        # here. Each message decodes into the shape
+        # +Store::EventApplicator#apply+ consumes -- the same internal
+        # event hash the Rack callback hands off, since the listener's
+        # +decode_event+ normalises into that shape pre-PUSH.
+        #
+        # Runs as a peer fiber to +pull!+/+reply!+. The two PULL sockets
+        # live in separate Async tasks, so the reactor schedules them
+        # fairly; one busy socket does not starve the other.
+        #
+        # Marshal (not JSON) for the wire format -- the event hash carries
+        # binary +wtxid+ / +block_hash+ / +merkle_path+ that would need
+        # hex round-tripping under JSON. Marshal is the simplest in-proc
+        # Ruby-to-Ruby encoding and keeps the convention (binary stays
+        # binary) intact across the bus.
+        def statuses_pull!(task:)
+          task.async do
+            pull = bind_or_die('statuses_worker') { OMQ::PULL.bind('inproc://statuses.pull') }
+            while (msg = pull.receive)
+              begin
+                event = Marshal.load(msg.first) # rubocop:disable Security/MarshalLoad
+                applicator.apply(event)
+              rescue StandardError => e
+                BSV.logger&.error { "[Engine::Broadcast] statuses_pull error: #{e.message}" }
               end
             end
           end

@@ -932,6 +932,201 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         expect(crashed[:error]).not_to be_empty
       end
     end
+
+    describe '#statuses_pull!' do
+      # Capture calls in an array so the test can poll until N applied
+      # without reaching into RSpec internals.
+      let(:applied) { [] }
+      let(:applicator) do
+        Class.new do
+          def initialize(applied) = (@applied = applied)
+          def apply(event) = @applied << event
+        end.new(applied)
+      end
+      let(:broadcast) do
+        described_class.new(store: store, broadcaster: broadcaster, applicator: applicator)
+      end
+      let(:event) do
+        {
+          wtxid: SecureRandom.random_bytes(32),
+          tx_status: 'SEEN_ON_NETWORK',
+          status: 200,
+          block_hash: nil,
+          block_height: nil,
+          merkle_path: nil,
+          extra_info: nil,
+          competing_txs: nil
+        }
+      end
+
+      it 'applies events PUSHed to inproc://statuses.pull' do
+        Async do |task|
+          broadcast.statuses_pull!(task: task)
+
+          push = OMQ::PUSH.connect('inproc://statuses.pull')
+          push << Marshal.dump(event)
+
+          deadline = Time.now + 1.0
+          sleep 0.01 until applied.any? || Time.now > deadline
+
+          expect(applied).to contain_exactly(event)
+        ensure
+          task.stop
+        end
+      end
+
+      it 'survives a malformed message and continues processing' do
+        suppress_console_errors do
+          Async do |task|
+            broadcast.statuses_pull!(task: task)
+
+            push = OMQ::PUSH.connect('inproc://statuses.pull')
+            push << "not valid marshal\x00\xff".b
+            push << Marshal.dump(event)
+
+            deadline = Time.now + 1.0
+            sleep 0.01 until applied.any? || Time.now > deadline
+
+            expect(applied).to contain_exactly(event)
+          ensure
+            task.stop
+          end
+        end
+      end
+
+      it 'continues when the applicator raises' do
+        raising = Object.new
+        call_count = 0
+        raising.define_singleton_method(:apply) do |_event|
+          call_count += 1
+          raise StandardError, 'apply boom' if call_count == 1
+        end
+        broadcast = described_class.new(store: store, broadcaster: broadcaster, applicator: raising)
+
+        suppress_console_errors do
+          Async do |task|
+            broadcast.statuses_pull!(task: task)
+
+            push = OMQ::PUSH.connect('inproc://statuses.pull')
+            push << Marshal.dump(event)
+            push << Marshal.dump(event)
+
+            deadline = Time.now + 1.0
+            sleep 0.01 until call_count >= 2 || Time.now > deadline
+          ensure
+            task.stop
+          end
+        end
+
+        expect(call_count).to be >= 2
+      end
+
+      it 'emits fiber.crashed when the bind fails' do
+        OMQ::PULL.bind('inproc://statuses.pull')
+
+        suppress_console_errors do
+          Async do |task|
+            broadcast.statuses_pull!(task: task)
+            sleep 0.05
+          ensure
+            task.stop
+          end
+        end
+
+        crashed = emitted_events.find { |e| e[:name] == 'fiber.crashed' && e[:task] == 'statuses_worker' }
+        expect(crashed).not_to be_nil
+        expect(crashed[:error]).to be_a(String)
+        expect(crashed[:error]).not_to be_empty
+      end
+    end
+
+    # Backpressure / fairness check: the broadcasts.pull and
+    # statuses.pull sockets live in separate Async tasks (each pull!
+    # spawns its own +task.async+ fiber), so a load burst on one must
+    # not block the other. Pushes are interleaved; both queues must
+    # drain to completion within the test window.
+    describe 'concurrent pulls' do
+      let(:applied) { [] }
+      let(:applicator) do
+        Class.new do
+          def initialize(applied) = (@applied = applied)
+          def apply(event) = @applied << event
+        end.new(applied)
+      end
+      let(:processed_ids) { [] }
+      let(:broadcast) do
+        described_class.new(store: store, broadcaster: broadcaster, applicator: applicator)
+      end
+      let(:event) do
+        {
+          wtxid: SecureRandom.random_bytes(32),
+          tx_status: 'SEEN_ON_NETWORK',
+          status: 200,
+          block_hash: nil, block_height: nil, merkle_path: nil,
+          extra_info: nil, competing_txs: nil
+        }
+      end
+
+      before do
+        # Track which broadcasts.pull IDs reached process. Use the
+        # action_not_found fast path -- find_action returns nil so
+        # process emits task.skipped and exits without touching
+        # broadcaster, keeping the test focused on socket fairness.
+        ids = processed_ids
+        allow(store).to receive(:find_action) do |id:|
+          ids << id
+          nil
+        end
+        allow(store).to receive(:broadcast_status).and_return(nil)
+      end
+
+      it 'drains broadcasts.pull and statuses.pull concurrently without starvation' do
+        message_count = 25
+
+        Async do |task|
+          broadcast.pull!(task: task)
+          broadcast.statuses_pull!(task: task)
+
+          broadcasts_push = OMQ::PUSH.connect('inproc://broadcasts.pull')
+          statuses_push   = OMQ::PUSH.connect('inproc://statuses.pull')
+
+          message_count.times do |i|
+            broadcasts_push << (i + 1).to_s
+            statuses_push   << Marshal.dump(event)
+          end
+
+          deadline = Time.now + 5.0
+          loop do
+            break if applied.size >= message_count && processed_ids.size >= message_count
+            break if Time.now > deadline
+
+            sleep 0.02
+          end
+
+          expect(applied.size).to eq(message_count)
+          expect(processed_ids.size).to eq(message_count)
+        ensure
+          task.stop
+        end
+      end
+    end
+  end
+
+  describe '#initialize' do
+    it 'does not eagerly construct the default applicator (avoids autoloading Sequel-coupled Store::Models)' do
+      # Stubbed double('Store') would crash the Sequel-coupled autoload
+      # chain inside Store::EventApplicator's load if construction were
+      # eager. The applicator is built lazily on first call to
+      # +applicator+.
+      expect { described_class.new(store: store, broadcaster: broadcaster) }
+        .not_to raise_error
+    end
+
+    it 'accepts an applicator: kwarg' do
+      custom = double('Applicator')
+      instance = described_class.new(store: store, broadcaster: broadcaster, applicator: custom)
+      expect(instance.applicator).to be(custom)
+    end
   end
 
   include ConsoleHelpers

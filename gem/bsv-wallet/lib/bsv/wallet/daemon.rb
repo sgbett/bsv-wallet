@@ -5,6 +5,7 @@ require 'omq'
 require_relative 'engine/broadcast'
 require_relative 'engine/tx_proof'
 require_relative 'scheduler'
+require 'bsv/network/sse_listener'
 
 module BSV
   module Wallet
@@ -24,15 +25,28 @@ module BSV
 
       attr_reader :scheduler
 
+      # @param store        [BSV::Wallet::Store]
+      # @param broadcaster  [BSV::Network::Broadcaster]
+      # @param wallet       [String, nil]   wallet name for telemetry
+      # @param network      [Symbol, nil]   :mainnet / :testnet for telemetry
+      # @param callback_token [String, nil] Arcade callbackToken (#265).
+      #   When set, the daemon boots the SSE listener fiber to consume
+      #   the live status stream. Token derivation lives in #266 -- this
+      #   constructor just accepts the value. When nil, the listener is
+      #   skipped and resolution falls back entirely to the poll loop.
+      # @param shutdown_timeout [Numeric]
       def initialize(store:, broadcaster:, wallet: nil, network: nil,
+                     callback_token: nil,
                      shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT_S)
         @store = store
         @broadcaster = broadcaster
         @wallet_name = wallet
         @network = network
+        @callback_token = callback_token
         @shutdown_timeout = shutdown_timeout
         @task = nil
         @scheduler = nil
+        @sse_listener = nil
         @stop_requested = false
         @stopped = false
       end
@@ -47,9 +61,12 @@ module BSV
           broadcast = Engine::Broadcast.new(store: @store, broadcaster: @broadcaster)
           broadcast.pull!(task: task)
           broadcast.reply!(task: task)
+          broadcast.statuses_pull!(task: task)
 
           tx_proof = Engine::TxProof.new(store: @store, broadcaster: @broadcaster)
           tx_proof.pull!(task: task)
+
+          start_sse_listener(task: task) if @callback_token
 
           @scheduler = Scheduler.new(store: @store)
           @scheduler.run!(task: task)
@@ -93,6 +110,7 @@ module BSV
         return if @stopped
 
         @stopped = true
+        @sse_listener&.stop!
         drained = @scheduler&.shutdown(timeout: @shutdown_timeout)
         BSV::Wallet.emit('daemon.stopped', reason: 'signal', drained: drained)
         @task&.stop
@@ -106,6 +124,24 @@ module BSV
       def setup_signal_traps
         %w[INT TERM].each do |signal|
           Signal.trap(signal) { @stop_requested = true }
+        end
+      end
+
+      # Construct the SSE listener and run it as a peer Async task.
+      # The +on_event+ block is the seam between Network (Layer 1) and
+      # the OMQ bus: each decoded event is Marshal-encoded and PUSHed to
+      # +inproc://statuses.pull+, where +Engine::Broadcast#statuses_pull!+
+      # (already booted in #run!) pulls and applies it. PUSH is opened
+      # inside the listener fiber so its lifecycle is tied to the
+      # listener; closure happens implicitly when the fiber unwinds on
+      # +stop!+.
+      def start_sse_listener(task:)
+        task.async do |t|
+          push = OMQ::PUSH.connect('inproc://statuses.pull')
+          @sse_listener = BSV::Network::SSEListener.new(
+            token: @callback_token, store: @store
+          ) { |event| push << Marshal.dump(event) }
+          @sse_listener.run!(task: t)
         end
       end
     end
