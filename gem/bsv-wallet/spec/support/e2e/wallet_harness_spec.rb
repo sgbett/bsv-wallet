@@ -76,6 +76,11 @@ RSpec.describe E2E::WalletHarness do # rubocop:disable RSpec/SpecFilePathFormat
       ENV.delete('BSV_WALLET_POSTGRES')
       expect { described_class.install_derived_db_urls! }.to raise_error(KeyError)
     end
+
+    it 'raises a clear error when BSV_WALLET_POSTGRES is blank or whitespace-only' do
+      ENV['BSV_WALLET_POSTGRES'] = '   '
+      expect { described_class.install_derived_db_urls! }.to raise_error(KeyError)
+    end
   end
 
   describe '.test_wallet_names' do

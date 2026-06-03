@@ -56,10 +56,15 @@ module E2E
     # derived and overrides aren't meaningful, DB URLs are operationally
     # derived and overrides are.
     #
-    # Raises +KeyError+ when +BSV_WALLET_POSTGRES+ is unset — mirrors
-    # +install_derived_wifs!+ failing fast on a missing root.
+    # Raises +KeyError+ when +BSV_WALLET_POSTGRES+ is unset, blank, or
+    # whitespace-only — matches +missing_env+'s whitespace-as-unset
+    # semantics so a blank base never silently falls through (a blank
+    # base would make +CLI.derive_postgres_url+ return nil, which would
+    # blank out +ENV[key]+ and crash downstream readers like
+    # +broadcast_spec.rb:374+'s +ENV.fetch+).
     def install_derived_db_urls!
-      ENV.fetch('BSV_WALLET_POSTGRES')
+      raise KeyError, 'key not found: "BSV_WALLET_POSTGRES"' if ENV['BSV_WALLET_POSTGRES'].to_s.strip.empty?
+
       all_wallet_names.each do |name|
         key = "DATABASE_URL_#{name.upcase}"
         next if ENV[key].to_s.strip.length.positive?
