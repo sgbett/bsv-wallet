@@ -1418,7 +1418,7 @@ module BSV
       #   transformed to extended format".
       # @return [Hash, nil] broadcast status from Store
       def inline_broadcast(action_id:, tx:)
-        return @store.broadcast_status(action_id: action_id) unless @broadcaster
+        raise BSV::Wallet::Error, 'inline_broadcast called without broadcaster configured' unless @broadcaster
 
         @store.mark_broadcast_attempted(action_id: action_id)
         response = @broadcaster.broadcast(tx, wtxid: tx.wtxid)

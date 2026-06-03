@@ -274,6 +274,31 @@ RSpec.describe BSV::Wallet::Engine do
       end
     end
 
+    context 'when inline broadcast is invoked without a broadcaster' do
+      subject(:engine_without_broadcaster) do
+        described_class.new(
+          store: store, utxo_pool: utxo_pool,
+          services: double('Services', call: nil), network: :mainnet
+        )
+      end
+
+      it 'raises so the misconfiguration is explicit rather than leaving the action half-broadcast' do
+        expect do
+          engine_without_broadcaster.create_action(
+            description: 'inline broadcast without broadcaster',
+            inputs: [],
+            accept_delayed_broadcast: false,
+            outputs: [
+              { satoshis: 500, locking_script: OP_TRUE,
+                output_description: 'output', basket: 'payments',
+                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+                sender_identity_key: 'self' }
+            ]
+          )
+        end.to raise_error(BSV::Wallet::Error, /inline_broadcast called without broadcaster/)
+      end
+    end
+
     context 'with delayed broadcast (accept_delayed_broadcast: true)' do
       subject(:engine) do
         described_class.new(
