@@ -697,6 +697,9 @@ module BSV
         @db.transaction do
           raise "no broadcasts row for action_id=#{action_id}" unless models::Broadcast.where(action_id: action_id).any?
 
+          # Set-once: the +broadcast_at: nil+ predicate guards re-stamps on
+          # retry, so the column reflects the first attempt rather than the
+          # most recent one. See reference/schema.md (Phase 3).
           models::Broadcast
             .where(action_id: action_id, broadcast_at: nil)
             .update(broadcast_at: Time.now)

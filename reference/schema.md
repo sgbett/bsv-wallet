@@ -292,7 +292,7 @@ Engine::Broadcast#submit(action_id:)
 ```
 
 `Engine::Broadcast#submit`:
-1. Stamps `broadcast_at = now()` and commits (`Store#mark_broadcast_attempted`) — the row leaves the push-discovery set and joins the poll set
+1. Stamps `broadcast_at = now()` and commits (`Store#mark_broadcast_attempted`) — the row leaves the push-discovery set and joins the poll set. **Set-once invariant:** the stamp only writes when `broadcast_at IS NULL` (enforced in-query by the `where(broadcast_at: nil)` filter, not at the schema level). A retry after a partial failure does not re-stamp, so `broadcast_at` reflects the first attempt, not the most recent one.
 2. POSTs to ARC (network call — outside any DB transaction)
 3. On accepted ARC response: persists the status fields and triggers Phase 4 (`Store#promote_action_outputs`)
 4. On terminal rejection: `Store#fail_broadcast_action` deletes the action, its broadcasts row, and its (unpromoted) output rows in one transaction
