@@ -55,24 +55,35 @@ SSE framing (`event:`, `data:`, `\n\n` separator) is trivial to parse inline; no
 
 The SSE listener is scoped by callback token (`?callbackToken=…`). Every broadcast must POST with a matching `X-CallbackToken` header so Arcade can correlate. Token is per-wallet (likely stored in a wallet-level config or derived deterministically — analyst phase to decide).
 
-### 4.2 Three-codepath dispatch
+### 4.2 Three-codepath dispatch with pre-POST stamp + null-on-503
 
-| Status | Action | mark_broadcast_attempted? |
-|--------|--------|---------------------------|
-| `202`  | `record_broadcast_results` (status fields, await callback for terminal) | yes |
-| `400`  | `reject_action` cascade (terminal failure, ARC saw it and rejected synchronously) | yes |
-| `503`  | **Early return**, no Store mutation | **NO** — daemon retries next pull-loop cycle |
+`mark_broadcast_attempted` runs **before** the POST (preserving today's timing). The 503 path explicitly nulls `broadcast_at` back out before returning, returning the row to the queued / push-discovery set for clean retry.
 
-### 4.3 `mark_broadcast_attempted` timing shift
+| Status | Action | Effect on `broadcast_at` |
+|--------|--------|--------------------------|
+| (pre-POST) | `mark_broadcast_attempted` stamps | NULL → now() |
+| `202`  | `record_broadcast_results` (status fields, await callback for terminal) | stays stamped |
+| `400`  | `reject_action` cascade (terminal failure — ARC saw and rejected synchronously) | stays stamped (row then deleted by cascade) |
+| `503`  | **Null `broadcast_at`, return.** Daemon re-pulls next cycle. | reverted to NULL |
 
-Today: stamped **before** the network call (captures mid-POST crash state).
+### 4.3 Why this shape (vs the alternative we considered)
 
-New: stamped **after** response receipt, only on 202/400. Rationale:
+We considered post-receipt timing (stamp only on 202/400, never on 503). The trade is **crash-during-POST safety vs duplicate-submit risk**:
 
-- 503 means "ARC unavailable" → daemon should retry from a clean state. If we'd stamped `broadcast_at`, the action would leave the push-discovery set, never getting re-attempted.
-- Crash-mid-POST recovery moves to the callback path: if the tx actually reached ARC, our `X-CallbackToken` causes a SEEN/REJECTED event to eventually fire, and the listener applies it (matching the wtxid back to the action). If the tx didn't reach ARC, the daemon retries on the next cycle.
+- **Post-receipt timing:** clean state semantics, but a process crash between POST completion and response handling leaves `broadcast_at IS NULL` → daemon re-pulls → **duplicate submit**. Behaviour depends on how ARC responds to a duplicate wtxid. If ARC returns 400 ("already known"), our dispatch interprets that as terminal rejection → `reject_action` cascade unwinds a transaction that is actually in the mempool. That's a wallet correctness bug whose mitigation depends on an external contract (ARC's idempotency semantics) we haven't tested.
+- **Pre-call + null-on-503 (this design):** crash-mid-POST leaves `broadcast_at IS NOT NULL, tx_status IS NULL` — the recognisable "submitted, awaiting outcome" state that the callback path and poll fallback already handle. No duplicate submit, no dependency on ARC's idempotency for correctness. Cost: one extra UPDATE per 503 occurrence (rare, on the slow path).
 
-### 4.4 `inline_broadcast` NOT deleted in this HLR
+The 503 null-on-return is a single SQL statement against a single row; the window between receiving 503 and nulling `broadcast_at` is microseconds. A crash inside that window leaves the row stuck in "submitted, awaiting outcome" until callback / poll discovers it — slower recovery, not a correctness issue. Bounded, contained, explicit cost over invisible, unbounded, undocumented risk.
+
+### 4.4 Set-once invariant softens to "state flag"
+
+Today's schema.md describes `broadcast_at` as set-once (stamped on first attempt, never re-written). Under the null-on-503 path, that invariant softens to: `broadcast_at` is a **state marker** — NULL means the row is queued for submission, non-NULL means it has been submitted and is awaiting outcome. The `where(broadcast_at: nil)` predicate still prevents racing re-stamps within a single in-flight attempt; null-on-503 returns the row to the queued state. After a 503 + retry, `broadcast_at` reflects the retry timestamp, not the first attempt.
+
+This is a documentation update that lands with #251 (schema.md and the store.rb comment both want softening).
+
+### 4.5 `inline_broadcast` NOT deleted in this HLR
+
+### 4.6 `inline_broadcast` NOT deleted in this HLR
 
 Deletion depends on #252 (EF for daemon path). Until daemon-submit can produce EF from `action_id` alone, the inline path keeps the `tx:` kwarg shape (since the caller still has the live `Transaction` object). Once #252 lands, `inline_broadcast` collapses into `submit(action_id)` — a sibling HLR closes that loop.
 
@@ -154,7 +165,7 @@ Live funds. `before(:all)` consolidate/sweep. Assertions on bounded windows. MIN
 
 ## 7. Open implementation questions (for analyst phase)
 
-- **Idempotency of submit on duplicate.** If the daemon crashes after a successful POST but before reading the response, retry submits the same wtxid again. ARC's behavior on duplicate submit needs verification: does it return 202 again (graceful), or some distinct status? **Probe empirically with a controlled test before finalizing the 3-codepath dispatch.** If duplicate-submit returns a non-202/400/503 status, the dispatch table needs a fourth row.
+- **Idempotency of submit on duplicate** — *diagnostic value only, no longer correctness-critical.* The pre-call + null-on-503 design (§4.2/§4.3) avoids the duplicate-submit path on crash-mid-POST: a crash leaves `broadcast_at IS NOT NULL` so the daemon does not re-pull. Probe ARC's duplicate-submit behaviour anyway when convenient — useful for telemetry and for understanding what an unexpected 4xx response in the wild might mean — but it's no longer a blocker for landing #251.
 - **Callback token provenance.** Per-wallet, but how generated and where persisted? Likely a settings-level value, derived from wallet key or random + persisted at init. Analyst phase decides.
 - **`sse_cursors` schema.** `(token PK, last_event_id BIGINT, updated_at TIMESTAMP)` per the ADR. Confirm migration number, FK if any.
 - **OMQ socket bind paths.** `inproc://statuses.push` and `inproc://statuses.pull`? Match the existing pattern from `Engine::Broadcast`.
@@ -191,4 +202,7 @@ E4 should land first among the e2e tests because if it fails, everything downstr
 - `inline_broadcast` and daemon submit both route through `submit(action_id)` (the inline path still passes `tx:` until #252).
 - ADR §5 open item on "Arcade SSE event coverage + resumption" updated to "verified live" with the captured evidence from E8.
 - `Engine::Broadcast` constructor accepts (or constructs) the SSE listener as a peer; daemon wiring in `Daemon` runs the listener as one of its Async tasks.
-- Documentation updated: `reference/schema.md` mentions `sse_cursors`; the rename of `broadcast_spec.rb` → `stress_test_spec.rb` reflected anywhere it's referenced.
+- Documentation updated:
+  - `reference/schema.md` Phase 3: soften "Set-once invariant" framing to "state flag" (per §4.4); add `sse_cursors` to the schema reference.
+  - Store comment on `mark_broadcast_attempted` updated to describe null-on-503 path.
+  - Rename of `broadcast_spec.rb` → `stress_test_spec.rb` reflected anywhere it's referenced.

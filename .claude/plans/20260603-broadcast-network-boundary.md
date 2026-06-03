@@ -101,7 +101,7 @@ Today: `@broadcast_affinity` is an **in-memory hash** (`services.rb:29`), **txid
 
 - `BSV::Network::Broadcaster` + provider composition (promotion of `Services`' broadcast role).
 - Affinity persistence (`broadcasts.provider`), keyed off the **known wtxid**, not the response txid.
-- **Arcade SSE consumer** — new outbound ingestion + Arcade-shape decode; **reuse** the reject/record core extracted from `broadcast_callback.rb`.
+- **Arcade SSE consumer + submit-side reshape** (#251) — outbound SSE ingestion + Layer 1/2 split + OMQ PUSH/PULL bus; **reuse** the reject/record core extracted from `broadcast_callback.rb`; canonical `submit` with `X-CallbackToken` on every POST and 202/400/503 dispatch (pre-call stamp + null-on-503 for crash-safe retry). See `.claude/plans/20260603-251-sse-push-resolution.md` for details.
 - **#246** block-driven MINED resolver (+ **#245** reorg removal half) — already specced.
 - **WoC reconciliation sweep** for stale SEEN_ON_NETWORK (double-spend backstop).
 - **EF source-data for the `:delayed` daemon path** (#235 follow-on): the daemon submits `action[:raw_tx]` (raw hex), so it cannot produce Extended Format without a reconstructed `Transaction` (per-input source sats/scripts) or persisted EF. This is **wallet-side**, not SDK protocol divergence.
@@ -109,5 +109,5 @@ Today: `@broadcast_affinity` is an **in-memory hash** (`services.rb:29`), **txid
 ## Open / to confirm
 
 - **Arcade SSE event coverage + resumption — RESOLVED** via Arcade PR #50 (merged 2026-04-28). REJECTED published by `tx_validator`; `Last-Event-ID` implemented as nanosecond timestamp; catchup is current-status snapshot (not historical replay) — see §5 for design consequences. Live-stream validation can come during the SSE consumer build; the contract is now sufficient to design against.
-- **Reject-reason granularity loss.** Arcade's taxonomy likely surfaces a double-spend as plain `REJECTED` (no distinct `DOUBLE_SPEND_ATTEMPTED`). The unwind still fires (REJECTED is terminal), but reason granularity is lost vs ARC. Acceptable; note in telemetry.
+- **~~Reject-reason granularity loss~~ — RESOLVED** (per #251 plan / Arcade docs). Arcade *does* distinguish: `REJECTED` (from rejected-tx gossip) and `DOUBLE_SPEND_ATTEMPTED` (from rejected-tx gossip with specific reason) are separate statuses. The wallet's `ArcStatus` taxonomy preserves the distinction; no granularity loss into telemetry. Original assumption was pessimistic.
 - **~~Failover vs fan-out~~ — RESOLVED** (§6): failover-affinity (column) now; fan-out parked.
