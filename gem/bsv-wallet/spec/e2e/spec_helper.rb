@@ -28,7 +28,7 @@ require 'bsv-wallet'
 # unit specs ride the bare +rspec+ run). Require them explicitly rather
 # than globbing that directory — a glob would also pull in the co-located
 # +*_spec.rb+ files.
-%w[wallet_derivation event_log wallet_harness daemon_supervisor].each do |mod|
+%w[wallet_derivation event_log wallet_harness daemon_supervisor sse_test_listener].each do |mod|
   require_relative File.join('..', 'support', 'e2e', mod)
 end
 

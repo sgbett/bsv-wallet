@@ -64,7 +64,7 @@ The wallet uses **Arcade's Server-Sent Events stream** as the primary push chann
 
 - **Outbound connection** — the wallet daemon connects out; no publicly-reachable, highly-available inbound webhook endpoint to operate.
 - **Resumable** — `Last-Event-ID` (nanosecond timestamp) catchup on reconnect (verified against Arcade source, PR #50, merged 2026-04-28).
-- **Coverage verified** — `tx_validator` publishes RECEIVED / REJECTED; `propagation` publishes SEEN_ON_NETWORK; `bump_builder` publishes MINED-class (verified by inspecting the publish sites in PR #50).
+- **Coverage verified** — `tx_validator` publishes RECEIVED / REJECTED; `propagation` publishes SEEN_ON_NETWORK; `bump_builder` publishes MINED-class (verified by inspecting the publish sites in PR #50; REJECTED delivery confirmed live by #267 E4/E8 against `arcade.gorillapool.io` 2026-06-04).
 
 This makes Arcade the primary broadcast + resolution path. The "switch GorillaPool default to ARC" HLR is **mooted for this path**. ARC's separable advantages (`/v1/policy` fees, granular synchronous reject taxonomy) become independent questions, not blockers.
 
@@ -101,7 +101,7 @@ Demoted role: with SSE (push from the right instance) + block-driven MINED (glob
 ### Negative / accepted trade-offs
 
 - **Single primary endpoint.** The decision to go SSE-on-Arcade implies single-endpoint operation. If Arcade has an outage, the wallet's broadcast path is degraded — there is no automatic fail-over to ARC. Mitigation deferred to fan-out, which is parked.
-- **Reject-reason granularity loss.** Arcade likely surfaces double-spend as plain `REJECTED` without ARC's distinct `DOUBLE_SPEND_ATTEMPTED`. The unwind still fires (REJECTED is terminal), but reason granularity is lost vs ARC. Acceptable; note in telemetry.
+- **Reject-reason granularity loss — confirmed live (#267 / E8).** Arcade surfaces double-spend as plain `REJECTED` without ARC's distinct `DOUBLE_SPEND_ATTEMPTED`. Verified end-to-end against `arcade.gorillapool.io` mainnet on 2026-06-04: a deliberate double-spend produced an SSE frame with `tx_status: "REJECTED"`, and every supplementary field nil (`extra_info: nil`, `competing_txs: nil`, `status: nil`, no block fields). The unwind still fires (REJECTED is terminal), but reason granularity is lost vs ARC, and there is no `competing_txs` callback to identify the winning conflict. Acceptable; note in telemetry. Wallet's `ArcStatus::REJECTED` set (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`) remains correct — `DOUBLE_SPEND_ATTEMPTED` is dead code on the Arcade SSE path today, but kept for ARC-webhook compatibility (the `store/broadcast_callback.rb` receiver is retained per Alt C).
 - **SSE catchup is a current-status snapshot, not an audit log.** `Last-Event-ID` reconnect emits *the current* status of each token-scoped submission newer than `since` — a tx that went RECEIVED → REJECTED while disconnected emits only REJECTED. Fine for terminal-state semantics, but the SSE consumer's event-application core must be idempotent on current state (not a transition sequence) and must persist the cursor durably across reconnects (gaps under load are silent otherwise).
 - **Delivery is best-effort.** Slow-consumer drops are non-blocking server-side; the poll fallback (#246) is mandatory, not optional. No exactly-once assumption.
 
