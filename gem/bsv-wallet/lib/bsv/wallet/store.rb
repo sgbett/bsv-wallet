@@ -1121,4 +1121,5 @@ require_relative 'store/postgres'
 
 # Service classes
 BSV::Wallet::Store.autoload :BroadcastCallback, 'bsv/wallet/store/broadcast_callback'
+BSV::Wallet::Store.autoload :EventApplicator,   'bsv/wallet/store/event_applicator'
 BSV::Wallet::Store.autoload :UTXOPool,          'bsv/wallet/store/utxo_pool'
