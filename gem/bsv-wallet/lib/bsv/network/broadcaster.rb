@@ -55,7 +55,7 @@ module BSV
         rescue StandardError => e
           BSV.logger&.warn do
             '[Broadcaster] affinity write failed (broadcast succeeded, hint lost) ' \
-              "wtxid=#{wtxid.unpack1('H*')} provider=#{provider.name}: #{e.message}"
+              "dtxid=#{wtxid.reverse.unpack1('H*')} provider=#{provider.name}: #{e.message}"
           end
         end
       end
