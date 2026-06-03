@@ -72,9 +72,12 @@
 #   "live"          → the real thing: on-chain broadcasts, walletd
 #                     subprocesses, block-boundary termination.
 #
-# Smoke test (rehearse, tiny, ~seconds — proves all four stages wire up):
+# Smoke test (rehearse, tiny, ~seconds — proves all four stages wire up).
+# Requires the six test DBs to be empty (drop+create them, or use a fresh
+# BSV_WALLET_POSTGRES base) — the post-fanout assertion counts rows.
 #   E2E_MODE=rehearse FUND_SATS=100000 \
-#     FANOUT_L4_PAYMENTS=10 FANOUT_L5_PAYMENTS=10 FANOUT_MIN_SPENDABLE=20 \
+#     FANOUT_L4_PAYMENTS=10 FANOUT_L5_PAYMENTS=10 \
+#     FANOUT_L4_SATS=2000 FANOUT_L5_SATS=500 FANOUT_MIN_SPENDABLE=20 \
 #     BROADCAST_CYCLES=5 BROADCAST_PER_CYCLE=5 BROADCAST_MIN_TX=10 \
 #     BROADCAST_MIN_BLOCKS=0 bundle exec rspec spec/e2e/broadcast_spec.rb
 #

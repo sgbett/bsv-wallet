@@ -48,15 +48,19 @@ Required:
 
 | Var | What |
 |---|---|
-| `BSV_WALLET_WIF_SDK`   | Funding key. Must hold >= 50m sats at the start of a fresh run. |
-| `DATABASE_URL_SDK`     | Postgres URL for the funding wallet. |
-| `DATABASE_URL_W1..W5`  | Postgres URLs for the five derived test wallets. |
-| `BSV_ARC_TAAL_KEY`     | Optional. When set, the `ProviderStack` adds TAAL ARC to the broadcast fallback chain (mainnet only). Strongly recommended for stage 4's sustained throughput. |
+| `BSV_WALLET_WIF_SDK`    | Funding key. Must hold >= 50m sats at the start of a fresh run. |
+| `BSV_WALLET_POSTGRES`   | Postgres base URL (e.g. `postgres://user:pass@host:5432/`). `CLI.boot` derives each wallet's DB as `{base}/bsv_wallet_{name}` via `derive_postgres_url` — one var configures all six wallets (sdk + w1..w5). |
+| `BSV_ARC_TAAL_KEY`      | Optional. When set, the `ProviderStack` adds TAAL ARC to the broadcast fallback chain (mainnet only). Strongly recommended for stage 4's sustained throughput. |
 
 `BSV_WALLET_WIF_W1..W5` are **not** required — they're derived
 deterministically from `BSV_WALLET_WIF_SDK` (see
 `spec/support/e2e/wallet_derivation.rb`). The harness installs them
 into ENV at boot so `CLI.boot(wallet_name: 'w1')` picks them up.
+
+Per-wallet `DATABASE_URL_SDK` / `DATABASE_URL_W1..W5` overrides are
+respected when set — `CLI.boot` prefers an explicit `DATABASE_URL_<NAME>`
+over the derived URL — so a single wallet can be pointed at a different
+host without losing derivation for the others.
 
 If any required var is unset, the harness skips cleanly with a
 message listing exactly which vars are missing.
@@ -106,9 +110,14 @@ cd gem/bsv-wallet
 E2E_MODE=live bundle exec rspec spec/e2e/broadcast_spec.rb
 
 # Smoke run — rehearse mode, tiny scale, ~seconds. Proves all four
-# stages wire up and the asserts gate, with zero broadcasts.
+# stages wire up and the asserts gate, with zero broadcasts. Requires
+# fresh test DBs (the post-fanout assertion expects exactly L4+L5 outbound
+# actions per wallet; prior rehearse runs accumulate rows). Drop & recreate
+# `bsv_wallet_{sdk,w1..w5}` before running, or point `BSV_WALLET_POSTGRES`
+# at a fresh base.
 E2E_MODE=rehearse FUND_SATS=100000 \
-  FANOUT_L4_PAYMENTS=10 FANOUT_L5_PAYMENTS=10 FANOUT_MIN_SPENDABLE=20 \
+  FANOUT_L4_PAYMENTS=10 FANOUT_L5_PAYMENTS=10 \
+  FANOUT_L4_SATS=2000 FANOUT_L5_SATS=500 FANOUT_MIN_SPENDABLE=20 \
   BROADCAST_CYCLES=5 BROADCAST_PER_CYCLE=5 BROADCAST_MIN_TX=10 \
   BROADCAST_MIN_BLOCKS=0 bundle exec rspec spec/e2e/broadcast_spec.rb
 

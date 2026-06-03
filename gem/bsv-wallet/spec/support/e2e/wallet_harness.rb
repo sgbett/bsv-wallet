@@ -15,12 +15,20 @@ module E2E
   # +CLI.boot(wallet_name: 'w1')+ picks them up.
   #
   # Env vars consumed:
-  #   - +BSV_WALLET_WIF_SDK+  — the funding key (mandatory)
-  #   - +DATABASE_URL_SDK+    — per-wallet Postgres URL
-  #   - +DATABASE_URL_W1+ .. +DATABASE_URL_W5+ — per-wallet Postgres URLs
+  #   - +BSV_WALLET_WIF_SDK+   — the funding key (mandatory)
+  #   - +BSV_WALLET_POSTGRES+  — base Postgres URL (mandatory); +CLI.boot+
+  #     derives each wallet's DB as +{base}/bsv_wallet_{name}+ via
+  #     +derive_postgres_url+. Per-wallet +DATABASE_URL_<NAME>+ overrides
+  #     are still respected (CLI prefers explicit overrides).
   #
   # Env vars written (in-process, never persisted):
   #   - +BSV_WALLET_WIF_W1+ .. +BSV_WALLET_WIF_W5+ — derived from SDK
+  #   - +DATABASE_URL_SDK+ / +DATABASE_URL_W1+ .. +DATABASE_URL_W5+ —
+  #     derived from +BSV_WALLET_POSTGRES+ via +CLI.derive_postgres_url+.
+  #     Explicit +DATABASE_URL_<NAME>+ values already in ENV are respected.
+  #     +broadcast_spec.rb+ reads these slots directly (stage 3 fanout
+  #     verification opens a fresh +Sequel.connect+ per wallet), so they
+  #     must be populated even though +CLI.boot+ would derive on its own.
   module WalletHarness
     SDK = 'sdk'
 
@@ -36,11 +44,36 @@ module E2E
       end
     end
 
+    # Derive per-wallet Postgres URLs from +BSV_WALLET_POSTGRES+ and
+    # install them into ENV for each wallet name (+sdk+ + +w1+..+w5+).
+    # Reuses +CLI.derive_postgres_url+ so the derivation rule lives in
+    # one place.
+    #
+    # Respects explicit +DATABASE_URL_<NAME>+ overrides — only fills empty
+    # slots, so a single wallet can be pointed at a different host without
+    # losing derivation for the others. Diverges from +install_derived_wifs!+
+    # (unconditional overwrite) deliberately: WIFs are cryptographically
+    # derived and overrides aren't meaningful, DB URLs are operationally
+    # derived and overrides are.
+    #
+    # Raises +KeyError+ when +BSV_WALLET_POSTGRES+ is unset — mirrors
+    # +install_derived_wifs!+ failing fast on a missing root.
+    def install_derived_db_urls!
+      ENV.fetch('BSV_WALLET_POSTGRES')
+      all_wallet_names.each do |name|
+        key = "DATABASE_URL_#{name.upcase}"
+        next if ENV[key].to_s.strip.length.positive?
+
+        ENV[key] = BSV::Wallet::CLI.derive_postgres_url(name)
+      end
+    end
+
     # Boot an in-process wallet context for +name+ (e.g. +'sdk'+,
     # +'w1'+). Returns the +CLI.boot+ hash:
     #   { engine:, utxo_pool:, key_deriver:, db:, identity_key:, private_key: }
     def boot(name, network: :mainnet)
       install_derived_wifs!
+      install_derived_db_urls!
       BSV::Wallet::CLI.boot(wallet_name: name, network: network)
     end
 
@@ -90,8 +123,7 @@ module E2E
     # Required env vars for the harness to run. Phase specs call this
     # in +before+ and +skip+ on missing entries.
     def required_env
-      %w[BSV_WALLET_WIF_SDK DATABASE_URL_SDK] +
-        test_wallet_names.map { |n| "DATABASE_URL_#{n.upcase}" }
+      %w[BSV_WALLET_WIF_SDK BSV_WALLET_POSTGRES]
     end
 
     # Returns the names of any required env vars that are unset.
