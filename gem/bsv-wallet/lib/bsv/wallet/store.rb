@@ -924,7 +924,7 @@ module BSV
           action_id: record.action_id, tx_status: record.tx_status,
           arc_status: record.arc_status, broadcast_at: record.broadcast_at,
           block_hash: record.block_hash, block_height: record.block_height,
-          merkle_path: record.merkle_path
+          merkle_path: record.merkle_path, provider: record.provider
         }
       end
 

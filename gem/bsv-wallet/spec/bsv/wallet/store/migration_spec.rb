@@ -195,4 +195,27 @@ RSpec.describe 'Schema migration', :store do
       expect(row[:broadcast_intent]).to eq('delayed')
     end
   end
+
+  describe 'broadcasts.provider (migration 009)' do
+    it 'exists as a nullable text column with no default' do
+      schema = db.schema(:broadcasts).to_h
+      column = schema[:provider]
+      expect(column).not_to be_nil
+      expect(column[:allow_null]).to be(true)
+      expect(column[:ruby_default]).to be_nil
+    end
+
+    # Sequel auto-reverses add_column. Round-trip via the migrator to prove
+    # the column genuinely drops and re-creates on both backends.
+    it 'round-trips up/down/up via the migrator' do
+      Sequel.extension :migration
+      migrations_path = File.expand_path('../../../../db/migrations', __dir__)
+
+      Sequel::Migrator.run(db, migrations_path, target: 8)
+      expect(db.schema(:broadcasts).to_h).not_to have_key(:provider)
+
+      Sequel::Migrator.run(db, migrations_path)
+      expect(db.schema(:broadcasts).to_h).to have_key(:provider)
+    end
+  end
 end
