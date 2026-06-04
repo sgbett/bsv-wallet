@@ -113,7 +113,10 @@ end
 RSpec.describe E2E::DaemonSupervisor do
   # The supervisor spawns +bin/walletd+, which would try to connect to
   # Postgres and ARC. We stub Process.spawn to keep this test as a unit
-  # test for the supervisor's lifecycle bookkeeping only.
+  # test for the supervisor's lifecycle bookkeeping only. We also stub
+  # +assert_databases_empty!+ -- the pre-boot DB safety check
+  # (preventing the daemon from broadcasting any queued work on start)
+  # is verified separately and orthogonal to lifecycle bookkeeping.
   let(:tmpdir) { Dir.mktmpdir('e2e_supervisor_') }
   let(:supervisor) do
     described_class.new(
@@ -122,6 +125,10 @@ RSpec.describe E2E::DaemonSupervisor do
       log_dir: tmpdir,
       shutdown_timeout: 0.5
     )
+  end
+
+  before do
+    allow(supervisor).to receive(:assert_databases_empty!) # bypass DB check in unit tests
   end
 
   after { FileUtils.rm_rf(tmpdir) if File.directory?(tmpdir) }
