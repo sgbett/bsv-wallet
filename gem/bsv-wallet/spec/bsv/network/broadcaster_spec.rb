@@ -171,13 +171,13 @@ RSpec.describe BSV::Network::Broadcaster do
       expect(response.data[:tx_status]).to eq('SEEN_ON_NETWORK')
     end
 
-    it 'forwards the dtxid via the +txid:+ kwarg (BRC-100 spec naming)' do
+    it 'forwards the dtxid as a positional argument (SDK protocols take txid positional, not kwarg)' do
       provider = stub_provider('ARC', { get_tx_status: success(status_data) })
       broadcaster = described_class.new(providers: [provider])
 
       broadcaster.get_tx_status(wtxid: wtxid, dtxid: dtxid)
 
-      expect(provider).to have_received(:call).with(:get_tx_status, txid: dtxid)
+      expect(provider).to have_received(:call).with(:get_tx_status, dtxid)
     end
 
     it 'falls back to the next provider on retryable error' do
@@ -400,16 +400,16 @@ RSpec.describe BSV::Network::Broadcaster do
         broadcaster = described_class.new(providers: [gp_status, taal_status], store: store)
         broadcaster.get_tx_status(wtxid: bound_wtxid, dtxid: bound_dtxid)
 
-        expect(taal_status).to have_received(:call).with(:get_tx_status, txid: bound_dtxid)
-        expect(gp_status).not_to have_received(:call).with(:get_tx_status, txid: bound_dtxid)
+        expect(taal_status).to have_received(:call).with(:get_tx_status, bound_dtxid)
+        expect(gp_status).not_to have_received(:call).with(:get_tx_status, bound_dtxid)
       end
 
       it 'falls through to first-capable when no affinity has been recorded' do
         broadcaster = described_class.new(providers: [gp_status, taal_status], store: store)
         broadcaster.get_tx_status(wtxid: bound_wtxid, dtxid: bound_dtxid)
 
-        expect(gp_status).to have_received(:call).with(:get_tx_status, txid: bound_dtxid)
-        expect(taal_status).not_to have_received(:call).with(:get_tx_status, txid: bound_dtxid)
+        expect(gp_status).to have_received(:call).with(:get_tx_status, bound_dtxid)
+        expect(taal_status).not_to have_received(:call).with(:get_tx_status, bound_dtxid)
       end
 
       it 'falls through to first-capable when the recorded provider is no longer registered (config drift)' do
@@ -420,7 +420,7 @@ RSpec.describe BSV::Network::Broadcaster do
         broadcaster = described_class.new(providers: [gp_status, taal_status], store: store)
         broadcaster.get_tx_status(wtxid: bound_wtxid, dtxid: bound_dtxid)
 
-        expect(gp_status).to have_received(:call).with(:get_tx_status, txid: bound_dtxid)
+        expect(gp_status).to have_received(:call).with(:get_tx_status, bound_dtxid)
       end
     end
   end

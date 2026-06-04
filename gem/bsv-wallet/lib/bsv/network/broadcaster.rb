@@ -98,9 +98,10 @@ module BSV
       # provider, with fallback on retryable errors.
       #
       # The wallet's bookkeeping key is the binary wtxid; the wire query
-      # uses the display-order +dtxid+ hex string (the +txid:+ keyword on
-      # the SDK call retains BRC-100 spec naming, where +txid+ is the
-      # display-order label rather than a byte-order indicator).
+      # uses the display-order +dtxid+ hex string. The SDK's protocol
+      # +call_get_tx_status(txid, **)+ takes the dtxid as a *positional*
+      # argument (Ruby 3 keyword-arg strictness; passing it as +txid:+
+      # raises "unknown keyword: :txid").
       #
       # @param wtxid [String] 32-byte binary wire-order wtxid (affinity key)
       # @param dtxid [String] 64-char display-order hex (sent to ARC)
@@ -109,7 +110,7 @@ module BSV
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'Broadcaster#get_tx_status wtxid')
 
         candidates = candidates_with_affinity(wtxid, command: :get_tx_status)
-        @services.call_with_candidates(:get_tx_status, candidates, txid: dtxid)
+        @services.call_with_candidates(:get_tx_status, candidates, dtxid)
       end
 
       private
