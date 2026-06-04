@@ -8,7 +8,18 @@
 #
 # Usage:
 #   echo '{"inputs":[...], "outputs":[...]}' | \
-#     bin/create_action [wallet] --description "payment" [--no-send] [--label <name>]...
+#     bin/create_action [wallet] --description "payment" [--inline | --no-send] [--label <name>]...
+#
+# Broadcast modes (BRC-100 createAction defaults — intend to broadcast):
+#   (default) — no_send: false, accept_delayed_broadcast: true
+#               action is queued for walletd to push. Without walletd
+#               running, nothing reaches the network.
+#   --inline  — no_send: false, accept_delayed_broadcast: false
+#               broadcast synchronously now via the inline path.
+#   --no-send — no_send: true
+#               build and sign, return BEEF, never publish. For
+#               peer-to-peer hand-off flows where the recipient
+#               internalises the BEEF and the wallet never broadcasts.
 #
 # JSON input format:
 #   {
@@ -30,19 +41,17 @@ wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
 
 options = { labels: [] }
 OptionParser.new do |opts|
-  opts.banner = 'Usage: bin/create_action [wallet] --description "..." [--no-send] [--label <name>]...'
+  opts.banner = 'Usage: bin/create_action [wallet] --description "..." [--inline | --no-send] [--label <name>]...'
   opts.on('--description DESC', 'Action description (5-50 chars)') { |v| options[:description] = v }
-  opts.on('--no-send', 'Build and sign but do not broadcast (default)') { options[:no_send] = true }
-  opts.on('--send', 'Broadcast the transaction') { options[:no_send] = false }
+  opts.on('--inline', 'Broadcast synchronously now (default: queue for walletd)') { options[:inline] = true }
+  opts.on('--no-send', 'Build BEEF without ever broadcasting (peer-to-peer hand-off)') { options[:no_send] = true }
   opts.on('--label NAME', 'Add label (repeatable)') { |v| options[:labels] << v }
   opts.on('-b', 'Force binary output to TTY') { options[:binary] = true }
   opts.on('-o FILE', 'Write BEEF to file') { |v| options[:output_file] = v }
 end.parse!(args)
 
 abort 'Missing --description' unless options[:description]
-
-# Default to no_send for CLI usage
-options[:no_send] = true if options[:no_send].nil?
+abort '--inline and --no-send are mutually exclusive' if options[:inline] && options[:no_send]
 
 # Read JSON from stdin
 abort 'No JSON on stdin (pipe input/output specs)' if $stdin.tty?
@@ -59,12 +68,19 @@ end
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 engine = ctx[:engine]
 
+# Map CLI flags to engine kwargs. Defaults match BRC-100 createAction:
+# no_send: false (intend to broadcast), accept_delayed_broadcast: true
+# (queue for walletd to push).
+no_send = options[:no_send] || false
+accept_delayed_broadcast = !options[:inline]
+
 result = engine.create_action(
   description: options[:description],
   inputs: inputs.any? ? inputs : nil,
   outputs: outputs.any? ? outputs : nil,
   labels: options[:labels].any? ? options[:labels] : nil,
-  no_send: options[:no_send],
+  no_send: no_send,
+  accept_delayed_broadcast: accept_delayed_broadcast,
   randomize_outputs: false
 )
 
@@ -75,7 +91,8 @@ BSV::Wallet::CLI::Output.write_binary(result[:tx],
 
 # Summary to stderr
 dtxid = result[:txid].reverse.unpack1('H*')
-warn "dtxid:   #{dtxid}"
-warn "inputs:  #{inputs.length}"
-warn "outputs: #{outputs.length}"
-warn "no_send: #{options[:no_send]}"
+warn "dtxid:                    #{dtxid}"
+warn "inputs:                   #{inputs.length}"
+warn "outputs:                  #{outputs.length}"
+warn "no_send:                  #{no_send}"
+warn "accept_delayed_broadcast: #{accept_delayed_broadcast}"
