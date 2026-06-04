@@ -2,6 +2,25 @@
 
 require 'json'
 
+# Store is currently used synchronously: callers (CLI tools, the Engine,
+# and the daemon's worker fibers) issue a method call and wait for the
+# result before continuing. Sequel's pool is keyed on whatever
+# +Sequel.current+ returns -- Thread.current by default, Fiber.current
+# when the +fiber_concurrency+ extension is enabled.
+#
+# Walletd (bin/walletd) enables +Sequel.extension :fiber_concurrency+
+# because it runs many Async fibers on one reactor thread. CLI tools
+# do not (one thread, one root fiber -- functionally identical, YAGNI).
+#
+# If a future change introduces fiber-based async access to Store
+# (e.g. an OMQ-fronted PUSH/PULL queue for eventual-consistency writes,
+# or any +task.async do+ that ends up calling Store methods), the
+# calling process must enable +Sequel.extension :fiber_concurrency+
+# *and* size the pool for the expected concurrent fiber count. See
+# bin/walletd for the pattern and #268 for the bug that scoping
+# prevents (concurrent fibers on a shared connection corrupt PG
+# result state -- "undefined method 'nfields' for nil").
+
 module BSV
   module Wallet
     # SQL-backed persistence for the wallet.
