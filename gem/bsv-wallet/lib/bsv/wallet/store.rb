@@ -21,17 +21,20 @@ module BSV
       # Factory: return a SQLite or Postgres instance based on the URL.
       #
       # @param url [String] database URL (sqlite:// or postgres://)
+      # @param db_opts [Hash] extra options passed through to
+      #   +Sequel.connect+. CLI tools omit this (Sequel default pool
+      #   suffices for single-process, single-fiber use). The walletd
+      #   daemon supplies +max_connections+ sized for its concurrent
+      #   fiber inventory after enabling +Sequel.extension(:fiber_concurrency)+.
+      #   See #268 + bin/walletd.
       # @return [BSV::Wallet::Store::SQLite, BSV::Wallet::Store::Postgres]
-      def self.connect(url)
-        if url.to_s.downcase.start_with?('postgres')
-          Postgres.new(url: url)
-        else
-          SQLite.new(url: url)
-        end
+      def self.connect(url, **db_opts)
+        klass = url.to_s.downcase.start_with?('postgres') ? Postgres : SQLite
+        klass.new(url: url, db_opts: db_opts)
       end
 
-      def initialize(url: nil, db: nil)
-        @db = db || Sequel.connect(url)
+      def initialize(url: nil, db: nil, db_opts: {})
+        @db = db || Sequel.connect(url, **db_opts)
         # Set global so Sequel::Model(:table_name) calls in model class
         # bodies can resolve the database during autoload.
         Sequel::Model.db = @db
