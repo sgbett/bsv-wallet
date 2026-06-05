@@ -56,7 +56,13 @@ db_url = BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet_name) ||
 store = BSV::Wallet::Store.connect(db_url, max_connections: daemon_pool_size)
 store.migrate!
 
-provider = BSV::Network::Providers::WhatsOnChain.send(network)
+# GorillaPool (Arcade) is the broadcast porcelain — callbacks via
+# X-CallbackToken + SSE status push, the path the wallet is designed
+# around. WhatsOnChain's call_broadcast signature isn't kwarg-tolerant
+# and its tx_status shape isn't Arcade-compatible, so it must not be in
+# the broadcaster's candidate list. WoC stays available for chain queries
+# (get_tx, get_merkle_path, etc.) when those wire up here.
+provider = BSV::Network::Providers::GorillaPool.default(testnet: network != :mainnet)
 broadcaster = BSV::Network::Broadcaster.new(providers: [provider], store: store)
 
 # Deterministic callbackToken: identical to the one CLI.boot derives for

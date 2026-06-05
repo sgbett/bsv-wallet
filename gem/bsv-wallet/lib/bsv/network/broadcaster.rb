@@ -11,8 +11,15 @@ module BSV
     # only.
     #
     # @example
-    #   broadcaster = BSV::Network::Broadcaster.new(providers: [gp, woc], store: store)
+    #   broadcaster = BSV::Network::Broadcaster.new(providers: [gorilla_pool], store: store)
     #   broadcaster.broadcast(raw_tx, wtxid: wtxid)
+    #
+    # Providers passed here must implement +:broadcast+ and +:get_tx_status+
+    # in Arcade-shape -- callback_token kwarg, X-CallbackToken header, and
+    # the SSE-aligned response payload. WhatsOnChain's protocol declares the
+    # +:broadcast+ capability but its +call_broadcast(tx)+ has no kwargs and
+    # its tx_status semantics are different; don't mix it in here. Use it as
+    # a chain query provider in +Services+, not a Broadcaster candidate.
     class Broadcaster
       # @param providers [Array<BSV::Network::Provider>] providers in priority order
       # @param store     [BSV::Wallet::Store, nil] store for affinity persistence
