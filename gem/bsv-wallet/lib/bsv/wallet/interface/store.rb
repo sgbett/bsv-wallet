@@ -560,6 +560,35 @@ module BSV
           raise NotImplementedError
         end
 
+        # --- SSE Cursors ---
+
+        # Load the high-water Last-Event-ID for an Arcade SSE callback token.
+        #
+        # Returns +nil+ for an unknown token, signalling the listener to
+        # connect without a +Last-Event-ID+ header (fresh stream).
+        #
+        # @param token [String] Arcade callbackToken value
+        # @return [Integer, nil] last successfully bus-pushed event id
+        #   (nanosecond timestamp per Arcade SSE), or +nil+ if never seen
+        def load_sse_cursor(token:)
+          raise NotImplementedError
+        end
+
+        # Persist the high-water Last-Event-ID for an Arcade SSE token.
+        #
+        # Upsert keyed on +token+: a second save for the same token
+        # overwrites the previous +last_event_id+ rather than raising a
+        # PK violation. Used by the SSE listener after each event has
+        # been handed off to the in-proc bus -- the cursor reflects what
+        # has been pushed, so a reconnect resumes from the next frame.
+        #
+        # @param token [String] Arcade callbackToken value
+        # @param last_event_id [Integer] SSE id of the most recently
+        #   pushed event (nanosecond timestamp)
+        def save_sse_cursor(token:, last_event_id:)
+          raise NotImplementedError
+        end
+
         # --- Reaper ---
 
         # Delete stale unsigned or unbroadcast actions older than the threshold.

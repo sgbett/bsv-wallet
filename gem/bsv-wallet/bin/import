@@ -7,20 +7,39 @@
 # each one via engine.import_utxo (self-payment to a BRC-42 derived address).
 #
 # Usage:
-#   bin/import <wallet>
+#   bin/import <wallet> [--no-send]
+#
+# Phase 2 broadcast mode mirrors bin/create_action:
+#   (default)  — no_send: false, accept_delayed_broadcast: true.
+#                Phase 2 self-payment is queued for walletd to push; outputs
+#                are not promoted to the spendable set until the broadcast
+#                lands. Real-world bootstrap shape.
+#   --no-send  — no_send: true.
+#                Phase 2 self-payment is built and signed but never broadcast;
+#                outputs are promoted in the same DB transaction. The wallet
+#                holds spendable BRC-42 derived UTXOs whose parent (the Phase 2
+#                tx) is not on chain. Useful for integration tests that
+#                exchange BEEF peer-to-peer without touching the network.
 #
 # Prints imported count to stdout (machine-readable).
 # Prints detail to stderr (human-readable).
 
 require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
 
-wallet_name = ARGV.shift
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
 
-abort 'Usage: bin/import <wallet>' unless wallet_name
+options = {}
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/import <wallet> [--no-send]'
+  opts.on('--no-send', 'Build Phase 2 self-payment without broadcasting (promote locally)') { options[:no_send] = true }
+end.parse!(args)
+
+abort 'Usage: bin/import <wallet> [--no-send]' unless wallet_name
 
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 
-result = ctx[:engine].import_wallet
+result = ctx[:engine].import_wallet(no_send: options[:no_send] || false)
 
 $stdout.puts result[:imported]
 result[:utxos].each do |utxo|

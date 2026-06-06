@@ -71,8 +71,16 @@ module BSV
         network_services = BSV::Network::Services.new(
           providers: [broadcast_provider, network_provider]
         )
+        # Broadcaster's candidate list is broadcast-only providers (Arcade/ARC
+        # path via GorillaPool). The WhatsOnChain +network_provider+ stays in
+        # +network_services+ for chain queries (:get_tx, :get_merkle_path,
+        # etc.) and is the Engine's +@network_provider+ for direct lookups,
+        # but is not a broadcast/get_tx_status candidate -- WoC's
+        # +call_broadcast(tx)+ has no +**+ for callback_token and its
+        # +get_tx_status+ shape isn't Arcade-compatible, so a fallback from
+        # GorillaPool to WoC raises (or returns a malformed response).
         network_broadcaster = BSV::Network::Broadcaster.new(
-          providers: [broadcast_provider, network_provider],
+          providers: [broadcast_provider],
           store: store
         )
         chain_tracker = BSV::Network::ChainTracker.new(store: store, services: network_services)
@@ -84,6 +92,12 @@ module BSV
           abort "LIMP_THRESHOLD must be a valid integer (got #{limp_threshold_raw.inspect})"
         end
 
+        # Arcade callbackToken: deterministic from the WIF so the SSE
+        # listener (daemon-side) and the inline broadcast POST (engine-side)
+        # converge on the same routing identifier without an extra
+        # persistence layer. See #266.
+        callback_token = BSV::Wallet::CallbackToken.derive(wif)
+
         engine = BSV::Wallet::Engine.new(
           store: store,
           utxo_pool: utxo_pool,
@@ -93,7 +107,8 @@ module BSV
           chain_tracker: chain_tracker,
           network_provider: network_provider,
           network: network,
-          limp_threshold: limp_threshold
+          limp_threshold: limp_threshold,
+          callback_token: callback_token
         )
 
         {
@@ -102,7 +117,8 @@ module BSV
           key_deriver: key_deriver,
           db: db,
           identity_key: key_deriver.identity_key,
-          private_key: private_key
+          private_key: private_key,
+          callback_token: callback_token
         }
       end
 

@@ -69,14 +69,18 @@ RSpec.describe 'Schema migration', :store do
     # ARC's metamorph Status enum + IMMUTABLE (wallet's ArcStatus::TERMINAL).
     # See #198/#220 — the canonical source is ARC's metamorph_api.proto.
     it 'tx_status has the correct values' do
+      # ORDER BY enumsortorder so ALTER TYPE ADD VALUE ... AFTER positions
+      # (e.g. SEEN_MULTIPLE_NODES inserted after SEEN_ON_NETWORK via #011)
+      # show up in their declared lifecycle order, not insertion order.
       values = db.from(
-        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'tx_status'")
+        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'tx_status' ORDER BY e.enumsortorder")
       ).select_map(:enumlabel)
       expect(values).to eq(
         %w[
           UNKNOWN QUEUED RECEIVED STORED
           ANNOUNCED_TO_NETWORK REQUESTED_BY_NETWORK SENT_TO_NETWORK
           ACCEPTED_BY_NETWORK SEEN_IN_ORPHAN_MEMPOOL SEEN_ON_NETWORK
+          SEEN_MULTIPLE_NODES
           DOUBLE_SPEND_ATTEMPTED REJECTED MINED_IN_STALE_BLOCK MINED IMMUTABLE
         ]
       )

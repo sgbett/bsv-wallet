@@ -31,18 +31,122 @@ RSpec.describe BSV::Wallet::Daemon do
     BSV.logger = original_logger
   end
 
+  # Join the watcher thread before mocks teardown so any late stop!
+  # invocation (which calls @scheduler.shutdown — a verifying double)
+  # lands inside the example lifecycle. Ruby 3.4 surfaced cases where
+  # the thread outlived the example and the late double call raised
+  # RSpec::Mocks::OutsideOfExampleError. after(:each) runs before
+  # rspec-mocks teardown, unlike the around hook's ensure block.
+  after { daemon.watcher_thread&.join(2) }
+
   describe '#run!' do
     before do
+      # callback_token: nil reflects the default Daemon constructor (no
+      # token configured) -- the per-context override at line ~69 supplies
+      # a real token when the SSE-listener branch is under test.
       allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
-        .with(store: store, broadcaster: broadcaster).and_return(broadcast)
+        .with(store: store, broadcaster: broadcaster, callback_token: nil).and_return(broadcast)
       allow(BSV::Wallet::Engine::TxProof).to receive(:new)
         .with(store: store, broadcaster: broadcaster).and_return(tx_proof)
       allow(BSV::Wallet::Scheduler).to receive(:new)
         .with(store: store).and_return(scheduler)
 
-      allow(broadcast).to receive_messages(pull!: broadcast, reply!: broadcast)
+      allow(broadcast).to receive_messages(pull!: broadcast, reply!: broadcast,
+                                           statuses_pull!: broadcast)
       allow(tx_proof).to receive(:pull!).and_return(tx_proof)
       allow(scheduler).to receive(:run!)
+    end
+
+    it 'calls statuses_pull! on Broadcast (drains SSE-delivered events)' do
+      Async do |task|
+        daemon.run!
+        task.stop
+      end
+
+      expect(broadcast).to have_received(:statuses_pull!)
+    end
+
+    it 'does NOT boot the SSE listener when callback_token: is nil (default)' do
+      allow(BSV::Network::SSEListener).to receive(:new)
+
+      Async do |task|
+        daemon.run!
+        task.stop
+      end
+
+      expect(BSV::Network::SSEListener).not_to have_received(:new)
+    end
+
+    context 'when callback_token: is provided' do
+      let(:listener) { instance_double(BSV::Network::SSEListener, run!: nil, stop!: nil) }
+      let(:daemon) do
+        described_class.new(store: store, broadcaster: broadcaster,
+                            wallet: wallet_name, network: network,
+                            callback_token: 'tok-abc123')
+      end
+
+      before do
+        allow(BSV::Network::SSEListener).to receive(:new).and_return(listener)
+        # Inner context supplies a real token, so Engine::Broadcast.new is
+        # called with that token rather than the outer-before's nil stub.
+        allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
+          .with(store: store, broadcaster: broadcaster, callback_token: 'tok-abc123')
+          .and_return(broadcast)
+      end
+
+      # The daemon's PUSH socket connects to +inproc://statuses.pull+ ---
+      # OMQ.await_bind waits one reconnect_interval (~100ms) when the
+      # endpoint is unbound, which blocks the spawned listener fiber
+      # from running through to SSEListener.new within the test window.
+      # Real Daemon#run! binds the PULL via Engine::Broadcast#statuses_pull!
+      # (also a spawned fiber); in this spec broadcast is mocked so we
+      # bind a stand-in PULL here so the PUSH connect completes
+      # immediately and the fiber proceeds to construct the listener.
+      def bind_statuses_pull!(task)
+        task.async { OMQ::PULL.bind('inproc://statuses.pull') }
+      end
+
+      it 'constructs SSEListener with the supplied token and the daemon store' do
+        captured_kwargs = nil
+        allow(BSV::Network::SSEListener).to receive(:new) do |**kwargs, &_block|
+          captured_kwargs = kwargs
+          listener
+        end
+
+        Async do |task|
+          bind_statuses_pull!(task)
+          daemon.run!
+          sleep 0.05
+          task.stop
+        end
+
+        expect(BSV::Network::SSEListener).to have_received(:new)
+        expect(captured_kwargs).to include(token: 'tok-abc123', store: store)
+      end
+
+      it 'runs the listener as a peer Async task' do
+        Async do |task|
+          bind_statuses_pull!(task)
+          daemon.run!
+          sleep 0.05
+          task.stop
+        end
+
+        expect(listener).to have_received(:run!)
+      end
+
+      it 'stops the listener cooperatively on stop!' do
+        Async do |task|
+          bind_statuses_pull!(task)
+          daemon.run!
+          sleep 0.05
+          daemon.stop!
+        ensure
+          task.stop
+        end
+
+        expect(listener).to have_received(:stop!)
+      end
     end
 
     it 'creates Engine::Broadcast with store and broadcaster' do
@@ -52,7 +156,24 @@ RSpec.describe BSV::Wallet::Daemon do
       end
 
       expect(BSV::Wallet::Engine::Broadcast).to have_received(:new)
-        .with(store: store, broadcaster: broadcaster)
+        .with(store: store, broadcaster: broadcaster, callback_token: nil)
+    end
+
+    it 'creates Engine::Broadcast with the configured callback_token (#266 plumbing)' do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
+        .with(store: store, broadcaster: broadcaster, callback_token: 'tok-daemon-xyz')
+        .and_return(broadcast)
+      daemon_with_token = described_class.new(store: store, broadcaster: broadcaster,
+                                              wallet: wallet_name, network: network,
+                                              callback_token: 'tok-daemon-xyz')
+
+      Async do |task|
+        daemon_with_token.run!
+        task.stop
+      end
+
+      expect(BSV::Wallet::Engine::Broadcast).to have_received(:new)
+        .with(store: store, broadcaster: broadcaster, callback_token: 'tok-daemon-xyz')
     end
 
     it 'calls pull! and reply! on Broadcast' do
@@ -177,13 +298,14 @@ RSpec.describe BSV::Wallet::Daemon do
 
     before do
       allow(BSV::Wallet::Engine::Broadcast).to receive(:new)
-        .with(store: store, broadcaster: broadcaster).and_return(broadcast)
+        .with(store: store, broadcaster: broadcaster, callback_token: nil).and_return(broadcast)
       allow(BSV::Wallet::Engine::TxProof).to receive(:new)
         .with(store: store, broadcaster: broadcaster).and_return(tx_proof)
       allow(BSV::Wallet::Scheduler).to receive(:new)
         .with(store: store).and_return(scheduler)
 
-      allow(broadcast).to receive_messages(pull!: broadcast, reply!: broadcast)
+      allow(broadcast).to receive_messages(pull!: broadcast, reply!: broadcast,
+                                           statuses_pull!: broadcast)
       allow(tx_proof).to receive(:pull!).and_return(tx_proof)
       allow(scheduler).to receive(:run!)
       allow(scheduler).to receive(:shutdown).and_return(true)

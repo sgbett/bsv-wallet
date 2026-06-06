@@ -31,6 +31,7 @@ Gem::Specification.new do |spec|
   spec.require_paths = ['lib']
 
   spec.add_dependency 'async'
+  spec.add_dependency 'async-http', '~> 0.95'
   spec.add_dependency 'bsv-sdk'
   spec.add_dependency 'logger'
   spec.add_dependency 'omq'

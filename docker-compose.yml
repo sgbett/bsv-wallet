@@ -5,6 +5,23 @@ services:
     restart: unless-stopped
     ports:
       - "5433:5432"
+    # max_connections sizing rationale:
+    #
+    #   server-side max_connections >=
+    #     Σ over running processes (BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS or pool default)
+    #     + concurrent CLI invocations (≈ 2-4 each, transient)
+    #     + dev / admin sessions (psql, pgcli, monitoring)
+    #     + headroom for reconnects (~10%)
+    #
+    # Walletd defaults to BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS=16 (see
+    # bin/walletd). Running alice + bob + carol daemons concurrently
+    # (3 × 16 = 48) plus a handful of CLI tools and dev sessions fits
+    # comfortably under 100. Raise both numbers together when scaling
+    # past 4-5 concurrent daemons or when bumping the per-daemon pool.
+    #
+    # Each PG connection uses ~10MB of server memory, so 100 is also
+    # cheap in absolute terms (~1GB at peak).
+    command: ["postgres", "-c", "max_connections=100"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

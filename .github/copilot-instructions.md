@@ -20,7 +20,7 @@ The wallet is laid out as four collaborating layers. Engine-level "logical model
 
 Single gem (`bsv-wallet`) supports both Postgres (primary) and SQLite (convenience) through `DATABASE_URL`. The wallet is Postgres-based by design — schema features and constraints assume Postgres semantics. SQLite carries them via translation for fast logic-only specs.
 
-Unit specs branch on `DATABASE_URL` — unset / sqlite → SQLite, `postgres://` → Postgres — and CI runs both in a matrix. Integration specs run against Postgres (locally via `.env`-supplied `DATABASE_URL_*` URLs, in CI via the Postgres service container). Anything Postgres-specific (CHECK violations, ENUM rejections, RESTRICT FK, the `prevent_outbound_spendable` trigger) MUST be covered by a spec running against Postgres.
+Unit specs branch on `BSV_WALLET_POSTGRES` — unset → in-memory SQLite, set (e.g. `postgres://postgres:postgres@localhost:5433/`) → Postgres at `<base>/bsv_wallet_test`. The spec helper derives the test DB from the base and **ignores `DATABASE_URL`** so an operator's working DATABASE_URL never silently hijacks the spec run. CI runs both branches in a matrix. Integration specs run against Postgres (locally via `.env`-supplied `DATABASE_URL_*` URLs, in CI via the Postgres service container). Anything Postgres-specific (CHECK violations, ENUM rejections, RESTRICT FK, the `prevent_outbound_spendable` trigger) MUST be covered by a spec running against Postgres.
 
 ## The 4-Phase Action Lifecycle
 

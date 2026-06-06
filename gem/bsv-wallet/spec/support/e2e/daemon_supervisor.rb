@@ -23,7 +23,7 @@ module E2E
   # On +stop_all+ each daemon receives SIGTERM and is given up to
   # +shutdown_timeout+ seconds to drain in-flight tasks. If it does not
   # exit within the budget it is killed with SIGKILL.
-  class DaemonSupervisor
+  class DaemonSupervisor # rubocop:disable Metrics/ClassLength
     DEFAULT_SHUTDOWN_TIMEOUT_S = 45.0
 
     attr_reader :log_dir, :log_paths
@@ -45,7 +45,15 @@ module E2E
     # is known to be running; does not wait for the daemon's
     # +daemon.started+ event (callers that need that should grep the
     # log file).
+    #
+    # Refuses to boot if any supervised wallet's broadcasts table has
+    # queued (broadcast_at IS NULL) work. That would cause the daemon
+    # to broadcast those queued txs against real ARC the moment it
+    # starts -- exactly the "tests don't broadcast unless walletd is
+    # running" invariant relied on by engine method defaults that ship
+    # +accept_delayed_broadcast: true+ everywhere.
     def start_all
+      assert_databases_empty!
       FileUtils.mkdir_p(@log_dir)
       timestamp = Time.now.utc.strftime('%Y%m%dT%H%M%SZ')
 
@@ -97,6 +105,42 @@ module E2E
     end
 
     private
+
+    # Defensive pre-boot check: refuse to start walletd subprocesses
+    # against any wallet DB that has queued broadcasts. This catches
+    # test setups that accidentally left work in the queue, which
+    # walletd would immediately attempt to broadcast against real ARC.
+    #
+    # A wallet with no broadcasts row (fresh DB), a non-existent table
+    # (DB never migrated), or zero queued rows all pass cleanly. Any
+    # non-zero queued count raises with the wallet name and count so
+    # the spec fails loudly instead of silently broadcasting.
+    def assert_databases_empty!
+      require 'sequel'
+      require 'bsv-wallet'
+      require 'bsv/wallet/cli'
+      @wallet_names.each do |wallet|
+        db_url = BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet) ||
+                 BSV::Wallet::CLI.derive_postgres_url(wallet)
+        next unless db_url
+
+        store = BSV::Wallet::Store.connect(db_url)
+        begin
+          queued = store.db[:broadcasts].where(broadcast_at: nil).count
+          if queued.positive?
+            raise "DaemonSupervisor refusing to boot walletd for #{wallet}: " \
+                  "#{queued} queued broadcasts in DB would be sent on daemon start. " \
+                  'Reset the DB or drain the queue before this test.'
+          end
+        rescue Sequel::DatabaseError => e
+          # Tables don't exist yet (fresh DB, never migrated) -- treat as
+          # empty. Re-raise anything else (real connectivity / permission issues).
+          raise unless e.message.include?('broadcasts') || e.message.include?('does not exist')
+        ensure
+          store&.disconnect
+        end
+      end
+    end
 
     def signal_safely(pid, signal)
       Process.kill(signal, pid)

@@ -253,7 +253,7 @@ RSpec.describe BSV::Wallet::Engine do
       # inputs locked.
       it 'rejects the action on a non-2xx response carrying a terminal txStatus' do
         allow(broadcaster).to receive(:broadcast).with(anything, wtxid: anything).and_return(
-          double('ProtocolResponse', http_success?: false, data: { 'txStatus' => 'REJECTED' })
+          double('ProtocolResponse', http_success?: false, code: '400', data: { 'txStatus' => 'REJECTED' })
         )
 
         engine.create_action(
@@ -271,6 +271,61 @@ RSpec.describe BSV::Wallet::Engine do
         action = store.send(:models)::Action.where(description: 'inline broadcast rejected').last
         expect(action).to be_nil
         expect(engine.list_outputs(basket: 'payments')[:total_outputs]).to eq(0)
+      end
+
+      it 'forwards the configured callback_token on the broadcaster call (X-CallbackToken plumbing)' do
+        # Override the default broadcaster stub (which is keyed on the
+        # zero-token signature) so the callback_token-laden call matches.
+        allow(broadcaster).to receive(:broadcast)
+          .with(anything, hash_including(callback_token: 'tok-inline-xyz'))
+          .and_return(broadcast_response)
+
+        engine_with_token = described_class.new(
+          store: store, utxo_pool: utxo_pool, services: services,
+          broadcaster: broadcaster, network: :mainnet,
+          callback_token: 'tok-inline-xyz'
+        )
+
+        engine_with_token.create_action(
+          description: 'inline broadcast with token',
+          inputs: [],
+          accept_delayed_broadcast: false,
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          ]
+        )
+
+        expect(broadcaster).to have_received(:broadcast)
+          .with(anything, hash_including(callback_token: 'tok-inline-xyz'))
+      end
+
+      # 503 backpressure: mirror Engine::Broadcast#submit's null-on-503
+      # behaviour (plan §4.2). The row's broadcast_at gets reverted so
+      # the daemon's pending_submissions discovery picks it up next cycle
+      # for clean retry. Preserves the inline_broadcast contract -- caller
+      # sees the not-yet-accepted state (no fake REJECTED return).
+      it 'on a 503 backpressure response, clears broadcast_at so the row re-enters the queued set' do
+        allow(broadcaster).to receive(:broadcast).with(anything, wtxid: anything).and_return(
+          double('ProtocolResponse', http_success?: false, code: '503', data: nil)
+        )
+
+        engine.create_action(
+          description: 'inline 503 backpressure',
+          inputs: [],
+          accept_delayed_broadcast: false,
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          ]
+        )
+
+        action = store.send(:models)::Action.where(description: 'inline 503 backpressure').last
+        expect(action).not_to be_nil
+        status = store.broadcast_status(action_id: action.id)
+        # broadcast_at reverted; row returns to pending_submissions.
+        expect(status[:broadcast_at]).to be_nil
+        expect(store.pending_submissions.map { |b| b[:action_id] }).to include(action.id)
       end
     end
 

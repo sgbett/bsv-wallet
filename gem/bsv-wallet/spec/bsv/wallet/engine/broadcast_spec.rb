@@ -11,9 +11,25 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
   let(:broadcast) { described_class.new(store: store, broadcaster: broadcaster) }
 
   let(:action_id) { 42 }
-  let(:raw_tx) { "\x01\x00".b }
+  # Real signed P2PKH transaction — parseable by Transaction.from_binary so
+  # the daemon submit path's EF reconstruction (#252) can hydrate from it.
+  # The wtxid below is the SDK's hash of this raw_tx, but most specs use a
+  # distinct +submit_wtxid+ for the action's stored wtxid to keep the
+  # broadcast-affinity / kwarg-forwarding assertions clear.
+  let(:raw_tx) do
+    ['01000000016ce7229f014164e254aad172b1f8b40d496942ad7e323b47e0424c2b2e2e3772010000006a47' \
+     '30440220463fcf8f57a61c4f8ede208773db8732bf3a0757d929a8cbbe29bf4905fe5ef6022005d74398fa' \
+     'f5b24912821836171af44f55f89858f3edf92863cde4823da11d4641210362f5fb9274834bb0cd0376a8d5' \
+     'd02bdbf459a37a62c5baef3fb06d1159b55597ffffffff01f0991600000000001976a9141f36a49fcf6ada' \
+     '1f74f82377b33b17b68f7a016188acd3740e00'].pack('H*')
+  end
   let(:submit_wtxid) { SecureRandom.random_bytes(32) }
   let(:action_hash) { { id: action_id, raw_tx: raw_tx, wtxid: submit_wtxid } }
+  # Per-input source data that #hydrated_transaction_for attaches to the
+  # parsed Transaction. Matches the single input in +raw_tx+.
+  let(:resolved_inputs) do
+    [{ source_satoshis: 1_500_000, source_locking_script: ["76a914#{'a' * 40}88ac"].pack('H*') }]
+  end
   # Success responses come through BSV::Network::Services which
   # normalizes to symbol + snake_case keys.
   let(:broadcast_data) do
@@ -42,6 +58,10 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     # Phase 4 promote is triggered on accepted ARC responses; stub by default
     # so spec contexts that don't assert on it remain happy.
     allow(store).to receive(:promote_action_outputs).and_return([])
+    # EF reconstruction (#252) calls into the Store at submit time to hydrate
+    # per-input source data. Stubbed by default so submission specs do not
+    # have to wire it per-context.
+    allow(store).to receive(:resolve_inputs_for_signing).with(action_id: action_id).and_return(resolved_inputs)
   end
 
   describe '#process' do
@@ -97,7 +117,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     context 'when accepted with SEEN_ON_NETWORK' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -112,9 +132,25 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         )
       end
 
-      it 'calls broadcaster.broadcast with the raw_tx and submit wtxid' do
+      it 'calls broadcaster.broadcast with a hydrated Transaction and submit wtxid' do
         broadcast.process(action_id)
-        expect(broadcaster).to have_received(:broadcast).with(raw_tx, wtxid: submit_wtxid)
+        expect(broadcaster).to have_received(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid)
+      end
+
+      it 'hydrates each input with source_satoshis and source_locking_script for EF (#252)' do
+        captured_tx = nil
+        allow(broadcaster).to receive(:broadcast) { |tx, **|
+          captured_tx = tx
+          success_response
+        }
+
+        broadcast.process(action_id)
+
+        expect(captured_tx.inputs.length).to eq(resolved_inputs.length)
+        captured_tx.inputs.each_with_index do |input, idx|
+          expect(input.source_satoshis).to eq(resolved_inputs[idx][:source_satoshis])
+          expect(input.source_locking_script.to_binary).to eq(resolved_inputs[idx][:source_locking_script])
+        end
       end
 
       it 'records the broadcast result from normalized response data' do
@@ -152,7 +188,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -170,7 +206,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -199,7 +235,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(http_response).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(true)
         allow(http_response).to receive(:is_a?).with(Net::HTTPServerError).and_return(false)
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(error_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(error_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -217,10 +253,10 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
     end
 
-    context 'when 503 transport error' do
+    context 'when 503 backpressure (Arcade validator-queue full)' do
       let(:http_response) { instance_double(Net::HTTPServiceUnavailable, code: '503') }
       let(:error_response) do
-        BSV::Network::ProtocolResponse.new(http_response, http_success: false, error_message: 'Service Unavailable')
+        BSV::Network::ProtocolResponse.new(http_response, http_success: false, error_message: 'Arcade backpressure')
       end
 
       before do
@@ -229,16 +265,28 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(http_response).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(false)
         allow(http_response).to receive(:is_a?).with(Net::HTTPServerError).and_return(true)
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(error_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(error_response)
         allow(store).to receive(:abort_action)
+        allow(store).to receive(:clear_broadcast_attempted)
+        allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
 
-      it 'emits task.failed with reason=transport_error and integer latency_ms' do
+      it 'emits task.failed with reason=backpressure and integer latency_ms' do
         broadcast.process(action_id)
         failed = emitted_events.find { |e| e[:name] == 'task.failed' }
-        expect(failed).to include(reason: :transport_error, task: 'broadcast_submission', id: action_id)
+        expect(failed).to include(reason: :backpressure, task: 'broadcast_submission', id: action_id)
         expect(failed[:latency_ms]).to be_an(Integer)
+      end
+
+      it 'calls clear_broadcast_attempted so the row re-enters the queued set' do
+        broadcast.process(action_id)
+        expect(store).to have_received(:clear_broadcast_attempted).with(action_id: action_id)
+      end
+
+      it 'does not call reject_action (503 is transient, not terminal)' do
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:reject_action)
       end
 
       it 'does not call abort_action' do
@@ -259,7 +307,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(stale_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(stale_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -277,6 +325,28 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
     end
 
+    context 'when DB input count disagrees with parsed tx (#252 defensive guard)' do
+      before do
+        allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
+        # raw_tx parses to 1 input; return 2 source rows to provoke the
+        # mismatch raise.
+        allow(store).to receive(:resolve_inputs_for_signing).with(action_id: action_id).and_return(resolved_inputs * 2)
+        allow(broadcaster).to receive(:broadcast)
+      end
+
+      it 'raises BSV::Wallet::Error with action_id and counts' do
+        expect { broadcast.process(action_id) }
+          .to raise_error(BSV::Wallet::Error, /input count mismatch action_id=#{action_id} tx=1 db=2/)
+      end
+
+      it 'does not call broadcaster.broadcast' do
+        broadcast.process(action_id)
+      rescue BSV::Wallet::Error
+        expect(broadcaster).not_to have_received(:broadcast)
+      end
+    end
+
     context 'when malformed 2xx (no data)' do
       let(:malformed_response) do
         BSV::Network::ProtocolResponse.new(
@@ -286,7 +356,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(malformed_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(malformed_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -317,7 +387,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(rejected_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(rejected_response)
         allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -349,7 +419,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(double_spend_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(double_spend_response)
         allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -382,7 +452,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(orphan_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(orphan_response)
         allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -405,7 +475,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     context 'when broadcast succeeds' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -786,7 +856,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       allow(store).to receive(:mark_broadcast_attempted) do |**|
         call_order << :stamp
       end
-      allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid) do
+      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid) do
         call_order << :network
         success_response
       end
@@ -797,7 +867,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     end
 
     it 'stamps the broadcast row even when broadcaster.broadcast raises' do
-      allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_raise(StandardError, 'boom')
+      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_raise(StandardError, 'boom')
 
       expect { broadcast.process(action_id) }.to raise_error(StandardError, 'boom')
       expect(store).to have_received(:mark_broadcast_attempted).with(action_id: action_id)
@@ -805,10 +875,109 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
     it 'does not call record_broadcast_result when broadcaster.broadcast raises (crash-recovery state)' do
       allow(store).to receive(:record_broadcast_result)
-      allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: submit_wtxid).and_raise(StandardError, 'boom')
+      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_raise(StandardError, 'boom')
 
       expect { broadcast.process(action_id) }.to raise_error(StandardError, 'boom')
       expect(store).not_to have_received(:record_broadcast_result)
+    end
+  end
+
+  describe 'X-CallbackToken plumbing on submit path' do
+    let(:callback_token) { 'tok-abc123' }
+    let(:broadcast_with_token) do
+      described_class.new(store: store, broadcaster: broadcaster, callback_token: callback_token)
+    end
+
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
+      allow(store).to receive(:record_broadcast_result).and_return(status_hash)
+    end
+
+    it 'forwards the configured callback_token to broadcaster.broadcast' do
+      allow(broadcaster).to receive(:broadcast)
+        .with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid, callback_token: callback_token)
+        .and_return(success_response)
+
+      broadcast_with_token.process(action_id)
+
+      expect(broadcaster).to have_received(:broadcast)
+        .with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid, callback_token: callback_token)
+    end
+
+    it 'omits callback_token kwarg when not configured (lenient default)' do
+      # Default constructor — no callback_token. The broadcaster call
+      # carries only the wtxid kwarg.
+      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(success_response)
+
+      broadcast.process(action_id)
+
+      expect(broadcaster).to have_received(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid)
+    end
+  end
+
+  describe 'submit-path HTTP-status dispatch (#266)' do
+    # 400 with a body carrying a terminal txStatus -- preserves today's
+    # behaviour (reject_action cascade). 400 without txStatus exercises the
+    # subtlety in #266's edge-case list (non-cascade transient).
+    let(:http_400) { instance_double(Net::HTTPBadRequest, code: '400') }
+
+    before do
+      allow(http_400).to receive(:is_a?).and_return(false)
+      allow(http_400).to receive(:is_a?).with(Net::HTTPSuccess).and_return(false)
+      allow(http_400).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(false)
+      allow(http_400).to receive(:is_a?).with(Net::HTTPServerError).and_return(false)
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
+      allow(store).to receive(:reject_action)
+      allow(store).to receive(:clear_broadcast_attempted)
+    end
+
+    context 'when 400 carries a terminal txStatus (REJECTED)' do
+      let(:rejected_400) do
+        BSV::Network::ProtocolResponse.new(
+          http_400, http_success: false,
+                    data: { 'txid' => 'abc', 'txStatus' => 'REJECTED' },
+                    error_message: 'REJECTED'
+        )
+      end
+
+      it 'calls reject_action (cascade unwind)' do
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(rejected_400)
+        broadcast.process(action_id)
+        expect(store).to have_received(:reject_action).with(action_id: action_id)
+      end
+
+      it 'does not call clear_broadcast_attempted (terminal, not transient)' do
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(rejected_400)
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:clear_broadcast_attempted)
+      end
+    end
+
+    context 'when 400 carries no txStatus (non-terminal failure)' do
+      # Mirrors the #266 edge case: some ARC 400s are retryable. They must
+      # not auto-cascade into reject_action -- the row stays alive for the
+      # resolution loop / poll path to converge.
+      let(:non_terminal_400) do
+        BSV::Network::ProtocolResponse.new(
+          http_400, http_success: false,
+                    data: { 'detail' => 'rate limit', 'title' => 'Bad Request' },
+                    error_message: 'Bad Request'
+        )
+      end
+
+      it 'does not call reject_action' do
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(non_terminal_400)
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:reject_action)
+      end
+
+      it 'does not call clear_broadcast_attempted (row stays stamped for poll path)' do
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(non_terminal_400)
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:clear_broadcast_attempted)
+      end
     end
   end
 
@@ -931,6 +1100,201 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         expect(crashed[:error]).to be_a(String)
         expect(crashed[:error]).not_to be_empty
       end
+    end
+
+    describe '#statuses_pull!' do
+      # Capture calls in an array so the test can poll until N applied
+      # without reaching into RSpec internals.
+      let(:applied) { [] }
+      let(:applicator) do
+        Class.new do
+          def initialize(applied) = (@applied = applied)
+          def apply(event) = @applied << event
+        end.new(applied)
+      end
+      let(:broadcast) do
+        described_class.new(store: store, broadcaster: broadcaster, applicator: applicator)
+      end
+      let(:event) do
+        {
+          wtxid: SecureRandom.random_bytes(32),
+          tx_status: 'SEEN_ON_NETWORK',
+          status: 200,
+          block_hash: nil,
+          block_height: nil,
+          merkle_path: nil,
+          extra_info: nil,
+          competing_txs: nil
+        }
+      end
+
+      it 'applies events PUSHed to inproc://statuses.pull' do
+        Async do |task|
+          broadcast.statuses_pull!(task: task)
+
+          push = OMQ::PUSH.connect('inproc://statuses.pull')
+          push << Marshal.dump(event)
+
+          deadline = Time.now + 1.0
+          sleep 0.01 until applied.any? || Time.now > deadline
+
+          expect(applied).to contain_exactly(event)
+        ensure
+          task.stop
+        end
+      end
+
+      it 'survives a malformed message and continues processing' do
+        suppress_console_errors do
+          Async do |task|
+            broadcast.statuses_pull!(task: task)
+
+            push = OMQ::PUSH.connect('inproc://statuses.pull')
+            push << "not valid marshal\x00\xff".b
+            push << Marshal.dump(event)
+
+            deadline = Time.now + 1.0
+            sleep 0.01 until applied.any? || Time.now > deadline
+
+            expect(applied).to contain_exactly(event)
+          ensure
+            task.stop
+          end
+        end
+      end
+
+      it 'continues when the applicator raises' do
+        raising = Object.new
+        call_count = 0
+        raising.define_singleton_method(:apply) do |_event|
+          call_count += 1
+          raise StandardError, 'apply boom' if call_count == 1
+        end
+        broadcast = described_class.new(store: store, broadcaster: broadcaster, applicator: raising)
+
+        suppress_console_errors do
+          Async do |task|
+            broadcast.statuses_pull!(task: task)
+
+            push = OMQ::PUSH.connect('inproc://statuses.pull')
+            push << Marshal.dump(event)
+            push << Marshal.dump(event)
+
+            deadline = Time.now + 1.0
+            sleep 0.01 until call_count >= 2 || Time.now > deadline
+          ensure
+            task.stop
+          end
+        end
+
+        expect(call_count).to be >= 2
+      end
+
+      it 'emits fiber.crashed when the bind fails' do
+        OMQ::PULL.bind('inproc://statuses.pull')
+
+        suppress_console_errors do
+          Async do |task|
+            broadcast.statuses_pull!(task: task)
+            sleep 0.05
+          ensure
+            task.stop
+          end
+        end
+
+        crashed = emitted_events.find { |e| e[:name] == 'fiber.crashed' && e[:task] == 'statuses_worker' }
+        expect(crashed).not_to be_nil
+        expect(crashed[:error]).to be_a(String)
+        expect(crashed[:error]).not_to be_empty
+      end
+    end
+
+    # Backpressure / fairness check: the broadcasts.pull and
+    # statuses.pull sockets live in separate Async tasks (each pull!
+    # spawns its own +task.async+ fiber), so a load burst on one must
+    # not block the other. Pushes are interleaved; both queues must
+    # drain to completion within the test window.
+    describe 'concurrent pulls' do
+      let(:applied) { [] }
+      let(:applicator) do
+        Class.new do
+          def initialize(applied) = (@applied = applied)
+          def apply(event) = @applied << event
+        end.new(applied)
+      end
+      let(:processed_ids) { [] }
+      let(:broadcast) do
+        described_class.new(store: store, broadcaster: broadcaster, applicator: applicator)
+      end
+      let(:event) do
+        {
+          wtxid: SecureRandom.random_bytes(32),
+          tx_status: 'SEEN_ON_NETWORK',
+          status: 200,
+          block_hash: nil, block_height: nil, merkle_path: nil,
+          extra_info: nil, competing_txs: nil
+        }
+      end
+
+      before do
+        # Track which broadcasts.pull IDs reached process. Use the
+        # action_not_found fast path -- find_action returns nil so
+        # process emits task.skipped and exits without touching
+        # broadcaster, keeping the test focused on socket fairness.
+        ids = processed_ids
+        allow(store).to receive(:find_action) do |id:|
+          ids << id
+          nil
+        end
+        allow(store).to receive(:broadcast_status).and_return(nil)
+      end
+
+      it 'drains broadcasts.pull and statuses.pull concurrently without starvation' do
+        message_count = 25
+
+        Async do |task|
+          broadcast.pull!(task: task)
+          broadcast.statuses_pull!(task: task)
+
+          broadcasts_push = OMQ::PUSH.connect('inproc://broadcasts.pull')
+          statuses_push   = OMQ::PUSH.connect('inproc://statuses.pull')
+
+          message_count.times do |i|
+            broadcasts_push << (i + 1).to_s
+            statuses_push   << Marshal.dump(event)
+          end
+
+          deadline = Time.now + 5.0
+          loop do
+            break if applied.size >= message_count && processed_ids.size >= message_count
+            break if Time.now > deadline
+
+            sleep 0.02
+          end
+
+          expect(applied.size).to eq(message_count)
+          expect(processed_ids.size).to eq(message_count)
+        ensure
+          task.stop
+        end
+      end
+    end
+  end
+
+  describe '#initialize' do
+    it 'does not eagerly construct the default applicator (avoids autoloading Sequel-coupled Store::Models)' do
+      # Stubbed double('Store') would crash the Sequel-coupled autoload
+      # chain inside Store::EventApplicator's load if construction were
+      # eager. The applicator is built lazily on first call to
+      # +applicator+.
+      expect { described_class.new(store: store, broadcaster: broadcaster) }
+        .not_to raise_error
+    end
+
+    it 'accepts an applicator: kwarg' do
+      custom = double('Applicator')
+      instance = described_class.new(store: store, broadcaster: broadcaster, applicator: custom)
+      expect(instance.applicator).to be(custom)
     end
   end
 

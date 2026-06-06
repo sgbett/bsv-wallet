@@ -29,9 +29,10 @@ module BSV
     class Engine
       include BSV::Wallet::Interface::BRC100
 
-      autoload :Broadcast,  'bsv/wallet/engine/broadcast'
-      autoload :TxProof,    'bsv/wallet/engine/tx_proof'
-      autoload :OmqSupport, 'bsv/wallet/engine/omq_support'
+      autoload :Broadcast,   'bsv/wallet/engine/broadcast'
+      autoload :TxProof,     'bsv/wallet/engine/tx_proof'
+      autoload :OmqSupport,  'bsv/wallet/engine/omq_support'
+      autoload :InputSource, 'bsv/wallet/engine/input_source'
 
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -43,7 +44,8 @@ module BSV
       def initialize(store:, utxo_pool:,
                      services: nil, broadcaster: nil, key_deriver: nil, chain_tracker: nil,
                      network_provider: nil,
-                     network: :mainnet, limp_threshold: LIMP_THRESHOLD)
+                     network: :mainnet, limp_threshold: LIMP_THRESHOLD,
+                     callback_token: nil)
         raise ArgumentError, "limp_threshold must be >= #{LIMP_THRESHOLD_MIN}" if limp_threshold < LIMP_THRESHOLD_MIN
 
         @store = store
@@ -55,6 +57,10 @@ module BSV
         @network_provider = network_provider
         @network_name = network
         @limp_threshold = limp_threshold
+        # Arcade callbackToken forwarded to inline_broadcast's POST so the
+        # SSE listener (subscribed to the same token at daemon boot) receives
+        # status frames for inline submissions. See #266.
+        @callback_token = callback_token
       end
 
       # Is the wallet in limp mode? When true, all outbound operations
@@ -465,22 +471,25 @@ module BSV
       #
       # @param dtxid [String] 64-char hex transaction ID (display order)
       # @param vout [Integer] output index (default: 0)
-      # @param no_send [Boolean] when true (the default), Phase 2's BRC-42
-      #   self-payment is built but not broadcast — its output exists only
-      #   in the wallet's view. CI suites rely on this so test runs cost
-      #   nothing.
-      #
-      #   Set false when the wallet intends to broadcast subsequent
-      #   actions on chain. Phase 2's output then lives on the chain's
-      #   UTXO set so a downstream broadcast referencing it is consensus-
+      # @param no_send [Boolean] default false (BRC-100 createAction
+      #   default — intend to broadcast). Phase 2's BRC-42 self-payment
+      #   is queued for broadcast, so its output lives on the chain's
+      #   UTXO set, making downstream broadcasts referencing it consensus-
       #   valid. The rule is binary: either every action in the run
-      #   broadcasts (including this one) or none of them do — broadcasting
-      #   a descendant of a no_send parent gets rejected by the network
-      #   for a non-existent input.
+      #   broadcasts (including this one) or none of them do —
+      #   broadcasting a descendant of a +no_send: true+ parent gets
+      #   rejected by the network for a non-existent input.
+      #
+      #   Set true only for the "build locally without ever broadcasting"
+      #   case where the wallet intentionally never publishes the action
+      #   (rare; downstream broadcasts will fail consensus).
       # @param accept_delayed_broadcast [Boolean] only consulted when
-      #   +no_send+ is false. Default true (queue for the daemon to push).
+      #   +no_send+ is false. Default true (queue for the daemon to
+      #   push). Tests that want "build + queue, never broadcast" leave
+      #   this true and don't run walletd — the queue stays full but
+      #   nothing reaches the network.
       # @return [Hash] { imported: true, satoshis:, dtxid: }
-      def import_utxo(dtxid:, vout: 0, no_send: true, accept_delayed_broadcast: true)
+      def import_utxo(dtxid:, vout: 0, no_send: false, accept_delayed_broadcast: true)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
@@ -578,9 +587,8 @@ module BSV
       # bootstrap path — how a wallet gets its initial funding.
       #
       # @param no_send [Boolean] forwarded to +import_utxo+ for each
-      #   discovered UTXO. Default true (CI invariant — Phase 2 stays
-      #   off chain). Set false when the wallet intends to broadcast
-      #   downstream actions.
+      #   discovered UTXO. Default false (BRC-100 createAction default).
+      #   Set true only for the "build locally without broadcasting" case.
       # @param accept_delayed_broadcast [Boolean] forwarded to
       #   +import_utxo+. Only consulted when +no_send+ is false.
       # @param include_unconfirmed [Boolean] when true, scan WoC's
@@ -590,7 +598,7 @@ module BSV
       #   Phase 4 sets true so SDK can see the just-broadcast sweep
       #   outputs without waiting for a block.
       # @return [Hash] { imported: Integer, utxos: Array<Hash> }
-      def import_wallet(no_send: true, accept_delayed_broadcast: true,
+      def import_wallet(no_send: false, accept_delayed_broadcast: true,
                         include_unconfirmed: false)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
@@ -767,13 +775,13 @@ module BSV
       #
       # @param recipient [String] 66-char compressed public key hex (02/03 prefix)
       # @param satoshis [Integer] amount to send
-      # @param no_send [Boolean] when true (the default) the action is built
-      #   and signed but never reaches ARC — the BEEF is returned for
-      #   peer-to-peer handoff. Set false for on-chain broadcast.
+      # @param no_send [Boolean] default false (BRC-100 createAction
+      #   default — intend to broadcast). Set true for "build + sign
+      #   + return BEEF for peer-to-peer handoff without ever publishing."
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash] { beef:, sender_identity_key:, outputs: [{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }] }
-      def send_payment(recipient:, satoshis:, no_send: true, accept_delayed_broadcast: true)
+      def send_payment(recipient:, satoshis:, no_send: false, accept_delayed_broadcast: true)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -823,13 +831,14 @@ module BSV
       # loop produces a single BRC-42 self-payment.
       #
       # @param target_inputs [Integer] minimum smallest outputs to consume per step
-      # @param no_send [Boolean] when true (the default) the action is built
-      #   and signed but never reaches ARC. Set false for on-chain broadcast.
+      # @param no_send [Boolean] default false (BRC-100 createAction
+      #   default — intend to broadcast). Set true only for the "build
+      #   locally without broadcasting" case.
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash, nil] the +create_action+ result, or +nil+ if there are
       #   fewer than +target_inputs+ spendable outputs (the loop's natural exit).
-      def consolidate_step(target_inputs: 20, no_send: true, accept_delayed_broadcast: true)
+      def consolidate_step(target_inputs: 20, no_send: false, accept_delayed_broadcast: true)
         require_key_deriver!
         smallest = @utxo_pool.smallest(limit: target_inputs)
         return nil if smallest.length < target_inputs
@@ -863,14 +872,14 @@ module BSV
       # requires +change_count >= 1+).
       #
       # @param recipient [String] 66-char compressed pubkey hex (02/03)
-      # @param no_send [Boolean] when true (the default) the action is built
-      #   and signed but never reaches ARC — the BEEF is returned for
-      #   peer-to-peer handoff. Set false for on-chain broadcast.
+      # @param no_send [Boolean] default false (BRC-100 createAction
+      #   default — intend to broadcast). Set true for "build + sign
+      #   + return BEEF for peer-to-peer handoff without ever publishing."
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash, nil] the +create_action+ result, or +nil+ when the
       #   wallet has no spendable outputs.
-      def sweep(recipient:, no_send: true, accept_delayed_broadcast: true)
+      def sweep(recipient:, no_send: false, accept_delayed_broadcast: true)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -1421,7 +1430,12 @@ module BSV
         raise BSV::Wallet::Error, 'inline_broadcast called without broadcaster configured' unless @broadcaster
 
         @store.mark_broadcast_attempted(action_id: action_id)
-        response = @broadcaster.broadcast(tx, wtxid: tx.wtxid)
+        # Mirror Engine::Broadcast#submit (#266): forward callback_token
+        # so Arcade's SSE listener receives the resulting status frame.
+        # Lenient default -- skip the kwarg when no token configured.
+        broadcast_kwargs = { wtxid: tx.wtxid }
+        broadcast_kwargs[:callback_token] = @callback_token if @callback_token
+        response = @broadcaster.broadcast(tx, **broadcast_kwargs)
 
         if response.http_success?
           data = response.data
@@ -1435,16 +1449,27 @@ module BSV
             extra_info: data[:extra_info],
             competing_txs: data[:competing_txs]
           )
+        elsif response.code.to_s == '503'
+          # 503 backpressure path -- mirror Engine::Broadcast#submit's
+          # null-on-503 (plan §4.2). Revert the pre-call broadcast_at
+          # stamp so the row re-enters the queued / push-discovery set
+          # for clean retry. The clear is guarded against the listener
+          # race in Store#clear_broadcast_attempted (no-op when tx_status
+          # has progressed). Return the stored status so the caller's
+          # accepted?/rejected? checks see "still pending" rather than
+          # a stale success.
+          @store.clear_broadcast_attempted(action_id: action_id)
+          @store.broadcast_status(action_id: action_id)
         else
-          # Non-2xx ARC response. A definitive rejection carries a terminal
-          # txStatus in the (raw, camelCase) failure body; surface it so the
-          # caller's +rejected?+ check unwinds the action and releases its
-          # locked inputs, exactly as the daemon's +submit+ path does via
-          # +reject_action+. Transport errors and non-terminal failures
-          # carry no rejecting status and fall through to the stored
-          # (tx_status NULL) row for the poll loop to resolve later. We never
-          # return a non-rejecting status here — that would let +accepted?+
-          # misread a failed submit as success.
+          # Non-2xx, non-503 ARC response. A definitive rejection carries a
+          # terminal txStatus in the (raw, camelCase) failure body; surface
+          # it so the caller's +rejected?+ check unwinds the action and
+          # releases its locked inputs, exactly as the daemon's +submit+
+          # path does via +reject_action+. Transport errors and non-terminal
+          # failures carry no rejecting status and fall through to the
+          # stored (tx_status NULL) row for the poll loop to resolve later.
+          # We never return a non-rejecting status here — that would let
+          # +accepted?+ misread a failed submit as success.
           failure_status = response.data && response.data['txStatus']
           if failure_status && ArcStatus::REJECTED.include?(failure_status.to_s.upcase)
             { tx_status: failure_status.to_s.upcase }
@@ -2034,10 +2059,8 @@ module BSV
             prev_tx_out_index: resolved[:source_vout],
             sequence: resolved[:sequence] || 0xFFFFFFFF
           )
-          input.source_satoshis = resolved[:source_satoshis]
-
-          locking_script = resolve_source_locking_script(resolved[:source_locking_script])
-          input.source_locking_script = locking_script
+          InputSource.attach!(input, resolved)
+          locking_script = input.source_locking_script
 
           # Find the caller's input spec for this vin (for custom unlocking scripts)
           caller_input = find_caller_input(caller_inputs, resolved[:vin])
@@ -2059,16 +2082,6 @@ module BSV
         end
 
         [tx_inputs, signing_keys]
-      end
-
-      # Resolve a source locking script (binary) into a Script object.
-      #
-      # @param script_data [String, nil] binary locking script
-      # @return [Script::Script, nil]
-      def resolve_source_locking_script(script_data)
-        return if script_data.nil?
-
-        BSV::Script::Script.from_binary(script_data)
       end
 
       # Resolve an unlocking script value to a Script object.
@@ -2404,8 +2417,7 @@ module BSV
         signing_keys = {}
         resolved_inputs.each_with_index do |resolved, idx|
           input = tx.inputs[idx]
-          input.source_satoshis = resolved[:source_satoshis]
-          input.source_locking_script = resolve_source_locking_script(resolved[:source_locking_script])
+          InputSource.attach!(input, resolved)
 
           spend = spends[resolved[:vin]] || spends[idx]
           if spend

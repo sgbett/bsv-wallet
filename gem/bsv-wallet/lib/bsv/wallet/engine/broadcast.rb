@@ -9,13 +9,38 @@ module BSV
       #
       # Owns OMQ sockets for background work (PULL) and inline
       # request-reply (REP). Processes pending broadcasts by calling
-      # Services and recording results in Store.
+      # Services and recording results in Store. Also owns the statuses
+      # PULL socket for SSE-delivered events (#265): the Network-layer
+      # SSE listener PUSHes decoded event hashes here, this fiber PULLs
+      # and hands off to Store::EventApplicator for atomic application.
       class Broadcast
         include OmqSupport
 
-        def initialize(store:, broadcaster:)
+        # @param store        [BSV::Wallet::Store]
+        # @param broadcaster  [BSV::Network::Broadcaster]
+        # @param applicator   [Store::EventApplicator, nil] consumes statuses
+        #   events on +statuses_pull!+. Lazily defaulted to a fresh
+        #   +Store::EventApplicator.new(store: store)+ on first read so
+        #   existing call sites (pre-#265 specs, the inline path) don't
+        #   trigger autoload of Store::EventApplicator (and its Sequel
+        #   dependency chain) at construction time; #265's Daemon wiring
+        #   supplies its own instance.
+        # @param callback_token [String, nil] Arcade callbackToken; passed
+        #   to +Broadcaster#broadcast+ on every submit so the +X-CallbackToken+
+        #   header is set on the POST and Arcade's SSE listener (subscribed
+        #   to the same token) receives the resulting status frames. Lenient
+        #   default (nil) lets unit specs that do not run a listener exercise
+        #   submit without the header.
+        def initialize(store:, broadcaster:, applicator: nil, callback_token: nil)
           @store = store
           @broadcaster = broadcaster
+          @applicator = applicator
+          @callback_token = callback_token
+        end
+
+        # Lazy default — see +#initialize+.
+        def applicator
+          @applicator ||= BSV::Wallet::Store::EventApplicator.new(store: @store)
         end
 
         # Background queue -- fire-and-forget processing.
@@ -28,6 +53,38 @@ module BSV
                 process(msg.first.to_i)
               rescue StandardError => e
                 BSV.logger&.error { "[Engine::Broadcast] pull error: #{e.message}" }
+              end
+            end
+          end
+          self
+        end
+
+        # Statuses queue -- consumes SSE-delivered events. Binds a PULL
+        # socket at +inproc://statuses.pull+; the SSE listener fiber
+        # (Daemon-wired in #265) PUSHes Marshal-encoded event hashes
+        # here. Each message decodes into the shape
+        # +Store::EventApplicator#apply+ consumes -- the same internal
+        # event hash the Rack callback hands off, since the listener's
+        # +decode_event+ normalises into that shape pre-PUSH.
+        #
+        # Runs as a peer fiber to +pull!+/+reply!+. The two PULL sockets
+        # live in separate Async tasks, so the reactor schedules them
+        # fairly; one busy socket does not starve the other.
+        #
+        # Marshal (not JSON) for the wire format -- the event hash carries
+        # binary +wtxid+ / +block_hash+ / +merkle_path+ that would need
+        # hex round-tripping under JSON. Marshal is the simplest in-proc
+        # Ruby-to-Ruby encoding and keeps the convention (binary stays
+        # binary) intact across the bus.
+        def statuses_pull!(task:)
+          task.async do
+            pull = bind_or_die('statuses_worker') { OMQ::PULL.bind('inproc://statuses.pull') }
+            while (msg = pull.receive)
+              begin
+                event = Marshal.load(msg.first) # rubocop:disable Security/MarshalLoad
+                applicator.apply(event)
+              rescue StandardError => e
+                BSV.logger&.error { "[Engine::Broadcast] statuses_pull error: #{e.message}" }
               end
             end
           end
@@ -109,13 +166,57 @@ module BSV
 
         private
 
-        # Initial broadcast -- submit raw_tx to ARC.
+        # Parse +action[:raw_tx]+ into a Transaction and re-attach per-input
+        # source data (+source_satoshis+ / +source_locking_script+) from the
+        # Store so the SDK can serialize Extended Format. Inputs are ordered
+        # by +inputs.vin+, which matches the order of +tx.inputs+ from the
+        # raw-tx parse.
+        #
+        # @param action [Hash] action record carrying +:id+ and +:raw_tx+
+        # @return [BSV::Transaction::Transaction]
+        # @raise [BSV::Wallet::Error] when the DB input count disagrees with
+        #   the parsed transaction's input count (a contract violation
+        #   upstream; should never fire under the normal create_action flow).
+        def hydrated_transaction_for(action)
+          tx = BSV::Transaction::Transaction.from_binary(action[:raw_tx])
+          sources = @store.resolve_inputs_for_signing(action_id: action[:id])
+          if tx.inputs.length != sources.length
+            raise BSV::Wallet::Error,
+                  "input count mismatch action_id=#{action[:id]} " \
+                  "tx=#{tx.inputs.length} db=#{sources.length}"
+          end
+
+          tx.inputs.each_with_index { |input, idx| InputSource.attach!(input, sources[idx]) }
+          tx
+        end
+
+        # Initial broadcast -- submit Extended Format to ARC.
+        #
+        # Reconstructs the Transaction from +action[:raw_tx]+ + per-input
+        # source data via #hydrated_transaction_for so the SDK's broadcaster
+        # serializes to EF (Arcade rejects raw-tx submits with "'PreviousTx'
+        # not supplied"). The inline path passes its in-memory Transaction
+        # directly; the daemon path reconstructs from the DB. #252.
         #
         # Stamps broadcast_at in a committed transaction *before* the
-        # network call. A mid-POST crash therefore leaves the row in
-        # broadcast_at IS NOT NULL, tx_status IS NULL -- a recognisable
-        # crash-recovery state that the poll loop subsequently resolves
-        # via GET /tx/{txid}.
+        # network call (plan §4.2 / §4.3). A mid-POST crash therefore
+        # leaves the row in broadcast_at IS NOT NULL, tx_status IS NULL --
+        # a recognisable crash-recovery state that the poll loop / SSE
+        # listener subsequently resolves.
+        #
+        # Dispatch by HTTP status (#266 / plan §4.2):
+        #   202 -> record_broadcast_results (today's success path)
+        #   400 -> reject_action when the body carries a terminal txStatus;
+        #          a 400 without txStatus stays alive for the resolution
+        #          loop (some ARC 400s are non-terminal, see #266 edge case)
+        #   503 -> clear_broadcast_attempted; daemon re-pulls next cycle.
+        #          The clear is guarded against the listener-race in
+        #          Store#clear_broadcast_attempted (where tx_status IS NULL)
+        #   other 4xx/5xx -> existing transient/transport handling
+        #
+        # Crash-between-503-and-clear leaves the row stuck in "submitted,
+        # awaiting outcome" until the poll loop / listener resolves it.
+        # Bounded recovery, not a correctness issue (plan §4.3).
         def submit(action_id, action, started_at:)
           # wtxid_raw_tx_parity (migration 003) guarantees wtxid is set
           # whenever raw_tx is — the #process guard above filtered out the
@@ -124,56 +225,26 @@ module BSV
           BSV::Primitives::Hex.validate_wtxid!(action[:wtxid], name: 'Engine::Broadcast#submit wtxid')
 
           @store.mark_broadcast_attempted(action_id: action_id)
-          response = @broadcaster.broadcast(action[:raw_tx], wtxid: action[:wtxid])
+          # Hydrate a Transaction from raw_tx + DB-resolved source data so
+          # the SDK can serialize Extended Format on the wire (Arcade rejects
+          # raw-tx submits with "'PreviousTx' not supplied"). The inline path
+          # already ships a Transaction; #252 closes the daemon-side gap.
+          tx = hydrated_transaction_for(action)
+          # Conditional kwarg: Broadcaster also drops nil callback_token to
+          # avoid polluting the Provider#call signature, but skipping it
+          # here keeps Engine::Broadcast#submit specs free of the kwarg
+          # when no token is configured (the lenient-default case).
+          broadcast_kwargs = { wtxid: action[:wtxid] }
+          broadcast_kwargs[:callback_token] = @callback_token if @callback_token
+          response = @broadcaster.broadcast(tx, **broadcast_kwargs)
           latency_ms = ((Time.now - started_at) * 1000).round
 
           if response.http_success?
-            # Success responses are normalized by BSV::Network::Services
-            # to symbol + snake_case keys. Failure responses (below) are
-            # returned raw from the provider (string + camelCase).
-            data = response.data
-            updated = @store.record_broadcast_result(
-              action_id: action_id,
-              tx_status: data[:tx_status],
-              arc_status: data[:status],
-              block_hash: data[:block_hash],
-              block_height: data[:block_height],
-              merkle_path: data[:merkle_path],
-              extra_info: data[:extra_info],
-              competing_txs: data[:competing_txs]
-            )
-            # Phase 4 promotion is now atomic with the result recording
-            # above — Store#record_broadcast_result promotes outputs in the
-            # same transaction when tx_status is accepted. No separate call
-            # needed here; closes the crash-recovery gap where a process
-            # could die between recording and promotion.
-            BSV::Wallet.emit('task.succeeded',
-                             task: 'broadcast_submission', id: action_id,
-                             latency_ms: latency_ms,
-                             outcome: categorize_outcome(data[:tx_status]))
-            updated
+            handle_submit_success(action_id, response, latency_ms: latency_ms)
+          elsif backpressure?(response)
+            handle_submit_backpressure(action_id, response, latency_ms: latency_ms)
           elsif terminal_failure?(response)
-            # Under HLR #182's atomic invariant, the broadcasts row already
-            # exists by submit time. Use reject_action to cascade-unwind
-            # any speculatively-promoted descendants and release locked
-            # UTXOs. If the cascade hits a no_send descendant the call
-            # raises -- bump retry_count, leave the row alive for the
-            # next resolution-loop pass, and emit a failure event.
-            begin
-              @store.reject_action(action_id: action_id)
-              BSV::Wallet.emit('task.aborted',
-                               task: 'broadcast_submission', id: action_id,
-                               reason: categorize_reason(response),
-                               arc_status: response.data['txStatus'])
-              nil
-            rescue BSV::Wallet::CannotRejectInternalActionError => e
-              @store.increment_broadcast_retry(action_id: action_id)
-              BSV::Wallet.emit('task.failed',
-                               task: 'broadcast_submission', id: action_id,
-                               reason: :cannot_reject_internal_action,
-                               error: e.message)
-              @store.broadcast_status(action_id: action_id)
-            end
+            handle_submit_terminal(action_id, response)
           else
             BSV::Wallet.emit('task.failed',
                              task: 'broadcast_submission', id: action_id,
@@ -181,6 +252,72 @@ module BSV
                              reason: categorize_reason(response))
             @store.broadcast_status(action_id: action_id)
           end
+        end
+
+        # 202 success branch -- record the ARC response (which atomically
+        # promotes outputs in the same Store transaction).
+        def handle_submit_success(action_id, response, latency_ms:)
+          # Success responses are normalized by BSV::Network::Services
+          # to symbol + snake_case keys. Failure responses (below) are
+          # returned raw from the provider (string + camelCase).
+          data = response.data
+          updated = @store.record_broadcast_result(
+            action_id: action_id,
+            tx_status: data[:tx_status],
+            arc_status: data[:status],
+            block_hash: data[:block_hash],
+            block_height: data[:block_height],
+            merkle_path: data[:merkle_path],
+            extra_info: data[:extra_info],
+            competing_txs: data[:competing_txs]
+          )
+          # Phase 4 promotion is now atomic with the result recording
+          # above — Store#record_broadcast_result promotes outputs in the
+          # same transaction when tx_status is accepted. No separate call
+          # needed here; closes the crash-recovery gap where a process
+          # could die between recording and promotion.
+          BSV::Wallet.emit('task.succeeded',
+                           task: 'broadcast_submission', id: action_id,
+                           latency_ms: latency_ms,
+                           outcome: categorize_outcome(data[:tx_status]))
+          updated
+        end
+
+        # 400 / terminal-body branch -- under HLR #182's atomic invariant,
+        # the broadcasts row already exists by submit time. Use reject_action
+        # to cascade-unwind any speculatively-promoted descendants and
+        # release locked UTXOs. If the cascade hits a no_send descendant
+        # the call raises -- bump retry_count, leave the row alive for the
+        # next resolution-loop pass, and emit a failure event.
+        def handle_submit_terminal(action_id, response)
+          @store.reject_action(action_id: action_id)
+          BSV::Wallet.emit('task.aborted',
+                           task: 'broadcast_submission', id: action_id,
+                           reason: categorize_reason(response),
+                           arc_status: response.data['txStatus'])
+          nil
+        rescue BSV::Wallet::CannotRejectInternalActionError => e
+          @store.increment_broadcast_retry(action_id: action_id)
+          BSV::Wallet.emit('task.failed',
+                           task: 'broadcast_submission', id: action_id,
+                           reason: :cannot_reject_internal_action,
+                           error: e.message)
+          @store.broadcast_status(action_id: action_id)
+        end
+
+        # 503 backpressure branch -- Arcade returns 503 (with optional
+        # Retry-After) when the validator queue is full. Clear the pre-call
+        # +broadcast_at+ stamp so the row re-enters the queued set, log
+        # the deferral, and emit a task.failed event so the Scheduler's
+        # in_flight counter balances. The daemon's pending_submissions
+        # discovery picks the row back up next cycle.
+        def handle_submit_backpressure(action_id, _response, latency_ms:)
+          @store.clear_broadcast_attempted(action_id: action_id)
+          BSV::Wallet.emit('task.failed',
+                           task: 'broadcast_submission', id: action_id,
+                           latency_ms: latency_ms,
+                           reason: :backpressure)
+          @store.broadcast_status(action_id: action_id)
         end
 
         # Status poll -- query ARC for current tx status.
@@ -306,6 +443,17 @@ module BSV
           return false unless response.data
 
           terminal_status?(response.data['txStatus'], response.data['extraInfo'])
+        end
+
+        # True when the response is Arcade's 503 backpressure signal
+        # (validator queue full, Retry-After header). The Arcade
+        # SDK protocol returns +http_success: false+ with the original
+        # 503 response attached, so the HTTP code is the discriminator.
+        # ARC itself does not currently return 503 in normal operation,
+        # but treating any 503 as backpressure costs nothing and matches
+        # the plan §4.2 dispatch table.
+        def backpressure?(response)
+          response.code.to_s == '503'
         end
       end
     end

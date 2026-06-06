@@ -69,8 +69,9 @@ message listing exactly which vars are missing.
 
 ```
 spec/e2e/                     — on-chain only; excluded from bare rspec via .rspec
-  spec_helper.rb              — separate from spec/spec_helper.rb; loaded only for broadcast_spec
-  broadcast_spec.rb           — the harness: reset → fund → fanout → broadcast
+  spec_helper.rb              — separate from spec/spec_helper.rb; loaded only for e2e specs
+  e2e_workload_spec.rb        — the #126 workload harness: reset → fund → fanout → broadcast
+  broadcast_spec.rb           — the #251 SSE-driven broadcast scenarios (E1–E8)
   README.md
 
 spec/support/e2e/             — pure-Ruby; rides the bare rspec suite, no on-chain env
@@ -107,7 +108,7 @@ tunables below for a few-seconds smoke run.
 cd gem/bsv-wallet
 
 # The whole harness, end-to-end, on chain (~1 hour)
-E2E_MODE=live bundle exec rspec spec/e2e/broadcast_spec.rb
+E2E_MODE=live bundle exec rspec spec/e2e/e2e_workload_spec.rb
 
 # Smoke run — rehearse mode, tiny scale, ~seconds. Proves all four
 # stages wire up and the asserts gate, with zero broadcasts. Requires
@@ -119,7 +120,7 @@ E2E_MODE=rehearse FUND_SATS=100000 \
   FANOUT_L4_PAYMENTS=10 FANOUT_L5_PAYMENTS=10 \
   FANOUT_L4_SATS=2000 FANOUT_L5_SATS=500 FANOUT_MIN_SPENDABLE=20 \
   BROADCAST_CYCLES=5 BROADCAST_PER_CYCLE=5 BROADCAST_MIN_TX=10 \
-  BROADCAST_MIN_BLOCKS=0 bundle exec rspec spec/e2e/broadcast_spec.rb
+  BROADCAST_MIN_BLOCKS=0 bundle exec rspec spec/e2e/e2e_workload_spec.rb
 
 # Support unit tests (no env, no chain — safe anywhere)
 bundle exec rspec spec/e2e/support_spec.rb spec/e2e/wallet_harness_spec.rb

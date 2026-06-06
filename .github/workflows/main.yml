@@ -56,7 +56,9 @@ jobs:
         run: bundle exec rspec
         working-directory: gem/bsv-wallet
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5433/bsv_wallet_test
+          # Spec helper derives <base>/bsv_wallet_test from this and
+          # ignores DATABASE_URL — separation of operator vs test DB.
+          BSV_WALLET_POSTGRES: postgres://postgres:postgres@localhost:5433/
 
       - name: Upload coverage
         if: matrix.ruby == '3.4'
