@@ -31,6 +31,14 @@ RSpec.describe BSV::Wallet::Daemon do
     BSV.logger = original_logger
   end
 
+  # Join the watcher thread before mocks teardown so any late stop!
+  # invocation (which calls @scheduler.shutdown — a verifying double)
+  # lands inside the example lifecycle. Ruby 3.4 surfaced cases where
+  # the thread outlived the example and the late double call raised
+  # RSpec::Mocks::OutsideOfExampleError. after(:each) runs before
+  # rspec-mocks teardown, unlike the around hook's ensure block.
+  after { daemon.watcher_thread&.join(2) }
+
   describe '#run!' do
     before do
       # callback_token: nil reflects the default Daemon constructor (no

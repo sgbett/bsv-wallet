@@ -23,7 +23,7 @@ module BSV
       # per-instance via the +shutdown_timeout+ constructor kwarg.
       DEFAULT_SHUTDOWN_TIMEOUT_S = Scheduler::DEFAULT_SHUTDOWN_TIMEOUT_S
 
-      attr_reader :scheduler
+      attr_reader :scheduler, :watcher_thread
 
       # @param store        [BSV::Wallet::Store]
       # @param broadcaster  [BSV::Network::Broadcaster]
@@ -92,8 +92,13 @@ module BSV
           #
           # Self-terminates when @task is finished, so the thread does
           # not outlive the daemon's lifecycle (e.g. specs that exit
-          # without flipping @stop_requested).
-          Thread.new do
+          # without flipping @stop_requested). Exposed via attr_reader so
+          # specs can deterministically join the thread before the example
+          # ends — on Ruby 3.4 the thread occasionally lingers past the
+          # example boundary, and any post-example +stop!+ call here hits
+          # +@scheduler.shutdown+ on a now-orphaned verifying double
+          # (+RSpec::Mocks::OutsideOfExampleError+).
+          @watcher_thread = Thread.new do
             sleep(SHUTDOWN_POLL_INTERVAL_S) until @stop_requested || @task.finished?
             stop! if @stop_requested
           end
