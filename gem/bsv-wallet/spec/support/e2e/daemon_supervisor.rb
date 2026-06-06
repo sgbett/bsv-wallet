@@ -134,8 +134,14 @@ module E2E
           end
         rescue Sequel::DatabaseError => e
           # Tables don't exist yet (fresh DB, never migrated) -- treat as
-          # empty. Re-raise anything else (real connectivity / permission issues).
-          raise unless e.message.include?('broadcasts') || e.message.include?('does not exist')
+          # empty. Re-raise anything else (real connectivity / permission
+          # issues, including +permission denied for relation broadcasts+
+          # which mentions the table name but is not a missing-table case).
+          postgres_undefined_table = e.respond_to?(:wrapped_exception) &&
+                                     defined?(PG::UndefinedTable) &&
+                                     e.wrapped_exception.is_a?(PG::UndefinedTable)
+          sqlite_no_such_table = e.message.include?('no such table')
+          raise unless postgres_undefined_table || sqlite_no_such_table
         ensure
           store&.disconnect
         end

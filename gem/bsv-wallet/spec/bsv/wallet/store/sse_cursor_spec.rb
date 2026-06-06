@@ -31,6 +31,20 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.load_sse_cursor(token: token)).to eq(200)
     end
 
+    it 'is monotonic — a stale write with a smaller id is a no-op (defends against listener race / dual-flush)' do
+      store.save_sse_cursor(token: token, last_event_id: 500)
+      store.save_sse_cursor(token: token, last_event_id: 200) # smaller, must not rewind
+
+      expect(store.load_sse_cursor(token: token)).to eq(500)
+    end
+
+    it 'is monotonic — equal id is also a no-op (no rewind, no spurious update)' do
+      store.save_sse_cursor(token: token, last_event_id: 500)
+      store.save_sse_cursor(token: token, last_event_id: 500)
+
+      expect(store.load_sse_cursor(token: token)).to eq(500)
+    end
+
     it 'stamps updated_at on each save' do
       before = Time.now - 60
       store.save_sse_cursor(token: token, last_event_id: 1)

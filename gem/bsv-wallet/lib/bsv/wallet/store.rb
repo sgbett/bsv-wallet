@@ -774,10 +774,16 @@ module BSV
       def save_sse_cursor(token:, last_event_id:)
         # Upsert keyed on the token PK. Concurrent listeners booting for
         # the same token (defensive -- the daemon should run one) race
-        # cleanly: last write wins, no PK violation. See #262.
+        # cleanly without PK violation. +update_where+ enforces strict
+        # monotonicity: a stale write (reconnect race, dual listener
+        # flushing residual events from before fail-over) that carries a
+        # smaller +last_event_id+ becomes a no-op rather than rewinding
+        # the cursor and re-delivering events the listener already
+        # advanced past. See #262.
         models::SseCursor.dataset
                          .insert_conflict(target: :token,
-                                          update: { last_event_id: last_event_id, updated_at: Time.now })
+                                          update: { last_event_id: last_event_id, updated_at: Time.now },
+                                          update_where: (Sequel[:sse_cursors][:last_event_id] < last_event_id))
                          .insert(token: token, last_event_id: last_event_id, updated_at: Time.now)
       end
 
