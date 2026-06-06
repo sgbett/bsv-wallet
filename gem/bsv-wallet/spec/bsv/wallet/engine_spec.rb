@@ -53,9 +53,9 @@ RSpec.describe BSV::Wallet::Engine do
   end
 
   describe '#create_action BEEF hint publish (#269)' do
-    it 'is a no-op when BSV_WALLET_EF_HINTS_SOCKET is unset' do
+    it 'is a no-op when BSV_WALLET_HINTS_SOCKET is unset' do
       allow(ENV).to receive(:fetch).and_call_original
-      allow(ENV).to receive(:fetch).with('BSV_WALLET_EF_HINTS_SOCKET', nil).and_return(nil)
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return(nil)
       allow(OMQ::PUSH).to receive(:connect)
 
       engine.create_action(
@@ -70,13 +70,13 @@ RSpec.describe BSV::Wallet::Engine do
       expect(OMQ::PUSH).not_to have_received(:connect)
     end
 
-    it 'connects + pushes a Marshalled hint when BSV_WALLET_EF_HINTS_SOCKET is set' do
+    it 'connects + pushes a Marshalled hint when BSV_WALLET_HINTS_SOCKET is set' do
       allow(ENV).to receive(:fetch).and_call_original
-      allow(ENV).to receive(:fetch).with('BSV_WALLET_EF_HINTS_SOCKET', nil).and_return('inproc://test-ef-hints-publish')
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('inproc://test-hints-publish')
       sent = []
       fake_socket = double('PUSH')
       allow(fake_socket).to receive(:<<) { |payload| sent << payload }
-      allow(OMQ::PUSH).to receive(:connect).with('inproc://test-ef-hints-publish').and_return(fake_socket)
+      allow(OMQ::PUSH).to receive(:connect).with('inproc://test-hints-publish').and_return(fake_socket)
 
       engine.create_action(
         description: 'hint enabled',
@@ -87,7 +87,7 @@ RSpec.describe BSV::Wallet::Engine do
         ]
       )
 
-      expect(OMQ::PUSH).to have_received(:connect).with('inproc://test-ef-hints-publish')
+      expect(OMQ::PUSH).to have_received(:connect).with('inproc://test-hints-publish')
       expect(sent.size).to eq(1)
       hint = Marshal.load(sent.first) # rubocop:disable Security/MarshalLoad
       expect(hint).to include(:action_id, :beef)
@@ -97,7 +97,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'swallows OMQ::PUSH.connect errors (best-effort, never blocks create_action)' do
       allow(ENV).to receive(:fetch).and_call_original
-      allow(ENV).to receive(:fetch).with('BSV_WALLET_EF_HINTS_SOCKET', nil).and_return('ipc:///nonexistent/path.sock')
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('ipc:///nonexistent/path.sock')
       allow(OMQ::PUSH).to receive(:connect).and_raise(StandardError, 'connect boom')
 
       expect do
@@ -114,7 +114,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'does not publish a hint for no_send actions (they will never be broadcast)' do
       allow(ENV).to receive(:fetch).and_call_original
-      allow(ENV).to receive(:fetch).with('BSV_WALLET_EF_HINTS_SOCKET', nil).and_return('inproc://test-ef-hints-no-send')
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('inproc://test-hints-no-send')
       allow(OMQ::PUSH).to receive(:connect)
 
       engine.create_action(

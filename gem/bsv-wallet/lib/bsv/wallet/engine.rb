@@ -34,7 +34,7 @@ module BSV
       autoload :OmqSupport,            'bsv/wallet/engine/omq_support'
       autoload :InputSource,           'bsv/wallet/engine/input_source'
       autoload :MerklePathNormaliser,  'bsv/wallet/engine/merkle_path_normaliser'
-      autoload :EFCache,               'bsv/wallet/engine/ef_cache'
+      autoload :HydratedTxCache,       'bsv/wallet/engine/hydrated_tx_cache'
 
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -261,7 +261,7 @@ module BSV
         # daemon's submit emits EF via Transaction#to_ef_hex on that same
         # object. Producer pays zero extra queries (atomic_beef was built
         # for the caller's return value either way). Opt-in via
-        # BSV_WALLET_EF_HINTS_SOCKET; no-op otherwise. #269.
+        # BSV_WALLET_HINTS_SOCKET; no-op otherwise. #269.
         publish_beef_hint(action_result[:id], atomic_beef) unless no_send
 
         # Internal-path (no_send): synchronous Phase 4 — promote caller
@@ -1384,7 +1384,7 @@ module BSV
       # subject tx, the producer has it built already (returned to the
       # caller from +create_action+), and the same cached Transaction
       # serves a future BEEF-based p2p hand-off path without rebuilding.
-      # Best-effort: when +BSV_WALLET_EF_HINTS_SOCKET+ is unset, do
+      # Best-effort: when +BSV_WALLET_HINTS_SOCKET+ is unset, do
       # nothing. Push failures (daemon not listening, socket missing, OMQ
       # error) are swallowed — daemon's #252 reconstruction stays the
       # correctness floor. #269.
@@ -1393,18 +1393,18 @@ module BSV
       # action's DB commit, the daemon caches a hint for an action it
       # will never look up. Harmless — broadcast discovery reads from
       # the DB, not the cache, so an orphan entry is never queried.
-      # +EFCache+'s LRU eventually evicts it under load. No reconcili-
-      # ation required.
+      # +HydratedTxCache+'s LRU eventually evicts it under load. No
+      # reconciliation required.
       def publish_beef_hint(action_id, atomic_beef)
-        socket_path = ENV.fetch('BSV_WALLET_EF_HINTS_SOCKET', nil)
+        socket_path = ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil)
         return unless socket_path
 
         payload = Marshal.dump(action_id: action_id, beef: atomic_beef)
 
-        @ef_hint_socket_lock ||= Mutex.new
-        @ef_hint_socket_lock.synchronize do
-          @ef_hint_socket ||= OMQ::PUSH.connect(socket_path)
-          @ef_hint_socket << payload
+        @hints_socket_lock ||= Mutex.new
+        @hints_socket_lock.synchronize do
+          @hints_socket ||= OMQ::PUSH.connect(socket_path)
+          @hints_socket << payload
         end
       rescue StandardError => e
         BSV.logger&.debug { "[Engine] BEEF hint publish skipped: #{e.message}" }

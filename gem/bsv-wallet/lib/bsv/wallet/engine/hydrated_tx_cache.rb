@@ -3,11 +3,19 @@
 module BSV
   module Wallet
     class Engine
-      # Bounded in-process LRU cache for hydrated +Transaction+ objects,
-      # keyed by +action_id+. Hit on +#get+ saves +Engine::Broadcast#submit+
-      # from the +Store#resolve_inputs_for_signing+ JOIN; miss falls
-      # through to #252's reconstruction path. Correctness rides on the
-      # DB; performance rides on the cache. See #269.
+      # Bounded in-process LRU cache for *hydrated* +Transaction+
+      # objects, keyed by +action_id+. "Hydrated" here means every
+      # input has +source_transaction+ populated with the full parent
+      # +Transaction+, which is what lets the cached object serialise
+      # to EF (for broadcast) or BEEF (for p2p hand-off) without
+      # touching the DB. Populated by parsing the producer-side
+      # Atomic BEEF that +Engine#create_action+ already builds, so
+      # this comes for free.
+      #
+      # Hit on +#get+ saves +Engine::Broadcast#submit+ from the
+      # +Store#resolve_inputs_for_signing+ JOIN; miss falls through to
+      # #252's reconstruction path. Correctness rides on the DB;
+      # performance rides on the cache. See #269.
       #
       # Populated in two ways:
       #   - Daemon's own +Engine#create_action+ calls (intra-process producer
@@ -28,17 +36,17 @@ module BSV
       # entries when over capacity. +Mutex+ guards every operation; the
       # daemon's Async reactor is fiber-safe under Mutex because Mutex
       # in MRI doesn't park the reactor for uncontended acquires.
-      class EFCache
+      class HydratedTxCache
         DEFAULT_CAPACITY = 1000
 
         attr_reader :capacity
 
-        # Construct from environment. Reads +BSV_WALLET_EF_CACHE_SIZE+
+        # Construct from environment. Reads +BSV_WALLET_TX_CACHE_SIZE+
         # (Integer) and falls back to +DEFAULT_CAPACITY+. The default
         # constructor used by +Engine::Broadcast+; CLI tools and specs
         # can call +new+ directly with a specific capacity.
         def self.from_env
-          new(capacity: Integer(ENV.fetch('BSV_WALLET_EF_CACHE_SIZE', DEFAULT_CAPACITY)))
+          new(capacity: Integer(ENV.fetch('BSV_WALLET_TX_CACHE_SIZE', DEFAULT_CAPACITY)))
         end
 
         # @param capacity [Integer] maximum number of entries; 0 disables

@@ -159,7 +159,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       it 'short-circuits reconstruction when the EF cache has the action (#269 hit)' do
         cached_tx = BSV::Transaction::Transaction.from_binary(raw_tx)
-        broadcast.ef_cache.put(action_id, cached_tx)
+        broadcast.hydrated_tx_cache.put(action_id, cached_tx)
         captured_tx = nil
         allow(broadcaster).to receive(:broadcast) { |tx, **|
           captured_tx = tx
@@ -175,12 +175,12 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
 
       it 'evicts the action from the EF cache after terminal success (#269)' do
-        broadcast.ef_cache.put(action_id, BSV::Transaction::Transaction.from_binary(raw_tx))
-        expect(broadcast.ef_cache.get(action_id)).not_to be_nil
+        broadcast.hydrated_tx_cache.put(action_id, BSV::Transaction::Transaction.from_binary(raw_tx))
+        expect(broadcast.hydrated_tx_cache.get(action_id)).not_to be_nil
 
         broadcast.process(action_id)
 
-        expect(broadcast.ef_cache.get(action_id)).to be_nil
+        expect(broadcast.hydrated_tx_cache.get(action_id)).to be_nil
       end
 
       it 'records the broadcast result from normalized response data' do
@@ -466,9 +466,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
 
       it 'evicts the action from the EF cache after terminal rejection (#269)' do
-        broadcast.ef_cache.put(action_id, BSV::Transaction::Transaction.from_binary(raw_tx))
+        broadcast.hydrated_tx_cache.put(action_id, BSV::Transaction::Transaction.from_binary(raw_tx))
         broadcast.process(action_id)
-        expect(broadcast.ef_cache.get(action_id)).to be_nil
+        expect(broadcast.hydrated_tx_cache.get(action_id)).to be_nil
       end
     end
 
@@ -1395,8 +1395,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
     end
 
-    describe '#ef_hints_pull! (#269)' do
-      let(:ef_socket) { 'inproc://ef-hints-test' }
+    describe '#hints_pull! (#269)' do
+      let(:hints_socket) { 'inproc://hints-test' }
       # Synthesize a hint payload carrying an opaque BEEF blob. BEEF
       # encoding correctness is the SDK's concern; the receiver's job is
       # to decode -> extract subject_tx -> put. Stub Beef.from_binary so
@@ -1415,9 +1415,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       it 'is a no-op when socket_path: nil (no fiber bound, cache stays empty)' do
         Async do |task|
-          broadcast.ef_hints_pull!(task: task, socket_path: nil)
+          broadcast.hints_pull!(task: task, socket_path: nil)
           sleep 0.05
-          expect(broadcast.ef_cache).to be_empty
+          expect(broadcast.hydrated_tx_cache).to be_empty
         ensure
           task.stop
         end
@@ -1425,15 +1425,15 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       it 'pulls a hint, parses BEEF, extracts subject_tx, primes the cache' do
         Async do |task|
-          broadcast.ef_hints_pull!(task: task, socket_path: ef_socket)
+          broadcast.hints_pull!(task: task, socket_path: hints_socket)
 
-          push = OMQ::PUSH.connect(ef_socket)
+          push = OMQ::PUSH.connect(hints_socket)
           push << Marshal.dump(hint_payload)
 
           deadline = Time.now + 1.0
-          sleep 0.01 until broadcast.ef_cache.get(7) || Time.now > deadline
+          sleep 0.01 until broadcast.hydrated_tx_cache.get(7) || Time.now > deadline
 
-          cached = broadcast.ef_cache.get(7)
+          cached = broadcast.hydrated_tx_cache.get(7)
           expect(cached).to equal(subject_tx)
         ensure
           task.stop
@@ -1443,16 +1443,16 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'survives a malformed message and keeps the fiber alive' do
         suppress_console_errors do
           Async do |task|
-            broadcast.ef_hints_pull!(task: task, socket_path: ef_socket)
+            broadcast.hints_pull!(task: task, socket_path: hints_socket)
 
-            push = OMQ::PUSH.connect(ef_socket)
+            push = OMQ::PUSH.connect(hints_socket)
             push << "not valid marshal\x00\xff".b
             push << Marshal.dump(hint_payload)
 
             deadline = Time.now + 1.0
-            sleep 0.01 until broadcast.ef_cache.get(7) || Time.now > deadline
+            sleep 0.01 until broadcast.hydrated_tx_cache.get(7) || Time.now > deadline
 
-            expect(broadcast.ef_cache.get(7)).to equal(subject_tx)
+            expect(broadcast.hydrated_tx_cache.get(7)).to equal(subject_tx)
           ensure
             task.stop
           end
