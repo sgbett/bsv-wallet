@@ -52,7 +52,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
-  describe '#create_action EF hint publish (#269)' do
+  describe '#create_action BEEF hint publish (#269)' do
     it 'is a no-op when BSV_WALLET_EF_HINTS_SOCKET is unset' do
       allow(ENV).to receive(:fetch).and_call_original
       allow(ENV).to receive(:fetch).with('BSV_WALLET_EF_HINTS_SOCKET', nil).and_return(nil)
@@ -90,9 +90,9 @@ RSpec.describe BSV::Wallet::Engine do
       expect(OMQ::PUSH).to have_received(:connect).with('inproc://test-ef-hints-publish')
       expect(sent.size).to eq(1)
       hint = Marshal.load(sent.first) # rubocop:disable Security/MarshalLoad
-      expect(hint).to include(:action_id, :raw_tx, :sources)
-      expect(hint[:raw_tx]).to be_a(String)
-      expect(hint[:sources]).to be_an(Array)
+      expect(hint).to include(:action_id, :beef)
+      expect(hint[:beef]).to be_a(String)
+      expect(hint[:beef].bytesize).to be > 0
     end
 
     it 'swallows OMQ::PUSH.connect errors (best-effort, never blocks create_action)' do

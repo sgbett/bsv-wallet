@@ -94,13 +94,20 @@ module BSV
           self
         end
 
-        # EF hint receiver -- pulls cross-process producer hints (CLI tools,
+        # BEEF hint receiver -- pulls cross-process producer hints (CLI tools,
         # API, UI) into the in-process EF cache. Each hint carries the
-        # action's raw_tx + the resolved input source data; receiver
-        # rebuilds the Transaction and primes the cache so a subsequent
-        # broadcast hits without the DB JOIN. Optional: when +socket_path+
-        # is nil, no fiber is started and the cache fills only via
-        # intra-process producers. #269.
+        # action's Atomic BEEF; receiver parses, extracts the subject
+        # Transaction (whose inputs have +source_transaction+ wired by
+        # +Beef.from_binary+), and primes the cache so a subsequent
+        # broadcast emits EF via +Transaction#to_ef_hex+ without the JOIN.
+        #
+        # Optional: when +socket_path+ is nil, no fiber is started and the
+        # cache fills only via intra-process producers.
+        #
+        # Trust boundary: +Marshal.load+ runs on bytes from anyone with
+        # write permission to the socket inode. On ipc:// that means file-
+        # system perms on the socket path; operators sharing the path with
+        # untrusted users are responsible for the consequences. #269.
         def ef_hints_pull!(task:, socket_path:)
           return self unless socket_path
 
@@ -109,9 +116,10 @@ module BSV
             while (msg = pull.receive)
               begin
                 hint = Marshal.load(msg.first) # rubocop:disable Security/MarshalLoad
-                tx = BSV::Transaction::Transaction.from_binary(hint[:raw_tx])
-                hint[:sources].each_with_index { |src, idx| InputSource.attach!(tx.inputs[idx], src) }
-                @ef_cache.put(hint[:action_id], tx)
+                beef = BSV::Transaction::Beef.from_binary(hint[:beef])
+                subject_wtxid = beef.subject_wtxid
+                subject_tx = subject_wtxid ? beef.find_atomic_transaction(subject_wtxid) : beef.transactions.last&.transaction
+                @ef_cache.put(hint[:action_id], subject_tx) if subject_tx
               rescue StandardError => e
                 BSV.logger&.error { "[Engine::Broadcast] ef_hints_pull error: #{e.message}" }
               end

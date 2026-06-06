@@ -247,19 +247,22 @@ module BSV
           outputs: pending_outputs, change_outputs: change_outputs
         )
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-        # Push an EF cache hint after sign succeeds. Producer-side (this
-        # process) queries the same JOIN the daemon would skip; net-zero
-        # query count, but the cost shifts off the daemon's critical
-        # path. Opt-in via BSV_WALLET_EF_HINTS_SOCKET; no-op otherwise.
-        # #269.
-        publish_ef_hint(action_result[:id], raw_tx) unless no_send
-
         BSV.logger&.debug do
           "[Engine] create_action: dtxid=#{wtxid.reverse.unpack1('H*')} " \
             "outputs=#{outputs&.length || 0} change=#{change_outputs.length}"
         end
 
         atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
+        # Push the just-built BEEF as a cache hint so the daemon's
+        # broadcast skips both Store#find_action and the input source-data
+        # JOIN. BEEF is a strict superset of EF for the subject tx (parent
+        # transactions are inlined), so the receiver can prime the cache
+        # with a Transaction whose source_transaction is already wired;
+        # daemon's submit emits EF via Transaction#to_ef_hex on that same
+        # object. Producer pays zero extra queries (atomic_beef was built
+        # for the caller's return value either way). Opt-in via
+        # BSV_WALLET_EF_HINTS_SOCKET; no-op otherwise. #269.
+        publish_beef_hint(action_result[:id], atomic_beef) unless no_send
 
         # Internal-path (no_send): synchronous Phase 4 — promote caller
         # outputs, promote change to spendable, return change outpoints.
@@ -1375,18 +1378,21 @@ module BSV
 
       # Build an Atomic BEEF (BRC-95) envelope for a signed transaction.
       #
-      # Push a hydrated-Transaction hint to the daemon's EF cache so its
-      # broadcast skips the +resolve_inputs_for_signing+ JOIN. Best-effort:
-      # when +BSV_WALLET_EF_HINTS_SOCKET+ is unset, do nothing. Push
-      # failures (daemon not listening, socket missing, OMQ error) are
-      # swallowed — the hint is purely an optimisation; daemon's #252
-      # reconstruction stays the correctness floor. #269.
-      def publish_ef_hint(action_id, raw_tx)
+      # Push a BEEF cache hint to the daemon so broadcast skips both
+      # +find_action+ and the +resolve_inputs_for_signing+ JOIN. BEEF is
+      # the natural hint payload: it's a strict superset of EF for the
+      # subject tx, the producer has it built already (returned to the
+      # caller from +create_action+), and the same cached Transaction
+      # serves a future BEEF-based p2p hand-off path without rebuilding.
+      # Best-effort: when +BSV_WALLET_EF_HINTS_SOCKET+ is unset, do
+      # nothing. Push failures (daemon not listening, socket missing, OMQ
+      # error) are swallowed — daemon's #252 reconstruction stays the
+      # correctness floor. #269.
+      def publish_beef_hint(action_id, atomic_beef)
         socket_path = ENV.fetch('BSV_WALLET_EF_HINTS_SOCKET', nil)
         return unless socket_path
 
-        sources = @store.resolve_inputs_for_signing(action_id: action_id)
-        payload = Marshal.dump(action_id: action_id, raw_tx: raw_tx, sources: sources)
+        payload = Marshal.dump(action_id: action_id, beef: atomic_beef)
 
         @ef_hint_socket_lock ||= Mutex.new
         @ef_hint_socket_lock.synchronize do
@@ -1394,7 +1400,7 @@ module BSV
           @ef_hint_socket << payload
         end
       rescue StandardError => e
-        BSV.logger&.debug { "[Engine] EF hint publish skipped: #{e.message}" }
+        BSV.logger&.debug { "[Engine] BEEF hint publish skipped: #{e.message}" }
       end
 
       # Outgoing BEEF: constructed from our own ProofStore — verification is

@@ -1397,15 +1397,20 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
     describe '#ef_hints_pull! (#269)' do
       let(:ef_socket) { 'inproc://ef-hints-test' }
-      # Synthesize a minimal hint payload using a deterministic raw_tx +
-      # matching sources. Receiver should Transaction.from_binary + attach
-      # source data to each input, then put into @ef_cache.
-      let(:hint_payload) do
-        {
-          action_id: 7,
-          raw_tx: raw_tx,
-          sources: resolved_inputs
-        }
+      # Synthesize a hint payload carrying an opaque BEEF blob. BEEF
+      # encoding correctness is the SDK's concern; the receiver's job is
+      # to decode -> extract subject_tx -> put. Stub Beef.from_binary so
+      # the spec stays focused on the wrapping behaviour.
+      let(:subject_tx) { BSV::Transaction::Transaction.from_binary(raw_tx) }
+      let(:fake_beef) do
+        double('Beef', subject_wtxid: subject_tx.wtxid).tap do |b|
+          allow(b).to receive(:find_atomic_transaction).with(subject_tx.wtxid).and_return(subject_tx)
+        end
+      end
+      let(:hint_payload) { { action_id: 7, beef: 'FAKE_BEEF_BYTES' } }
+
+      before do
+        allow(BSV::Transaction::Beef).to receive(:from_binary).with('FAKE_BEEF_BYTES').and_return(fake_beef)
       end
 
       it 'is a no-op when socket_path: nil (no fiber bound, cache stays empty)' do
@@ -1418,7 +1423,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         end
       end
 
-      it 'pulls a hint, rebuilds the Transaction, and primes the cache' do
+      it 'pulls a hint, parses BEEF, extracts subject_tx, primes the cache' do
         Async do |task|
           broadcast.ef_hints_pull!(task: task, socket_path: ef_socket)
 
@@ -1429,8 +1434,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
           sleep 0.01 until broadcast.ef_cache.get(7) || Time.now > deadline
 
           cached = broadcast.ef_cache.get(7)
-          expect(cached).to be_a(BSV::Transaction::Transaction)
-          expect(cached.inputs.first.source_satoshis).to eq(resolved_inputs[0][:source_satoshis])
+          expect(cached).to equal(subject_tx)
         ensure
           task.stop
         end
@@ -1448,7 +1452,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
             deadline = Time.now + 1.0
             sleep 0.01 until broadcast.ef_cache.get(7) || Time.now > deadline
 
-            expect(broadcast.ef_cache.get(7)).to be_a(BSV::Transaction::Transaction)
+            expect(broadcast.ef_cache.get(7)).to equal(subject_tx)
           ensure
             task.stop
           end
