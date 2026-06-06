@@ -1388,6 +1388,13 @@ module BSV
       # nothing. Push failures (daemon not listening, socket missing, OMQ
       # error) are swallowed — daemon's #252 reconstruction stays the
       # correctness floor. #269.
+      #
+      # Dangling hints: if a producer crashes between this push and the
+      # action's DB commit, the daemon caches a hint for an action it
+      # will never look up. Harmless — broadcast discovery reads from
+      # the DB, not the cache, so an orphan entry is never queried.
+      # +EFCache+'s LRU eventually evicts it under load. No reconcili-
+      # ation required.
       def publish_beef_hint(action_id, atomic_beef)
         socket_path = ENV.fetch('BSV_WALLET_EF_HINTS_SOCKET', nil)
         return unless socket_path

@@ -26,6 +26,26 @@ RSpec.describe BSV::Wallet::Engine::EFCache do
     end
   end
 
+  describe '.from_env' do
+    it 'uses DEFAULT_CAPACITY when BSV_WALLET_EF_CACHE_SIZE is unset' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_EF_CACHE_SIZE', described_class::DEFAULT_CAPACITY).and_return(described_class::DEFAULT_CAPACITY)
+      expect(described_class.from_env.capacity).to eq(described_class::DEFAULT_CAPACITY)
+    end
+
+    it 'parses BSV_WALLET_EF_CACHE_SIZE as Integer' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_EF_CACHE_SIZE', described_class::DEFAULT_CAPACITY).and_return('250')
+      expect(described_class.from_env.capacity).to eq(250)
+    end
+
+    it 'raises ArgumentError on a non-numeric value (fail loud, not silent)' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_EF_CACHE_SIZE', described_class::DEFAULT_CAPACITY).and_return('nope')
+      expect { described_class.from_env }.to raise_error(ArgumentError, /invalid value for Integer/)
+    end
+  end
+
   describe '#get / #put' do
     let(:cache) { described_class.new(capacity: 10) }
 

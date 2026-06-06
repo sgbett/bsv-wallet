@@ -36,7 +36,7 @@ module BSV
           @broadcaster = broadcaster
           @applicator = applicator
           @callback_token = callback_token
-          @ef_cache = ef_cache || EFCache.new
+          @ef_cache = ef_cache || EFCache.from_env
         end
 
         attr_reader :ef_cache
