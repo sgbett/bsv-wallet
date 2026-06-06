@@ -3,6 +3,7 @@
 require 'bsv-wallet'
 require 'bsv/wallet/engine/broadcast'
 require 'logger'
+require 'net/http'
 require_relative '../../../support/console_helpers'
 
 RSpec.describe BSV::Wallet::Engine::Broadcast do
