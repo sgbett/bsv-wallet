@@ -146,7 +146,7 @@ RSpec.describe BSV::Network::Services do
 
       result = services.call(:get_utxos, 'addr')
       expect(result.http_success?).to be false
-      expect(result.error_message).to match(/no provider/)
+      expect(result.error_message).to include('no provider')
     end
   end
 

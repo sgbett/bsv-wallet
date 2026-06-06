@@ -88,7 +88,7 @@ RSpec.describe BSV::Network::Broadcaster do
       result = broadcaster.broadcast('rawtx', wtxid: wtxid)
 
       expect(result.http_success?).to be false
-      expect(result.error_message).to match(/no provider/)
+      expect(result.error_message).to include('no provider')
     end
 
     it 'accepts a Transaction-shaped payload (inline path) without narrowing' do
@@ -198,7 +198,7 @@ RSpec.describe BSV::Network::Broadcaster do
       response = broadcaster.get_tx_status(wtxid: wtxid, dtxid: dtxid)
 
       expect(response.http_success?).to be false
-      expect(response.error_message).to match(/no provider/)
+      expect(response.error_message).to include('no provider')
     end
 
     it 'requires a valid wtxid' do

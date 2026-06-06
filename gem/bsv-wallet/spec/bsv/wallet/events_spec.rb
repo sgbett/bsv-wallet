@@ -25,7 +25,7 @@ RSpec.describe BSV::Wallet do # rubocop:disable RSpec/SpecFilePathFormat
       described_class.emit('foo', a: 1, b: 'x')
 
       expect(logged_output).to include('[event] foo a=1 b=x')
-      expect(logged_output).to match(/INFO/)
+      expect(logged_output).to include('INFO')
     end
 
     it 'emits name only with no trailing space when payload is empty' do
@@ -79,7 +79,7 @@ RSpec.describe BSV::Wallet do # rubocop:disable RSpec/SpecFilePathFormat
       it 'writes the canonical [event] line to event_log alongside BSV.logger' do
         described_class.emit('task.succeeded', task: 'broadcast_push', id: 42)
 
-        expect(event_log_output).to match(/\[event\] task\.succeeded task=broadcast_push id=42/)
+        expect(event_log_output).to include('[event] task.succeeded task=broadcast_push id=42')
         expect(logged_output).to include('[event] task.succeeded task=broadcast_push id=42')
       end
 
