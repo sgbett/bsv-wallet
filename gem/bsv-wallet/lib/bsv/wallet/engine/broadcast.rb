@@ -166,7 +166,37 @@ module BSV
 
         private
 
-        # Initial broadcast -- submit raw_tx to ARC.
+        # Parse +action[:raw_tx]+ into a Transaction and re-attach per-input
+        # source data (+source_satoshis+ / +source_locking_script+) from the
+        # Store so the SDK can serialize Extended Format. Inputs are ordered
+        # by +inputs.vin+, which matches the order of +tx.inputs+ from the
+        # raw-tx parse.
+        #
+        # @param action [Hash] action record carrying +:id+ and +:raw_tx+
+        # @return [BSV::Transaction::Transaction]
+        # @raise [BSV::Wallet::Error] when the DB input count disagrees with
+        #   the parsed transaction's input count (a contract violation
+        #   upstream; should never fire under the normal create_action flow).
+        def hydrated_transaction_for(action)
+          tx = BSV::Transaction::Transaction.from_binary(action[:raw_tx])
+          sources = @store.resolve_inputs_for_signing(action_id: action[:id])
+          if tx.inputs.length != sources.length
+            raise BSV::Wallet::Error,
+                  "input count mismatch action_id=#{action[:id]} " \
+                  "tx=#{tx.inputs.length} db=#{sources.length}"
+          end
+
+          tx.inputs.each_with_index { |input, idx| InputSource.attach!(input, sources[idx]) }
+          tx
+        end
+
+        # Initial broadcast -- submit Extended Format to ARC.
+        #
+        # Reconstructs the Transaction from +action[:raw_tx]+ + per-input
+        # source data via #hydrated_transaction_for so the SDK's broadcaster
+        # serializes to EF (Arcade rejects raw-tx submits with "'PreviousTx'
+        # not supplied"). The inline path passes its in-memory Transaction
+        # directly; the daemon path reconstructs from the DB. #252.
         #
         # Stamps broadcast_at in a committed transaction *before* the
         # network call (plan §4.2 / §4.3). A mid-POST crash therefore
@@ -195,13 +225,18 @@ module BSV
           BSV::Primitives::Hex.validate_wtxid!(action[:wtxid], name: 'Engine::Broadcast#submit wtxid')
 
           @store.mark_broadcast_attempted(action_id: action_id)
+          # Hydrate a Transaction from raw_tx + DB-resolved source data so
+          # the SDK can serialize Extended Format on the wire (Arcade rejects
+          # raw-tx submits with "'PreviousTx' not supplied"). The inline path
+          # already ships a Transaction; #252 closes the daemon-side gap.
+          tx = hydrated_transaction_for(action)
           # Conditional kwarg: Broadcaster also drops nil callback_token to
           # avoid polluting the Provider#call signature, but skipping it
           # here keeps Engine::Broadcast#submit specs free of the kwarg
           # when no token is configured (the lenient-default case).
           broadcast_kwargs = { wtxid: action[:wtxid] }
           broadcast_kwargs[:callback_token] = @callback_token if @callback_token
-          response = @broadcaster.broadcast(action[:raw_tx], **broadcast_kwargs)
+          response = @broadcaster.broadcast(tx, **broadcast_kwargs)
           latency_ms = ((Time.now - started_at) * 1000).round
 
           if response.http_success?

@@ -29,9 +29,10 @@ module BSV
     class Engine
       include BSV::Wallet::Interface::BRC100
 
-      autoload :Broadcast,  'bsv/wallet/engine/broadcast'
-      autoload :TxProof,    'bsv/wallet/engine/tx_proof'
-      autoload :OmqSupport, 'bsv/wallet/engine/omq_support'
+      autoload :Broadcast,   'bsv/wallet/engine/broadcast'
+      autoload :TxProof,     'bsv/wallet/engine/tx_proof'
+      autoload :OmqSupport,  'bsv/wallet/engine/omq_support'
+      autoload :InputSource, 'bsv/wallet/engine/input_source'
 
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -2058,10 +2059,8 @@ module BSV
             prev_tx_out_index: resolved[:source_vout],
             sequence: resolved[:sequence] || 0xFFFFFFFF
           )
-          input.source_satoshis = resolved[:source_satoshis]
-
-          locking_script = resolve_source_locking_script(resolved[:source_locking_script])
-          input.source_locking_script = locking_script
+          InputSource.attach!(input, resolved)
+          locking_script = input.source_locking_script
 
           # Find the caller's input spec for this vin (for custom unlocking scripts)
           caller_input = find_caller_input(caller_inputs, resolved[:vin])
@@ -2083,16 +2082,6 @@ module BSV
         end
 
         [tx_inputs, signing_keys]
-      end
-
-      # Resolve a source locking script (binary) into a Script object.
-      #
-      # @param script_data [String, nil] binary locking script
-      # @return [Script::Script, nil]
-      def resolve_source_locking_script(script_data)
-        return if script_data.nil?
-
-        BSV::Script::Script.from_binary(script_data)
       end
 
       # Resolve an unlocking script value to a Script object.
@@ -2428,8 +2417,7 @@ module BSV
         signing_keys = {}
         resolved_inputs.each_with_index do |resolved, idx|
           input = tx.inputs[idx]
-          input.source_satoshis = resolved[:source_satoshis]
-          input.source_locking_script = resolve_source_locking_script(resolved[:source_locking_script])
+          InputSource.attach!(input, resolved)
 
           spend = spends[resolved[:vin]] || spends[idx]
           if spend
