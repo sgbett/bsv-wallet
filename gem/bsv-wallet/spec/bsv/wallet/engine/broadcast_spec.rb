@@ -1463,6 +1463,32 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
           end
         end
       end
+
+      it 'drops Marshalled hints with the wrong shape (defends against socket-side cache poisoning)' do
+        Async do |task|
+          broadcast.hints_pull!(task: task, socket_path: hints_socket)
+          push = OMQ::PUSH.connect(hints_socket)
+
+          # Three flavours of wrong-shape: non-Hash, Hash with string
+          # action_id, Hash with non-String beef. None should land in
+          # the cache (which keys on integer action_id, so they'd
+          # never hit a real lookup -- just consume LRU slots).
+          push << Marshal.dump([1, 2, 3])
+          push << Marshal.dump(action_id: 'sneaky', beef: 'whatever')
+          push << Marshal.dump(action_id: 99, beef: :not_a_string)
+          # Then a valid hint so we have a synchronisation point.
+          push << Marshal.dump(hint_payload)
+
+          deadline = Time.now + 1.0
+          sleep 0.01 until broadcast.hydrated_tx_cache.get(7) || Time.now > deadline
+
+          expect(broadcast.hydrated_tx_cache.get(7)).to equal(subject_tx)
+          # The cache must contain only the valid entry.
+          expect(broadcast.hydrated_tx_cache.size).to eq(1)
+        ensure
+          task.stop
+        end
+      end
     end
   end
 

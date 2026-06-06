@@ -116,6 +116,17 @@ module BSV
             while (msg = pull.receive)
               begin
                 hint = Marshal.load(msg.first) # rubocop:disable Security/MarshalLoad
+                # Shape guard: anyone with write access to the socket
+                # inode (the documented trust boundary, see issue #280)
+                # could push arbitrary Marshalled data; without this
+                # check a malformed +action_id+ would still take an
+                # LRU slot in the cache and evict real entries (the
+                # lookup keys on Integer +action[:id]+, so a non-Integer
+                # would never hit). Drop garbage early.
+                next unless hint.is_a?(Hash) &&
+                            hint[:action_id].is_a?(Integer) &&
+                            hint[:beef].is_a?(String)
+
                 beef = BSV::Transaction::Beef.from_binary(hint[:beef])
                 subject_wtxid = beef.subject_wtxid
                 subject_tx = subject_wtxid ? beef.find_atomic_transaction(subject_wtxid) : beef.transactions.last&.transaction
