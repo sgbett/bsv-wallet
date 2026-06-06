@@ -25,9 +25,23 @@ RSpec.describe 'walletd broadcaster.provider end-to-end', :postgres do # rubocop
   let(:database_url) { ENV.fetch('DATABASE_URL') }
   let(:store) { BSV::Wallet::Store.connect(database_url).tap(&:migrate!) }
 
-  let(:wtxid) { SecureRandom.random_bytes(32) }
-  let(:dtxid) { wtxid.reverse.unpack1('H*') }
-  let(:raw_tx) { SecureRandom.random_bytes(120) }
+  # Zero-input transaction with a single OP_TRUE output. Two reasons:
+  # 1) parseable by +Transaction.from_binary+ so the delayed path's
+  #    +Engine::Broadcast#hydrated_transaction_for+ (#252) doesn't crash
+  #    on random bytes;
+  # 2) zero inputs means the +tx.inputs.length != sources.length+ guard
+  #    in +hydrated_transaction_for+ passes trivially (0 == 0) without
+  #    needing to stub +resolve_inputs_for_signing+ on the real Store.
+  let(:tx) do
+    t = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+    t.add_output(BSV::Transaction::TransactionOutput.new(
+                   satoshis: 1, locking_script: BSV::Script::Script.from_binary("\x51".b)
+                 ))
+    t
+  end
+  let(:raw_tx) { tx.to_binary }
+  let(:wtxid)  { tx.wtxid }
+  let(:dtxid)  { wtxid.reverse.unpack1('H*') }
 
   # Stub broadcast-capable provider. +ProtocolResponse+ is returned by
   # +Provider#call+; +Services+ then normalises it. The provider's +name+

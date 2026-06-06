@@ -106,7 +106,7 @@ jobs:
 
       - name: Create per-wallet Postgres databases
         run: |
-          for db in alice bob carol; do
+          for db in alice bob carol test; do
             PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -c "CREATE DATABASE bsv_wallet_${db};"
           done
 
@@ -120,3 +120,8 @@ jobs:
           DATABASE_URL_ALICE: postgres://postgres:postgres@localhost:5433/bsv_wallet_alice
           DATABASE_URL_BOB: postgres://postgres:postgres@localhost:5433/bsv_wallet_bob
           DATABASE_URL_CAROL: postgres://postgres:postgres@localhost:5433/bsv_wallet_carol
+          # Generic Postgres URL for :postgres-tagged integration specs that
+          # don't need a wallet-specific DB. Without this, the
+          # +skip unless ENV['DATABASE_URL']+ guards in those specs hide
+          # failures in CI while they surface locally.
+          DATABASE_URL: postgres://postgres:postgres@localhost:5433/bsv_wallet_test
