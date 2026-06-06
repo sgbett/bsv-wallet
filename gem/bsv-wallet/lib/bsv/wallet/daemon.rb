@@ -72,6 +72,11 @@ module BSV
           broadcast.pull!(task: task)
           broadcast.reply!(task: task)
           broadcast.statuses_pull!(task: task)
+          # Opt-in cross-process hint receiver: when configured, producers
+          # (CLI / API / UI) push Atomic BEEF so the daemon's broadcast
+          # skips the resolve_inputs_for_signing JOIN at submit time and
+          # has the parents on hand for any future BEEF hand-off. #269.
+          broadcast.hints_pull!(task: task, socket_path: ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil))
 
           tx_proof = Engine::TxProof.new(store: @store, broadcaster: @broadcaster)
           tx_proof.pull!(task: task)
