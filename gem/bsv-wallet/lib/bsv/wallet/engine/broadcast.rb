@@ -31,12 +31,15 @@ module BSV
         #   to the same token) receives the resulting status frames. Lenient
         #   default (nil) lets unit specs that do not run a listener exercise
         #   submit without the header.
-        def initialize(store:, broadcaster:, applicator: nil, callback_token: nil)
+        def initialize(store:, broadcaster:, applicator: nil, callback_token: nil, ef_cache: nil)
           @store = store
           @broadcaster = broadcaster
           @applicator = applicator
           @callback_token = callback_token
+          @ef_cache = ef_cache || EFCache.new
         end
+
+        attr_reader :ef_cache
 
         # Lazy default — see +#initialize+.
         def applicator
@@ -85,6 +88,32 @@ module BSV
                 applicator.apply(event)
               rescue StandardError => e
                 BSV.logger&.error { "[Engine::Broadcast] statuses_pull error: #{e.message}" }
+              end
+            end
+          end
+          self
+        end
+
+        # EF hint receiver -- pulls cross-process producer hints (CLI tools,
+        # API, UI) into the in-process EF cache. Each hint carries the
+        # action's raw_tx + the resolved input source data; receiver
+        # rebuilds the Transaction and primes the cache so a subsequent
+        # broadcast hits without the DB JOIN. Optional: when +socket_path+
+        # is nil, no fiber is started and the cache fills only via
+        # intra-process producers. #269.
+        def ef_hints_pull!(task:, socket_path:)
+          return self unless socket_path
+
+          task.async do
+            pull = bind_or_die('ef_hints_worker') { OMQ::PULL.bind(socket_path) }
+            while (msg = pull.receive)
+              begin
+                hint = Marshal.load(msg.first) # rubocop:disable Security/MarshalLoad
+                tx = BSV::Transaction::Transaction.from_binary(hint[:raw_tx])
+                hint[:sources].each_with_index { |src, idx| InputSource.attach!(tx.inputs[idx], src) }
+                @ef_cache.put(hint[:action_id], tx)
+              rescue StandardError => e
+                BSV.logger&.error { "[Engine::Broadcast] ef_hints_pull error: #{e.message}" }
               end
             end
           end
@@ -178,6 +207,12 @@ module BSV
         #   the parsed transaction's input count (a contract violation
         #   upstream; should never fire under the normal create_action flow).
         def hydrated_transaction_for(action)
+          # Cache hit: producer already supplied the hydrated Transaction
+          # (intra-process create_action or out-of-process via the OMQ
+          # hint receiver). Skip the parse + resolve_inputs JOIN. #269.
+          cached = @ef_cache.get(action[:id])
+          return cached if cached
+
           tx = BSV::Transaction::Transaction.from_binary(action[:raw_tx])
           sources = @store.resolve_inputs_for_signing(action_id: action[:id])
           if tx.inputs.length != sources.length
@@ -277,6 +312,10 @@ module BSV
           # needed here; closes the crash-recovery gap where a process
           # could die between recording and promotion.
           link_proof_if_present(action_id, data)
+          # Terminal-success eviction: the action is in mempool or on
+          # chain; the hydrated Transaction is dead weight from here. LRU
+          # is the safety net if eviction is skipped for any reason. #269.
+          @ef_cache.evict(action_id)
           BSV::Wallet.emit('task.succeeded',
                            task: 'broadcast_submission', id: action_id,
                            latency_ms: latency_ms,
@@ -324,6 +363,9 @@ module BSV
         # next resolution-loop pass, and emit a failure event.
         def handle_submit_terminal(action_id, response)
           @store.reject_action(action_id: action_id)
+          # Terminal-rejection eviction: the cascade just deleted the
+          # action; a cached Transaction would dangle. #269.
+          @ef_cache.evict(action_id)
           # arc_status carries the status-poll shape's txStatus when present
           # (Arcade's {txStatus, extraInfo} body); arc_reason carries the
           # broadcast-rejection shape's reason string ({error, reason} body).

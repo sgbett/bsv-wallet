@@ -157,6 +157,32 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         end
       end
 
+      it 'short-circuits reconstruction when the EF cache has the action (#269 hit)' do
+        cached_tx = BSV::Transaction::Transaction.from_binary(raw_tx)
+        broadcast.ef_cache.put(action_id, cached_tx)
+        captured_tx = nil
+        allow(broadcaster).to receive(:broadcast) { |tx, **|
+          captured_tx = tx
+          success_response
+        }
+
+        broadcast.process(action_id)
+
+        expect(captured_tx).to equal(cached_tx)
+        # Cache hit means no JOIN on the broadcast path — the DB-side
+        # resolve call must not fire.
+        expect(store).not_to have_received(:resolve_inputs_for_signing)
+      end
+
+      it 'evicts the action from the EF cache after terminal success (#269)' do
+        broadcast.ef_cache.put(action_id, BSV::Transaction::Transaction.from_binary(raw_tx))
+        expect(broadcast.ef_cache.get(action_id)).not_to be_nil
+
+        broadcast.process(action_id)
+
+        expect(broadcast.ef_cache.get(action_id)).to be_nil
+      end
+
       it 'records the broadcast result from normalized response data' do
         broadcast.process(action_id)
         expect(store).to have_received(:record_broadcast_result).with(
@@ -437,6 +463,12 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'calls reject_action on the store (releases locked inputs)' do
         broadcast.process(action_id)
         expect(store).to have_received(:reject_action).with(action_id: action_id)
+      end
+
+      it 'evicts the action from the EF cache after terminal rejection (#269)' do
+        broadcast.ef_cache.put(action_id, BSV::Transaction::Transaction.from_binary(raw_tx))
+        broadcast.process(action_id)
+        expect(broadcast.ef_cache.get(action_id)).to be_nil
       end
     end
 
@@ -1359,6 +1391,67 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
           expect(processed_ids.size).to eq(message_count)
         ensure
           task.stop
+        end
+      end
+    end
+
+    describe '#ef_hints_pull! (#269)' do
+      let(:ef_socket) { 'inproc://ef-hints-test' }
+      # Synthesize a minimal hint payload using a deterministic raw_tx +
+      # matching sources. Receiver should Transaction.from_binary + attach
+      # source data to each input, then put into @ef_cache.
+      let(:hint_payload) do
+        {
+          action_id: 7,
+          raw_tx: raw_tx,
+          sources: resolved_inputs
+        }
+      end
+
+      it 'is a no-op when socket_path: nil (no fiber bound, cache stays empty)' do
+        Async do |task|
+          broadcast.ef_hints_pull!(task: task, socket_path: nil)
+          sleep 0.05
+          expect(broadcast.ef_cache).to be_empty
+        ensure
+          task.stop
+        end
+      end
+
+      it 'pulls a hint, rebuilds the Transaction, and primes the cache' do
+        Async do |task|
+          broadcast.ef_hints_pull!(task: task, socket_path: ef_socket)
+
+          push = OMQ::PUSH.connect(ef_socket)
+          push << Marshal.dump(hint_payload)
+
+          deadline = Time.now + 1.0
+          sleep 0.01 until broadcast.ef_cache.get(7) || Time.now > deadline
+
+          cached = broadcast.ef_cache.get(7)
+          expect(cached).to be_a(BSV::Transaction::Transaction)
+          expect(cached.inputs.first.source_satoshis).to eq(resolved_inputs[0][:source_satoshis])
+        ensure
+          task.stop
+        end
+      end
+
+      it 'survives a malformed message and keeps the fiber alive' do
+        suppress_console_errors do
+          Async do |task|
+            broadcast.ef_hints_pull!(task: task, socket_path: ef_socket)
+
+            push = OMQ::PUSH.connect(ef_socket)
+            push << "not valid marshal\x00\xff".b
+            push << Marshal.dump(hint_payload)
+
+            deadline = Time.now + 1.0
+            sleep 0.01 until broadcast.ef_cache.get(7) || Time.now > deadline
+
+            expect(broadcast.ef_cache.get(7)).to be_a(BSV::Transaction::Transaction)
+          ensure
+            task.stop
+          end
         end
       end
     end

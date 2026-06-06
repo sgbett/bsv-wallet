@@ -34,6 +34,7 @@ module BSV
       autoload :OmqSupport,            'bsv/wallet/engine/omq_support'
       autoload :InputSource,           'bsv/wallet/engine/input_source'
       autoload :MerklePathNormaliser,  'bsv/wallet/engine/merkle_path_normaliser'
+      autoload :EFCache,               'bsv/wallet/engine/ef_cache'
 
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -246,6 +247,13 @@ module BSV
           outputs: pending_outputs, change_outputs: change_outputs
         )
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+        # Push an EF cache hint after sign succeeds. Producer-side (this
+        # process) queries the same JOIN the daemon would skip; net-zero
+        # query count, but the cost shifts off the daemon's critical
+        # path. Opt-in via BSV_WALLET_EF_HINTS_SOCKET; no-op otherwise.
+        # #269.
+        publish_ef_hint(action_result[:id], raw_tx) unless no_send
+
         BSV.logger&.debug do
           "[Engine] create_action: dtxid=#{wtxid.reverse.unpack1('H*')} " \
             "outputs=#{outputs&.length || 0} change=#{change_outputs.length}"
@@ -1367,6 +1375,28 @@ module BSV
 
       # Build an Atomic BEEF (BRC-95) envelope for a signed transaction.
       #
+      # Push a hydrated-Transaction hint to the daemon's EF cache so its
+      # broadcast skips the +resolve_inputs_for_signing+ JOIN. Best-effort:
+      # when +BSV_WALLET_EF_HINTS_SOCKET+ is unset, do nothing. Push
+      # failures (daemon not listening, socket missing, OMQ error) are
+      # swallowed — the hint is purely an optimisation; daemon's #252
+      # reconstruction stays the correctness floor. #269.
+      def publish_ef_hint(action_id, raw_tx)
+        socket_path = ENV.fetch('BSV_WALLET_EF_HINTS_SOCKET', nil)
+        return unless socket_path
+
+        sources = @store.resolve_inputs_for_signing(action_id: action_id)
+        payload = Marshal.dump(action_id: action_id, raw_tx: raw_tx, sources: sources)
+
+        @ef_hint_socket_lock ||= Mutex.new
+        @ef_hint_socket_lock.synchronize do
+          @ef_hint_socket ||= OMQ::PUSH.connect(socket_path)
+          @ef_hint_socket << payload
+        end
+      rescue StandardError => e
+        BSV.logger&.debug { "[Engine] EF hint publish skipped: #{e.message}" }
+      end
+
       # Outgoing BEEF: constructed from our own ProofStore — verification is
       # for incoming untrusted data only (see verify_incoming_transaction!).
       #

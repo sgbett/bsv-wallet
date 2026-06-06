@@ -52,7 +52,7 @@ RSpec.describe BSV::Wallet::Daemon do
         .with(store: store).and_return(scheduler)
 
       allow(broadcast).to receive_messages(pull!: broadcast, reply!: broadcast,
-                                           statuses_pull!: broadcast)
+                                           statuses_pull!: broadcast, ef_hints_pull!: broadcast)
       allow(tx_proof).to receive(:pull!).and_return(tx_proof)
       allow(scheduler).to receive(:run!)
     end
@@ -64,6 +64,30 @@ RSpec.describe BSV::Wallet::Daemon do
       end
 
       expect(broadcast).to have_received(:statuses_pull!)
+    end
+
+    it 'calls ef_hints_pull! on Broadcast with the env-configured socket path (#269)' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_EF_HINTS_SOCKET', nil).and_return('ipc:///tmp/test-ef-hints.sock')
+
+      Async do |task|
+        daemon.run!
+        task.stop
+      end
+
+      expect(broadcast).to have_received(:ef_hints_pull!).with(task: anything, socket_path: 'ipc:///tmp/test-ef-hints.sock')
+    end
+
+    it 'calls ef_hints_pull! with socket_path: nil when BSV_WALLET_EF_HINTS_SOCKET is unset (#269)' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_EF_HINTS_SOCKET', nil).and_return(nil)
+
+      Async do |task|
+        daemon.run!
+        task.stop
+      end
+
+      expect(broadcast).to have_received(:ef_hints_pull!).with(task: anything, socket_path: nil)
     end
 
     it 'does NOT boot the SSE listener when callback_token: is nil (default)' do
@@ -305,7 +329,7 @@ RSpec.describe BSV::Wallet::Daemon do
         .with(store: store).and_return(scheduler)
 
       allow(broadcast).to receive_messages(pull!: broadcast, reply!: broadcast,
-                                           statuses_pull!: broadcast)
+                                           statuses_pull!: broadcast, ef_hints_pull!: broadcast)
       allow(tx_proof).to receive(:pull!).and_return(tx_proof)
       allow(scheduler).to receive(:run!)
       allow(scheduler).to receive(:shutdown).and_return(true)
