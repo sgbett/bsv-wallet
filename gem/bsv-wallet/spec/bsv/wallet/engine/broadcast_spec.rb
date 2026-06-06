@@ -28,7 +28,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
   # Per-input source data that #hydrated_transaction_for attaches to the
   # parsed Transaction. Matches the single input in +raw_tx+.
   let(:resolved_inputs) do
-    [{ source_satoshis: 1_500_000, source_locking_script: ['76a914' + ('a' * 40) + '88ac'].pack('H*') }]
+    [{ source_satoshis: 1_500_000, source_locking_script: ["76a914#{'a' * 40}88ac"].pack('H*') }]
   end
   # Success responses come through BSV::Network::Services which
   # normalizes to symbol + snake_case keys.
@@ -139,7 +139,10 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       it 'hydrates each input with source_satoshis and source_locking_script for EF (#252)' do
         captured_tx = nil
-        allow(broadcaster).to receive(:broadcast) { |tx, **| captured_tx = tx; success_response }
+        allow(broadcaster).to receive(:broadcast) { |tx, **|
+          captured_tx = tx
+          success_response
+        }
 
         broadcast.process(action_id)
 

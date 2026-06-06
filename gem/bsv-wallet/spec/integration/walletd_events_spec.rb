@@ -29,7 +29,7 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
      '1f74f82377b33b17b68f7a016188acd3740e00'].pack('H*')
   end
   let(:resolved_inputs) do
-    [{ source_satoshis: 1_500_000, source_locking_script: ['76a914' + ('a' * 40) + '88ac'].pack('H*') }]
+    [{ source_satoshis: 1_500_000, source_locking_script: ["76a914#{'a' * 40}88ac"].pack('H*') }]
   end
   let(:merkle_path_binary) { "\x01\x02\x03".b }
 
