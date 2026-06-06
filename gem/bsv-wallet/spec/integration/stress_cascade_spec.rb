@@ -163,7 +163,7 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
     payment_log = Fanout.pass(
       wallets: wallet_names, count: payments_per_wallet, satoshis: payment_sats
     ) do |sender, recipient, sats, i|
-      envelope, _, status = run_cli('create', sender, identity_keys[recipient], sats.to_s)
+      envelope, _, status = run_cli('create', sender, identity_keys[recipient], sats.to_s, '--no-send')
       expect(status).to be_success, "create #{sender}→#{recipient} (#{i + 1}/#{payments_per_wallet}) failed"
       expect(envelope.bytesize).to be > 0
 
