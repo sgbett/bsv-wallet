@@ -34,6 +34,7 @@ RSpec.shared_context 'engine setup' do
     described_class.new(
       store: store,
       utxo_pool: utxo_pool,
+      broadcaster: broadcaster,
       network: :mainnet
     )
   end
@@ -43,17 +44,21 @@ RSpec.shared_context 'engine setup' do
   # Proof methods now live on Store directly. This alias keeps existing
   # spec setup/assertion code (proof_store.save_proof, etc.) working.
   let(:proof_store) { store }
+  # Engine#initialize requires broadcaster post-#271. Specs that don't
+  # exercise broadcasting inherit this stub; tests that drive inline
+  # broadcast stub the relevant Broadcaster methods in their own +before+.
+  let(:broadcaster) { instance_double(BSV::Network::Broadcaster) }
 
   let(:engine_with_privileged_keys) do
     priv_deriver = BSV::Wallet::KeyDeriver.new(private_key: root_key, privileged_key: privileged_key)
     described_class.new(
-      store: store, utxo_pool: utxo_pool,
+      store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
       key_deriver: priv_deriver, network: :mainnet
     )
   end
   let(:engine_with_keys) do
     described_class.new(
-      store: store, utxo_pool: utxo_pool,
+      store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
       key_deriver: key_deriver, network: :mainnet
     )
   end

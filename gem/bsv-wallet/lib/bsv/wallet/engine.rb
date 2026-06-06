@@ -29,20 +29,21 @@ module BSV
     class Engine
       include BSV::Wallet::Interface::BRC100
 
-      autoload :Broadcast,   'bsv/wallet/engine/broadcast'
-      autoload :TxProof,     'bsv/wallet/engine/tx_proof'
-      autoload :OmqSupport,  'bsv/wallet/engine/omq_support'
-      autoload :InputSource, 'bsv/wallet/engine/input_source'
+      autoload :Broadcast,             'bsv/wallet/engine/broadcast'
+      autoload :TxProof,               'bsv/wallet/engine/tx_proof'
+      autoload :OmqSupport,            'bsv/wallet/engine/omq_support'
+      autoload :InputSource,           'bsv/wallet/engine/input_source'
+      autoload :MerklePathNormaliser,  'bsv/wallet/engine/merkle_path_normaliser'
 
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
       LIMP_THRESHOLD     = 50_000  # default: 50K sats
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
-      attr_reader :limp_threshold, :services, :broadcaster
+      attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker
 
-      def initialize(store:, utxo_pool:,
-                     services: nil, broadcaster: nil, key_deriver: nil, chain_tracker: nil,
+      def initialize(store:, utxo_pool:, broadcaster:,
+                     services: nil, key_deriver: nil, chain_tracker: nil,
                      network_provider: nil,
                      network: :mainnet, limp_threshold: LIMP_THRESHOLD,
                      callback_token: nil)
@@ -57,10 +58,16 @@ module BSV
         @network_provider = network_provider
         @network_name = network
         @limp_threshold = limp_threshold
-        # Arcade callbackToken forwarded to inline_broadcast's POST so the
+        # Arcade callbackToken forwarded to the broadcast worker's POST so the
         # SSE listener (subscribed to the same token at daemon boot) receives
         # status frames for inline submissions. See #266.
         @callback_token = callback_token
+        # Inline-broadcast worker — same Engine::Broadcast the daemon's PULL
+        # loop uses. Eliminates the parallel +inline_broadcast+ codepath
+        # that pre-#271 duplicated submit's 202 / 400 / 503 dispatch and
+        # the post-submit accept / reject / promote bookkeeping.
+        @broadcast_worker = Broadcast.new(store: @store, broadcaster: @broadcaster,
+                                          callback_token: @callback_token)
       end
 
       # Is the wallet in limp mode? When true, all outbound operations
@@ -212,13 +219,13 @@ module BSV
         # change generation — already detected above to keep the
         # key_deriver check honest.
         if skip_change
-          wtxid, raw_tx, vout_mapping, signed_tx = build_transaction(
+          wtxid, raw_tx, vout_mapping, = build_transaction(
             action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,
             sign: true
           )
           change_outputs = []
         else
-          wtxid, raw_tx, vout_mapping, change_outputs, signed_tx = run_funding_loop(
+          wtxid, raw_tx, vout_mapping, change_outputs, = run_funding_loop(
             action_id: action_result[:id],
             caller_outputs: outputs || [],
             caller_supplied_inputs: caller_supplied_inputs,
@@ -255,25 +262,14 @@ module BSV
           return { txid: wtxid, tx: atomic_beef, no_send_change: change }
         end
 
-        # Phase 3 + 4: Broadcast inline. Phase 4 (output promotion +
-        # spendable row creation) runs on accepted ARC response. Delayed
+        # Phase 3 + 4: Broadcast inline. The broadcast worker (same one the
+        # daemon's PULL loop uses) handles the 202 / 400 / 503 dispatch
+        # internally: atomic Phase 4 promotion on accepted, reject_action
+        # cascade on terminal 400, broadcast_at clear on 503, eager proof
+        # linking when the response carries merkle material. Delayed
         # broadcasts are picked up by the daemon's push-discovery loop from
-        # the broadcasts row that sign_action created atomically above.
-        if broadcast == :inline
-          broadcast_result = inline_broadcast(action_id: action_result[:id], tx: signed_tx)
-          if rejected?(broadcast_result)
-            # Definitive sync rejection: tx isn't in any mempool. Cascade
-            # forward through any child action that consumed this action's
-            # outputs (none here on the inline path, but reject_action is
-            # the right primitive) and unwind speculative promotion in
-            # one transaction. The +inputs+ rows CASCADE-delete with the
-            # action, freeing locked outputs for the next call to spend.
-            @store.reject_action(action_id: action_result[:id])
-          elsif accepted?(broadcast_result)
-            @store.promote_action_outputs(action_id: action_result[:id])
-            handle_proof_from_broadcast(action_result[:id], broadcast_result)
-          end
-        end
+        # the broadcasts row that sign_action created atomically above. #271.
+        @broadcast_worker.process(action_result[:id]) if broadcast == :inline
 
         { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
@@ -301,7 +297,7 @@ module BSV
         # so sign_action only deserializes the unsigned tx, applies caller
         # unlocking scripts, signs remaining P2PKH inputs, and updates the
         # action with the signed raw_tx + wtxid.
-        wtxid, raw_tx, signed_tx = apply_spends(action, spends)
+        wtxid, raw_tx, = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
 
@@ -312,15 +308,9 @@ module BSV
 
         return { txid: wtxid, tx: atomic_beef } if no_send
 
-        if broadcast == :inline
-          broadcast_result = inline_broadcast(action_id: action[:id], tx: signed_tx)
-          if rejected?(broadcast_result)
-            @store.reject_action(action_id: action[:id])
-          elsif accepted?(broadcast_result)
-            @store.promote_action_outputs(action_id: action[:id])
-            handle_proof_from_broadcast(action[:id], broadcast_result)
-          end
-        end
+        # See create_action: the broadcast worker handles dispatch + bookkeeping
+        # internally. #271.
+        @broadcast_worker.process(action[:id]) if broadcast == :inline
 
         { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
@@ -1366,145 +1356,6 @@ module BSV
         end
       end
 
-      # +inline_broadcast+'s output-promotion decision. Returns true
-      # when the tx is "on its way" — either formally accepted
-      # (+ArcStatus::ACCEPTED+) OR in an in-flight status that isn't
-      # definitively rejected. The narrower accepted-only test was wrong
-      # for the inline path: ARC's synchronous response on submit is
-      # typically an in-flight status, not SEEN_ON_NETWORK. Treating
-      # in-flight as "not promoted" left the wallet's spendable view
-      # stuck on the consumed input with no replacement change, breaking
-      # the next outbound payment with a spurious limp-mode error.
-      def accepted?(broadcast_result)
-        return false unless broadcast_result
-
-        status = broadcast_result[:tx_status].to_s.upcase
-        return false if status.empty?
-
-        !ArcStatus::REJECTED.include?(status)
-      end
-
-      # Definitive synchronous rejection. The broadcaster returned a
-      # status that explicitly says "the network refused this tx" —
-      # +REJECTED+ from Arcade / Teranode's catch-all +PROCESSING (4)+
-      # validation failure, or +DOUBLE_SPEND_ATTEMPTED+ from ARC. These
-      # are the cases where the tx is not in any node's mempool and the
-      # wallet's locked inputs need releasing so subsequent actions can
-      # spend them.
-      #
-      # Non-rejection includes both formal acceptance (the wallet
-      # promotes outputs and proceeds) and in-flight / orphaned states
-      # (the wallet still promotes, trusting the daemon's poll loop to
-      # eventually resolve — orphaned txs typically resolve in time).
-      def rejected?(broadcast_result)
-        return false unless broadcast_result
-
-        status = broadcast_result[:tx_status].to_s.upcase
-        return false if status.empty?
-
-        ArcStatus::REJECTED.include?(status)
-      end
-
-      # Inline ARC submission for the synchronous broadcast path.
-      #
-      # Stamps broadcast_at in a committed transaction *before* the
-      # network call (mirrors Engine::Broadcast#submit). A mid-POST
-      # crash therefore leaves the row in broadcast_at IS NOT NULL,
-      # tx_status IS NULL -- a recognisable crash-recovery state the
-      # poll loop subsequently resolves via GET /tx/{txid}.
-      #
-      # The broadcasts row is created atomically by Store#sign_action
-      # when actions.broadcast_intent != 'none', so this method assumes the
-      # row exists and only updates it.
-      #
-      # @param action_id [Integer]
-      # @param tx [BSV::Transaction::Transaction] signed transaction
-      #   with +source_satoshis+ / +source_locking_script+ wired on
-      #   each input. Passed as a Transaction object (not raw bytes)
-      #   so the ARC protocol can serialise to Extended Format (EF)
-      #   via +tx.to_ef_hex+ — TAAL ARC rejects raw-format submits
-      #   with "Missing input scripts: Transaction could not be
-      #   transformed to extended format".
-      # @return [Hash, nil] broadcast status from Store
-      def inline_broadcast(action_id:, tx:)
-        raise BSV::Wallet::Error, 'inline_broadcast called without broadcaster configured' unless @broadcaster
-
-        @store.mark_broadcast_attempted(action_id: action_id)
-        # Mirror Engine::Broadcast#submit (#266): forward callback_token
-        # so Arcade's SSE listener receives the resulting status frame.
-        # Lenient default -- skip the kwarg when no token configured.
-        broadcast_kwargs = { wtxid: tx.wtxid }
-        broadcast_kwargs[:callback_token] = @callback_token if @callback_token
-        response = @broadcaster.broadcast(tx, **broadcast_kwargs)
-
-        if response.http_success?
-          data = response.data
-          @store.record_broadcast_result(
-            action_id: action_id,
-            tx_status: data[:tx_status],
-            arc_status: data[:status],
-            block_hash: data[:block_hash],
-            block_height: data[:block_height],
-            merkle_path: data[:merkle_path],
-            extra_info: data[:extra_info],
-            competing_txs: data[:competing_txs]
-          )
-        elsif response.code.to_s == '503'
-          # 503 backpressure path -- mirror Engine::Broadcast#submit's
-          # null-on-503 (plan §4.2). Revert the pre-call broadcast_at
-          # stamp so the row re-enters the queued / push-discovery set
-          # for clean retry. The clear is guarded against the listener
-          # race in Store#clear_broadcast_attempted (no-op when tx_status
-          # has progressed). Return the stored status so the caller's
-          # accepted?/rejected? checks see "still pending" rather than
-          # a stale success.
-          @store.clear_broadcast_attempted(action_id: action_id)
-          @store.broadcast_status(action_id: action_id)
-        else
-          # Non-2xx, non-503 ARC response. A definitive rejection carries a
-          # terminal txStatus in the (raw, camelCase) failure body; surface
-          # it so the caller's +rejected?+ check unwinds the action and
-          # releases its locked inputs, exactly as the daemon's +submit+
-          # path does via +reject_action+. Transport errors and non-terminal
-          # failures carry no rejecting status and fall through to the
-          # stored (tx_status NULL) row for the poll loop to resolve later.
-          # We never return a non-rejecting status here — that would let
-          # +accepted?+ misread a failed submit as success.
-          failure_status = response.data && response.data['txStatus']
-          if failure_status && ArcStatus::REJECTED.include?(failure_status.to_s.upcase)
-            { tx_status: failure_status.to_s.upcase }
-          else
-            @store.broadcast_status(action_id: action_id)
-          end
-        end
-      end
-
-      def handle_proof_from_broadcast(action_id, broadcast_result)
-        return unless broadcast_result[:merkle_path]
-
-        wtxid = broadcast_result[:wtxid] || @store.find_action(id: action_id)&.dig(:wtxid)
-        return unless wtxid
-
-        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'handle_proof_from_broadcast wtxid')
-        merkle_path = normalize_merkle_path(broadcast_result[:merkle_path], wtxid)
-
-        # Store raw_tx from the action so BEEF construction can use it
-        raw_tx = broadcast_result[:raw_tx]
-        raw_tx ||= @store.find_action(id: action_id)&.dig(:raw_tx)
-
-        proof_id = @store.save_proof(
-          wtxid: wtxid,
-          proof: {
-            height: broadcast_result[:block_height],
-            block_hash: broadcast_result[:block_hash],
-            merkle_path: merkle_path,
-            raw_tx: raw_tx
-          }
-        )
-        @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
-        BSV.logger&.debug { "[Engine] proof_from_broadcast: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{broadcast_result[:block_height]}" }
-      end
-
       def query_change_outpoints(action_id)
         action = @store.find_action(id: action_id)
         return [] unless action&.dig(:wtxid)
@@ -1512,46 +1363,6 @@ module BSV
         dtxid = action[:wtxid].reverse.unpack1('H*')
         vouts = @store.query_change_output_vouts(action_id: action_id)
         vouts.map { |vout| "#{dtxid}.#{vout}" }
-      end
-
-      # Normalize a merkle_path value to BRC-74 binary format.
-      #
-      # ARC may return merkle_path as:
-      # - Binary (ASCII-8BIT) — already in BRC-74 format, pass through
-      # - Hex string — decode to binary
-      # - TSC format hash — convert via MerklePath.from_tsc
-      #
-      # @param merkle_path [String, Hash] raw merkle_path from broadcast response
-      # @param wtxid [String] 32-byte binary wtxid (wire order, needed for TSC conversion)
-      # @return [String] BRC-74 binary merkle_path
-      def normalize_merkle_path(merkle_path, wtxid)
-        if merkle_path.is_a?(Hash)
-          BSV.logger&.debug { '[Engine] normalize_merkle_path: format=TSC' }
-          return normalize_tsc_merkle_path(merkle_path, wtxid)
-        end
-        if merkle_path.encoding == Encoding::ASCII_8BIT
-          BSV.logger&.debug { '[Engine] normalize_merkle_path: format=binary (passthrough)' }
-          return merkle_path
-        end
-        if merkle_path.match?(/\A[0-9a-fA-F]+\z/)
-          BSV.logger&.debug { "[Engine] normalize_merkle_path: format=hex (#{merkle_path.length} chars)" }
-          return [merkle_path].pack('H*')
-        end
-        BSV.logger&.debug { '[Engine] normalize_merkle_path: format=unknown (force binary)' }
-        merkle_path.b
-      end
-
-      # Convert a TSC-format merkle proof hash to BRC-74 binary.
-      # from_tsc expects display-order hex; wtxid is wire order, so reverse for display.
-      def normalize_tsc_merkle_path(tsc, wtxid)
-        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'normalize_tsc wtxid')
-        dtxid = wtxid.reverse.unpack1('H*')
-        BSV::Transaction::MerklePath.from_tsc(
-          dtxid_hex: tsc[:txOrId] || tsc[:tx_or_id] || dtxid,
-          index: tsc[:index],
-          nodes: tsc[:nodes],
-          block_height: tsc[:blockHeight] || tsc[:block_height]
-        ).to_binary
       end
 
       # Build an Atomic BEEF (BRC-95) envelope for a signed transaction.
@@ -2159,7 +1970,7 @@ module BSV
       # @return [Array(String, String, Hash, Transaction)] wtxid (32-byte
       #   wire order), raw_tx (binary), vout_mapping (original index ->
       #   new vout), and the assembled tx (signed when +sign:+ is true,
-      #   needed by +inline_broadcast+ for EF serialisation).
+      #   needed downstream for EF serialisation).
       def build_transaction(action_id, inputs, outputs, lock_time, version, randomize, sign: true)
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
 
