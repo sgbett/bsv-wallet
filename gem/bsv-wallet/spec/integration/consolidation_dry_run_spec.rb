@@ -125,7 +125,7 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
     # bootstrap self-payment's network fee (a few dozen sats). Allow a
     # 1000-sat margin to absorb fee variance across SDK version bumps.
     wallet_names.each do |wallet|
-      _, _, status = run_cli('import', wallet)
+      _, _, status = run_cli('import', wallet, '--no-send')
       expect(status).to be_success, "import #{wallet} failed"
       balance_stdout, _, status = run_cli('balance', wallet)
       expect(status).to be_success, "post-import balance #{wallet} failed"

@@ -17,7 +17,20 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
 
   let(:wtxid) { SecureRandom.random_bytes(32) }
   let(:dtxid) { wtxid.reverse.unpack1('H*') }
-  let(:raw_tx) { "\x01\x00".b }
+  # Real signed P2PKH transaction (1 input, 1 output) so #252's daemon-side
+  # EF reconstruction (Engine::Broadcast#hydrated_transaction_for) can parse
+  # action[:raw_tx] and walk its inputs. The resolved_inputs let below
+  # matches this tx's single input so #attach! has source data to wire in.
+  let(:raw_tx) do
+    ['01000000016ce7229f014164e254aad172b1f8b40d496942ad7e323b47e0424c2b2e2e3772010000006a47' \
+     '30440220463fcf8f57a61c4f8ede208773db8732bf3a0757d929a8cbbe29bf4905fe5ef6022005d74398fa' \
+     'f5b24912821836171af44f55f89858f3edf92863cde4823da11d4641210362f5fb9274834bb0cd0376a8d5' \
+     'd02bdbf459a37a62c5baef3fb06d1159b55597ffffffff01f0991600000000001976a9141f36a49fcf6ada' \
+     '1f74f82377b33b17b68f7a016188acd3740e00'].pack('H*')
+  end
+  let(:resolved_inputs) do
+    [{ source_satoshis: 1_500_000, source_locking_script: ['76a914' + ('a' * 40) + '88ac'].pack('H*') }]
+  end
   let(:merkle_path_binary) { "\x01\x02\x03".b }
 
   let(:store) { double('Store') }
@@ -100,10 +113,13 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
       link_proof: nil,
       promote_action_outputs: []
     )
+    # EF reconstruction (#252) at submit time calls into the Store to hydrate
+    # per-input source data.
+    allow(store).to receive(:resolve_inputs_for_signing).with(action_id: 1).and_return(resolved_inputs)
 
     # --- Network stubs ---
     allow(broadcaster).to receive(:get_tx_status).with(wtxid: wtxid, dtxid: dtxid).and_return(proof_response)
-    allow(broadcaster).to receive(:broadcast).with(raw_tx, wtxid: wtxid).and_return(broadcast_response)
+    allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: wtxid).and_return(broadcast_response)
   end
 
   it 'emits the canonical event sequence across one broadcast and one proof cycle' do

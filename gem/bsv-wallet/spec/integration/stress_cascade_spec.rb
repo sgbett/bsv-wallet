@@ -147,7 +147,7 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
     # sats minus a few dozen sats. Allow a 1000-sat margin to absorb fee
     # variance across SDK version bumps.
     wallet_names.each do |wallet|
-      _, _, status = run_cli('import', wallet)
+      _, _, status = run_cli('import', wallet, '--no-send')
       expect(status).to be_success, "import #{wallet} failed"
       bal = balance(wallet)
       expect(bal).to be >= 999_000, "#{wallet} starting balance #{bal} < 999k sats (import likely failed)"
