@@ -70,6 +70,23 @@ RSpec.describe BSV::Wallet::Engine do
       expect(OMQ::PUSH).not_to have_received(:connect)
     end
 
+    it 'treats a set-but-blank BSV_WALLET_HINTS_SOCKET as unset (would noisily fail OMQ::PUSH.connect("") otherwise)' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('   ')
+      allow(OMQ::PUSH).to receive(:connect)
+
+      engine.create_action(
+        description: 'hint disabled by blank env',
+        inputs: [],
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+        ]
+      )
+
+      expect(OMQ::PUSH).not_to have_received(:connect)
+    end
+
     it 'connects + pushes a Marshalled hint when BSV_WALLET_HINTS_SOCKET is set' do
       allow(ENV).to receive(:fetch).and_call_original
       allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('inproc://test-hints-publish')

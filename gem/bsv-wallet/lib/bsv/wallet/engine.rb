@@ -1396,7 +1396,13 @@ module BSV
       # +HydratedTxCache+'s LRU eventually evicts it under load. No
       # reconciliation required.
       def publish_beef_hint(action_id, atomic_beef)
+        # Blank-or-unset normalises to nil — a set-but-empty env
+        # (e.g. +export BSV_WALLET_HINTS_SOCKET=+ in a shell) would
+        # otherwise be a truthy "" that +OMQ::PUSH.connect+ would
+        # raise on; the rescue below would swallow it but every
+        # publish would noisily fail in debug logs.
         socket_path = ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil)
+        socket_path = nil if socket_path&.strip&.empty?
         return unless socket_path
 
         payload = Marshal.dump(action_id: action_id, beef: atomic_beef)

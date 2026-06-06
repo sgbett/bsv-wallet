@@ -82,7 +82,9 @@ module BSV
           # (CLI / API / UI) push Atomic BEEF so the daemon's broadcast
           # skips the resolve_inputs_for_signing JOIN at submit time and
           # has the parents on hand for any future BEEF hand-off. #269.
-          broadcast.hints_pull!(task: task, socket_path: ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil))
+          # Blank-or-unset normalises to nil so a set-but-empty env
+          # doesn't try to bind on "" and crash the fiber.
+          broadcast.hints_pull!(task: task, socket_path: hints_socket_path)
 
           tx_proof = Engine::TxProof.new(store: @store, broadcaster: @broadcaster)
           tx_proof.pull!(task: task)
@@ -151,6 +153,17 @@ module BSV
         %w[INT TERM].each do |signal|
           Signal.trap(signal) { @stop_requested = true }
         end
+      end
+
+      # Read +BSV_WALLET_HINTS_SOCKET+ with blank-or-unset → nil
+      # normalisation. A set-but-empty env (e.g. +export
+      # BSV_WALLET_HINTS_SOCKET=+ in a shell) would otherwise be a
+      # truthy "" that +hints_pull!+ tries to bind on. #269.
+      def hints_socket_path
+        value = ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil)
+        return nil if value.nil? || value.strip.empty?
+
+        value
       end
 
       # Construct the SSE listener and run it as a peer Async task.

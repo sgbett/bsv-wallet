@@ -90,6 +90,18 @@ RSpec.describe BSV::Wallet::Daemon do
       expect(broadcast).to have_received(:hints_pull!).with(task: anything, socket_path: nil)
     end
 
+    it 'treats a set-but-blank BSV_WALLET_HINTS_SOCKET as unset (would crash the fiber on bind otherwise)' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('   ')
+
+      Async do |task|
+        daemon.run!
+        task.stop
+      end
+
+      expect(broadcast).to have_received(:hints_pull!).with(task: anything, socket_path: nil)
+    end
+
     it 'does NOT boot the SSE listener when callback_token: is nil (default)' do
       allow(BSV::Network::SSEListener).to receive(:new)
 
