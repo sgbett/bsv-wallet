@@ -329,35 +329,21 @@ RSpec.describe BSV::Wallet::Engine do
       end
     end
 
-    context 'when inline broadcast is invoked without a broadcaster' do
-      subject(:engine_without_broadcaster) do
-        described_class.new(
-          store: store, utxo_pool: utxo_pool,
-          services: double('Services', call: nil), network: :mainnet
-        )
-      end
-
-      it 'raises so the misconfiguration is explicit rather than leaving the action half-broadcast' do
+    context 'when constructed without a broadcaster' do
+      it 'raises ArgumentError at construction (broadcaster is required post-#271)' do
         expect do
-          engine_without_broadcaster.create_action(
-            description: 'inline broadcast without broadcaster',
-            inputs: [],
-            accept_delayed_broadcast: false,
-            outputs: [
-              { satoshis: 500, locking_script: OP_TRUE,
-                output_description: 'output', basket: 'payments',
-                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-                sender_identity_key: 'self' }
-            ]
+          described_class.new(
+            store: store, utxo_pool: utxo_pool,
+            services: double('Services', call: nil), network: :mainnet
           )
-        end.to raise_error(BSV::Wallet::Error, /inline_broadcast called without broadcaster/)
+        end.to raise_error(ArgumentError, /missing keyword: :broadcaster/)
       end
     end
 
     context 'with delayed broadcast (accept_delayed_broadcast: true)' do
       subject(:engine) do
         described_class.new(
-          store: store, utxo_pool: utxo_pool,
+          store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
           services: services, network: :mainnet
         )
       end
@@ -922,7 +908,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     let(:engine_with_tracker) do
       described_class.new(
-        store: store, utxo_pool: utxo_pool,
+        store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
         chain_tracker: chain_tracker_mock, network: :mainnet
       )
     end
@@ -1239,7 +1225,7 @@ RSpec.describe BSV::Wallet::Engine do
         allow(rejecting_tracker).to receive_messages(valid_root_for_height?: false, current_height: 900_000)
 
         engine_reject = described_class.new(
-          store: store, utxo_pool: utxo_pool,
+          store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
           chain_tracker: rejecting_tracker, network: :mainnet
         )
 
@@ -1522,124 +1508,10 @@ RSpec.describe BSV::Wallet::Engine do
       end
     end
 
-    context 'handle_proof_from_broadcast normalization' do
-      it 'normalizes hex merkle_path to binary before storing' do
-        # Create an action that will receive a broadcast proof
-        beef_data = build_test_beef(satoshis: 500)
-        beef = BSV::Transaction::Beef.from_binary(beef_data)
-        subject_wtxid = beef.subject_wtxid
-
-        engine_with_tracker.internalize_action(
-          tx: beef_data,
-          description: 'hex proof normal',
-          outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'hex_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
-          ]
-        )
-
-        # Build a valid merkle path and encode as hex
-        # subject_wtxid from beef is wire order — use directly as merkle path hash
-        sibling_hash = SecureRandom.random_bytes(32)
-        mp = BSV::Transaction::MerklePath.new(
-          block_height: 850_000,
-          path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: subject_wtxid, txid: true),
-            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
-          ]]
-        )
-        merkle_path_hex = mp.to_binary.unpack1('H*')
-
-        # Find the action and simulate broadcast proof with hex merkle_path
-        action = store.find_action(wtxid: subject_wtxid)
-        engine.send(:handle_proof_from_broadcast, action[:id], {
-                      wtxid: subject_wtxid,
-                      block_height: 850_000,
-                      merkle_path: merkle_path_hex
-                    })
-
-        proof = proof_store.find_proof(wtxid: subject_wtxid)
-        expect(proof).not_to be_nil
-        expect(proof[:merkle_path].encoding).to eq(Encoding::ASCII_8BIT)
-
-        # Verify it can be deserialized
-        stored_mp, = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path])
-        expect(stored_mp.block_height).to eq(850_000)
-      end
-
-      it 'passes through binary merkle_path unchanged' do
-        beef_data = build_test_beef(satoshis: 500)
-        beef = BSV::Transaction::Beef.from_binary(beef_data)
-        subject_wtxid = beef.subject_wtxid
-
-        engine_with_tracker.internalize_action(
-          tx: beef_data,
-          description: 'bin proof pass',
-          outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'bin_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
-          ]
-        )
-
-        # subject_wtxid from beef is wire order — use directly as merkle path hash
-        sibling_hash = SecureRandom.random_bytes(32)
-        mp = BSV::Transaction::MerklePath.new(
-          block_height: 850_000,
-          path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: subject_wtxid, txid: true),
-            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
-          ]]
-        )
-        merkle_path_binary = mp.to_binary
-
-        action = store.find_action(wtxid: subject_wtxid)
-        engine.send(:handle_proof_from_broadcast, action[:id], {
-                      wtxid: subject_wtxid,
-                      block_height: 850_000,
-                      merkle_path: merkle_path_binary
-                    })
-
-        proof = proof_store.find_proof(wtxid: subject_wtxid)
-        expect(proof[:merkle_path]).to eq(merkle_path_binary)
-      end
-
-      it 'stores raw_tx from the action for BEEF construction' do
-        # Create an outgoing action so it has raw_tx set
-        locking_script = OP_TRUE
-        result = engine.create_action(
-          description: 'broadcast raw_tx',
-          inputs: [],
-          no_send: true,
-          outputs: [{ satoshis: 500, locking_script: locking_script,
-                      basket: 'proof_raw_tx' }]
-        )
-
-        wtxid = result[:txid]
-        action = store.find_action(wtxid: wtxid)
-
-        # Simulate ARC returning MINED with merkle_path
-        # wtxid is wire order — use directly as merkle path hash
-        sibling_hash = SecureRandom.random_bytes(32)
-        mp = BSV::Transaction::MerklePath.new(
-          block_height: 850_000,
-          path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid, txid: true),
-            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
-          ]]
-        )
-
-        engine.send(:handle_proof_from_broadcast, action[:id], {
-                      wtxid: wtxid,
-                      block_height: 850_000,
-                      merkle_path: mp.to_binary
-                    })
-
-        proof = proof_store.find_proof(wtxid: wtxid)
-        expect(proof).not_to be_nil
-        expect(proof[:raw_tx]).not_to be_nil
-        expect(proof[:raw_tx].bytesize).to be > 0
-      end
-    end
+    # Broadcast-proof linking (formerly Engine#handle_proof_from_broadcast):
+    # moved to Engine::Broadcast#link_proof_if_present in #271; merkle-path
+    # normalisation lives in Engine::MerklePathNormaliser. Direct coverage
+    # in spec/bsv/wallet/engine/broadcast_spec.rb.
 
     # --- verify_incoming_transaction! unit tests ---
 

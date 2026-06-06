@@ -128,7 +128,7 @@ RSpec.describe 'walletd broadcaster.provider end-to-end', :postgres do # rubocop
         network: :mainnet
       )
 
-      engine.send(:inline_broadcast, action_id: action_id, tx: signed_tx)
+      engine.broadcast_worker.process(action_id)
 
       row = store.db[:broadcasts].where(action_id: action_id).first
       expect(row[:provider]).to eq(provider_name)

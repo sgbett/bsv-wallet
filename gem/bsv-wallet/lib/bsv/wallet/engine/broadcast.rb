@@ -276,11 +276,44 @@ module BSV
           # same transaction when tx_status is accepted. No separate call
           # needed here; closes the crash-recovery gap where a process
           # could die between recording and promotion.
+          link_proof_if_present(action_id, data)
           BSV::Wallet.emit('task.succeeded',
                            task: 'broadcast_submission', id: action_id,
                            latency_ms: latency_ms,
                            outcome: categorize_outcome(data[:tx_status]))
           updated
+        end
+
+        # When ARC's success response carries proof material (rare — happens
+        # when the tx was already mined at submit time), eagerly save the
+        # +tx_proofs+ row and link it to the action. Avoids waiting for
+        # +Engine::TxProof+'s proof_acquisition cycle to pull it back via
+        # +get_tx_status+. Pre-#271 this lived in the inline-only
+        # +Engine#handle_proof_from_broadcast+; folding it here gives the
+        # daemon path the same eagerness for free.
+        def link_proof_if_present(action_id, data)
+          return unless data[:merkle_path] && data[:block_height]
+
+          action = @store.find_action(id: action_id)
+          wtxid = action&.dig(:wtxid)
+          return unless wtxid
+
+          BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'link_proof_if_present wtxid')
+          merkle_path = MerklePathNormaliser.normalize(data[:merkle_path], wtxid)
+
+          proof_id = @store.save_proof(
+            wtxid: wtxid,
+            proof: {
+              height: data[:block_height],
+              block_hash: data[:block_hash],
+              merkle_path: merkle_path,
+              raw_tx: action[:raw_tx]
+            }
+          )
+          @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
+          BSV.logger&.debug do
+            "[Engine::Broadcast] proof linked from broadcast response: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{data[:block_height]}"
+          end
         end
 
         # 400 / terminal-body branch -- under HLR #182's atomic invariant,

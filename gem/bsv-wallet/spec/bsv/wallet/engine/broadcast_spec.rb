@@ -57,11 +57,15 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     allow(store).to receive(:mark_broadcast_attempted)
     # Phase 4 promote is triggered on accepted ARC responses; stub by default
     # so spec contexts that don't assert on it remain happy.
-    allow(store).to receive(:promote_action_outputs).and_return([])
     # EF reconstruction (#252) calls into the Store at submit time to hydrate
     # per-input source data. Stubbed by default so submission specs do not
     # have to wire it per-context.
     allow(store).to receive(:resolve_inputs_for_signing).with(action_id: action_id).and_return(resolved_inputs)
+    # Eager proof linking (#271) — submit calls these only when the response
+    # carries merkle material; spec contexts that don't supply it just need
+    # the stubs in place so the assertions can verify "was/wasn't called".
+    allow(store).to receive_messages(promote_action_outputs: [], save_proof: nil)
+    allow(store).to receive(:link_proof)
   end
 
   describe '#process' do
@@ -165,6 +169,35 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
           extra_info: nil,
           competing_txs: nil
         )
+      end
+
+      it 'does not link a proof when the response carries no merkle_path' do
+        broadcast.process(action_id)
+        expect(store).not_to have_received(:save_proof)
+        expect(store).not_to have_received(:link_proof)
+      end
+
+      it 'eagerly saves the proof and links to the action when response carries merkle material (#271)' do
+        mp = BSV::Transaction::MerklePath.new(
+          block_height: 850_000,
+          path: [[
+            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: submit_wtxid, txid: true),
+            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: SecureRandom.random_bytes(32))
+          ]]
+        )
+        merkle_path_binary = mp.to_binary
+        proof_data = broadcast_data.merge(merkle_path: merkle_path_binary, block_height: 850_000, block_hash: SecureRandom.random_bytes(32))
+        proof_response = BSV::Network::ProtocolResponse.new(nil, data: proof_data, http_success: true)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(proof_response)
+        allow(store).to receive(:save_proof).and_return(777)
+
+        broadcast.process(action_id)
+
+        expect(store).to have_received(:save_proof).with(
+          wtxid: submit_wtxid,
+          proof: hash_including(height: 850_000, merkle_path: kind_of(String), raw_tx: raw_tx)
+        )
+        expect(store).to have_received(:link_proof).with(action_id: action_id, tx_proof_id: 777)
       end
 
       it 'returns the broadcast status' do
