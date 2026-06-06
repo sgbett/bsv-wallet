@@ -377,12 +377,14 @@ module BSV
           # arc_status carries the status-poll shape's txStatus when present
           # (Arcade's {txStatus, extraInfo} body); arc_reason carries the
           # broadcast-rejection shape's reason string ({error, reason} body).
-          # At most one is populated per response; the other is nil. #270.
+          # At most one is populated per response; +compact+ omits the
+          # missing one so downstream consumers don't have to filter nils.
+          # #270.
           BSV::Wallet.emit('task.aborted',
                            task: 'broadcast_submission', id: action_id,
                            reason: categorize_reason(response),
-                           arc_status: response.data['txStatus'],
-                           arc_reason: response.data['reason'])
+                           **{ arc_status: response.data['txStatus'],
+                               arc_reason: response.data['reason'] }.compact)
           nil
         rescue BSV::Wallet::CannotRejectInternalActionError => e
           @store.increment_broadcast_retry(action_id: action_id)

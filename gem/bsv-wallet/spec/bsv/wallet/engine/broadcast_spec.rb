@@ -458,6 +458,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
           reason: :policy_violation, arc_status: 'REJECTED',
           task: 'broadcast_submission', id: action_id
         )
+        # The {txStatus, extraInfo} shape carries no reason; key omitted.
+        expect(aborted).not_to have_key(:arc_reason)
       end
 
       it 'calls reject_action on the store (releases locked inputs)' do
@@ -575,9 +577,11 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         expect(aborted).to include(
           reason: :policy_violation,
           arc_reason: "'PreviousTx' not supplied",
-          arc_status: nil,
           task: 'broadcast_submission', id: action_id
         )
+        # The {error, reason} 4xx shape carries no txStatus; the key is
+        # omitted from the event rather than emitted as nil.
+        expect(aborted).not_to have_key(:arc_status)
       end
 
       it 'does not emit task.failed reason=:unknown (regression guard against the pre-#270 categorisation gap)' do
