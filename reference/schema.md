@@ -1032,7 +1032,7 @@ Arcade SSE listener resume points. One row per Arcade callbackToken; the row rec
 | last_event_id | bigint | NOT NULL |
 | updated_at | timestamptz | NOT NULL |
 
-**No FK on `token`:** the token is Arcade-issued, not derived from any wallet table.
+**No FK on `token`:** the token is an external identifier, not a row in any other wallet table. In practice it is wallet-derived (HMAC-from-WIF via `BSV::Wallet::CallbackToken#derive`) and supplied to Arcade for callback scoping — the wallet owns it, Arcade just relays callbacks tagged with it.
 
 **`last_event_id`:** Arcade emits SSE `id:` fields as nanosecond timestamps (~19 digits — see Arcade PR #50). `bigint` accommodates the full range.
 

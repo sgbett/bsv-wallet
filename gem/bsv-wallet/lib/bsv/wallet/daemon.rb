@@ -2,6 +2,12 @@
 
 require 'async'
 require 'omq'
+# Load Engine first so its autoloads (InputSource, MerklePathNormaliser,
+# HydratedTxCache) are installed before broadcast/tx_proof reopen the
+# class — those modules are referenced unqualified inside the workers
+# and would otherwise NameError if +daemon+ is loaded without a prior
+# +require 'bsv-wallet'+.
+require_relative 'engine'
 require_relative 'engine/broadcast'
 require_relative 'engine/tx_proof'
 require_relative 'scheduler'
