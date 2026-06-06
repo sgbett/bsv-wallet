@@ -505,6 +505,56 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
     end
 
+    # #270 — Arcade's synchronous broadcast 4xx body shape carries
+    # {error, reason} rather than {txStatus, extraInfo}. Pre-#270 this
+    # landed as task.failed reason=:unknown (or :malformed pre-SDK-0.23.1)
+    # and the action stayed alive on the synchronous path, relying on
+    # SSE to eventually cascade. Post-#270 both paths agree: the
+    # synchronous response triggers reject_action immediately, and the
+    # 'reason' diagnostic is preserved on the event payload.
+    context "when 4xx with Arcade's broadcast-rejection shape (#270)" do
+      let(:broadcast_rejection_response) do
+        BSV::Network::ProtocolResponse.new(
+          nil,
+          http_success: false,
+          data: { 'error' => 'transaction failed validation',
+                  'reason' => "'PreviousTx' not supplied" },
+          error_message: "'PreviousTx' not supplied"
+        )
+      end
+
+      before do
+        allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+        allow(broadcaster).to receive(:broadcast)
+          .with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid)
+          .and_return(broadcast_rejection_response)
+        allow(store).to receive(:reject_action)
+        allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
+      end
+
+      it 'calls reject_action on the store (releases locked inputs)' do
+        broadcast.process(action_id)
+        expect(store).to have_received(:reject_action).with(action_id: action_id)
+      end
+
+      it 'emits task.aborted with reason=policy_violation and arc_reason carrying the diagnostic' do
+        broadcast.process(action_id)
+        aborted = emitted_events.find { |e| e[:name] == 'task.aborted' }
+        expect(aborted).to include(
+          reason: :policy_violation,
+          arc_reason: "'PreviousTx' not supplied",
+          arc_status: nil,
+          task: 'broadcast_submission', id: action_id
+        )
+      end
+
+      it 'does not emit task.failed reason=:unknown (regression guard against the pre-#270 categorisation gap)' do
+        broadcast.process(action_id)
+        failed = emitted_events.find { |e| e[:name] == 'task.failed' }
+        expect(failed).to be_nil
+      end
+    end
+
     context 'when broadcast succeeds' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)

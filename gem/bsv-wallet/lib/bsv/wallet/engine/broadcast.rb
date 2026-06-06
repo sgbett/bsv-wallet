@@ -324,10 +324,15 @@ module BSV
         # next resolution-loop pass, and emit a failure event.
         def handle_submit_terminal(action_id, response)
           @store.reject_action(action_id: action_id)
+          # arc_status carries the status-poll shape's txStatus when present
+          # (Arcade's {txStatus, extraInfo} body); arc_reason carries the
+          # broadcast-rejection shape's reason string ({error, reason} body).
+          # At most one is populated per response; the other is nil. #270.
           BSV::Wallet.emit('task.aborted',
                            task: 'broadcast_submission', id: action_id,
                            reason: categorize_reason(response),
-                           arc_status: response.data['txStatus'])
+                           arc_status: response.data['txStatus'],
+                           arc_reason: response.data['reason'])
           nil
         rescue BSV::Wallet::CannotRejectInternalActionError => e
           @store.increment_broadcast_retry(action_id: action_id)
@@ -436,7 +441,14 @@ module BSV
             tx_status = response.data['txStatus'].to_s.upcase
             return :stale_beef if tx_status == 'MINED_IN_STALE_BLOCK'
 
-            categorize_terminal_reason(response.data['txStatus'], response.data['extraInfo'])
+            reason = categorize_terminal_reason(response.data['txStatus'], response.data['extraInfo'])
+            # Arcade's synchronous broadcast-rejection shape carries no
+            # txStatus / extraInfo (just {error, reason}) so the status-poll
+            # bucketing returns :unknown. Treat it as :policy_violation —
+            # the tx was definitively refused by the network. #270.
+            return :policy_violation if reason == :unknown && arcade_broadcast_rejection?(response)
+
+            reason
           elsif response.retryable?
             response.code.to_i == 429 ? :rate_limited : :transport_error
           else
@@ -472,10 +484,25 @@ module BSV
         # True when the ARC failure response indicates a definitive,
         # non-recoverable rejection. Requires data to be present
         # (transport errors are always transient).
+        #
+        # Recognises two distinct Arcade failure shapes:
+        # - status-poll / SSE: {txStatus: "REJECTED", extraInfo: "..."}
+        # - synchronous broadcast 4xx: {error: "...", reason: "..."}
+        # See #270 for the second-shape coverage rationale.
         def terminal_failure?(response)
           return false unless response.data
+          return true if terminal_status?(response.data['txStatus'], response.data['extraInfo'])
 
-          terminal_status?(response.data['txStatus'], response.data['extraInfo'])
+          arcade_broadcast_rejection?(response)
+        end
+
+        # True when the response carries Arcade's synchronous broadcast
+        # rejection body — {error, reason} hash with both keys present.
+        # Tight predicate (both keys required) so unrelated 4xx bodies
+        # that happen to include an +error+ field don't false-cascade.
+        def arcade_broadcast_rejection?(response)
+          data = response.data
+          data.is_a?(Hash) && data.key?('error') && data.key?('reason')
         end
 
         # True when the response is Arcade's 503 backpressure signal
