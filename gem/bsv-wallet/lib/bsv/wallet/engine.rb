@@ -141,10 +141,10 @@ module BSV
                       return_txid_only: false, no_send: false,
                       originator: nil)
         validate_reference!(reference)
-        action_row = @store.find_action(reference: reference)
-        raise BSV::Wallet::InvalidParameterError, 'reference' unless action_row
+        action = Action.find(engine: self, reference: reference)
+        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
-        Action.new(engine: self, row: action_row).sign!(
+        action.sign!(
           spends: spends,
           no_send: no_send,
           accept_delayed_broadcast: accept_delayed_broadcast,
@@ -154,10 +154,10 @@ module BSV
 
       def abort_action(reference:, originator: nil)
         validate_reference!(reference)
-        action_row = @store.find_action(reference: reference)
-        raise BSV::Wallet::InvalidParameterError, 'reference' unless action_row
+        action = Action.find(engine: self, reference: reference)
+        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
-        Action.new(engine: self, row: action_row).abort!
+        action.abort!
       end
 
       # Operator-facing entry to Store#reject_action. The daemon's
@@ -165,28 +165,14 @@ module BSV
       # tools target specific stuck rows (action_id is a wallet-local
       # integer, not a BRC-100 reference — this isn't a spec method).
       def reject_action(action_id:)
-        action = @store.find_action(id: action_id)
-        raise BSV::Wallet::InvalidParameterError, "action_id=#{action_id} not found" unless action
+        raise BSV::Wallet::InvalidParameterError, "action_id=#{action_id} not found" unless Action.find_by_id(engine: self, id: action_id)
 
         @store.reject_action(action_id: action_id)
         { rejected: true, action_id: action_id }
       end
 
-      def list_actions(labels:, label_query_mode: :any,
-                       include_labels: false, include_inputs: false,
-                       include_input_source_locking_scripts: false,
-                       include_input_unlocking_scripts: false,
-                       include_outputs: false, include_output_locking_scripts: false,
-                       limit: 10, offset: 0, seek_permission: true, originator: nil)
-        result = @store.query_actions(
-          labels: labels, label_query_mode: label_query_mode,
-          limit: [limit, 10_000].min, offset: offset,
-          include_labels: include_labels, include_inputs: include_inputs,
-          include_input_locking_scripts: include_input_source_locking_scripts,
-          include_outputs: include_outputs,
-          include_output_locking_scripts: include_output_locking_scripts
-        )
-        { total_actions: result[:total], actions: result[:actions] }
+      def list_actions(**params)
+        Action.list(engine: self, **params)
       end
 
       def internalize_action(tx:, outputs:, description:, labels: nil,

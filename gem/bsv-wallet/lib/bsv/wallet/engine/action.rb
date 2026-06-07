@@ -283,6 +283,40 @@ module BSV
           { accepted: true }
         end
 
+        # Migrate +Engine#list_actions+'s body. Returns the BRC-100 hash
+        # shape +{ total_actions:, actions: }+ from +Store#query_actions+.
+        def self.list(engine:, labels:, label_query_mode: :any,
+                      include_labels: false, include_inputs: false,
+                      include_input_source_locking_scripts: false,
+                      include_input_unlocking_scripts: false,
+                      include_outputs: false, include_output_locking_scripts: false,
+                      limit: 10, offset: 0, seek_permission: true, originator: nil)
+          result = engine.store.query_actions(
+            labels: labels, label_query_mode: label_query_mode,
+            limit: [limit, 10_000].min, offset: offset,
+            include_labels: include_labels, include_inputs: include_inputs,
+            include_input_locking_scripts: include_input_source_locking_scripts,
+            include_outputs: include_outputs,
+            include_output_locking_scripts: include_output_locking_scripts
+          )
+          { total_actions: result[:total], actions: result[:actions] }
+        end
+
+        # Canonical lookup by BRC-100 reference. Returns an Action wrapping
+        # the row, or +nil+ when no action matches.
+        def self.find(engine:, reference:)
+          row = engine.store.find_action(reference: reference)
+          row && new(engine: engine, row: row)
+        end
+
+        # Internal lookup by wallet-local action id. Same shape as +.find+ —
+        # operator-facing porcelain (e.g. +bin/reject_action+) targets rows
+        # by id, not by reference.
+        def self.find_by_id(engine:, id:)
+          row = engine.store.find_action(id: id)
+          row && new(engine: engine, row: row)
+        end
+
         # ---- Class helpers (used by non-lifecycle porcelain) ---------------
 
         # Translate caller input specs into Store input specs.

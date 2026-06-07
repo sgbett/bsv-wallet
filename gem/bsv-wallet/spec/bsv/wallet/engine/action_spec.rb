@@ -308,6 +308,57 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
   end
 
+  describe '.list' do
+    it 'returns the BRC-100 { total_actions:, actions: } hash shape' do
+      store.create_action(action: { description: 'list smoke other', broadcast_intent: :none, outgoing: false })
+      action = store.create_action(action: { description: 'list smoke target', broadcast_intent: :none, outgoing: false })
+      described_class.attach_labels(engine: engine, action_id: action[:id], labels: ['list-smoke'])
+
+      result = described_class.list(engine: engine, labels: ['list-smoke'])
+
+      expect(result).to include(:total_actions, :actions)
+      expect(result[:total_actions]).to eq(1)
+      expect(result[:actions].first[:description]).to eq('list smoke target')
+    end
+
+    it 'is the entry point Engine#list_actions delegates to' do
+      action = store.create_action(action: { description: 'list delegator smoke', broadcast_intent: :none, outgoing: false })
+      described_class.attach_labels(engine: engine, action_id: action[:id], labels: ['list-delegator'])
+
+      expect(engine.list_actions(labels: ['list-delegator'])).to include(total_actions: 1)
+    end
+  end
+
+  describe '.find' do
+    it 'returns an Action when a row exists for the reference' do
+      row = store.create_action(action: { description: 'findable smoke', broadcast_intent: :none, outgoing: false })
+
+      found = described_class.find(engine: engine, reference: row[:reference])
+
+      expect(found).to be_a(described_class)
+      expect(found.id).to eq(row[:id])
+    end
+
+    it 'returns nil when no row exists for the reference' do
+      expect(described_class.find(engine: engine, reference: SecureRandom.uuid)).to be_nil
+    end
+  end
+
+  describe '.find_by_id' do
+    it 'returns an Action when a row exists for the id' do
+      row = store.create_action(action: { description: 'findable by id smoke', broadcast_intent: :none, outgoing: false })
+
+      found = described_class.find_by_id(engine: engine, id: row[:id])
+
+      expect(found).to be_a(described_class)
+      expect(found.id).to eq(row[:id])
+    end
+
+    it 'returns nil when no row exists for the id' do
+      expect(described_class.find_by_id(engine: engine, id: 999_999_999)).to be_nil
+    end
+  end
+
   describe '.attach_labels' do
     it 'is a no-op for nil labels' do
       action = store.create_action(action: { description: 'no labels', broadcast_intent: :none, outgoing: false })
