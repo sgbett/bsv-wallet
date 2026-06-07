@@ -101,6 +101,16 @@ wallet = BSV::Wallet::Engine.new(
 )
 ```
 
+### Engine Logical Models
+
+Inside Layer 3, the `Engine` factors its lifecycle-bearing concerns into three logical models — Ruby classes that own a workflow rather than persist a row:
+
+- **`Engine::Action`** — owns the create / sign / abort / internalize / list lifecycle for action rows. Drives the funding loop, change generation, BEEF assembly, and SPV verification for incoming transactions.
+- **`Engine::Broadcast`** — owns the broadcast lifecycle (submit, poll, accept, reject). The inline path and the daemon's push/poll loops both go through here.
+- **`Engine::TxProof`** — owns proof acquisition and linking. Pulls TSC merkle paths, normalises them, persists via `Store#save_proof`, and links them to actions.
+
+The trio shares a common shape: each is a plain Ruby class instantiated with `engine:` and a row reference, exposing class methods for entry points (`create`, `internalize`, `submit`, `poll_status`, `acquire`) and instance methods for in-flight state. The Sequel models on Layer 2b stay declarative — describing what rows ARE — while the Engine trio supplies the imperative behaviour for what rows DO over their lifetime. This split is a core walletd principle: physical models live in the Store; behaviour lives in the Engine.
+
 ### Gem Structure
 
 The wallet ships as a single gem (`bsv-wallet`) supporting both SQLite and PostgreSQL backends. The backend is selected at connection time based on the `DATABASE_URL` scheme — SQLite by default, PostgreSQL when the URL starts with `postgres://`.
@@ -189,7 +199,7 @@ The most complex method. Follows the schema's four-phase lifecycle. No database 
 
 Phase 2 is a single composition of two encapsulated primitives, driven by a small funding loop inside `create_action`:
 
-4. **Generate change + detect shortfall** — `Engine#generate_change` builds the transaction with templated change outputs, computes the exact fee from the templated size, and returns either `{ wtxid, raw_tx, vout_mapping, change_outputs }` or `{ shortfall: N }`
+4. **Generate change + detect shortfall** — `Engine::Action#generate_change` builds the transaction with templated change outputs, computes the exact fee from the templated size, and returns either `{ wtxid, raw_tx, vout_mapping, change_outputs }` or `{ shortfall: N }`
 5. **Top up if needed** — on a shortfall with wallet-selected inputs, `Engine#select_inputs(target_satoshis: shortfall, exclude: locked)` finds extra UTXOs and `Store#lock_inputs` locks them onto the existing action; the loop then re-runs step 4. Caller-supplied input shortfalls raise `InsufficientFundsError` immediately — the wallet does not extend a caller-supplied input set
 6. **Persist** — `Store#sign_action(action_id:, wtxid:, raw_tx:, outputs:, change_outputs:)` attaches the signed transaction, writes the caller and change output rows (`promoted = false` on the send path), and creates the broadcasts row for non-`:none` actions
 

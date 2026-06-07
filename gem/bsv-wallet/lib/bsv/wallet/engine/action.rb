@@ -373,6 +373,18 @@ module BSV
           engine.store.label_action(action_id: action_id, label_ids: label_ids)
         end
 
+        # Resolve a locking script value to a Script object.
+        #
+        # Binary strings (ASCII-8BIT / non-hex) are wrapped via from_binary.
+        # Hex strings are decoded via from_hex.
+        def self.resolve_locking_script(script_data)
+          if script_data.encoding == Encoding::ASCII_8BIT || !script_data.match?(/\A[0-9a-fA-F]*\z/)
+            BSV::Script::Script.from_binary(script_data)
+          else
+            BSV::Script::Script.from_hex(script_data)
+          end
+        end
+
         # ---- Instance -------------------------------------------------------
 
         attr_reader :engine, :id, :row
@@ -602,7 +614,7 @@ module BSV
           return [[], {}] if outputs.nil? || outputs.empty?
 
           tx_outputs = outputs.map do |out|
-            script = resolve_locking_script(out[:locking_script])
+            script = self.class.resolve_locking_script(out[:locking_script])
             BSV::Transaction::TransactionOutput.new(
               satoshis: out[:satoshis] || 0,
               locking_script: script
@@ -621,18 +633,6 @@ module BSV
           indices.each_with_index { |orig, new_pos| vout_mapping[orig] = new_pos }
 
           [tx_outputs, vout_mapping]
-        end
-
-        # Resolve a locking script value to a Script object.
-        #
-        # Binary strings (ASCII-8BIT / non-hex) are wrapped via from_binary.
-        # Hex strings are decoded via from_hex.
-        def resolve_locking_script(script_data)
-          if script_data.encoding == Encoding::ASCII_8BIT || !script_data.match?(/\A[0-9a-fA-F]*\z/)
-            BSV::Script::Script.from_binary(script_data)
-          else
-            BSV::Script::Script.from_hex(script_data)
-          end
         end
 
         # Build TransactionInput objects from resolved input data.
@@ -905,7 +905,7 @@ module BSV
 
           # B. Derive change output keys (BRC-42 self-payments)
           change_keys = change_count.times.map do |i|
-            prefix = random_derivation
+            prefix = BSV::Wallet.random_derivation
             suffix = (i + 1).to_s
             pub = @engine.key_deriver.derive_public_key(
               protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
@@ -920,7 +920,7 @@ module BSV
           caller_tx_outputs = caller_outputs.map do |out|
             BSV::Transaction::TransactionOutput.new(
               satoshis: out[:satoshis] || 0,
-              locking_script: resolve_locking_script(out[:locking_script])
+              locking_script: self.class.resolve_locking_script(out[:locking_script])
             )
           end
           change_tx_outputs = change_keys.map do |ck|
@@ -992,10 +992,6 @@ module BSV
             vout_mapping: vout_mapping,
             change_outputs: change_output_specs
           }
-        end
-
-        def random_derivation
-          BSV::Wallet.random_derivation
         end
 
         # ---- Internalize helpers (incoming-BEEF path) ----------------------

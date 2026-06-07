@@ -423,7 +423,9 @@ module BSV
         # Slot may have been locked by a concurrent caller — retry with a different slot
         return generate_receive_address unless locking_action
 
-        wtxid, raw_tx, = build_transaction(locking_action[:id], [{ output_id: slot[:id] }], [], nil, nil, false)
+        wtxid, raw_tx, = Action.new(engine: self, row: { id: locking_action[:id] }).send(
+          :build_transaction, locking_action[:id], [{ output_id: slot[:id] }], [], nil, nil, false
+        )
         @store.sign_action(action_id: locking_action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         attach_labels(locking_action[:id], ['wbikd'])
@@ -537,7 +539,7 @@ module BSV
         require_key_deriver!
         validate_recipient_key!(recipient)
 
-        derivation_prefix = random_derivation
+        derivation_prefix = BSV::Wallet.random_derivation
         derivation_suffix = '1'
 
         derived_pub = @key_deriver.derive_public_key(
@@ -1004,7 +1006,7 @@ module BSV
         outputs.each_with_index do |out, idx|
           next unless out[:output_type] == 'root'
 
-          script = resolve_locking_script(out[:locking_script])
+          script = Action.resolve_locking_script(out[:locking_script])
           unless script.p2pkh?
             raise BSV::Wallet::InvalidParameterError.new(
               "outputs[#{idx}].output_type",
@@ -1101,33 +1103,6 @@ module BSV
         BSV.logger&.debug { "[Engine] BEEF hint publish skipped: #{e.message}" }
       end
 
-      # Thin delegators: the incoming-BEEF helpers were moved to
-      # +Engine::Action+ as part of #286. Engine no longer has body-level
-      # call sites — these delegators exist so the +engine_spec.rb+
-      # private-method specs (+send(:wire_ancestor, ...)+,
-      # +send(:parse_beef, ...)+, +send(:verify_incoming_transaction!, ...)+,
-      # +send(:replace_known_ancestors!, ...)+) keep passing without
-      # modification. Sub-PR 5 migrates those specs to +action_spec.rb+ and
-      # these delegators go away. Canonical implementations are private
-      # instance methods on +Engine::Action+.
-      def wire_ancestor(wtxid, visited: Set.new)
-        Action.new(engine: self, row: { id: nil }).send(:wire_ancestor, wtxid, visited: visited)
-      end
-
-      def parse_beef(data)
-        Action.new(engine: self, row: { id: nil }).send(:parse_beef, data)
-      end
-
-      def verify_incoming_transaction!(subject_tx)
-        Action.new(engine: self, row: { id: nil }).send(:verify_incoming_transaction!, subject_tx)
-      end
-
-      def replace_known_ancestors!(beef, subject_wtxid, known_wtxids)
-        Action.new(engine: self, row: { id: nil }).send(
-          :replace_known_ancestors!, beef, subject_wtxid, known_wtxids
-        )
-      end
-
       def validate_recipient_key!(key)
         return if key.is_a?(String) && key.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
 
@@ -1196,7 +1171,7 @@ module BSV
         end
 
         # Create a slot via broadcast self-payment with OP_RETURN recovery marker
-        prefix = random_derivation
+        prefix = BSV::Wallet.random_derivation
         suffix = '1'
         derived_pub = @key_deriver.derive_public_key(
           protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
@@ -1351,46 +1326,6 @@ module BSV
         result = 0
         a.bytes.zip(b.bytes) { |x, y| result |= x ^ y }
         result.zero?
-      end
-
-      # Thin delegators: these helpers were moved to +Engine::Action+ as
-      # part of #284. Call sites still on Engine in this sub-PR
-      # (internalize_action / generate_receive_address / send_payment /
-      # find_or_create_wbikd_slot / validate_output_ownership!, plus
-      # private-method specs in engine_spec.rb) reach them via these
-      # delegators; later sub-PRs move the call sites and the delegators
-      # go away. Canonical implementations are private instance methods on
-      # +Engine::Action+.
-      def build_outputs(outputs, randomize)
-        Action.new(engine: self, row: { id: nil }).send(:build_outputs, outputs, randomize)
-      end
-
-      def resolve_locking_script(script_data)
-        Action.new(engine: self, row: { id: nil }).send(:resolve_locking_script, script_data)
-      end
-
-      def build_inputs(resolved_inputs, caller_inputs)
-        Action.new(engine: self, row: { id: nil }).send(:build_inputs, resolved_inputs, caller_inputs)
-      end
-
-      def build_transaction(action_id, inputs, outputs, lock_time, version, randomize, sign: true)
-        Action.new(engine: self, row: { id: action_id }).send(
-          :build_transaction, action_id, inputs, outputs, lock_time, version, randomize, sign: sign
-        )
-      end
-
-      def generate_change(action_id:, caller_outputs:, lock_time:, version:, randomize:,
-                          change_count:, caller_inputs: nil)
-        Action.new(engine: self, row: { id: action_id }).send(
-          :generate_change,
-          action_id: action_id, caller_outputs: caller_outputs,
-          lock_time: lock_time, version: version, randomize: randomize,
-          change_count: change_count, caller_inputs: caller_inputs
-        )
-      end
-
-      def random_derivation
-        BSV::Wallet.random_derivation
       end
     end
   end
