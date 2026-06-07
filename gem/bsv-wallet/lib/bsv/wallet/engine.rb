@@ -141,51 +141,23 @@ module BSV
                       return_txid_only: false, no_send: false,
                       originator: nil)
         validate_reference!(reference)
-        action = @store.find_action(reference: reference)
-        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
+        action_row = @store.find_action(reference: reference)
+        raise BSV::Wallet::InvalidParameterError, 'reference' unless action_row
 
-        # Runtime broadcast-override at sign time belongs to the
-        # chained-send subsystem (#192). The base wallet's signAction
-        # only completes the deferred-construction lifecycle per the
-        # original broadcast intent set at createAction time.
-        if no_send && action[:broadcast_intent] != 'none'
-          raise BSV::Wallet::UnsupportedActionError,
-                'signAction(no_send: true) requires the action to have been ' \
-                "created with no_send: true (broadcast intent 'none'). " \
-                'Runtime override at sign time is not implemented in the base ' \
-                'wallet; tracked in #192.'
-        end
-
-        # Outputs were already written during create_action (promoted: false)
-        # so sign_action only deserializes the unsigned tx, applies caller
-        # unlocking scripts, signs remaining P2PKH inputs, and updates the
-        # action with the signed raw_tx + wtxid.
-        wtxid, raw_tx, = apply_spends(action, spends)
-        @store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: raw_tx)
-        @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-
-        # Build Atomic BEEF envelope for the :tx return value
-        atomic_beef = build_atomic_beef(raw_tx, action[:id])
-
-        broadcast = determine_broadcast(no_send, accept_delayed_broadcast)
-
-        return { txid: wtxid, tx: atomic_beef } if no_send
-
-        # See create_action: the broadcast worker handles dispatch + bookkeeping
-        # internally. #271.
-        @broadcast_worker.process(action[:id]) if broadcast == :inline
-
-        { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
+        Action.new(engine: self, row: action_row).sign!(
+          spends: spends,
+          no_send: no_send,
+          accept_delayed_broadcast: accept_delayed_broadcast,
+          return_txid_only: return_txid_only
+        )
       end
 
       def abort_action(reference:, originator: nil)
         validate_reference!(reference)
-        action = @store.find_action(reference: reference)
-        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
+        action_row = @store.find_action(reference: reference)
+        raise BSV::Wallet::InvalidParameterError, 'reference' unless action_row
 
-        @store.abort_action(action_id: action[:id])
-        @utxo_pool.release(outputs: [])
-        { aborted: true }
+        Action.new(engine: self, row: action_row).abort!
       end
 
       # Operator-facing entry to Store#reject_action. The daemon's
@@ -1202,13 +1174,6 @@ module BSV
         BSV.logger&.debug { "[Engine] BEEF hint publish skipped: #{e.message}" }
       end
 
-      # Thin delegator: call site still on Engine in this sub-PR
-      # (sign_action) — moves in Sub-PR 2. Canonical impl is on
-      # +Action#build_atomic_beef+ (private).
-      def build_atomic_beef(raw_tx, action_id)
-        Action.new(engine: self, row: { id: action_id }).send(:build_atomic_beef, raw_tx, action_id)
-      end
-
       # Thin delegator: call sites still on Engine in this sub-PR
       # (hydrate_known_sources!) — moves in Sub-PR 3. Canonical impl is on
       # +Action#wire_ancestor+ (private).
@@ -1592,8 +1557,8 @@ module BSV
 
       # Thin delegators: these helpers were moved to +Engine::Action+ as
       # part of #284. Call sites still on Engine in this sub-PR
-      # (sign_action / internalize_action / apply_spends, plus #build_outputs
-      # / #build_inputs / #build_transaction / #resolve_locking_script
+      # (internalize_action / generate_receive_address / send_payment /
+      # find_or_create_wbikd_slot / validate_output_ownership!, plus
       # private-method specs in engine_spec.rb) reach them via these
       # delegators; later sub-PRs move the call sites and the delegators
       # go away. Canonical implementations are private instance methods on
@@ -1608,18 +1573,6 @@ module BSV
 
       def build_inputs(resolved_inputs, caller_inputs)
         Action.new(engine: self, row: { id: nil }).send(:build_inputs, resolved_inputs, caller_inputs)
-      end
-
-      def resolve_unlocking_script(script_data)
-        Action.new(engine: self, row: { id: nil }).send(:resolve_unlocking_script, script_data)
-      end
-
-      def find_caller_input(caller_inputs, vin)
-        Action.new(engine: self, row: { id: nil }).send(:find_caller_input, caller_inputs, vin)
-      end
-
-      def derive_signing_key(resolved)
-        Action.new(engine: self, row: { id: nil }).send(:derive_signing_key, resolved)
       end
 
       def build_transaction(action_id, inputs, outputs, lock_time, version, randomize, sign: true)
@@ -1640,79 +1593,6 @@ module BSV
 
       def random_derivation
         BSV::Wallet.random_derivation
-      end
-
-      # Apply caller-provided unlocking scripts and sign remaining inputs.
-      #
-      # Deserializes the unsigned transaction stored during deferred
-      # create_action, applies unlocking scripts from the spends hash,
-      # signs any remaining P2PKH inputs the wallet can sign, serializes,
-      # and returns [wtxid, raw_tx].
-      #
-      # @param action [Hash] the action record from find_action
-      # @param spends [Hash{Integer => Hash}] vin => { unlocking_script:, sequence_number: }
-      # @return [Array(String, String)] wtxid (32-byte wire order), raw_tx (binary)
-      def apply_spends(action, spends)
-        # Deserialize the unsigned transaction stored during create_action
-        unsigned_raw = action[:raw_tx]
-        raise BSV::Wallet::Error, 'no unsigned transaction for deferred action' unless unsigned_raw
-
-        tx = BSV::Transaction::Transaction.from_binary(unsigned_raw)
-
-        # Resolve inputs from the Store — needed for source data (satoshis,
-        # locking script, derivation params) which are not in the wire format
-        resolved_inputs = @store.resolve_inputs_for_signing(action_id: action[:id])
-
-        # Re-attach source data and apply spends
-        signing_keys = {}
-        resolved_inputs.each_with_index do |resolved, idx|
-          input = tx.inputs[idx]
-          InputSource.attach!(input, resolved)
-
-          spend = spends[resolved[:vin]] || spends[idx]
-          if spend
-            # Apply sequence override if provided
-            input.sequence = spend[:sequence_number] if spend[:sequence_number]
-
-            # Apply caller-provided unlocking script
-            input.unlocking_script = resolve_unlocking_script(spend[:unlocking_script]) if spend[:unlocking_script]
-          elsif input.source_locking_script&.p2pkh?
-            # No spend provided for this P2PKH input — wallet signs it
-            require_key_deriver!
-            signing_keys[idx] = derive_signing_key(resolved)
-          end
-
-          # Validate: check for unresolvable inputs (no spend + no P2PKH)
-          spend = spends[resolved[:vin]] || spends[idx]
-          next if spend&.dig(:unlocking_script)
-          next if signing_keys.key?(idx)
-
-          raise BSV::Wallet::Error,
-                "input at vin #{resolved[:vin]} has no unlocking script in spends " \
-                'and is not a P2PKH input the wallet can sign'
-        end
-
-        # Sign wallet-owned P2PKH inputs
-        signing_keys.each { |idx, key| tx.sign(idx, key) }
-
-        # Validate spends don't reference non-existent input indices
-        valid_vins = resolved_inputs.map { |r| r[:vin] }
-        valid_indices = (0...resolved_inputs.length).to_a
-        spends.each_key do |vin|
-          next if valid_vins.include?(vin) || valid_indices.include?(vin)
-
-          raise BSV::Wallet::InvalidParameterError.new(
-            'spends', "vin #{vin} does not exist in the transaction"
-          )
-        end
-
-        raw_tx = tx.to_binary
-        wtxid = tx.wtxid
-
-        # Trailing +tx+ for callers that need EF format at broadcast
-        # time. Source data was wired in the +resolved_inputs.each+
-        # loop above; +tx.to_ef+ now works without DB hits.
-        [wtxid, raw_tx, tx]
       end
     end
   end

@@ -98,6 +98,114 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
   end
 
+  describe '#sign!' do
+    it 'completes a deferred-signing flow when invoked directly on an Action instance' do
+      # Deferred create: outputs only, no inputs to sign — exercises the
+      # sign! lifecycle method without needing wallet-owned P2PKH inputs.
+      create_result = engine.create_action(
+        description: 'action sign! smoke',
+        inputs: [],
+        sign_and_process: false,
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+            sender_identity_key: 'self' }
+        ]
+      )
+      reference = create_result[:signable_transaction][:reference]
+      row = store.find_action(reference: reference)
+
+      result = described_class.new(engine: engine, row: row).sign!(
+        spends: {}, no_send: false,
+        accept_delayed_broadcast: true, return_txid_only: false
+      )
+
+      expect(result).to include(:txid, :tx)
+      expect(result[:txid].bytesize).to eq(32)
+      expect(result[:tx]).to be_a(String)
+    end
+
+    it 'is the entry point Engine#sign_action delegates to' do
+      create_result = engine.create_action(
+        description: 'sign delegator',
+        inputs: [],
+        sign_and_process: false,
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+            sender_identity_key: 'self' }
+        ]
+      )
+      reference = create_result[:signable_transaction][:reference]
+
+      result = engine.sign_action(spends: {}, reference: reference)
+
+      expect(result).to include(:txid, :tx)
+      expect(result[:txid].bytesize).to eq(32)
+    end
+
+    it 'rejects no_send when the underlying action was not created with broadcast_intent: none' do
+      # Deferred path defaults to broadcast_intent: :delayed — no_send: true
+      # at sign time is a runtime override the base wallet does not support.
+      create_result = engine.create_action(
+        description: 'no_send guard',
+        inputs: [],
+        sign_and_process: false,
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+            sender_identity_key: 'self' }
+        ]
+      )
+      row = store.find_action(reference: create_result[:signable_transaction][:reference])
+      action = described_class.new(engine: engine, row: row)
+
+      expect do
+        action.sign!(
+          spends: {}, no_send: true,
+          accept_delayed_broadcast: true, return_txid_only: false
+        )
+      end.to raise_error(BSV::Wallet::UnsupportedActionError, /signAction\(no_send: true\)/)
+    end
+  end
+
+  describe '#abort!' do
+    it 'aborts an unsigned action when invoked directly on an Action instance' do
+      create_result = engine.create_action(
+        description: 'action abort! smoke',
+        inputs: [],
+        sign_and_process: false,
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            output_description: 'output' }
+        ]
+      )
+      reference = create_result[:signable_transaction][:reference]
+      row = store.find_action(reference: reference)
+
+      result = described_class.new(engine: engine, row: row).abort!
+
+      expect(result).to eq({ aborted: true })
+      expect(store.find_action(reference: reference)).to be_nil
+    end
+
+    it 'is the entry point Engine#abort_action delegates to' do
+      create_result = engine.create_action(
+        description: 'abort delegator',
+        inputs: [],
+        sign_and_process: false,
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            output_description: 'output' }
+        ]
+      )
+      reference = create_result[:signable_transaction][:reference]
+
+      expect(engine.abort_action(reference: reference)).to eq({ aborted: true })
+      expect(store.find_action(reference: reference)).to be_nil
+    end
+  end
+
   describe '.attach_labels' do
     it 'is a no-op for nil labels' do
       action = store.create_action(action: { description: 'no labels', broadcast_intent: :none, outgoing: false })

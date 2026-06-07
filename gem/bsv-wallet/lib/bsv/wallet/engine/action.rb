@@ -265,7 +265,133 @@ module BSV
           @id     = row[:id]
         end
 
+        # Complete the deferred-signing path: deserialise the unsigned tx,
+        # apply caller spends, sign remaining wallet-owned P2PKH inputs,
+        # persist, build the Atomic BEEF envelope, and dispatch broadcast
+        # per the action's intent.
+        #
+        # @return [Hash] +{ txid:, tx: }+ — +txid+ is the wire-order wtxid,
+        #   +tx+ is Atomic BEEF binary (or +nil+ when +return_txid_only:+).
+        def sign!(spends:, no_send:, accept_delayed_broadcast:, return_txid_only:)
+          # Runtime broadcast-override at sign time belongs to the
+          # chained-send subsystem (#192). The base wallet's signAction
+          # only completes the deferred-construction lifecycle per the
+          # original broadcast intent set at createAction time.
+          if no_send && @row[:broadcast_intent] != 'none'
+            raise BSV::Wallet::UnsupportedActionError,
+                  'signAction(no_send: true) requires the action to have been ' \
+                  "created with no_send: true (broadcast intent 'none'). " \
+                  'Runtime override at sign time is not implemented in the base ' \
+                  'wallet; tracked in #192.'
+          end
+
+          # Outputs were already written during create_action (promoted: false)
+          # so sign! only deserialises the unsigned tx, applies caller
+          # unlocking scripts, signs remaining P2PKH inputs, and updates the
+          # action with the signed raw_tx + wtxid.
+          wtxid, raw_tx, = apply_spends(spends)
+          @engine.store.sign_action(action_id: @id, wtxid: wtxid, raw_tx: raw_tx)
+          @engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+
+          # Build Atomic BEEF envelope for the :tx return value
+          atomic_beef = build_atomic_beef(raw_tx, @id)
+
+          broadcast = @engine.send(:determine_broadcast, no_send, accept_delayed_broadcast)
+
+          return { txid: wtxid, tx: atomic_beef } if no_send
+
+          # See Action.create: the broadcast worker handles dispatch +
+          # bookkeeping internally. #271.
+          @engine.broadcast_worker.process(@id) if broadcast == :inline
+
+          { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
+        end
+
+        # Abort an in-flight action. Releases any locked inputs and marks
+        # the action aborted in the Store.
+        #
+        # @return [Hash] +{ aborted: true }+
+        def abort!
+          @engine.store.abort_action(action_id: @id)
+          @engine.utxo_pool.release(outputs: [])
+          { aborted: true }
+        end
+
         private
+
+        # Apply caller-provided unlocking scripts and sign remaining inputs.
+        #
+        # Deserialises the unsigned transaction stored during deferred
+        # create_action, applies unlocking scripts from the spends hash,
+        # signs any remaining P2PKH inputs the wallet can sign, serialises,
+        # and returns [wtxid, raw_tx, tx].
+        #
+        # @param spends [Hash{Integer => Hash}] vin => { unlocking_script:, sequence_number: }
+        # @return [Array(String, String, Transaction)] wtxid (32-byte wire
+        #   order), raw_tx (binary), tx (live Transaction with source data
+        #   wired in for downstream EF serialisation).
+        def apply_spends(spends)
+          # Deserialise the unsigned transaction stored during create_action
+          unsigned_raw = @row[:raw_tx]
+          raise BSV::Wallet::Error, 'no unsigned transaction for deferred action' unless unsigned_raw
+
+          tx = BSV::Transaction::Transaction.from_binary(unsigned_raw)
+
+          # Resolve inputs from the Store — needed for source data (satoshis,
+          # locking script, derivation params) which are not in the wire format
+          resolved_inputs = @engine.store.resolve_inputs_for_signing(action_id: @id)
+
+          # Re-attach source data and apply spends
+          signing_keys = {}
+          resolved_inputs.each_with_index do |resolved, idx|
+            input = tx.inputs[idx]
+            InputSource.attach!(input, resolved)
+
+            spend = spends[resolved[:vin]] || spends[idx]
+            if spend
+              # Apply sequence override if provided
+              input.sequence = spend[:sequence_number] if spend[:sequence_number]
+
+              # Apply caller-provided unlocking script
+              input.unlocking_script = resolve_unlocking_script(spend[:unlocking_script]) if spend[:unlocking_script]
+            elsif input.source_locking_script&.p2pkh?
+              # No spend provided for this P2PKH input — wallet signs it
+              @engine.send(:require_key_deriver!)
+              signing_keys[idx] = derive_signing_key(resolved)
+            end
+
+            # Validate: check for unresolvable inputs (no spend + no P2PKH)
+            spend = spends[resolved[:vin]] || spends[idx]
+            next if spend&.dig(:unlocking_script)
+            next if signing_keys.key?(idx)
+
+            raise BSV::Wallet::Error,
+                  "input at vin #{resolved[:vin]} has no unlocking script in spends " \
+                  'and is not a P2PKH input the wallet can sign'
+          end
+
+          # Sign wallet-owned P2PKH inputs
+          signing_keys.each { |idx, key| tx.sign(idx, key) }
+
+          # Validate spends don't reference non-existent input indices
+          valid_vins = resolved_inputs.map { |r| r[:vin] }
+          valid_indices = (0...resolved_inputs.length).to_a
+          spends.each_key do |vin|
+            next if valid_vins.include?(vin) || valid_indices.include?(vin)
+
+            raise BSV::Wallet::InvalidParameterError.new(
+              'spends', "vin #{vin} does not exist in the transaction"
+            )
+          end
+
+          raw_tx = tx.to_binary
+          wtxid = tx.wtxid
+
+          # Trailing +tx+ for callers that need EF format at broadcast
+          # time. Source data was wired in the +resolved_inputs.each+
+          # loop above; +tx.to_ef+ now works without DB hits.
+          [wtxid, raw_tx, tx]
+        end
 
         # Internal-path Phase 4: synchronously promote outputs and create
         # spendable rows in one shot. Used for incoming actions (broadcast
