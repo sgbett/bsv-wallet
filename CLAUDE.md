@@ -37,19 +37,52 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 
 `Transaction#wtxid` returns wire order (SDK v0.17.0+). `Transaction#txid` returns display order — a convenience method, never used in the data path. The `DisplayTxid` module provides `dtxid` on Sequel models.
 
-## Database: Postgres is Primary
+## Database & Wallet Configuration
 
 This is a **Postgres-based** wallet. SQLite exists as a convenience for fast logic-only specs that don't depend on DB invariants — it is not the production target.
 
 The schema chooses Postgres-native features deliberately: `bytea` for everything hash-shaped, native `uuid` for `actions.reference`, ENUM types (`broadcast_intent`), CHECK constraints, RESTRICT FK semantics. See `reference/schema-intent.md`.
 
-**Conventions:**
+### Configuration model — no mystery
 
-- When the user says "the database" or "the wallet" without qualifying, assume Postgres.
-- The local `.env` (loaded by `BSV::Wallet::CLI.boot` via `dotenv/load`) provides per-wallet Postgres URLs (`DATABASE_URL_ALICE`, etc.) — anything that shells out to `bin/` inherits these. Tests must not override them with sqlite paths.
-- Unit specs branch on `BSV_WALLET_POSTGRES`: unset → in-memory SQLite, set (e.g. `postgres://postgres:postgres@localhost:5433/`) → Postgres at `<base>/bsv_wallet_test`. The spec helper derives the test DB from the base and **ignores `DATABASE_URL`** — keeps an operator's working DATABASE_URL from silently hijacking the spec run. Both run in CI (matrix job).
-- Integration specs run against Postgres locally (via `.env`) and Postgres in CI. New DB-touching test helpers must read the configured DB URL, never hardcode `sqlite://`.
-- Postgres-specific behaviour (CHECK violations, ENUM rejections, RESTRICT FK semantics, the `prevent_outbound_spendable` trigger) MUST have a spec that runs against Postgres — SQLite carries those via translation and won't surface a regression.
+There are two audiences for wallet configuration, with different env-var conventions. Don't mix them up.
+
+#### End-user mode (someone who installed the gem)
+
+A single wallet, a single database. The end user sets one variable:
+
+- **`DATABASE_URL`** — full Postgres URL (e.g. `postgres://user:pass@host:5432/my_wallet`), or any Sequel-compatible URL. The end user doesn't care about per-wallet derivation; they have one wallet.
+- If `DATABASE_URL` is unset, `CLI.boot` falls back to SQLite at `~/.bsv-wallet/<name>.db` (or `default.db` for unnamed).
+
+This is what README, install docs, and end-user-facing copy should foreground. End users **don't need to know about** `BSV_WALLET_POSTGRES` or `BSV_WALLET_WIF_<NAME>` — those are dev/test scaffolding.
+
+#### Dev/test mode (this repo — what we use)
+
+Multiple named wallets sharing one Postgres server. Configuration is via shell environment variables (`~/.zshenv` locally, `.github/workflows/ci.yml` or GitHub secrets in CI):
+
+- **`BSV_WALLET_POSTGRES`** — the Postgres base URL, e.g. `postgres://postgres:postgres@localhost:5433/`. The primary variable; per-wallet URLs are derived from it.
+
+- **Named wallet `<name>`** (e.g. `alice`, `bob`, `carol`, `sdk`):
+  - WIF read from `BSV_WALLET_WIF_<NAME>` (e.g. `BSV_WALLET_WIF_ALICE`).
+  - Database derived as `<BSV_WALLET_POSTGRES>/bsv_wallet_<name>` (e.g. `…/bsv_wallet_alice`).
+  - In-repo named wallets: `alice` / `bob` / `carol` (integration specs), `sdk` (e2e harness), `w1`..`w5` (e2e wallet fleet).
+
+- **Unnamed wallet** (unit specs that don't bind to a real on-chain identity):
+  - No WIF required (specs generate their own keys).
+  - Database is `<BSV_WALLET_POSTGRES>/bsv_wallet_test`.
+
+- **`BSV_WALLET_POSTGRES` unset** → unit specs fall back to in-memory SQLite (the SQLite-augmentation path). CLI tools that need a real wallet require it set.
+
+`DATABASE_URL_<NAME>` (e.g. `DATABASE_URL_ALICE`) is an **override** for the derived URL, honored by `CLI.boot` for the rare case where a named wallet needs a non-standard host/port/db-name. It is not the primary mechanism — `BSV_WALLET_POSTGRES` is. Don't add `DATABASE_URL_<NAME>` to your environment unless you actually need the override.
+
+### Conventions
+
+- When the user says "the database" or "the wallet" without qualifying, assume Postgres in dev/test mode.
+- Unit spec helper branches on `BSV_WALLET_POSTGRES`: unset → in-memory SQLite, set → `<base>/bsv_wallet_test`. The helper **ignores `DATABASE_URL`** — keeps an operator's working end-user `DATABASE_URL` from silently hijacking the spec run. Both backends run in CI (matrix job).
+- Integration specs require **both** `BSV_WALLET_POSTGRES` and `BSV_WALLET_WIF_ALICE/BOB/CAROL` (each WIF funded with ≥ 1m sats on chain).
+- E2E specs use the `sdk` wallet (`BSV_WALLET_WIF_SDK` + `<base>/bsv_wallet_sdk`) plus the `w1`..`w5` derived fleet for the multi-wallet harness.
+- Postgres-specific behavior (CHECK violations, ENUM rejections, RESTRICT FK semantics, the `prevent_outbound_spendable` trigger) MUST have a spec that runs against Postgres — SQLite carries those via translation and won't surface a regression.
+- New DB-touching test helpers must read the configured DB URL, never hardcode `sqlite://`.
 
 ## Running Specs
 
@@ -62,7 +95,7 @@ cd gem/bsv-wallet && BSV_WALLET_POSTGRES=postgres://postgres:postgres@localhost:
 # Wallet unit specs against SQLite (augmentation — proves SQLite still works)
 cd gem/bsv-wallet && bundle exec rspec spec/bsv spec/bin
 
-# Wallet integration specs (require BSV_WALLET_WIF_ALICE/BOB/CAROL + each funded with >= 1m sats)
+# Wallet integration specs (require BSV_WALLET_POSTGRES + BSV_WALLET_WIF_ALICE/BOB/CAROL, each WIF funded with >= 1m sats)
 cd gem/bsv-wallet && bundle exec rspec spec/integration
 
 # All wallet specs (unit + integration)
