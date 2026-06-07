@@ -25,20 +25,54 @@ require 'sequel'
 require 'logger'
 require 'bsv-wallet'
 
+# Walletd runs many Async fibers on one reactor thread (SSE listener,
+# broadcast/statuses pull workers, scheduler discovery loops, proof
+# acquisition, plus the trap-safe shutdown watcher thread).
+#
+# fiber_concurrency switches Sequel's pool-checkout key from
+# Thread.current to Fiber.current so each fiber gets its own connection
+# (without it, all fibers on the reactor thread share one, corrupting
+# PG result state -- "undefined method 'nfields' for nil"; see #268).
+#
+# Enabled here (not in store.rb) so only the daemon process activates
+# it; CLI tools keep Sequel's default Thread-based pool, which is fine
+# for their single-fiber use.
+Sequel.extension :fiber_concurrency
+
+# Pool size: matches the fiber inventory above with headroom. Override
+# via BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS if adding fibers or running
+# under unusual load. Adjust the Postgres server-side max_connections
+# in step (see docker-compose.yml for the relationship).
+daemon_pool_size = ENV.fetch('BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS', '16').to_i
+
 BSV.logger ||= Logger.new($stderr, level: Logger::INFO)
 
 # Resolve wallet credentials via CLI helpers
+wif = BSV::Wallet::CLI.env_fetch('WIF', wallet_name)
 db_url = BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet_name) ||
          BSV::Wallet::CLI.default_sqlite_url(wallet_name)
 
 # Boot store + services (walletd doesn't need Engine or KeyDeriver)
-store = BSV::Wallet::Store.connect(db_url)
+store = BSV::Wallet::Store.connect(db_url, max_connections: daemon_pool_size)
 store.migrate!
 
-provider = BSV::Network::Providers::WhatsOnChain.send(network)
-services = BSV::Network::Services.new(providers: [provider])
+# GorillaPool (Arcade) is the broadcast porcelain — callbacks via
+# X-CallbackToken + SSE status push, the path the wallet is designed
+# around. WhatsOnChain's call_broadcast signature isn't kwarg-tolerant
+# and its tx_status shape isn't Arcade-compatible, so it must not be in
+# the broadcaster's candidate list. WoC stays available for chain queries
+# (get_tx, get_merkle_path, etc.) when those wire up here.
+provider = BSV::Network::Providers::GorillaPool.default(testnet: network != :mainnet)
+broadcaster = BSV::Network::Broadcaster.new(providers: [provider], store: store)
+
+# Deterministic callbackToken: identical to the one CLI.boot derives for
+# inline broadcasts, so the listener subscribed here and the engine-side
+# submit POSTs use the same routing identifier. See #266.
+callback_token = BSV::Wallet::CallbackToken.derive(wif)
 
 BSV.logger.info { "[walletd] Starting for #{wallet_name || 'default'} (#{network})..." }
 
-daemon = BSV::Wallet::Daemon.new(store: store, services: services, wallet: wallet_name, network: network)
+daemon = BSV::Wallet::Daemon.new(store: store, broadcaster: broadcaster,
+                                 wallet: wallet_name, network: network,
+                                 callback_token: callback_token)
 daemon.run!

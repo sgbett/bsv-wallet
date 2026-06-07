@@ -25,6 +25,11 @@ RSpec.describe BSV::Wallet::CLI do
           raise 'engine missing' unless ctx[:engine].is_a?(BSV::Wallet::Engine)
           store_klass = ctx[:engine].instance_variable_get(:@store).class
           raise "wrong store class \#{store_klass}" unless store_klass == BSV::Wallet::Store::SQLite
+          # #266: CLI.boot derives callback_token from WIF and returns it
+          # alongside the engine; walletd reads it from here to wire the
+          # SSE listener.
+          token = ctx[:callback_token]
+          raise "callback_token shape: \#{token.inspect}" unless token.is_a?(String) && token.match?(/\\A[0-9a-f]{32}\\z/)
           puts 'ok'
         RUBY
 

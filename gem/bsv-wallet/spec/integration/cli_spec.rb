@@ -58,7 +58,7 @@ RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable R
 
   it 'Alice pays Bob via create | receive pipeline' do
     # Import: scan Alice's root key address for UTXOs
-    _stdout, _, status = run_cli('import', 'alice')
+    _stdout, _, status = run_cli('import', 'alice', '--no-send')
     expect(status).to be_success
 
     # Balance: verify Alice has funds
@@ -68,7 +68,7 @@ RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable R
     expect(alice_balance).to be > 0
 
     # Create: Alice pays Bob 5000 sats (outputs JSON envelope)
-    envelope_stdout, _, status = run_cli('create', 'alice', bob_identity_key, '5000')
+    envelope_stdout, _, status = run_cli('create', 'alice', bob_identity_key, '5000', '--no-send')
     expect(status).to be_success
     expect(envelope_stdout.bytesize).to be > 0
 

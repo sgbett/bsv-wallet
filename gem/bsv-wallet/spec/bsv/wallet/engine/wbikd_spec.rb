@@ -92,7 +92,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     it 'returns { scanned: 0, found: 0 } with no outstanding addresses' do
       network_provider = double(:network_provider)
       engine_net = described_class.new(
-        store: store, utxo_pool: utxo_pool,
+        store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
         key_deriver: key_deriver, network_provider: network_provider,
         network: :mainnet
       )
@@ -106,7 +106,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       let(:network_provider) { double(:network_provider) }
       let(:engine_net) do
         described_class.new(
-          store: store, utxo_pool: utxo_pool,
+          store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
           key_deriver: key_deriver, network_provider: network_provider,
           network: :mainnet
         )

@@ -26,7 +26,6 @@ module BSV
           h[p] = TokenBucket.new(p.rate_limit) if p.rate_limit
         end
         @sibling_memo = {}
-        @broadcast_affinity = {}
         @mutex = Mutex.new
       end
 
@@ -43,7 +42,35 @@ module BSV
         memo_result = check_sibling_memo(sym, args, kwargs)
         return memo_result if memo_result
 
-        candidates = candidates_for(sym, args, kwargs)
+        candidates = candidates_for(sym)
+        call_with_candidates(sym, candidates, *args, **kwargs)
+      end
+
+      # Dispatch a command against an explicitly-ordered candidate list.
+      #
+      # Same retry / backoff / fallback / normalisation as +#call+, but the
+      # caller supplies the provider ordering instead of relying on
+      # +#candidates_for+. Used by +BSV::Network::Broadcaster+ to overlay
+      # wtxid-keyed affinity onto the dispatch path without duplicating
+      # the per-provider backoff loop here.
+      #
+      # When a block is given, it is yielded the +Provider+ that produced
+      # the successful response so callers (e.g. Broadcaster) can persist
+      # affinity. The block is not invoked on failure.
+      #
+      # Broadcast affinity persistence is +BSV::Network::Broadcaster+'s
+      # contract, not this layer's. Services intentionally does not record
+      # affinity itself — any direct caller of +#call(:broadcast, ...)+
+      # outside Broadcaster will silently skip the affinity hook. Route
+      # broadcast and +:get_tx_status+ through Broadcaster for any flow
+      # where affinity matters.
+      #
+      # @param command [Symbol] SDK command name
+      # @param candidates [Array<BSV::Network::Provider>] ordered providers
+      # @yield [provider] succeeding provider (success only)
+      # @return [BSV::Network::ProtocolResponse]
+      def call_with_candidates(command, candidates, *args, **kwargs)
+        sym = command.to_sym
         return no_provider_response(sym) if candidates.empty?
 
         last_error = nil
@@ -54,7 +81,7 @@ module BSV
           if result.http_success?
             stash_siblings(sym, result, args, kwargs)
             normalized = normalize(sym, result)
-            record_affinity(sym, provider, normalized)
+            yield(provider) if block_given?
             return normalized
           end
 
@@ -159,17 +186,8 @@ module BSV
       # --- Routing ---
 
       # Build the ordered candidate list for a command.
-      # For :get_tx_status, broadcast affinity moves the preferred provider to front.
-      def candidates_for(command, args = [], kwargs = {})
-        capable = @providers.select { |p| p.commands.include?(command) }
-
-        if command == :get_tx_status
-          txid = (kwargs[:txid] || args.first).to_s
-          affinity = @mutex.synchronize { @broadcast_affinity[txid] }
-          capable = [affinity] + (capable - [affinity]) if affinity && capable.include?(affinity)
-        end
-
-        capable
+      def candidates_for(command)
+        @providers.select { |p| p.commands.include?(command) }
       end
 
       # Synthetic error response when no provider serves a command.
@@ -330,23 +348,6 @@ module BSV
         return if Time.now - entry[:stashed_at] > MEMO_TTL
 
         ProtocolResponse.new(nil, data: entry[:data], http_success: true)
-      end
-
-      # --- Broadcast Affinity ---
-
-      MAX_AFFINITY_ENTRIES = 1000
-      private_constant :MAX_AFFINITY_ENTRIES
-
-      def record_affinity(command, provider, result)
-        return unless command == :broadcast && result.http_success?
-
-        txid = result.data[:txid]
-        return unless txid
-
-        @mutex.synchronize do
-          @broadcast_affinity.shift if @broadcast_affinity.size >= MAX_AFFINITY_ENTRIES
-          @broadcast_affinity[txid.to_s] = provider
-        end
       end
 
       # --- Token Bucket ---

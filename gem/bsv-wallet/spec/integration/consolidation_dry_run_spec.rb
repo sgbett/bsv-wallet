@@ -125,7 +125,7 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
     # bootstrap self-payment's network fee (a few dozen sats). Allow a
     # 1000-sat margin to absorb fee variance across SDK version bumps.
     wallet_names.each do |wallet|
-      _, _, status = run_cli('import', wallet)
+      _, _, status = run_cli('import', wallet, '--no-send')
       expect(status).to be_success, "import #{wallet} failed"
       balance_stdout, _, status = run_cli('balance', wallet)
       expect(status).to be_success, "post-import balance #{wallet} failed"
@@ -141,7 +141,7 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
       others = wallet_names - [sender]
       payments_per_wallet.times do |i|
         recipient = others.sample
-        envelope, _, status = run_cli('create', sender, identity_keys[recipient], payment_sats.to_s)
+        envelope, _, status = run_cli('create', sender, identity_keys[recipient], payment_sats.to_s, '--no-send')
         expect(status).to be_success, "create #{sender}→#{recipient} (#{i + 1}) failed"
 
         _, _, status = run_cli('receive', recipient, '--basket', 'received', stdin_data: envelope)
@@ -157,7 +157,7 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
 
     # Phase 3: consolidate each wallet until below the target.
     wallet_names.each do |wallet|
-      _, _, status = run_cli('consolidate', wallet, '--target-inputs', '20')
+      _, _, status = run_cli('consolidate', wallet, '--target-inputs', '20', '--no-send')
       expect(status).to be_success, "consolidate #{wallet} failed"
       # Below target_inputs after consolidation (loop terminated correctly).
       expect(total_spendable(wallet)).to be < 20,
@@ -166,7 +166,7 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
 
     # Phase 4: sweep each wallet to the ephemeral recipient.
     wallet_names.each do |wallet| # rubocop:disable Style/CombinableLoops
-      _, _, status = run_cli('sweep', wallet, '--to', ephemeral_recipient)
+      _, _, status = run_cli('sweep', wallet, '--to', ephemeral_recipient, '--no-send')
       expect(status).to be_success, "sweep #{wallet} failed"
     end
 

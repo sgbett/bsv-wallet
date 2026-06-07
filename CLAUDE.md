@@ -47,7 +47,7 @@ The schema chooses Postgres-native features deliberately: `bytea` for everything
 
 - When the user says "the database" or "the wallet" without qualifying, assume Postgres.
 - The local `.env` (loaded by `BSV::Wallet::CLI.boot` via `dotenv/load`) provides per-wallet Postgres URLs (`DATABASE_URL_ALICE`, etc.) — anything that shells out to `bin/` inherits these. Tests must not override them with sqlite paths.
-- Unit specs branch on `DATABASE_URL`: unset / sqlite → SQLite, `postgres://...` → Postgres. Both run in CI (matrix job).
+- Unit specs branch on `BSV_WALLET_POSTGRES`: unset → in-memory SQLite, set (e.g. `postgres://postgres:postgres@localhost:5433/`) → Postgres at `<base>/bsv_wallet_test`. The spec helper derives the test DB from the base and **ignores `DATABASE_URL`** — keeps an operator's working DATABASE_URL from silently hijacking the spec run. Both run in CI (matrix job).
 - Integration specs run against Postgres locally (via `.env`) and Postgres in CI. New DB-touching test helpers must read the configured DB URL, never hardcode `sqlite://`.
 - Postgres-specific behaviour (CHECK violations, ENUM rejections, RESTRICT FK semantics, the `prevent_outbound_spendable` trigger) MUST have a spec that runs against Postgres — SQLite carries those via translation and won't surface a regression.
 
@@ -57,7 +57,7 @@ Specs must run from the gem directory, not the repo root.
 
 ```bash
 # Wallet unit specs (Postgres — primary target)
-cd gem/bsv-wallet && DATABASE_URL=postgres://localhost/bsv_wallet_test bundle exec rspec spec/bsv spec/bin
+cd gem/bsv-wallet && BSV_WALLET_POSTGRES=postgres://postgres:postgres@localhost:5433/ bundle exec rspec spec/bsv spec/bin
 
 # Wallet unit specs against SQLite (augmentation — proves SQLite still works)
 cd gem/bsv-wallet && bundle exec rspec spec/bsv spec/bin

@@ -69,14 +69,18 @@ RSpec.describe 'Schema migration', :store do
     # ARC's metamorph Status enum + IMMUTABLE (wallet's ArcStatus::TERMINAL).
     # See #198/#220 — the canonical source is ARC's metamorph_api.proto.
     it 'tx_status has the correct values' do
+      # ORDER BY enumsortorder so ALTER TYPE ADD VALUE ... AFTER positions
+      # (e.g. SEEN_MULTIPLE_NODES inserted after SEEN_ON_NETWORK via #011)
+      # show up in their declared lifecycle order, not insertion order.
       values = db.from(
-        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'tx_status'")
+        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'tx_status' ORDER BY e.enumsortorder")
       ).select_map(:enumlabel)
       expect(values).to eq(
         %w[
           UNKNOWN QUEUED RECEIVED STORED
           ANNOUNCED_TO_NETWORK REQUESTED_BY_NETWORK SENT_TO_NETWORK
           ACCEPTED_BY_NETWORK SEEN_IN_ORPHAN_MEMPOOL SEEN_ON_NETWORK
+          SEEN_MULTIPLE_NODES
           DOUBLE_SPEND_ATTEMPTED REJECTED MINED_IN_STALE_BLOCK MINED IMMUTABLE
         ]
       )
@@ -193,6 +197,29 @@ RSpec.describe 'Schema migration', :store do
       action_id = insert_action(description: 'broadcast test 1')
       row = db[:actions].where(id: action_id).first
       expect(row[:broadcast_intent]).to eq('delayed')
+    end
+  end
+
+  describe 'broadcasts.provider (migration 009)' do
+    it 'exists as a nullable text column with no default' do
+      schema = db.schema(:broadcasts).to_h
+      column = schema[:provider]
+      expect(column).not_to be_nil
+      expect(column[:allow_null]).to be(true)
+      expect(column[:ruby_default]).to be_nil
+    end
+
+    # Sequel auto-reverses add_column. Round-trip via the migrator to prove
+    # the column genuinely drops and re-creates on both backends.
+    it 'round-trips up/down/up via the migrator' do
+      Sequel.extension :migration
+      migrations_path = File.expand_path('../../../../db/migrations', __dir__)
+
+      Sequel::Migrator.run(db, migrations_path, target: 8)
+      expect(db.schema(:broadcasts).to_h).not_to have_key(:provider)
+
+      Sequel::Migrator.run(db, migrations_path)
+      expect(db.schema(:broadcasts).to_h).to have_key(:provider)
     end
   end
 end

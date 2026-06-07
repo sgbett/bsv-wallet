@@ -29,31 +29,46 @@ module BSV
     class Engine
       include BSV::Wallet::Interface::BRC100
 
-      autoload :Broadcast,  'bsv/wallet/engine/broadcast'
-      autoload :TxProof,    'bsv/wallet/engine/tx_proof'
-      autoload :OmqSupport, 'bsv/wallet/engine/omq_support'
+      autoload :Broadcast,             'bsv/wallet/engine/broadcast'
+      autoload :TxProof,               'bsv/wallet/engine/tx_proof'
+      autoload :OmqSupport,            'bsv/wallet/engine/omq_support'
+      autoload :InputSource,           'bsv/wallet/engine/input_source'
+      autoload :MerklePathNormaliser,  'bsv/wallet/engine/merkle_path_normaliser'
+      autoload :HydratedTxCache,       'bsv/wallet/engine/hydrated_tx_cache'
 
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
       LIMP_THRESHOLD     = 50_000  # default: 50K sats
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
-      attr_reader :limp_threshold, :services
+      attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker
 
-      def initialize(store:, utxo_pool:,
+      def initialize(store:, utxo_pool:, broadcaster:,
                      services: nil, key_deriver: nil, chain_tracker: nil,
                      network_provider: nil,
-                     network: :mainnet, limp_threshold: LIMP_THRESHOLD)
+                     network: :mainnet, limp_threshold: LIMP_THRESHOLD,
+                     callback_token: nil)
         raise ArgumentError, "limp_threshold must be >= #{LIMP_THRESHOLD_MIN}" if limp_threshold < LIMP_THRESHOLD_MIN
 
         @store = store
         @utxo_pool = utxo_pool
         @services = services
+        @broadcaster = broadcaster
         @key_deriver = key_deriver
         @chain_tracker = chain_tracker
         @network_provider = network_provider
         @network_name = network
         @limp_threshold = limp_threshold
+        # Arcade callbackToken forwarded to the broadcast worker's POST so the
+        # SSE listener (subscribed to the same token at daemon boot) receives
+        # status frames for inline submissions. See #266.
+        @callback_token = callback_token
+        # Inline-broadcast worker — same Engine::Broadcast the daemon's PULL
+        # loop uses. Eliminates the parallel +inline_broadcast+ codepath
+        # that pre-#271 duplicated submit's 202 / 400 / 503 dispatch and
+        # the post-submit accept / reject / promote bookkeeping.
+        @broadcast_worker = Broadcast.new(store: @store, broadcaster: @broadcaster,
+                                          callback_token: @callback_token)
       end
 
       # Is the wallet in limp mode? When true, all outbound operations
@@ -205,13 +220,13 @@ module BSV
         # change generation — already detected above to keep the
         # key_deriver check honest.
         if skip_change
-          wtxid, raw_tx, vout_mapping = build_transaction(
+          wtxid, raw_tx, vout_mapping, = build_transaction(
             action_result[:id], inputs, outputs, lock_time, version, randomize_outputs,
             sign: true
           )
           change_outputs = []
         else
-          wtxid, raw_tx, vout_mapping, change_outputs, signed_tx = run_funding_loop(
+          wtxid, raw_tx, vout_mapping, change_outputs, = run_funding_loop(
             action_id: action_result[:id],
             caller_outputs: outputs || [],
             caller_supplied_inputs: caller_supplied_inputs,
@@ -238,6 +253,16 @@ module BSV
         end
 
         atomic_beef = build_atomic_beef(raw_tx, action_result[:id])
+        # Push the just-built BEEF as a cache hint so the daemon's
+        # broadcast skips both Store#find_action and the input source-data
+        # JOIN. BEEF is a strict superset of EF for the subject tx (parent
+        # transactions are inlined), so the receiver can prime the cache
+        # with a Transaction whose source_transaction is already wired;
+        # daemon's submit emits EF via Transaction#to_ef_hex on that same
+        # object. Producer pays zero extra queries (atomic_beef was built
+        # for the caller's return value either way). Opt-in via
+        # BSV_WALLET_HINTS_SOCKET; no-op otherwise. #269.
+        publish_beef_hint(action_result[:id], atomic_beef) unless no_send
 
         # Internal-path (no_send): synchronous Phase 4 — promote caller
         # outputs, promote change to spendable, return change outpoints.
@@ -248,25 +273,14 @@ module BSV
           return { txid: wtxid, tx: atomic_beef, no_send_change: change }
         end
 
-        # Phase 3 + 4: Broadcast inline. Phase 4 (output promotion +
-        # spendable row creation) runs on accepted ARC response. Delayed
+        # Phase 3 + 4: Broadcast inline. The broadcast worker (same one the
+        # daemon's PULL loop uses) handles the 202 / 400 / 503 dispatch
+        # internally: atomic Phase 4 promotion on accepted, reject_action
+        # cascade on terminal 400, broadcast_at clear on 503, eager proof
+        # linking when the response carries merkle material. Delayed
         # broadcasts are picked up by the daemon's push-discovery loop from
-        # the broadcasts row that sign_action created atomically above.
-        if broadcast == :inline
-          broadcast_result = inline_broadcast(action_id: action_result[:id], tx: signed_tx)
-          if rejected?(broadcast_result)
-            # Definitive sync rejection: tx isn't in any mempool. Cascade
-            # forward through any child action that consumed this action's
-            # outputs (none here on the inline path, but reject_action is
-            # the right primitive) and unwind speculative promotion in
-            # one transaction. The +inputs+ rows CASCADE-delete with the
-            # action, freeing locked outputs for the next call to spend.
-            @store.reject_action(action_id: action_result[:id])
-          elsif accepted?(broadcast_result)
-            @store.promote_action_outputs(action_id: action_result[:id])
-            handle_proof_from_broadcast(action_result[:id], broadcast_result)
-          end
-        end
+        # the broadcasts row that sign_action created atomically above. #271.
+        @broadcast_worker.process(action_result[:id]) if broadcast == :inline
 
         { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
@@ -294,7 +308,7 @@ module BSV
         # so sign_action only deserializes the unsigned tx, applies caller
         # unlocking scripts, signs remaining P2PKH inputs, and updates the
         # action with the signed raw_tx + wtxid.
-        wtxid, raw_tx, signed_tx = apply_spends(action, spends)
+        wtxid, raw_tx, = apply_spends(action, spends)
         @store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
 
@@ -305,15 +319,9 @@ module BSV
 
         return { txid: wtxid, tx: atomic_beef } if no_send
 
-        if broadcast == :inline
-          broadcast_result = inline_broadcast(action_id: action[:id], tx: signed_tx)
-          if rejected?(broadcast_result)
-            @store.reject_action(action_id: action[:id])
-          elsif accepted?(broadcast_result)
-            @store.promote_action_outputs(action_id: action[:id])
-            handle_proof_from_broadcast(action[:id], broadcast_result)
-          end
-        end
+        # See create_action: the broadcast worker handles dispatch + bookkeeping
+        # internally. #271.
+        @broadcast_worker.process(action[:id]) if broadcast == :inline
 
         { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
       end
@@ -464,22 +472,25 @@ module BSV
       #
       # @param dtxid [String] 64-char hex transaction ID (display order)
       # @param vout [Integer] output index (default: 0)
-      # @param no_send [Boolean] when true (the default), Phase 2's BRC-42
-      #   self-payment is built but not broadcast — its output exists only
-      #   in the wallet's view. CI suites rely on this so test runs cost
-      #   nothing.
-      #
-      #   Set false when the wallet intends to broadcast subsequent
-      #   actions on chain. Phase 2's output then lives on the chain's
-      #   UTXO set so a downstream broadcast referencing it is consensus-
+      # @param no_send [Boolean] default false (BRC-100 createAction
+      #   default — intend to broadcast). Phase 2's BRC-42 self-payment
+      #   is queued for broadcast, so its output lives on the chain's
+      #   UTXO set, making downstream broadcasts referencing it consensus-
       #   valid. The rule is binary: either every action in the run
-      #   broadcasts (including this one) or none of them do — broadcasting
-      #   a descendant of a no_send parent gets rejected by the network
-      #   for a non-existent input.
+      #   broadcasts (including this one) or none of them do —
+      #   broadcasting a descendant of a +no_send: true+ parent gets
+      #   rejected by the network for a non-existent input.
+      #
+      #   Set true only for the "build locally without ever broadcasting"
+      #   case where the wallet intentionally never publishes the action
+      #   (rare; downstream broadcasts will fail consensus).
       # @param accept_delayed_broadcast [Boolean] only consulted when
-      #   +no_send+ is false. Default true (queue for the daemon to push).
+      #   +no_send+ is false. Default true (queue for the daemon to
+      #   push). Tests that want "build + queue, never broadcast" leave
+      #   this true and don't run walletd — the queue stays full but
+      #   nothing reaches the network.
       # @return [Hash] { imported: true, satoshis:, dtxid: }
-      def import_utxo(dtxid:, vout: 0, no_send: true, accept_delayed_broadcast: true)
+      def import_utxo(dtxid:, vout: 0, no_send: false, accept_delayed_broadcast: true)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
@@ -577,9 +588,8 @@ module BSV
       # bootstrap path — how a wallet gets its initial funding.
       #
       # @param no_send [Boolean] forwarded to +import_utxo+ for each
-      #   discovered UTXO. Default true (CI invariant — Phase 2 stays
-      #   off chain). Set false when the wallet intends to broadcast
-      #   downstream actions.
+      #   discovered UTXO. Default false (BRC-100 createAction default).
+      #   Set true only for the "build locally without broadcasting" case.
       # @param accept_delayed_broadcast [Boolean] forwarded to
       #   +import_utxo+. Only consulted when +no_send+ is false.
       # @param include_unconfirmed [Boolean] when true, scan WoC's
@@ -589,7 +599,7 @@ module BSV
       #   Phase 4 sets true so SDK can see the just-broadcast sweep
       #   outputs without waiting for a block.
       # @return [Hash] { imported: Integer, utxos: Array<Hash> }
-      def import_wallet(no_send: true, accept_delayed_broadcast: true,
+      def import_wallet(no_send: false, accept_delayed_broadcast: true,
                         include_unconfirmed: false)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
@@ -766,13 +776,13 @@ module BSV
       #
       # @param recipient [String] 66-char compressed public key hex (02/03 prefix)
       # @param satoshis [Integer] amount to send
-      # @param no_send [Boolean] when true (the default) the action is built
-      #   and signed but never reaches ARC — the BEEF is returned for
-      #   peer-to-peer handoff. Set false for on-chain broadcast.
+      # @param no_send [Boolean] default false (BRC-100 createAction
+      #   default — intend to broadcast). Set true for "build + sign
+      #   + return BEEF for peer-to-peer handoff without ever publishing."
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash] { beef:, sender_identity_key:, outputs: [{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }] }
-      def send_payment(recipient:, satoshis:, no_send: true, accept_delayed_broadcast: true)
+      def send_payment(recipient:, satoshis:, no_send: false, accept_delayed_broadcast: true)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -822,13 +832,14 @@ module BSV
       # loop produces a single BRC-42 self-payment.
       #
       # @param target_inputs [Integer] minimum smallest outputs to consume per step
-      # @param no_send [Boolean] when true (the default) the action is built
-      #   and signed but never reaches ARC. Set false for on-chain broadcast.
+      # @param no_send [Boolean] default false (BRC-100 createAction
+      #   default — intend to broadcast). Set true only for the "build
+      #   locally without broadcasting" case.
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash, nil] the +create_action+ result, or +nil+ if there are
       #   fewer than +target_inputs+ spendable outputs (the loop's natural exit).
-      def consolidate_step(target_inputs: 20, no_send: true, accept_delayed_broadcast: true)
+      def consolidate_step(target_inputs: 20, no_send: false, accept_delayed_broadcast: true)
         require_key_deriver!
         smallest = @utxo_pool.smallest(limit: target_inputs)
         return nil if smallest.length < target_inputs
@@ -862,14 +873,14 @@ module BSV
       # requires +change_count >= 1+).
       #
       # @param recipient [String] 66-char compressed pubkey hex (02/03)
-      # @param no_send [Boolean] when true (the default) the action is built
-      #   and signed but never reaches ARC — the BEEF is returned for
-      #   peer-to-peer handoff. Set false for on-chain broadcast.
+      # @param no_send [Boolean] default false (BRC-100 createAction
+      #   default — intend to broadcast). Set true for "build + sign
+      #   + return BEEF for peer-to-peer handoff without ever publishing."
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash, nil] the +create_action+ result, or +nil+ when the
       #   wallet has no spendable outputs.
-      def sweep(recipient:, no_send: true, accept_delayed_broadcast: true)
+      def sweep(recipient:, no_send: false, accept_delayed_broadcast: true)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -1356,129 +1367,6 @@ module BSV
         end
       end
 
-      # +inline_broadcast+'s output-promotion decision. Returns true
-      # when the tx is "on its way" — either formally accepted
-      # (+ArcStatus::ACCEPTED+) OR in an in-flight status that isn't
-      # definitively rejected. The narrower accepted-only test was wrong
-      # for the inline path: ARC's synchronous response on submit is
-      # typically an in-flight status, not SEEN_ON_NETWORK. Treating
-      # in-flight as "not promoted" left the wallet's spendable view
-      # stuck on the consumed input with no replacement change, breaking
-      # the next outbound payment with a spurious limp-mode error.
-      def accepted?(broadcast_result)
-        return false unless broadcast_result
-
-        status = broadcast_result[:tx_status].to_s.upcase
-        return false if status.empty?
-
-        !ArcStatus::REJECTED.include?(status)
-      end
-
-      # Definitive synchronous rejection. The broadcaster returned a
-      # status that explicitly says "the network refused this tx" —
-      # +REJECTED+ from Arcade / Teranode's catch-all +PROCESSING (4)+
-      # validation failure, or +DOUBLE_SPEND_ATTEMPTED+ from ARC. These
-      # are the cases where the tx is not in any node's mempool and the
-      # wallet's locked inputs need releasing so subsequent actions can
-      # spend them.
-      #
-      # Non-rejection includes both formal acceptance (the wallet
-      # promotes outputs and proceeds) and in-flight / orphaned states
-      # (the wallet still promotes, trusting the daemon's poll loop to
-      # eventually resolve — orphaned txs typically resolve in time).
-      def rejected?(broadcast_result)
-        return false unless broadcast_result
-
-        status = broadcast_result[:tx_status].to_s.upcase
-        return false if status.empty?
-
-        ArcStatus::REJECTED.include?(status)
-      end
-
-      # Inline ARC submission for the synchronous broadcast path.
-      #
-      # Stamps broadcast_at in a committed transaction *before* the
-      # network call (mirrors Engine::Broadcast#submit). A mid-POST
-      # crash therefore leaves the row in broadcast_at IS NOT NULL,
-      # tx_status IS NULL -- a recognisable crash-recovery state the
-      # poll loop subsequently resolves via GET /tx/{txid}.
-      #
-      # The broadcasts row is created atomically by Store#sign_action
-      # when actions.broadcast_intent != 'none', so this method assumes the
-      # row exists and only updates it.
-      #
-      # @param action_id [Integer]
-      # @param tx [BSV::Transaction::Transaction] signed transaction
-      #   with +source_satoshis+ / +source_locking_script+ wired on
-      #   each input. Passed as a Transaction object (not raw bytes)
-      #   so the ARC protocol can serialise to Extended Format (EF)
-      #   via +tx.to_ef_hex+ — TAAL ARC rejects raw-format submits
-      #   with "Missing input scripts: Transaction could not be
-      #   transformed to extended format".
-      # @return [Hash, nil] broadcast status from Store
-      def inline_broadcast(action_id:, tx:)
-        return @store.broadcast_status(action_id: action_id) unless @services
-
-        @store.mark_broadcast_attempted(action_id: action_id)
-        response = @services.call(:broadcast, tx)
-
-        if response.http_success?
-          data = response.data
-          @store.record_broadcast_result(
-            action_id: action_id,
-            tx_status: data[:tx_status],
-            arc_status: data[:status],
-            block_hash: data[:block_hash],
-            block_height: data[:block_height],
-            merkle_path: data[:merkle_path],
-            extra_info: data[:extra_info],
-            competing_txs: data[:competing_txs]
-          )
-        else
-          # Non-2xx ARC response. A definitive rejection carries a terminal
-          # txStatus in the (raw, camelCase) failure body; surface it so the
-          # caller's +rejected?+ check unwinds the action and releases its
-          # locked inputs, exactly as the daemon's +submit+ path does via
-          # +reject_action+. Transport errors and non-terminal failures
-          # carry no rejecting status and fall through to the stored
-          # (tx_status NULL) row for the poll loop to resolve later. We never
-          # return a non-rejecting status here — that would let +accepted?+
-          # misread a failed submit as success.
-          failure_status = response.data && response.data['txStatus']
-          if failure_status && ArcStatus::REJECTED.include?(failure_status.to_s.upcase)
-            { tx_status: failure_status.to_s.upcase }
-          else
-            @store.broadcast_status(action_id: action_id)
-          end
-        end
-      end
-
-      def handle_proof_from_broadcast(action_id, broadcast_result)
-        return unless broadcast_result[:merkle_path]
-
-        wtxid = broadcast_result[:wtxid] || @store.find_action(id: action_id)&.dig(:wtxid)
-        return unless wtxid
-
-        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'handle_proof_from_broadcast wtxid')
-        merkle_path = normalize_merkle_path(broadcast_result[:merkle_path], wtxid)
-
-        # Store raw_tx from the action so BEEF construction can use it
-        raw_tx = broadcast_result[:raw_tx]
-        raw_tx ||= @store.find_action(id: action_id)&.dig(:raw_tx)
-
-        proof_id = @store.save_proof(
-          wtxid: wtxid,
-          proof: {
-            height: broadcast_result[:block_height],
-            block_hash: broadcast_result[:block_hash],
-            merkle_path: merkle_path,
-            raw_tx: raw_tx
-          }
-        )
-        @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
-        BSV.logger&.debug { "[Engine] proof_from_broadcast: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{broadcast_result[:block_height]}" }
-      end
-
       def query_change_outpoints(action_id)
         action = @store.find_action(id: action_id)
         return [] unless action&.dig(:wtxid)
@@ -1488,48 +1376,46 @@ module BSV
         vouts.map { |vout| "#{dtxid}.#{vout}" }
       end
 
-      # Normalize a merkle_path value to BRC-74 binary format.
-      #
-      # ARC may return merkle_path as:
-      # - Binary (ASCII-8BIT) — already in BRC-74 format, pass through
-      # - Hex string — decode to binary
-      # - TSC format hash — convert via MerklePath.from_tsc
-      #
-      # @param merkle_path [String, Hash] raw merkle_path from broadcast response
-      # @param wtxid [String] 32-byte binary wtxid (wire order, needed for TSC conversion)
-      # @return [String] BRC-74 binary merkle_path
-      def normalize_merkle_path(merkle_path, wtxid)
-        if merkle_path.is_a?(Hash)
-          BSV.logger&.debug { '[Engine] normalize_merkle_path: format=TSC' }
-          return normalize_tsc_merkle_path(merkle_path, wtxid)
-        end
-        if merkle_path.encoding == Encoding::ASCII_8BIT
-          BSV.logger&.debug { '[Engine] normalize_merkle_path: format=binary (passthrough)' }
-          return merkle_path
-        end
-        if merkle_path.match?(/\A[0-9a-fA-F]+\z/)
-          BSV.logger&.debug { "[Engine] normalize_merkle_path: format=hex (#{merkle_path.length} chars)" }
-          return [merkle_path].pack('H*')
-        end
-        BSV.logger&.debug { '[Engine] normalize_merkle_path: format=unknown (force binary)' }
-        merkle_path.b
-      end
-
-      # Convert a TSC-format merkle proof hash to BRC-74 binary.
-      # from_tsc expects display-order hex; wtxid is wire order, so reverse for display.
-      def normalize_tsc_merkle_path(tsc, wtxid)
-        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'normalize_tsc wtxid')
-        dtxid = wtxid.reverse.unpack1('H*')
-        BSV::Transaction::MerklePath.from_tsc(
-          dtxid_hex: tsc[:txOrId] || tsc[:tx_or_id] || dtxid,
-          index: tsc[:index],
-          nodes: tsc[:nodes],
-          block_height: tsc[:blockHeight] || tsc[:block_height]
-        ).to_binary
-      end
-
       # Build an Atomic BEEF (BRC-95) envelope for a signed transaction.
       #
+      # Push a BEEF cache hint to the daemon so broadcast skips both
+      # +find_action+ and the +resolve_inputs_for_signing+ JOIN. BEEF is
+      # the natural hint payload: it's a strict superset of EF for the
+      # subject tx, the producer has it built already (returned to the
+      # caller from +create_action+), and the same cached Transaction
+      # serves a future BEEF-based p2p hand-off path without rebuilding.
+      # Best-effort: when +BSV_WALLET_HINTS_SOCKET+ is unset, do
+      # nothing. Push failures (daemon not listening, socket missing, OMQ
+      # error) are swallowed — daemon's #252 reconstruction stays the
+      # correctness floor. #269.
+      #
+      # Dangling hints: if a producer crashes between this push and the
+      # action's DB commit, the daemon caches a hint for an action it
+      # will never look up. Harmless — broadcast discovery reads from
+      # the DB, not the cache, so an orphan entry is never queried.
+      # +HydratedTxCache+'s LRU eventually evicts it under load. No
+      # reconciliation required.
+      def publish_beef_hint(action_id, atomic_beef)
+        # Blank-or-unset normalises to nil — a set-but-empty env
+        # (e.g. +export BSV_WALLET_HINTS_SOCKET=+ in a shell) would
+        # otherwise be a truthy "" that +OMQ::PUSH.connect+ would
+        # raise on; the rescue below would swallow it but every
+        # publish would noisily fail in debug logs.
+        socket_path = ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil)
+        socket_path = nil if socket_path&.strip&.empty?
+        return unless socket_path
+
+        payload = Marshal.dump(action_id: action_id, beef: atomic_beef)
+
+        @hints_socket_lock ||= Mutex.new
+        @hints_socket_lock.synchronize do
+          @hints_socket ||= OMQ::PUSH.connect(socket_path)
+          @hints_socket << payload
+        end
+      rescue StandardError => e
+        BSV.logger&.debug { "[Engine] BEEF hint publish skipped: #{e.message}" }
+      end
+
       # Outgoing BEEF: constructed from our own ProofStore — verification is
       # for incoming untrusted data only (see verify_incoming_transaction!).
       #
@@ -2033,10 +1919,8 @@ module BSV
             prev_tx_out_index: resolved[:source_vout],
             sequence: resolved[:sequence] || 0xFFFFFFFF
           )
-          input.source_satoshis = resolved[:source_satoshis]
-
-          locking_script = resolve_source_locking_script(resolved[:source_locking_script])
-          input.source_locking_script = locking_script
+          InputSource.attach!(input, resolved)
+          locking_script = input.source_locking_script
 
           # Find the caller's input spec for this vin (for custom unlocking scripts)
           caller_input = find_caller_input(caller_inputs, resolved[:vin])
@@ -2058,16 +1942,6 @@ module BSV
         end
 
         [tx_inputs, signing_keys]
-      end
-
-      # Resolve a source locking script (binary) into a Script object.
-      #
-      # @param script_data [String, nil] binary locking script
-      # @return [Script::Script, nil]
-      def resolve_source_locking_script(script_data)
-        return if script_data.nil?
-
-        BSV::Script::Script.from_binary(script_data)
       end
 
       # Resolve an unlocking script value to a Script object.
@@ -2142,8 +2016,10 @@ module BSV
       # @param version [Integer, nil] transaction version
       # @param randomize [Boolean] whether to shuffle output order
       # @param sign [Boolean] whether to sign P2PKH inputs (default: true)
-      # @return [Array(String, String, Hash)] wtxid (32-byte wire order),
-      #   raw_tx (binary), and vout_mapping (original index -> new vout)
+      # @return [Array(String, String, Hash, Transaction)] wtxid (32-byte
+      #   wire order), raw_tx (binary), vout_mapping (original index ->
+      #   new vout), and the assembled tx (signed when +sign:+ is true,
+      #   needed downstream for EF serialisation).
       def build_transaction(action_id, inputs, outputs, lock_time, version, randomize, sign: true)
         resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)
 
@@ -2163,7 +2039,7 @@ module BSV
         raw_tx = tx.to_binary
         wtxid = tx.wtxid
 
-        [wtxid, raw_tx, vout_mapping]
+        [wtxid, raw_tx, vout_mapping, tx]
       end
 
       # Funding loop (#210): drive generate_change until inputs cover the
@@ -2401,8 +2277,7 @@ module BSV
         signing_keys = {}
         resolved_inputs.each_with_index do |resolved, idx|
           input = tx.inputs[idx]
-          input.source_satoshis = resolved[:source_satoshis]
-          input.source_locking_script = resolve_source_locking_script(resolved[:source_locking_script])
+          InputSource.attach!(input, resolved)
 
           spend = spends[resolved[:vin]] || spends[idx]
           if spend

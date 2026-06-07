@@ -16,7 +16,7 @@ module BSV
       # Network has formally accepted the broadcast (drives Phase 4
       # output promotion). ACCEPTED_BY_NETWORK is an interim accepted
       # state some ARC configs report before SEEN_ON_NETWORK.
-      ACCEPTED = %w[SEEN_ON_NETWORK ACCEPTED_BY_NETWORK MINED IMMUTABLE].freeze
+      ACCEPTED = %w[SEEN_ON_NETWORK SEEN_MULTIPLE_NODES ACCEPTED_BY_NETWORK MINED IMMUTABLE].freeze
 
       # Definitive, non-recoverable rejection. Used as the negative
       # predicate for speculative promotion: anything NOT in this set
@@ -44,7 +44,7 @@ module BSV
       # Store#pending_resolutions, so a non-enum value here would make
       # Postgres reject the query.
       TERMINAL = %w[
-        SEEN_ON_NETWORK MINED IMMUTABLE
+        SEEN_ON_NETWORK SEEN_MULTIPLE_NODES MINED IMMUTABLE
         REJECTED DOUBLE_SPEND_ATTEMPTED
       ].freeze
     end

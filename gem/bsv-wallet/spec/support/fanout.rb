@@ -7,8 +7,8 @@
 #
 #   - #129 (spec/integration/stress_cascade_spec.rb) — CI stress-test,
 #     drives the bin/ CLI pipeline (create + receive subprocesses).
-#   - #126 (spec/e2e/broadcast_spec.rb) — e2e on-chain harness, fanout is
-#     the stage-3 precondition driven by in-process Engine#send_payment +
+#   - #126 (spec/e2e/e2e_workload_spec.rb) — e2e on-chain harness, fanout
+#     is the stage-3 precondition driven by in-process Engine#send_payment +
 #     #internalize_action before the broadcast workload.
 #
 # The *routing* is identical in both — for each wallet, send +count+

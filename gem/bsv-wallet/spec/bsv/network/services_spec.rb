@@ -146,7 +146,7 @@ RSpec.describe BSV::Network::Services do
 
       result = services.call(:get_utxos, 'addr')
       expect(result.http_success?).to be false
-      expect(result.error_message).to match(/no provider/)
+      expect(result.error_message).to include('no provider')
     end
   end
 
@@ -342,26 +342,6 @@ RSpec.describe BSV::Network::Services do
       services.call(:get_tx, 'abc123')
       result = services.call(:get_merkle_path, txid: 'abc123')
       expect(result.http_success?).to be false
-    end
-  end
-
-  # --- Broadcast affinity ---
-
-  describe 'broadcast affinity' do
-    it 'prefers the broadcast provider for get_tx_status' do
-      arc = stub_provider('ARC', {
-                            broadcast: success({ 'txid' => 'abc', 'txStatus' => 'SEEN_ON_NETWORK' }),
-                            get_tx_status: success({ 'txid' => 'abc', 'txStatus' => 'MINED', 'blockHeight' => 800_000 })
-                          })
-      woc = stub_provider('WoC', {
-                            get_tx_status: success({ 'txid' => 'abc', 'txStatus' => 'UNKNOWN' })
-                          })
-
-      services = described_class.new(providers: [woc, arc])
-      services.call(:broadcast, 'rawtx')
-
-      result = services.call(:get_tx_status, txid: 'abc')
-      expect(result.data[:tx_status]).to eq('MINED')
     end
   end
 

@@ -6,9 +6,10 @@
 # lifecycle, subprocess management) that need no BSV_WALLET_WIF_SDK or
 # on-chain state.
 #
-# The on-chain harness itself is the sole occupant of spec/e2e
-# (+broadcast_spec.rb+), loaded via +spec/e2e/spec_helper.rb+ and excluded
-# from the bare run by the +--exclude-pattern+ in +.rspec+.
+# The on-chain specs live in spec/e2e (+e2e_workload_spec.rb+ — the #126
+# workload harness — and +broadcast_spec.rb+ — the #251 SSE-driven
+# scenarios), loaded via +spec/e2e/spec_helper.rb+ and excluded from the
+# bare run by the +--exclude-pattern+ in +.rspec+.
 
 require 'spec_helper'
 require 'fileutils'
@@ -112,7 +113,10 @@ end
 RSpec.describe E2E::DaemonSupervisor do
   # The supervisor spawns +bin/walletd+, which would try to connect to
   # Postgres and ARC. We stub Process.spawn to keep this test as a unit
-  # test for the supervisor's lifecycle bookkeeping only.
+  # test for the supervisor's lifecycle bookkeeping only. We also stub
+  # +assert_databases_empty!+ -- the pre-boot DB safety check
+  # (preventing the daemon from broadcasting any queued work on start)
+  # is verified separately and orthogonal to lifecycle bookkeeping.
   let(:tmpdir) { Dir.mktmpdir('e2e_supervisor_') }
   let(:supervisor) do
     described_class.new(
@@ -121,6 +125,10 @@ RSpec.describe E2E::DaemonSupervisor do
       log_dir: tmpdir,
       shutdown_timeout: 0.5
     )
+  end
+
+  before do
+    allow(supervisor).to receive(:assert_databases_empty!) # bypass DB check in unit tests
   end
 
   after { FileUtils.rm_rf(tmpdir) if File.directory?(tmpdir) }

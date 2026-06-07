@@ -4,23 +4,40 @@
 # Create a payment (porcelain).
 #
 # Usage:
-#   bin/create <wallet> <identity_key> <sats>
+#   bin/create <wallet> <identity_key> <sats> [--no-send]
+#
+# Broadcast mode mirrors bin/create_action / bin/import:
+#   (default)  — no_send: false, accept_delayed_broadcast: true. Payment
+#                action queued for walletd; change not promoted until the
+#                broadcast lands.
+#   --no-send  — payment built and signed, BEEF emitted; change promoted
+#                locally in the same DB transaction. Used by the
+#                integration tests' BEEF hand-off cascade.
 #
 # Stdout: JSON envelope { beef: <hex>, dtxid: <hex>, sender_identity_key: <hex>, outputs: [...] }
 # Stderr: human-readable summary
 
 require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
 
+# Positional args first, then flags.
 wallet_name = ARGV.shift
 identity_key = ARGV.shift
 sats = ARGV.shift&.to_i
 
-abort 'Usage: bin/create <wallet> <identity_key> <sats>' unless wallet_name && identity_key && sats&.positive?
+options = {}
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/create <wallet> <identity_key> <sats> [--no-send]'
+  opts.on('--no-send', 'Build payment without broadcasting (promote change locally)') { options[:no_send] = true }
+end.parse!(ARGV)
+
+abort 'Usage: bin/create <wallet> <identity_key> <sats> [--no-send]' unless wallet_name && identity_key && sats&.positive?
 abort 'Invalid identity key (expected 66-char compressed hex)' unless identity_key.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
 
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 
-result = ctx[:engine].send_payment(recipient: identity_key, satoshis: sats)
+result = ctx[:engine].send_payment(recipient: identity_key, satoshis: sats,
+                                   no_send: options[:no_send] || false)
 
 # Hex-encode binary fields for JSON transport: BEEF, and the subject txid
 # (send_payment returns it as a wire-order wtxid → expose as a display dtxid).

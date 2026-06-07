@@ -2,6 +2,25 @@
 
 require 'json'
 
+# Store is currently used synchronously: callers (CLI tools, the Engine,
+# and the daemon's worker fibers) issue a method call and wait for the
+# result before continuing. Sequel's pool is keyed on whatever
+# +Sequel.current+ returns -- Thread.current by default, Fiber.current
+# when the +fiber_concurrency+ extension is enabled.
+#
+# Walletd (bin/walletd) enables +Sequel.extension :fiber_concurrency+
+# because it runs many Async fibers on one reactor thread. CLI tools
+# do not (one thread, one root fiber -- functionally identical, YAGNI).
+#
+# If a future change introduces fiber-based async access to Store
+# (e.g. an OMQ-fronted PUSH/PULL queue for eventual-consistency writes,
+# or any +task.async do+ that ends up calling Store methods), the
+# calling process must enable +Sequel.extension :fiber_concurrency+
+# *and* size the pool for the expected concurrent fiber count. See
+# bin/walletd for the pattern and #268 for the bug that scoping
+# prevents (concurrent fibers on a shared connection corrupt PG
+# result state -- "undefined method 'nfields' for nil").
+
 module BSV
   module Wallet
     # SQL-backed persistence for the wallet.
@@ -21,17 +40,20 @@ module BSV
       # Factory: return a SQLite or Postgres instance based on the URL.
       #
       # @param url [String] database URL (sqlite:// or postgres://)
+      # @param db_opts [Hash] extra options passed through to
+      #   +Sequel.connect+. CLI tools omit this (Sequel default pool
+      #   suffices for single-process, single-fiber use). The walletd
+      #   daemon supplies +max_connections+ sized for its concurrent
+      #   fiber inventory after enabling +Sequel.extension(:fiber_concurrency)+.
+      #   See #268 + bin/walletd.
       # @return [BSV::Wallet::Store::SQLite, BSV::Wallet::Store::Postgres]
-      def self.connect(url)
-        if url.to_s.downcase.start_with?('postgres')
-          Postgres.new(url: url)
-        else
-          SQLite.new(url: url)
-        end
+      def self.connect(url, **db_opts)
+        klass = url.to_s.downcase.start_with?('postgres') ? Postgres : SQLite
+        klass.new(url: url, db_opts: db_opts)
       end
 
-      def initialize(url: nil, db: nil)
-        @db = db || Sequel.connect(url)
+      def initialize(url: nil, db: nil, db_opts: {})
+        @db = db || Sequel.connect(url, **db_opts)
         # Set global so Sequel::Model(:table_name) calls in model class
         # bodies can resolve the database during autoload.
         Sequel::Model.db = @db
@@ -657,6 +679,25 @@ module BSV
         broadcast_to_hash(broadcast)
       end
 
+      def record_broadcast_provider(wtxid:, provider:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'record_broadcast_provider wtxid')
+        action_id = models::Action.where(wtxid: Sequel.blob(wtxid)).get(:id)
+        return 0 unless action_id
+
+        # Last-broadcaster wins: re-broadcasting the same wtxid (e.g. retry
+        # after a partial failure on a different provider) overwrites the
+        # column so #provider_for reflects the most recent successful submit.
+        models::Broadcast.where(action_id: action_id).update(provider: provider)
+      end
+
+      def broadcast_provider_for(wtxid:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'broadcast_provider_for wtxid')
+        action_id = models::Action.where(wtxid: Sequel.blob(wtxid)).get(:id)
+        return unless action_id
+
+        models::Broadcast.where(action_id: action_id).get(:provider)
+      end
+
       def pending_resolutions(limit: 100)
         models::Broadcast
           .exclude(broadcast_at: nil)
@@ -678,9 +719,39 @@ module BSV
         @db.transaction do
           raise "no broadcasts row for action_id=#{action_id}" unless models::Broadcast.where(action_id: action_id).any?
 
+          # State marker: stamp +broadcast_at+ as the row enters "submitted,
+          # awaiting outcome". The +broadcast_at: nil+ predicate prevents
+          # racing re-stamps within a single in-flight attempt; the
+          # companion +clear_broadcast_attempted+ nulls the stamp on a 503
+          # response so the row re-enters the queued state for clean retry.
+          # After a 503 + retry, +broadcast_at+ reflects the retry timestamp
+          # rather than the first attempt. See reference/schema.md (Phase 3).
           models::Broadcast
             .where(action_id: action_id, broadcast_at: nil)
             .update(broadcast_at: Time.now)
+        end
+      end
+
+      # Revert +broadcast_at+ to NULL on the 503 / backpressure path so the
+      # row returns to the queued / push-discovery set for clean retry
+      # next cycle. See #266 + plan §4.2.
+      #
+      # Guarded by +tx_status: nil+: if the SSE listener concurrently
+      # delivered SEEN / REJECTED for the same wtxid (Arcade fanned out an
+      # event before responding 503, or a previous attempt actually made it
+      # through), the row has already transitioned and this clear becomes a
+      # no-op. Without the guard, racing the listener could reset state
+      # for an action that has moved on. Material edge case -- specced.
+      #
+      # @param action_id [Integer]
+      # @return [Integer] number of rows updated (0 when guarded out, 1
+      #   when the clear took effect)
+      def clear_broadcast_attempted(action_id:)
+        @db.transaction do
+          models::Broadcast
+            .where(action_id: action_id, tx_status: nil)
+            .exclude(broadcast_at: nil)
+            .update(broadcast_at: nil)
         end
       end
 
@@ -692,6 +763,28 @@ module BSV
         models::Broadcast
           .where(action_id: action_id)
           .update(retry_count: Sequel[:retry_count] + 1)
+      end
+
+      # --- SSE Cursors ---
+
+      def load_sse_cursor(token:)
+        models::SseCursor.where(token: token).get(:last_event_id)
+      end
+
+      def save_sse_cursor(token:, last_event_id:)
+        # Upsert keyed on the token PK. Concurrent listeners booting for
+        # the same token (defensive -- the daemon should run one) race
+        # cleanly without PK violation. +update_where+ enforces strict
+        # monotonicity: a stale write (reconnect race, dual listener
+        # flushing residual events from before fail-over) that carries a
+        # smaller +last_event_id+ becomes a no-op rather than rewinding
+        # the cursor and re-delivering events the listener already
+        # advanced past. See #262.
+        models::SseCursor.dataset
+                         .insert_conflict(target: :token,
+                                          update: { last_event_id: last_event_id, updated_at: Time.now },
+                                          update_where: (Sequel[:sse_cursors][:last_event_id] < last_event_id))
+                         .insert(token: token, last_event_id: last_event_id, updated_at: Time.now)
       end
 
       def reap_stale_actions(threshold:)
@@ -924,7 +1017,7 @@ module BSV
           action_id: record.action_id, tx_status: record.tx_status,
           arc_status: record.arc_status, broadcast_at: record.broadcast_at,
           block_hash: record.block_hash, block_height: record.block_height,
-          merkle_path: record.merkle_path
+          merkle_path: record.merkle_path, provider: record.provider
         }
       end
 
@@ -1083,4 +1176,5 @@ require_relative 'store/postgres'
 
 # Service classes
 BSV::Wallet::Store.autoload :BroadcastCallback, 'bsv/wallet/store/broadcast_callback'
+BSV::Wallet::Store.autoload :EventApplicator,   'bsv/wallet/store/event_applicator'
 BSV::Wallet::Store.autoload :UTXOPool,          'bsv/wallet/store/utxo_pool'

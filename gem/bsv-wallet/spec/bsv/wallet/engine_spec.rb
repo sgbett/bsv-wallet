@@ -52,6 +52,102 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
+  describe '#create_action BEEF hint publish (#269)' do
+    it 'is a no-op when BSV_WALLET_HINTS_SOCKET is unset' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return(nil)
+      allow(OMQ::PUSH).to receive(:connect)
+
+      engine.create_action(
+        description: 'hint disabled',
+        inputs: [],
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+        ]
+      )
+
+      expect(OMQ::PUSH).not_to have_received(:connect)
+    end
+
+    it 'treats a set-but-blank BSV_WALLET_HINTS_SOCKET as unset (would noisily fail OMQ::PUSH.connect("") otherwise)' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('   ')
+      allow(OMQ::PUSH).to receive(:connect)
+
+      engine.create_action(
+        description: 'hint disabled by blank env',
+        inputs: [],
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+        ]
+      )
+
+      expect(OMQ::PUSH).not_to have_received(:connect)
+    end
+
+    it 'connects + pushes a Marshalled hint when BSV_WALLET_HINTS_SOCKET is set' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('inproc://test-hints-publish')
+      sent = []
+      fake_socket = double('PUSH')
+      allow(fake_socket).to receive(:<<) { |payload| sent << payload }
+      allow(OMQ::PUSH).to receive(:connect).with('inproc://test-hints-publish').and_return(fake_socket)
+
+      engine.create_action(
+        description: 'hint enabled',
+        inputs: [],
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+        ]
+      )
+
+      expect(OMQ::PUSH).to have_received(:connect).with('inproc://test-hints-publish')
+      expect(sent.size).to eq(1)
+      hint = Marshal.load(sent.first) # rubocop:disable Security/MarshalLoad
+      expect(hint).to include(:action_id, :beef)
+      expect(hint[:beef]).to be_a(String)
+      expect(hint[:beef].bytesize).to be > 0
+    end
+
+    it 'swallows OMQ::PUSH.connect errors (best-effort, never blocks create_action)' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('ipc:///nonexistent/path.sock')
+      allow(OMQ::PUSH).to receive(:connect).and_raise(StandardError, 'connect boom')
+
+      expect do
+        engine.create_action(
+          description: 'hint fail swallowed',
+          inputs: [],
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          ]
+        )
+      end.not_to raise_error
+    end
+
+    it 'does not publish a hint for no_send actions (they will never be broadcast)' do
+      allow(ENV).to receive(:fetch).and_call_original
+      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('inproc://test-hints-no-send')
+      allow(OMQ::PUSH).to receive(:connect)
+
+      engine.create_action(
+        description: 'no_send hint skip',
+        inputs: [],
+        no_send: true,
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+        ]
+      )
+
+      expect(OMQ::PUSH).not_to have_received(:connect)
+    end
+  end
+
   describe '#create_action' do
     it 'creates an action with outputs' do
       result = engine.create_action(
@@ -165,7 +261,7 @@ RSpec.describe BSV::Wallet::Engine do
       subject(:engine) do
         described_class.new(
           store: store, utxo_pool: utxo_pool,
-          services: services, network: :mainnet
+          services: services, broadcaster: broadcaster, network: :mainnet
         )
       end
 
@@ -174,10 +270,11 @@ RSpec.describe BSV::Wallet::Engine do
                  tx_status: 'SEEN_ON_NETWORK', status: 200
                })
       end
-      let(:services) do
-        svc = double('Services')
-        allow(svc).to receive(:call).with(:broadcast, anything).and_return(broadcast_response)
-        svc
+      let(:services) { double('Services') }
+      let(:broadcaster) do
+        b = double('Broadcaster')
+        allow(b).to receive(:broadcast).with(anything, wtxid: anything).and_return(broadcast_response)
+        b
       end
 
       it 'broadcasts inline and promotes on acceptance' do
@@ -192,7 +289,7 @@ RSpec.describe BSV::Wallet::Engine do
         )
 
         expect(result[:txid]).not_to be_nil
-        expect(services).to have_received(:call).with(:broadcast, anything)
+        expect(broadcaster).to have_received(:broadcast).with(anything, wtxid: anything)
 
         # Verify outputs were promoted
         listed = engine.list_outputs(basket: 'payments')
@@ -200,11 +297,11 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it 'stamps broadcast_at before the ARC call (pre-POST timing)' do
-        # Inject a stubbed services.call that raises mid-POST. The row
+        # Inject a stubbed broadcaster.broadcast that raises mid-POST. The row
         # should still have broadcast_at set -- the recognisable
         # crash-recovery state the poll loop subsequently resolves.
         stamped_at_call_time = nil
-        allow(services).to receive(:call).with(:broadcast, anything) do
+        allow(broadcaster).to receive(:broadcast).with(anything, wtxid: anything) do
           action = store.send(:models)::Action.order(:id).last
           stamped_at_call_time = store.broadcast_status(action_id: action.id)
           raise StandardError, 'network down'
@@ -251,8 +348,8 @@ RSpec.describe BSV::Wallet::Engine do
       # would leave the action's outputs speculatively promoted and its
       # inputs locked.
       it 'rejects the action on a non-2xx response carrying a terminal txStatus' do
-        allow(services).to receive(:call).with(:broadcast, anything).and_return(
-          double('ProtocolResponse', http_success?: false, data: { 'txStatus' => 'REJECTED' })
+        allow(broadcaster).to receive(:broadcast).with(anything, wtxid: anything).and_return(
+          double('ProtocolResponse', http_success?: false, code: '400', data: { 'txStatus' => 'REJECTED' })
         )
 
         engine.create_action(
@@ -271,12 +368,78 @@ RSpec.describe BSV::Wallet::Engine do
         expect(action).to be_nil
         expect(engine.list_outputs(basket: 'payments')[:total_outputs]).to eq(0)
       end
+
+      it 'forwards the configured callback_token on the broadcaster call (X-CallbackToken plumbing)' do
+        # Override the default broadcaster stub (which is keyed on the
+        # zero-token signature) so the callback_token-laden call matches.
+        allow(broadcaster).to receive(:broadcast)
+          .with(anything, hash_including(callback_token: 'tok-inline-xyz'))
+          .and_return(broadcast_response)
+
+        engine_with_token = described_class.new(
+          store: store, utxo_pool: utxo_pool, services: services,
+          broadcaster: broadcaster, network: :mainnet,
+          callback_token: 'tok-inline-xyz'
+        )
+
+        engine_with_token.create_action(
+          description: 'inline broadcast with token',
+          inputs: [],
+          accept_delayed_broadcast: false,
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          ]
+        )
+
+        expect(broadcaster).to have_received(:broadcast)
+          .with(anything, hash_including(callback_token: 'tok-inline-xyz'))
+      end
+
+      # 503 backpressure: mirror Engine::Broadcast#submit's null-on-503
+      # behaviour (plan §4.2). The row's broadcast_at gets reverted so
+      # the daemon's pending_submissions discovery picks it up next cycle
+      # for clean retry. Preserves the inline_broadcast contract -- caller
+      # sees the not-yet-accepted state (no fake REJECTED return).
+      it 'on a 503 backpressure response, clears broadcast_at so the row re-enters the queued set' do
+        allow(broadcaster).to receive(:broadcast).with(anything, wtxid: anything).and_return(
+          double('ProtocolResponse', http_success?: false, code: '503', data: nil)
+        )
+
+        engine.create_action(
+          description: 'inline 503 backpressure',
+          inputs: [],
+          accept_delayed_broadcast: false,
+          outputs: [
+            { satoshis: 500, locking_script: OP_TRUE,
+              output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+          ]
+        )
+
+        action = store.send(:models)::Action.where(description: 'inline 503 backpressure').last
+        expect(action).not_to be_nil
+        status = store.broadcast_status(action_id: action.id)
+        # broadcast_at reverted; row returns to pending_submissions.
+        expect(status[:broadcast_at]).to be_nil
+        expect(store.pending_submissions.map { |b| b[:action_id] }).to include(action.id)
+      end
+    end
+
+    context 'when constructed without a broadcaster' do
+      it 'raises ArgumentError at construction (broadcaster is required post-#271)' do
+        expect do
+          described_class.new(
+            store: store, utxo_pool: utxo_pool,
+            services: double('Services', call: nil), network: :mainnet
+          )
+        end.to raise_error(ArgumentError, /missing keyword: :broadcaster/)
+      end
     end
 
     context 'with delayed broadcast (accept_delayed_broadcast: true)' do
       subject(:engine) do
         described_class.new(
-          store: store, utxo_pool: utxo_pool,
+          store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
           services: services, network: :mainnet
         )
       end
@@ -841,7 +1004,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     let(:engine_with_tracker) do
       described_class.new(
-        store: store, utxo_pool: utxo_pool,
+        store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
         chain_tracker: chain_tracker_mock, network: :mainnet
       )
     end
@@ -1158,7 +1321,7 @@ RSpec.describe BSV::Wallet::Engine do
         allow(rejecting_tracker).to receive_messages(valid_root_for_height?: false, current_height: 900_000)
 
         engine_reject = described_class.new(
-          store: store, utxo_pool: utxo_pool,
+          store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
           chain_tracker: rejecting_tracker, network: :mainnet
         )
 
@@ -1441,124 +1604,10 @@ RSpec.describe BSV::Wallet::Engine do
       end
     end
 
-    context 'handle_proof_from_broadcast normalization' do
-      it 'normalizes hex merkle_path to binary before storing' do
-        # Create an action that will receive a broadcast proof
-        beef_data = build_test_beef(satoshis: 500)
-        beef = BSV::Transaction::Beef.from_binary(beef_data)
-        subject_wtxid = beef.subject_wtxid
-
-        engine_with_tracker.internalize_action(
-          tx: beef_data,
-          description: 'hex proof normal',
-          outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'hex_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
-          ]
-        )
-
-        # Build a valid merkle path and encode as hex
-        # subject_wtxid from beef is wire order — use directly as merkle path hash
-        sibling_hash = SecureRandom.random_bytes(32)
-        mp = BSV::Transaction::MerklePath.new(
-          block_height: 850_000,
-          path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: subject_wtxid, txid: true),
-            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
-          ]]
-        )
-        merkle_path_hex = mp.to_binary.unpack1('H*')
-
-        # Find the action and simulate broadcast proof with hex merkle_path
-        action = store.find_action(wtxid: subject_wtxid)
-        engine.send(:handle_proof_from_broadcast, action[:id], {
-                      wtxid: subject_wtxid,
-                      block_height: 850_000,
-                      merkle_path: merkle_path_hex
-                    })
-
-        proof = proof_store.find_proof(wtxid: subject_wtxid)
-        expect(proof).not_to be_nil
-        expect(proof[:merkle_path].encoding).to eq(Encoding::ASCII_8BIT)
-
-        # Verify it can be deserialized
-        stored_mp, = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path])
-        expect(stored_mp.block_height).to eq(850_000)
-      end
-
-      it 'passes through binary merkle_path unchanged' do
-        beef_data = build_test_beef(satoshis: 500)
-        beef = BSV::Transaction::Beef.from_binary(beef_data)
-        subject_wtxid = beef.subject_wtxid
-
-        engine_with_tracker.internalize_action(
-          tx: beef_data,
-          description: 'bin proof pass',
-          outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
-              insertion_remittance: { basket: 'bin_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
-          ]
-        )
-
-        # subject_wtxid from beef is wire order — use directly as merkle path hash
-        sibling_hash = SecureRandom.random_bytes(32)
-        mp = BSV::Transaction::MerklePath.new(
-          block_height: 850_000,
-          path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: subject_wtxid, txid: true),
-            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
-          ]]
-        )
-        merkle_path_binary = mp.to_binary
-
-        action = store.find_action(wtxid: subject_wtxid)
-        engine.send(:handle_proof_from_broadcast, action[:id], {
-                      wtxid: subject_wtxid,
-                      block_height: 850_000,
-                      merkle_path: merkle_path_binary
-                    })
-
-        proof = proof_store.find_proof(wtxid: subject_wtxid)
-        expect(proof[:merkle_path]).to eq(merkle_path_binary)
-      end
-
-      it 'stores raw_tx from the action for BEEF construction' do
-        # Create an outgoing action so it has raw_tx set
-        locking_script = OP_TRUE
-        result = engine.create_action(
-          description: 'broadcast raw_tx',
-          inputs: [],
-          no_send: true,
-          outputs: [{ satoshis: 500, locking_script: locking_script,
-                      basket: 'proof_raw_tx' }]
-        )
-
-        wtxid = result[:txid]
-        action = store.find_action(wtxid: wtxid)
-
-        # Simulate ARC returning MINED with merkle_path
-        # wtxid is wire order — use directly as merkle path hash
-        sibling_hash = SecureRandom.random_bytes(32)
-        mp = BSV::Transaction::MerklePath.new(
-          block_height: 850_000,
-          path: [[
-            BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid, txid: true),
-            BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: sibling_hash)
-          ]]
-        )
-
-        engine.send(:handle_proof_from_broadcast, action[:id], {
-                      wtxid: wtxid,
-                      block_height: 850_000,
-                      merkle_path: mp.to_binary
-                    })
-
-        proof = proof_store.find_proof(wtxid: wtxid)
-        expect(proof).not_to be_nil
-        expect(proof[:raw_tx]).not_to be_nil
-        expect(proof[:raw_tx].bytesize).to be > 0
-      end
-    end
+    # Broadcast-proof linking (formerly Engine#handle_proof_from_broadcast):
+    # moved to Engine::Broadcast#link_proof_if_present in #271; merkle-path
+    # normalisation lives in Engine::MerklePathNormaliser. Direct coverage
+    # in spec/bsv/wallet/engine/broadcast_spec.rb.
 
     # --- verify_incoming_transaction! unit tests ---
 

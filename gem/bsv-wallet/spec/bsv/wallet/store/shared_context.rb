@@ -2,20 +2,27 @@
 
 # Shared database setup for store specs.
 #
-# Backend selection:
-#   DATABASE_URL unset / sqlite://  -> in-memory SQLite (default)
-#   DATABASE_URL=postgres://...     -> Postgres
+# Backend selection (deliberately independent of +DATABASE_URL+ so an
+# operator's working DATABASE_URL never silently hijacks the spec run):
+#
+#   BSV_WALLET_POSTGRES set    -> Postgres at <base>/bsv_wallet_test
+#   BSV_WALLET_POSTGRES unset  -> in-memory SQLite
+#
+# Set +BSV_WALLET_POSTGRES+ (typically to e.g.
+# +postgres://postgres:postgres@localhost:5433/+) to run the suite
+# against Postgres. Leave it unset for SQLite.
 #
 # All specs use BSV::Wallet::Store::Models::* models regardless of backend.
 
 require 'securerandom'
 require 'sequel'
+require 'bsv/wallet/cli'
 
 unless defined?(STORE_DB)
-  database_url = ENV.fetch('DATABASE_URL', nil)
+  test_db_url = BSV::Wallet::CLI.derive_postgres_url('test')
 
-  if database_url&.start_with?('postgres')
-    STORE_INSTANCE = BSV::Wallet::Store::Postgres.new(url: database_url)
+  if test_db_url
+    STORE_INSTANCE = BSV::Wallet::Store::Postgres.new(url: test_db_url)
   else
     db = Sequel.sqlite
     STORE_INSTANCE = BSV::Wallet::Store::SQLite.new(db: db)

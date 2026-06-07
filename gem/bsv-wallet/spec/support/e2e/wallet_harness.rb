@@ -26,7 +26,7 @@ module E2E
   #   - +DATABASE_URL_SDK+ / +DATABASE_URL_W1+ .. +DATABASE_URL_W5+ —
   #     derived from +BSV_WALLET_POSTGRES+ via +CLI.derive_postgres_url+.
   #     Explicit +DATABASE_URL_<NAME>+ values already in ENV are respected.
-  #     +broadcast_spec.rb+ reads these slots directly (stage 3 fanout
+  #     +e2e_workload_spec.rb+ reads these slots directly (stage 3 fanout
   #     verification opens a fresh +Sequel.connect+ per wallet), so they
   #     must be populated even though +CLI.boot+ would derive on its own.
   module WalletHarness
@@ -61,7 +61,7 @@ module E2E
     # semantics so a blank base never silently falls through (a blank
     # base would make +CLI.derive_postgres_url+ return nil, which would
     # blank out +ENV[key]+ and crash downstream readers like
-    # +broadcast_spec.rb:374+'s +ENV.fetch+).
+    # +e2e_workload_spec.rb+'s +ENV.fetch+).
     def install_derived_db_urls!
       raise KeyError, 'key not found: "BSV_WALLET_POSTGRES"' if ENV['BSV_WALLET_POSTGRES'].to_s.strip.empty?
 

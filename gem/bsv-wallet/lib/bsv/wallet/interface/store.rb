@@ -471,6 +471,38 @@ module BSV
           raise NotImplementedError
         end
 
+        # Persist broadcast affinity: the provider that handled this wtxid.
+        #
+        # Looks up the action by wtxid, then sets +broadcasts.provider+ on
+        # the matching broadcast row. Used by +BSV::Network::Broadcaster+
+        # to record which provider accepted the broadcast so a fresh
+        # broadcaster (e.g. after daemon restart) can re-route status
+        # queries to the same provider.
+        #
+        # Idempotent: re-recording the same +(wtxid, provider)+ is a no-op.
+        # A subsequent call with a different provider overwrites the column
+        # (last-broadcaster wins). No-op when no matching action or
+        # broadcast row exists (race with action deletion).
+        #
+        # @param wtxid [String] 32-byte binary wire-order wtxid
+        # @param provider [String] provider name (e.g. +"GorillaPool"+)
+        # @return [Integer] number of rows updated (0 or 1)
+        def record_broadcast_provider(wtxid:, provider:)
+          raise NotImplementedError
+        end
+
+        # Read broadcast affinity: the provider name for a given wtxid.
+        #
+        # Resolves the wtxid to its action then reads
+        # +broadcasts.provider+. Returns +nil+ when no action matches, no
+        # broadcasts row exists, or the column is NULL (no affinity yet).
+        #
+        # @param wtxid [String] 32-byte binary wire-order wtxid
+        # @return [String, nil] provider name, or +nil+ if no affinity recorded
+        def broadcast_provider_for(wtxid:)
+          raise NotImplementedError
+        end
+
         # Query broadcasts the resolution loop should poll to terminal.
         #
         # Returns broadcasts that have been attempted (+broadcast_at IS NOT NULL+)
@@ -525,6 +557,35 @@ module BSV
         #
         # @param action_id [Integer]
         def increment_broadcast_retry(action_id:)
+          raise NotImplementedError
+        end
+
+        # --- SSE Cursors ---
+
+        # Load the high-water Last-Event-ID for an Arcade SSE callback token.
+        #
+        # Returns +nil+ for an unknown token, signalling the listener to
+        # connect without a +Last-Event-ID+ header (fresh stream).
+        #
+        # @param token [String] Arcade callbackToken value
+        # @return [Integer, nil] last successfully bus-pushed event id
+        #   (nanosecond timestamp per Arcade SSE), or +nil+ if never seen
+        def load_sse_cursor(token:)
+          raise NotImplementedError
+        end
+
+        # Persist the high-water Last-Event-ID for an Arcade SSE token.
+        #
+        # Upsert keyed on +token+: a second save for the same token
+        # overwrites the previous +last_event_id+ rather than raising a
+        # PK violation. Used by the SSE listener after each event has
+        # been handed off to the in-proc bus -- the cursor reflects what
+        # has been pushed, so a reconnect resumes from the next frame.
+        #
+        # @param token [String] Arcade callbackToken value
+        # @param last_event_id [Integer] SSE id of the most recently
+        #   pushed event (nanosecond timestamp)
+        def save_sse_cursor(token:, last_event_id:)
           raise NotImplementedError
         end
 
