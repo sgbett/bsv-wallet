@@ -97,6 +97,7 @@ Style/NegatedIf:
 Naming/PredicateMethod:
   Exclude:
     - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
+    - 'gem/bsv-wallet/lib/bsv/wallet/engine/action.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/store/**/*'
 
 Style/SafeNavigationChainLength:

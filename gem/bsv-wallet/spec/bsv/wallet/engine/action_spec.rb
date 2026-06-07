@@ -206,6 +206,108 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
   end
 
+  describe '.internalize' do
+    # Action.internalize requires a chain_tracker for SPV verification.
+    let(:chain_tracker_mock) do
+      tracker = double('ChainTracker')
+      allow(tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
+      tracker
+    end
+
+    let(:engine_with_tracker) do
+      BSV::Wallet::Engine.new(
+        store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
+        chain_tracker: chain_tracker_mock, network: :mainnet
+      )
+    end
+
+    def build_internalize_beef(satoshis: 500)
+      ancestor = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      ancestor.add_output(BSV::Transaction::TransactionOutput.new(
+                            satoshis: satoshis + 100,
+                            locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                          ))
+      sibling = SecureRandom.random_bytes(32)
+      ancestor.merkle_path = BSV::Transaction::MerklePath.new(
+        block_height: 800_000,
+        path: [[
+          BSV::Transaction::MerklePath::PathElement.new(offset: 2, hash: ancestor.wtxid, txid: true),
+          BSV::Transaction::MerklePath::PathElement.new(offset: 3, hash: sibling)
+        ]]
+      )
+
+      subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                             prev_wtxid: ancestor.wtxid,
+                             prev_tx_out_index: 0,
+                             sequence: 0xFFFFFFFF,
+                             unlocking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                           ))
+      subject_tx.inputs[0].source_transaction = ancestor
+      subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                              satoshis: satoshis,
+                              locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                            ))
+
+      beef = BSV::Transaction::Beef.new
+      beef.merge_transaction(ancestor)
+      beef.merge_transaction(subject_tx)
+      [beef.to_atomic_binary(subject_tx.wtxid), subject_tx]
+    end
+
+    it 'returns BRC-100 { accepted: true } and persists the incoming action' do
+      beef_data, subject_tx = build_internalize_beef(satoshis: 500)
+
+      result = described_class.internalize(
+        engine: engine_with_tracker,
+        tx: beef_data,
+        description: 'action internalize smoke',
+        labels: ['incoming'],
+        outputs: [
+          {
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'smoke', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }
+        ]
+      )
+
+      expect(result).to eq({ accepted: true })
+
+      # Output landed in the basket
+      listed = engine_with_tracker.list_outputs(basket: 'smoke')
+      expect(listed[:total_outputs]).to eq(1)
+
+      # Action row was persisted with the subject tx's wtxid
+      action = store.find_action(wtxid: subject_tx.wtxid)
+      expect(action).not_to be_nil
+      expect(action[:broadcast_intent]).to eq('none')
+      expect(action[:outgoing]).to be(false)
+    end
+
+    it 'is the entry point Engine#internalize_action delegates to' do
+      beef_data, = build_internalize_beef(satoshis: 700)
+
+      result = engine_with_tracker.internalize_action(
+        tx: beef_data,
+        description: 'internalize delegator smoke',
+        outputs: [
+          {
+            output_index: 0, protocol: :basket_insertion, satoshis: 700,
+            insertion_remittance: {
+              basket: 'delegator', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }
+        ]
+      )
+
+      expect(result).to eq({ accepted: true })
+    end
+  end
+
   describe '.attach_labels' do
     it 'is a no-op for nil labels' do
       action = store.create_action(action: { description: 'no labels', broadcast_intent: :none, outgoing: false })
