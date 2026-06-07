@@ -43,6 +43,7 @@ Naming/MethodParameterName:
 Lint/UnusedMethodArgument:
   Exclude:
     - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
+    - 'gem/bsv-wallet/lib/bsv/wallet/engine/action.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/store/**/*'
 
 # Wallet orchestration and store operations are inherently complex;
@@ -96,6 +97,7 @@ Style/NegatedIf:
 Naming/PredicateMethod:
   Exclude:
     - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
+    - 'gem/bsv-wallet/lib/bsv/wallet/engine/action.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/store/**/*'
 
 Style/SafeNavigationChainLength:

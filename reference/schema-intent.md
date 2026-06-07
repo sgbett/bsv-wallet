@@ -276,10 +276,10 @@ payment outputs structurally. Outbound rows never get a spendable row
 route as caller outputs: `Store#sign_action(change_outputs:)` writes
 them at Phase 2 in a single atomic commit. Their derivation fields
 (`derivation_prefix`, `derivation_suffix`, `sender_identity_key = self`)
-are produced by the `generate_change` primitive inside `create_action`,
-which derives BRC-42 self-keys, templates change outputs onto the tx,
-distributes the surplus, and returns the surviving change rows for the
-Store to persist. The primitive runs regardless of where the inputs came
+are produced by the `generate_change` primitive on `Engine::Action`,
+invoked from `Engine::Action.create`'s funding loop, which derives BRC-42
+self-keys, templates change outputs onto the tx, distributes the surplus,
+and returns the surviving change rows for the Store to persist. The primitive runs regardless of where the inputs came
 from — wallet-selected (via `select_inputs` + the funding-loop top-up
 path) or caller-supplied. Structurally a change row is just another
 derived output (`output_type IS NULL` + all three derivation fields);
