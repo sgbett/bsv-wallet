@@ -155,15 +155,10 @@ module BSV
         end
       end
 
-      # Read +BSV_WALLET_HINTS_SOCKET+ with blank-or-unset → nil
-      # normalisation. A set-but-empty env (e.g. +export
-      # BSV_WALLET_HINTS_SOCKET=+ in a shell) would otherwise be a
-      # truthy "" that +hints_pull!+ tries to bind on. #269.
+      # +BSV_WALLET_HINTS_SOCKET+ value, blank-or-unset → nil
+      # (handled by +BSV::Wallet::Config#initialize+). #269 / #277.
       def hints_socket_path
-        value = ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil)
-        return nil if value.nil? || value.strip.empty?
-
-        value
+        BSV::Wallet.config.hints_socket
       end
 
       # Construct the SSE listener and run it as a peer Async task.

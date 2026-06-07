@@ -57,9 +57,13 @@ Four-layer SOA — each layer has a single responsibility:
 
 The Engine contains no SQL, no ARC calls, no thread management. It receives Layer 2 components at construction and orchestrates them. Swap implementations by passing different objects — same interface, different backend.
 
+### Configuration
+
+End-user configuration lives in the `BSV::Wallet.configure do |c| ... end` block. The canonical reference is `gem/bsv-wallet/config/config.example.rb` — copy it to `~/.bsv-wallet/config.rb` (or set `BSV_WALLET_CONFIG=<path>`) and override the knobs you care about. Every setting also defaults from a shell ENV var (`DATABASE_URL`, `WIF`, `LIMP_THRESHOLD`, `BSV_WALLET_HINTS_SOCKET`, etc.), so the wallet works out of the box from your shell env — the config file is only needed when you want to pin values explicitly or override the defaults.
+
 ### Database Backends
 
-The wallet supports both SQLite and PostgreSQL via Sequel. SQLite is the default; set `DATABASE_URL` to a `postgres://` URL to use PostgreSQL (requires the `pg` gem).
+The wallet supports both SQLite and PostgreSQL via Sequel. SQLite is the default; set `DATABASE_URL` to a `postgres://` URL (or `c.database_url` in your config file) to use PostgreSQL (requires the `pg` gem).
 
 A `docker-compose.yml` is provided for local PostgreSQL development:
 
@@ -67,7 +71,7 @@ A `docker-compose.yml` is provided for local PostgreSQL development:
 docker compose up -d postgres
 ```
 
-It runs `postgres:18` on port `5433` (to avoid clashing with a host install on `5432`) with user/password `postgres`/`postgres`, matching the `DATABASE_URL_*` entries in `.env`. Data is bind-mounted to `./tmp/postgres-data` (gitignored) — wipe it with `rm -rf tmp/postgres-data` to start fresh.
+It runs `postgres:18` on port `5433` (to avoid clashing with a host install on `5432`) with user/password `postgres`/`postgres`. Data is bind-mounted to `./tmp/postgres-data` (gitignored) — wipe it with `rm -rf tmp/postgres-data` to start fresh.
 
 On first init, `docker/postgres/initdb/01-create-databases.sql` creates three empty databases:
 

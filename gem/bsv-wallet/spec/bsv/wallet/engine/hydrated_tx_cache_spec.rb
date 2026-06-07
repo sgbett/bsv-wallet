@@ -26,23 +26,35 @@ RSpec.describe BSV::Wallet::Engine::HydratedTxCache do
     end
   end
 
-  describe '.from_env' do
-    it 'uses DEFAULT_CAPACITY when BSV_WALLET_TX_CACHE_SIZE is unset' do
-      allow(ENV).to receive(:fetch).and_call_original
-      allow(ENV).to receive(:fetch).with('BSV_WALLET_TX_CACHE_SIZE', described_class::DEFAULT_CAPACITY).and_return(described_class::DEFAULT_CAPACITY)
-      expect(described_class.from_env.capacity).to eq(described_class::DEFAULT_CAPACITY)
+  describe '.from_config' do
+    # Each example sets up Config via BSV::Wallet.config (which reads
+    # ENV at initialize); reset between examples so the singleton
+    # picks up the test's ENV mutation. ENV mutation save/restore via
+    # +around+ keeps neighbouring examples honest.
+    around do |example|
+      saved = ENV.fetch('BSV_WALLET_TX_CACHE_SIZE', nil)
+      BSV::Wallet.reset_config!
+      example.run
+    ensure
+      saved.nil? ? ENV.delete('BSV_WALLET_TX_CACHE_SIZE') : ENV['BSV_WALLET_TX_CACHE_SIZE'] = saved
+      BSV::Wallet.reset_config!
     end
 
-    it 'parses BSV_WALLET_TX_CACHE_SIZE as Integer' do
-      allow(ENV).to receive(:fetch).and_call_original
-      allow(ENV).to receive(:fetch).with('BSV_WALLET_TX_CACHE_SIZE', described_class::DEFAULT_CAPACITY).and_return('250')
-      expect(described_class.from_env.capacity).to eq(250)
+    it 'uses Config default (1000) when BSV_WALLET_TX_CACHE_SIZE is unset' do
+      ENV.delete('BSV_WALLET_TX_CACHE_SIZE')
+      expect(described_class.from_config.capacity).to eq(described_class::DEFAULT_CAPACITY)
+    end
+
+    it 'reads BSV_WALLET_TX_CACHE_SIZE via Config (Integer)' do
+      ENV['BSV_WALLET_TX_CACHE_SIZE'] = '250'
+      expect(described_class.from_config.capacity).to eq(250)
     end
 
     it 'raises ArgumentError on a non-numeric value (fail loud, not silent)' do
-      allow(ENV).to receive(:fetch).and_call_original
-      allow(ENV).to receive(:fetch).with('BSV_WALLET_TX_CACHE_SIZE', described_class::DEFAULT_CAPACITY).and_return('nope')
-      expect { described_class.from_env }.to raise_error(ArgumentError, /invalid value for Integer/)
+      ENV['BSV_WALLET_TX_CACHE_SIZE'] = 'nope'
+      # Failure now surfaces at Config#initialize, not at .from_config —
+      # the cache constructor never sees a bad value.
+      expect { BSV::Wallet.config }.to raise_error(ArgumentError, /invalid value for Integer/)
     end
   end
 

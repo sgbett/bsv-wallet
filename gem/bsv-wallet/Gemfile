@@ -19,9 +19,4 @@ group :development, :test do
   # Sequel loads the pg adapter lazily on connect.
   gem 'pg'
   gem 'sequel', '~> 5.0'
-
-  # Loads .env into ENV for the CLI bins and integration specs. CLI.boot
-  # already does +require 'dotenv/load'+ as an optional require; declaring
-  # it here makes it consistently available under +bundle exec+.
-  gem 'dotenv'
 end
