@@ -31,21 +31,36 @@ Methods to move (lines as of HEAD `a108716`):
 | `build_atomic_beef` | 1425 | `Action#build_atomic_beef` (private) |
 | `promote_with_outputs` | 1329 | `Action#promote_with_outputs` (private) |
 | `apply_spends` | 2265 | `Action#apply_spends` (private) |
-| `build_input_specs` | 1284 | `Action#build_input_specs` (private) |
-| `build_output_specs` | 1341 | `Action#build_output_specs` (private) |
+| `build_input_specs` | 1284 | `Action.build_input_specs` (**class**, see note A) |
+| `build_output_specs` | 1341 | `Action.build_output_specs` (**class**, see note A) |
 | `build_transaction` | (caller-side helper) | `Action#build_transaction` (private) |
+| `build_inputs` | (helper) | `Action#build_inputs` (private) |
+| `build_outputs` | (helper) | `Action#build_outputs` (private) |
+| `resolve_locking_script` | (helper) | `Action#resolve_locking_script` (private) |
+| `resolve_unlocking_script` | (helper) | `Action#resolve_unlocking_script` (private) |
+| `find_caller_input` | (helper) | `Action#find_caller_input` (private) |
+| `derive_signing_key` | (helper) | `Action#derive_signing_key` (private) |
+| `total_input_satoshis_for` | 2112 | `Action#total_input_satoshis_for` (private) |
 | `save_beef_proofs` | (incoming-side helper) | `Action#save_beef_proofs` (private) |
 | `wire_ancestor` | 1451 | `Action#wire_ancestor` (private) |
 | `hydrate_known_sources!` | 1482 | `Action#hydrate_known_sources!` (private) |
 | `parse_beef` | 1495 | `Action#parse_beef` (private) |
 | `verify_incoming_transaction!` | (helper) | `Action#verify_incoming_transaction!` (private) |
+| `replace_known_ancestors!` | (incoming-side helper) | `Action#replace_known_ancestors!` (private) |
+| `resolve_internalize_output` | (incoming-side helper) | `Action#resolve_internalize_output` (private) |
 | `query_change_outpoints` | 1370 | `Action#query_change_outpoints` (private) |
-| `publish_beef_hint` | 1398 | `Action#publish_beef_hint` (private) |
+| `publish_beef_hint` | 1398 | **STAYS on Engine** (see note B) |
+| `attach_labels` | 1319 | `Action.attach_labels` (**class**, see note A) |
+
+**Note A — class methods, not instance.** `build_input_specs`, `build_output_specs`, and `attach_labels` are called from non-lifecycle porcelain (`generate_receive_address`, `scan_receive_addresses`, etc.) that doesn't have an `Action` instance to dispatch through. Moving them as class methods on `Action` keeps the namespace tidy without forcing the caller to construct an `Action` it doesn't need.
+
+**Note B — `publish_beef_hint` stays on Engine.** The `@hints_socket` Mutex and the cached `OMQ::PUSH` socket are wallet-process scope, not action scope. `Action#beef` builds the BEEF; `Action.create` calls `engine.publish_beef_hint(action_id, atomic_beef)` after the build. (Earlier table draft had this moving — corrected per analyst review, consistent with Risk #2.)
 
 Methods that stay on `Engine` (orchestrators / not action-lifecycle):
 
 - `limp_mode?`, `headroom`, `enforce_limp_mode!`, `enforce_headroom_against!` — wallet-level state, not per-action.
-- `select_inputs`, `attach_labels` — `Action` calls them but they belong to the Engine as collaborators (selection is wallet-pool scope, label lookup is across-actions).
+- `select_inputs` — `Action` calls it but it belongs to the Engine as a collaborator (selection is wallet-pool scope).
+- `publish_beef_hint`, `@hints_socket` mutex — wallet-process scope, called from `Action.create` after the BEEF is built. See note B in the move table.
 - The non-action BRC-100 methods (`list_outputs`, `relinquish_output`, key-derivation, encrypt/decrypt, certificate, discover, header lookups) — orthogonal subsystems.
 - Internal porcelain (`sweep`, `consolidate_step`, `import_utxo`, `import_wallet`, `send_payment`, `sweep_to_root`, `generate_receive_address`, `scan_receive_addresses`) — all currently delegate to `create_action`; they keep doing so via `Action.create`. No surface change.
 - The `@broadcast_worker` instance + `@hints_socket` mutex — wallet-process-scoped collaborators.
@@ -108,10 +123,12 @@ end
 # Engine collaborator surface exposed for Engine::Action and Engine::Broadcast.
 # Not public API — these are internal handles for in-process logical models.
 attr_reader :store, :utxo_pool, :key_deriver, :chain_tracker,
-            :network_provider, :hydrated_tx_cache
+            :network_provider
 ```
 
 (Pre-existing public readers: `:limp_threshold, :services, :broadcaster, :broadcast_worker`.)
+
+`:hydrated_tx_cache` is **not** added — it lives on `Engine::Broadcast`, not on `Engine`, and `Action` doesn't need it directly (BEEF hints are published via `engine.publish_beef_hint` which already reaches the cache through the broadcast worker's OMQ socket).
 
 Note: `Broadcast` already reaches into `@store` directly via constructor injection; for `Action` we route through `engine.store` because `Action` is constructed per-call and the engine is the natural single source of truth for the collaborator graph.
 
@@ -137,9 +154,17 @@ The change is too big for a single PR (engine_spec.rb alone is 3,326 LOC and mos
 
 - Create `lib/bsv/wallet/engine/action.rb` with the class skeleton and constructor.
 - Add `autoload :Action` to Engine.
-- Move: `create_action` body, `run_funding_loop`, `generate_change`, `build_atomic_beef`, `promote_with_outputs`, `build_transaction`, `build_input_specs`, `build_output_specs`, `publish_beef_hint`, `query_change_outpoints`, `wire_ancestor`, `random_derivation`, `select_inputs`-style adapters.
+- Move (instance, private unless noted):
+  - `create_action` body → `Action.create` (class)
+  - `run_funding_loop`, `generate_change`, `total_input_satoshis_for`
+  - `build_atomic_beef`, `promote_with_outputs`, `query_change_outpoints`
+  - `build_transaction`, `build_inputs`, `build_outputs`
+  - `resolve_locking_script`, `resolve_unlocking_script`, `find_caller_input`, `derive_signing_key`
+  - `wire_ancestor`, `random_derivation`
+  - `build_input_specs`, `build_output_specs`, `attach_labels` → **class methods** on `Action` (called by non-lifecycle porcelain too).
+- `publish_beef_hint` and `@hints_socket` STAY on Engine — Action calls `engine.publish_beef_hint(...)` after build.
 - `Engine#create_action` collapses to: validate → `Action.create(engine: self, **params).to_create_result(...)`.
-- Expose new `attr_reader`s for collaborator access.
+- Expose new `attr_reader`s for collaborator access (without `:hydrated_tx_cache`).
 - All porcelain methods (`sweep`, `consolidate_step`, `import_utxo`, `send_payment`, etc.) keep calling `create_action` — no change at those sites.
 - Engine_spec.rb behavioral tests untouched; they now exercise the delegator and pass through to `Action`.
 - Add minimal `spec/bsv/wallet/engine/action_spec.rb` for class-level smoke (`Action.create` returns an Action; round-trip via Engine still works).
@@ -160,7 +185,7 @@ The change is too big for a single PR (engine_spec.rb alone is 3,326 LOC and mos
 
 #### Sub-PR 3 — `Action.internalize`
 
-- Move `internalize_action` body, `parse_beef`, `verify_incoming_transaction!`, `hydrate_known_sources!`, `save_beef_proofs`.
+- Move `internalize_action` body, `parse_beef`, `verify_incoming_transaction!`, `hydrate_known_sources!`, `save_beef_proofs`, `replace_known_ancestors!`, `resolve_internalize_output`.
 - `Engine#internalize_action` becomes: validate → `Action.internalize(engine: self, ...).to_create_result(...)`.
 
 **Expected diff:** ~200 lines moved.
@@ -177,7 +202,11 @@ The change is too big for a single PR (engine_spec.rb alone is 3,326 LOC and mos
 #### Sub-PR 5 — cleanup pass
 
 - Remove any helpers that became dead code once their callers moved.
-- Audit `engine_spec.rb` for any test that reaches into private methods directly — move those tests to `action_spec.rb` if they belong to `Action`'s surface now.
+- Audit `engine_spec.rb` for the ~15 `send(:run_funding_loop|generate_change|build_atomic_beef|apply_spends|...)` private-method reaches identified by the analyst. Migrate those tests to `action_spec.rb`, calling the methods directly on the `Action` instance.
+- **Documentation updates** (these are not optional — factually wrong docs are bugs):
+  - `docs/design.md:192` — replace the procedural `generate_change` reference with `Action#generate_change` (private) framing.
+  - `reference/schema-intent.md:241`, `:279`, `:593` — update references to engine internals that have moved to `Action`.
+  - Add a short "trio is complete" framing paragraph naming `Engine::Action` alongside `Engine::Broadcast` and `Engine::TxProof`, since the logical-model pattern now covers the full lifecycle.
 - Update `CLAUDE.md` / `reference/` notes that name procedural methods now gone.
 - Final LOC: Engine target ~1,200–1,400 (depends on what porcelain looks like); `Action` ~700–900.
 
@@ -213,6 +242,8 @@ Body lists `Closes #214` and each sub-PR's commit range. The full unit suite (Po
 | Engine constructor surface grows with new `attr_reader`s | Keep them under a documented "for Engine::Action use" comment block. Same shape as Engine::Broadcast's collaborator-injection model, just on the read side. |
 | `to_create_result` ends up with too many switches for the four return shapes (signed / deferred / no_send-internal / signable) | The branching already exists inside `Engine#create_action`; we're moving it, not creating it. If it bothers us post-move, file a follow-up to make `to_create_result` a proper case-table. |
 | Sub-PR 1 lands but discoveries inside it make sub-PR 2's shape change | Each sub-PR is independently scoped; if we discover something material, that PR's plan section updates and the umbrella plan in this file gets a note. The umbrella merge waits for all sub-PRs green. |
+| `@bypass_limp_mode` instance var hack on Engine (set by `sweep`/`import_utxo` before calling `create_action`, unset in `ensure`) — Action's `create` runs with Engine instance state | **Keep this on Engine.** `Action` reads via `engine.send(:enforce_limp_mode!)` (or expose a narrow public read), respecting the bypass set by the caller. Don't try to thread the flag through Action's signature; the porcelain set/ensure pattern stays intact. |
+| 15 existing private-method `send(:run_funding_loop|generate_change|build_atomic_beef|apply_spends|...)` reaches in `engine_spec.rb` will break when the methods move | Sub-PR 5's cleanup pass migrates them to `action_spec.rb`, calling on an `Action` instance directly. Tracked as an explicit Sub-PR 5 deliverable so it doesn't slip. |
 
 ## Construction model (resolved)
 
