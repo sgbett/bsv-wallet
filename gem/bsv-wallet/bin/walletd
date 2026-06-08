@@ -13,7 +13,6 @@
 require_relative '../lib/bsv/wallet/cli'
 
 wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
-network = (args.first || :mainnet).to_sym
 
 require 'sequel'
 require 'logger'
@@ -22,6 +21,10 @@ require 'bsv-wallet'
 # Load the end-user configure block (~/.bsv-wallet/config.rb) so any
 # overrides apply before the first BSV::Wallet.config read below.
 BSV::Wallet.load_config_file!
+
+# Network: explicit positional arg wins; otherwise read from config
+# (which itself defaults BSV_WALLET_NETWORK → :mainnet).
+network = args.first ? args.first.to_sym : BSV::Wallet.config.network
 
 # Walletd runs many Async fibers on one reactor thread (SSE listener,
 # broadcast/statuses pull workers, scheduler discovery loops, proof
@@ -49,7 +52,7 @@ BSV.logger ||= Logger.new($stderr, level: Logger::INFO)
 # dev/test fixtures handled by the legacy env_fetch chain until #292.
 # End-user (unnamed) mode reads BSV::Wallet.config.
 wif = wallet_name ? BSV::Wallet::CLI.env_fetch('WIF', wallet_name) : BSV::Wallet.config.wif
-abort 'Set WIF or configure c.wif in ~/.bsv-wallet/config.rb' if wif.nil? || wif.empty?
+abort BSV::Wallet::CLI.missing_wif_message(wallet_name) if wif.nil? || wif.empty?
 
 db_url = if wallet_name
            BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet_name)

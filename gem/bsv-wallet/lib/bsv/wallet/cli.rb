@@ -32,9 +32,9 @@ module BSV
       # constructs all Layer 2a components + the Engine.
       #
       # @param wallet_name [String, nil] e.g. "alice", "bob", or nil for default
-      # @param network [Symbol] :mainnet or :testnet
+      # @param network [Symbol, nil] :mainnet or :testnet; nil → read from config
       # @return [Hash] { engine:, utxo_pool:, key_deriver:, db:, identity_key:, private_key: }
-      def boot(wallet_name: nil, network: :mainnet)
+      def boot(wallet_name: nil, network: nil)
         require 'sequel'
         require 'logger'
         require 'bsv-wallet'
@@ -45,6 +45,10 @@ module BSV
         # bakes in.
         BSV::Wallet.load_config_file!
 
+        # Network: explicit kwarg wins; otherwise read from config
+        # (which itself defaults BSV_WALLET_NETWORK → :mainnet).
+        network ||= BSV::Wallet.config.network
+
         unless BSV.logger
           BSV.logger = Logger.new($stderr)
           BSV.logger.level = Logger::DEBUG
@@ -54,7 +58,7 @@ module BSV
         # legacy env_fetch chain until #292 lands a centralised fixture
         # surface. End-user (unnamed) mode reads BSV::Wallet.config.
         wif = wallet_name ? env_fetch('WIF', wallet_name) : BSV::Wallet.config.wif
-        abort 'Set WIF or configure c.wif in ~/.bsv-wallet/config.rb' if wif.nil? || wif.empty?
+        abort missing_wif_message(wallet_name) if wif.nil? || wif.empty?
 
         db_url = if wallet_name
                    env_fetch_optional('DATABASE_URL', wallet_name) ||
@@ -170,6 +174,18 @@ module BSV
         path = File.expand_path("~/.bsv-wallet/#{suffix}.db")
         FileUtils.mkdir_p(File.dirname(path))
         "sqlite://#{path}"
+      end
+
+      # Context-aware error message for the missing-WIF abort.
+      #
+      # @param wallet_name [String, nil]
+      # @return [String]
+      def missing_wif_message(wallet_name)
+        if wallet_name
+          "Set BSV_WALLET_WIF_#{wallet_name.upcase} (or WIF_#{wallet_name.upcase} / WIF)"
+        else
+          'Set WIF or configure c.wif in ~/.bsv-wallet/config.rb'
+        end
       end
 
       # Extract wallet name from the argument list.
