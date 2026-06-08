@@ -160,13 +160,19 @@ module BSV
       # @param wallet_name [String, nil]
       # @return [String]
       def missing_wif_message(wallet_name)
-        if wallet_name
-          "No fixture wallet :#{wallet_name} (or its WIF is empty). " \
-            'Register it in ~/.bsv-wallet/fixtures.rb, or set ' \
-            "BSV_WALLET_WIF_#{wallet_name.upcase} so the shipped " \
-            'fixtures template picks it up.'
+        return 'Set WIF or configure c.wif in ~/.bsv-wallet/config.rb' unless wallet_name
+
+        registered = BSV::Wallet::Fixtures.registry.names.map { |n| ":#{n}" }.join(', ')
+        if BSV::Wallet::Fixtures.wallet(wallet_name)
+          # Wallet IS registered but its WIF is empty — operator just needs
+          # to set BSV_WALLET_WIF_<NAME> (the shipped default reads it).
+          "Fixture wallet :#{wallet_name} has no WIF. Set BSV_WALLET_WIF_#{wallet_name.upcase} or " \
+            "pin the WIF explicitly in ~/.bsv-wallet/fixtures.rb (registered: #{registered})."
         else
-          'Set WIF or configure c.wif in ~/.bsv-wallet/config.rb'
+          # Wallet NOT registered at all — operator needs to add the
+          # registration; setting an ENV var won't help.
+          "No fixture wallet :#{wallet_name} (registered: #{registered}). " \
+            "Add `f.wallet :#{wallet_name}, wif: ...` to ~/.bsv-wallet/fixtures.rb."
         end
       end
 

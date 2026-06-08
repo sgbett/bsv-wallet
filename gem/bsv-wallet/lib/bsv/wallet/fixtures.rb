@@ -45,7 +45,10 @@ module BSV
 
         # Register a named wallet. Both +wif:+ and +database_url:+ are
         # optional — +database_url+ derives from +postgres_base+ when
-        # not given (or stays nil if no base).
+        # not given (or stays nil if no base). Blank/whitespace input
+        # for either normalises to nil so a stray empty ENV doesn't
+        # produce an invalid value that also prevents the SQLite
+        # fallback downstream.
         #
         # @param name [Symbol, String]
         # @param wif [String, nil]
@@ -55,8 +58,8 @@ module BSV
           sym = name.to_sym
           @wallets[sym] = Wallet.new(
             name: sym,
-            wif: wif,
-            database_url: database_url || derive_database_url(sym)
+            wif: blank_to_nil(wif),
+            database_url: blank_to_nil(database_url) || derive_database_url(sym)
           )
         end
 
@@ -83,6 +86,13 @@ module BSV
           return nil if base.nil? || base.empty?
 
           "#{base.chomp('/')}/bsv_wallet_#{name}"
+        end
+
+        def blank_to_nil(value)
+          return nil if value.nil?
+
+          stripped = value.to_s.strip
+          stripped.empty? ? nil : stripped
         end
       end
 
@@ -118,10 +128,13 @@ module BSV
         registry[name]
       end
 
-      # Reset the singleton — drops all registrations so the next
-      # +registry+ access instantiates fresh. Test helper.
+      # Reset the singleton — drops all registrations AND the
+      # "already-loaded" flag so the next +registry+ access starts
+      # fresh and the next +load_config_file!+ call loads a file again.
+      # Test helper.
       def self.reset!
         @registry = nil
+        @loaded = false
       end
 
       # Path to the gem-bundled default fixtures file. Auto-loaded
@@ -132,24 +145,39 @@ module BSV
 
       # Load the dev/test fixtures file.
       #
-      # Resolution: explicit +path+ argument > +BSV_WALLET_FIXTURES+
-      # env var > +~/.bsv-wallet/fixtures.rb+ (user override) >
+      # Resolution: tries each candidate in order, uses the first that
+      # exists — explicit +path+ argument > +BSV_WALLET_FIXTURES+ env
+      # var > +~/.bsv-wallet/fixtures.rb+ (user override) >
       # +DEFAULT_FILE+ (gem-bundled). The gem default registers the
       # standard named wallets from shell ENV, so an operator with
       # +BSV_WALLET_POSTGRES+ + +BSV_WALLET_WIF_<NAME>+ set needs no
       # personal fixtures file. Errors propagate.
       #
+      # **Idempotent.** Returns nil on every call after the first
+      # (until +reset!+) so callers (e.g. +CLI.boot+) can defensively
+      # invoke this without overwriting earlier registrations from the
+      # same process (e.g. the e2e harness's derived +w1+..+w5+ WIFs).
+      #
       # @param path [String, nil]
-      # @return [String, nil] path loaded, or nil if no file resolves
+      # @return [String, nil] path loaded, or nil if already loaded /
+      #   no file resolves
       def self.load_config_file!(path = nil)
-        path ||= ENV.fetch('BSV_WALLET_FIXTURES', nil)
-        path ||= File.expand_path('~/.bsv-wallet/fixtures.rb')
-        path = DEFAULT_FILE unless File.exist?(path)
-        return unless File.exist?(path)
+        return nil if @loaded
 
-        BSV.logger&.info { "[BSV::Wallet::Fixtures] loading: #{path}" }
-        load(path)
-        path
+        candidates = [
+          path,
+          ENV.fetch('BSV_WALLET_FIXTURES', nil),
+          File.expand_path('~/.bsv-wallet/fixtures.rb'),
+          DEFAULT_FILE
+        ].compact
+
+        resolved = candidates.find { |p| File.exist?(p) }
+        @loaded = true
+        return nil unless resolved
+
+        BSV.logger&.info { "[BSV::Wallet::Fixtures] loading: #{resolved}" }
+        load(resolved)
+        resolved
       end
     end
   end

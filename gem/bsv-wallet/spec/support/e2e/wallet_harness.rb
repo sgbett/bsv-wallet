@@ -53,6 +53,12 @@ module E2E
     def install_fixtures!
       raise KeyError, 'key not found: "BSV_WALLET_POSTGRES"' if ENV['BSV_WALLET_POSTGRES'].to_s.strip.empty?
 
+      # Load the gem default first so any subsequent +CLI.boot+ call
+      # within this process treats fixtures as already loaded (the
+      # +load_config_file!+ idempotence guard prevents the default
+      # from clobbering our derived registrations below).
+      BSV::Wallet::Fixtures.load_config_file!
+
       sdk_wif = ENV.fetch('BSV_WALLET_WIF_SDK')
       derived = E2E::WalletDerivation.derive_by_name(sdk_wif: sdk_wif)
 
