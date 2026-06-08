@@ -35,7 +35,7 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
   let(:bin_dir) { File.expand_path('../../bin', __dir__) }
   let(:identity_keys) do
     wallet_names.to_h do |name|
-      wif = ENV.fetch("BSV_WALLET_WIF_#{name.upcase}")
+      wif = BSV::Wallet::Fixtures.wallet(name.to_sym).wif
       pk = BSV::Primitives::PrivateKey.from_wif(wif)
       [name, BSV::Wallet::KeyDeriver.new(private_key: pk).identity_key]
     end
@@ -44,21 +44,25 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
   # but consolidation requires a recipient for the final sweep step.
   let(:ephemeral_recipient) { BSV::Primitives::PrivateKey.generate.public_key.to_hex }
 
-  # Required env vars per wallet:
-  #   BSV_WALLET_WIF_{NAME}   — the wallet's private key (WIF)
-  #   DATABASE_URL_{NAME}     — Postgres URL (per-wallet DB)
+  # Required env: per the Fixtures registry, alice/bob/carol need
+  # BSV_WALLET_WIF_<NAME> + a derivable DATABASE_URL_<NAME> (or
+  # BSV_WALLET_POSTGRES base).
   before do
-    required_env = wallet_names.flat_map do |n|
-      %W[BSV_WALLET_WIF_#{n.upcase} DATABASE_URL_#{n.upcase}]
+    BSV::Wallet::Fixtures.reset!
+    BSV::Wallet::Fixtures.load_config_file!
+    missing = wallet_names.reject do |n|
+      w = BSV::Wallet::Fixtures.wallet(n.to_sym)
+      w&.wif.to_s.strip.length.positive? && w&.database_url.to_s.strip.length.positive?
     end
-    missing = required_env.reject { |k| ENV[k].to_s.strip.length.positive? }
-    skip "Missing env: #{missing.join(', ')}" unless missing.empty?
+    skip "Missing fixtures: #{missing.join(', ')}" unless missing.empty?
 
     wallet_names.each { |w| reset_wallet_db(w) }
   end
 
+  after { BSV::Wallet::Fixtures.reset! }
+
   def reset_wallet_db(wallet)
-    db = Sequel.connect(ENV.fetch("DATABASE_URL_#{wallet.upcase}"))
+    db = Sequel.connect(BSV::Wallet::Fixtures.wallet(wallet.to_sym).database_url)
     begin
       tables = db.tables - %i[schema_migrations schema_info]
       return if tables.empty?
@@ -107,7 +111,7 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
   # distribution. HLR #130's acceptance criterion is "action records
   # reflect the expected count" exactly because of this.
   def action_counts(wallet)
-    db = Sequel.connect(ENV.fetch("DATABASE_URL_#{wallet.upcase}"))
+    db = Sequel.connect(BSV::Wallet::Fixtures.wallet(wallet.to_sym).database_url)
     begin
       {
         total: db[:actions].count,

@@ -20,8 +20,12 @@ module BSV
     require_relative 'wallet/events'
 
     # End-user configuration surface (BSV::Wallet.configure block + Config singleton).
-    # Dev/test fixtures (named-wallet WIFs, BSV_WALLET_POSTGRES, etc.) live elsewhere; see #292.
     require_relative 'wallet/config'
+
+    # Dev/test named-wallet fixture registry (BSV::Wallet::Fixtures).
+    # End-user code shouldn't need this; named wallets (alice/bob/carol/sdk/w1..w5/test)
+    # register here.
+    require_relative 'wallet/fixtures'
 
     autoload :VERSION, 'bsv/wallet/version'
 

@@ -29,17 +29,21 @@ RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable R
   let(:bob_db)   { File.join(tmpdir, 'bob.db') }
   let(:bob_identity_key) do
     require 'bsv-wallet'
-    pk = BSV::Primitives::PrivateKey.from_wif(ENV.fetch('BSV_WALLET_WIF_BOB'))
+    pk = BSV::Primitives::PrivateKey.from_wif(BSV::Wallet::Fixtures.wallet(:bob).wif)
     BSV::Wallet::KeyDeriver.new(private_key: pk).identity_key
   end
 
   before do
-    missing = %w[BSV_WALLET_WIF_ALICE BSV_WALLET_WIF_BOB].reject { |k| ENV[k].to_s.strip.length.positive? }
-    skip "Missing env: #{missing.join(', ')}" unless missing.empty?
+    require 'bsv-wallet'
+    BSV::Wallet::Fixtures.reset!
+    BSV::Wallet::Fixtures.load_config_file!
+    missing = %i[alice bob].reject { |n| BSV::Wallet::Fixtures.wallet(n)&.wif.to_s.strip.length.positive? }
+    skip "Missing fixture WIFs: #{missing.join(', ')} (set BSV_WALLET_WIF_ALICE/BOB)" unless missing.empty?
   end
 
   after do
     FileUtils.rm_rf(tmpdir) if File.directory?(tmpdir)
+    BSV::Wallet::Fixtures.reset!
   end
 
   def run_cli(tool, *args, stdin_data: nil)
