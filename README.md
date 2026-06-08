@@ -59,7 +59,7 @@ The Engine contains no SQL, no ARC calls, no thread management. It receives Laye
 
 ### Configuration
 
-End-user configuration lives in the `BSV::Wallet.configure do |c| ... end` block. The canonical reference is `gem/bsv-wallet/config/config.example.rb` — copy it to `~/.bsv-wallet/config.rb` (or set `BSV_WALLET_CONFIG=<path>`) and override the knobs you care about. Every setting also defaults from a shell ENV var (`DATABASE_URL`, `WIF`, `LIMP_THRESHOLD`, `BSV_WALLET_HINTS_SOCKET`, etc.), so the wallet works out of the box from your shell env — the config file is only needed when you want to pin values explicitly or override the defaults.
+End-user configuration lives in the `BSV::Wallet.configure do |c| ... end` block. The canonical reference is the gem's [`config/config.example.rb`](gem/bsv-wallet/config/config.example.rb) template — when installed as a gem, find it under `<gem_dir>/config/config.example.rb` (run `bundle info bsv-wallet` or `gem which bsv-wallet` to locate). Copy it to `~/.bsv-wallet/config.rb` (or set `BSV_WALLET_CONFIG=<path>`) and override the knobs you care about. Every setting also defaults from a shell ENV var (`DATABASE_URL`, `WIF`, `LIMP_THRESHOLD`, `BSV_WALLET_HINTS_SOCKET`, etc.), so the wallet works out of the box from your shell env — the config file is only needed when you want to pin values explicitly or override the defaults.
 
 ### Database Backends
 
