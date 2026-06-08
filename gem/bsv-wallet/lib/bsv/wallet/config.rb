@@ -54,11 +54,24 @@ module BSV
       def initialize
         @database_url     = ENV.fetch('DATABASE_URL', nil)
         @wif              = ENV.fetch('WIF', nil)
-        @network          = ENV.fetch('BSV_WALLET_NETWORK', 'mainnet').to_sym
+        @network          = self.class.parse_network(ENV.fetch('BSV_WALLET_NETWORK', nil))
         @limp_threshold   = Integer(ENV.fetch('LIMP_THRESHOLD', '50000'))
         @daemon_pool_size = Integer(ENV.fetch('BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS', '16'))
         @tx_cache_size    = Integer(ENV.fetch('BSV_WALLET_TX_CACHE_SIZE', '1000'))
         @hints_socket     = blank_to_nil(ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil))
+      end
+
+      # Normalise a network string to a Symbol. Blank, whitespace-only,
+      # or nil input → +:mainnet+ (the wallet's default). Shared between
+      # +Config#initialize+ (env-driven) and +bin/walletd+ (positional
+      # arg) so both reject the +"".to_sym → :""+ trap.
+      #
+      # @param value [String, Symbol, nil]
+      # @return [Symbol]
+      def self.parse_network(value)
+        return :mainnet if value.nil? || value.to_s.strip.empty?
+
+        value.to_s.strip.to_sym
       end
 
       private

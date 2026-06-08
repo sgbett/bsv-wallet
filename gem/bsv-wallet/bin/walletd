@@ -22,9 +22,15 @@ require 'bsv-wallet'
 # overrides apply before the first BSV::Wallet.config read below.
 BSV::Wallet.load_config_file!
 
-# Network: explicit positional arg wins; otherwise read from config
-# (which itself defaults BSV_WALLET_NETWORK → :mainnet).
-network = args.first ? args.first.to_sym : BSV::Wallet.config.network
+# Network: explicit positional arg wins (parsed via Config.parse_network
+# so blank/whitespace doesn't produce the +"".to_sym → :""+ trap);
+# otherwise read from config (already parsed at Config#initialize).
+arg = args.first
+network = if arg.nil? || arg.strip.empty?
+            BSV::Wallet.config.network
+          else
+            BSV::Wallet::Config.parse_network(arg)
+          end
 
 # Walletd runs many Async fibers on one reactor thread (SSE listener,
 # broadcast/statuses pull workers, scheduler discovery loops, proof

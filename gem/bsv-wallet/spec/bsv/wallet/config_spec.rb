@@ -48,6 +48,21 @@ RSpec.describe BSV::Wallet::Config do
       end
     end
 
+    it 'BSV_WALLET_NETWORK empty/whitespace → :mainnet (avoids the "".to_sym → :"" trap)' do
+      with_env('BSV_WALLET_NETWORK' => '') do
+        expect(described_class.new.network).to eq(:mainnet)
+      end
+      with_env('BSV_WALLET_NETWORK' => '   ') do
+        expect(described_class.new.network).to eq(:mainnet)
+      end
+    end
+
+    it 'BSV_WALLET_NETWORK strips surrounding whitespace' do
+      with_env('BSV_WALLET_NETWORK' => '  testnet  ') do
+        expect(described_class.new.network).to eq(:testnet)
+      end
+    end
+
     it 'LIMP_THRESHOLD → limp_threshold (Integer), default 50_000' do
       with_env('LIMP_THRESHOLD' => nil) do
         expect(described_class.new.limp_threshold).to eq(50_000)
