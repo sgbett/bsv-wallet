@@ -41,12 +41,11 @@ module BSV
 
         attr_reader :capacity
 
-        # Construct from environment. Reads +BSV_WALLET_TX_CACHE_SIZE+
-        # (Integer) and falls back to +DEFAULT_CAPACITY+. The default
-        # constructor used by +Engine::Broadcast+; CLI tools and specs
-        # can call +new+ directly with a specific capacity.
-        def self.from_env
-          new(capacity: Integer(ENV.fetch('BSV_WALLET_TX_CACHE_SIZE', DEFAULT_CAPACITY)))
+        # Construct from the central config (+BSV::Wallet.config.tx_cache_size+).
+        # The default constructor used by +Engine::Broadcast+; CLI tools
+        # and specs can call +new+ directly with a specific capacity. #277.
+        def self.from_config
+          new(capacity: BSV::Wallet.config.tx_cache_size)
         end
 
         # @param capacity [Integer] maximum number of entries; 0 disables

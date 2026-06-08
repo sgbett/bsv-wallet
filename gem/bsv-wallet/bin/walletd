@@ -13,17 +13,24 @@
 require_relative '../lib/bsv/wallet/cli'
 
 wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
-network = (args.first || :mainnet).to_sym
-
-begin
-  require 'dotenv/load'
-rescue LoadError
-  # dotenv is optional
-end
 
 require 'sequel'
 require 'logger'
 require 'bsv-wallet'
+
+# Load the end-user configure block (~/.bsv-wallet/config.rb) so any
+# overrides apply before the first BSV::Wallet.config read below.
+BSV::Wallet.load_config_file!
+
+# Network: explicit positional arg wins (parsed via Config.parse_network
+# so blank/whitespace doesn't produce the +"".to_sym → :""+ trap);
+# otherwise read from config (already parsed at Config#initialize).
+arg = args.first
+network = if arg.nil? || arg.strip.empty?
+            BSV::Wallet.config.network
+          else
+            BSV::Wallet::Config.parse_network(arg)
+          end
 
 # Walletd runs many Async fibers on one reactor thread (SSE listener,
 # broadcast/statuses pull workers, scheduler discovery loops, proof
@@ -40,17 +47,25 @@ require 'bsv-wallet'
 Sequel.extension :fiber_concurrency
 
 # Pool size: matches the fiber inventory above with headroom. Override
-# via BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS if adding fibers or running
-# under unusual load. Adjust the Postgres server-side max_connections
-# in step (see docker-compose.yml for the relationship).
-daemon_pool_size = ENV.fetch('BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS', '16').to_i
+# via the daemon_pool_size config knob (default 16, reads
+# BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS). Adjust the Postgres server-side
+# max_connections in step (see docker-compose.yml for the relationship).
+daemon_pool_size = BSV::Wallet.config.daemon_pool_size
 
 BSV.logger ||= Logger.new($stderr, level: Logger::INFO)
 
-# Resolve wallet credentials via CLI helpers
-wif = BSV::Wallet::CLI.env_fetch('WIF', wallet_name)
-db_url = BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet_name) ||
-         BSV::Wallet::CLI.default_sqlite_url(wallet_name)
+# Resolve wallet credentials. Named wallets (alice/bob/etc.) are
+# dev/test fixtures handled by the legacy env_fetch chain until #292.
+# End-user (unnamed) mode reads BSV::Wallet.config.
+wif = wallet_name ? BSV::Wallet::CLI.env_fetch('WIF', wallet_name) : BSV::Wallet.config.wif
+abort BSV::Wallet::CLI.missing_wif_message(wallet_name) if wif.nil? || wif.empty?
+
+db_url = if wallet_name
+           BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet_name)
+         else
+           BSV::Wallet.config.database_url
+         end
+db_url ||= BSV::Wallet::CLI.default_sqlite_url(wallet_name)
 
 # Boot store + services (walletd doesn't need Engine or KeyDeriver)
 store = BSV::Wallet::Store.connect(db_url, max_connections: daemon_pool_size)

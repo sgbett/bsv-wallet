@@ -7,12 +7,17 @@ module BSV
     # Each bin/ tool runs in its own OS process, so the global
     # Sequel::Model.db is safe — only one wallet per process.
     #
-    # Backend selection:
-    #   - If DATABASE_URL is set, its scheme determines the adapter
-    #     (postgres:// or postgresql:// → Postgres via pg gem,
-    #      anything else → SQLite).
-    #   - If DATABASE_URL is unset, defaults to SQLite at
-    #     ~/.bsv-wallet/<name>.db.
+    # Two boot modes:
+    #
+    #   * **End-user mode** (+wallet_name: nil+): single wallet, settings
+    #     come from +BSV::Wallet.config+ (the +configure+ block in
+    #     +~/.bsv-wallet/config.rb+, falling back to ENV defaults). See
+    #     +lib/bsv/wallet/config.rb+ and +config/config.example.rb+.
+    #
+    #   * **Dev/test mode** (+wallet_name: 'alice'+ etc.): per-wallet WIF
+    #     and DB URL via +BSV_WALLET_WIF_<NAME>+, +DATABASE_URL_<NAME>+,
+    #     or derived from +BSV_WALLET_POSTGRES+. See #292 for the planned
+    #     centralised fixture surface.
     #
     # @example
     #   wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
@@ -27,26 +32,40 @@ module BSV
       # constructs all Layer 2a components + the Engine.
       #
       # @param wallet_name [String, nil] e.g. "alice", "bob", or nil for default
-      # @param network [Symbol] :mainnet or :testnet
+      # @param network [Symbol, nil] :mainnet or :testnet; nil → read from config
       # @return [Hash] { engine:, utxo_pool:, key_deriver:, db:, identity_key:, private_key: }
-      def boot(wallet_name: nil, network: :mainnet)
-        begin
-          require 'dotenv/load'
-        rescue LoadError
-          # dotenv is optional — env vars can come from shell profile or CI
-        end
+      def boot(wallet_name: nil, network: nil)
         require 'sequel'
         require 'logger'
         require 'bsv-wallet'
+
+        # Load the end-user configure block first so any consumer
+        # reading +BSV::Wallet.config.x+ during boot sees the user's
+        # overrides, not just the ENV defaults Config#initialize
+        # bakes in.
+        BSV::Wallet.load_config_file!
+
+        # Network: explicit kwarg wins; otherwise read from config
+        # (which itself defaults BSV_WALLET_NETWORK → :mainnet).
+        network ||= BSV::Wallet.config.network
 
         unless BSV.logger
           BSV.logger = Logger.new($stderr)
           BSV.logger.level = Logger::DEBUG
         end
 
-        wif = env_fetch('WIF', wallet_name)
-        db_url = env_fetch_optional('DATABASE_URL', wallet_name)
-        db_url ||= derive_postgres_url(wallet_name)
+        # Named wallets (alice/bob/etc.) are dev/test fixtures — keep the
+        # legacy env_fetch chain until #292 lands a centralised fixture
+        # surface. End-user (unnamed) mode reads BSV::Wallet.config.
+        wif = wallet_name ? env_fetch('WIF', wallet_name) : BSV::Wallet.config.wif
+        abort missing_wif_message(wallet_name) if wif.nil? || wif.empty?
+
+        db_url = if wallet_name
+                   env_fetch_optional('DATABASE_URL', wallet_name) ||
+                     derive_postgres_url(wallet_name)
+                 else
+                   BSV::Wallet.config.database_url
+                 end
         db_url ||= default_sqlite_url(wallet_name)
 
         store = BSV::Wallet::Store.connect(db_url)
@@ -85,12 +104,11 @@ module BSV
         )
         chain_tracker = BSV::Network::ChainTracker.new(store: store, services: network_services)
 
-        limp_threshold_raw = ENV.fetch('LIMP_THRESHOLD', BSV::Wallet::Engine::LIMP_THRESHOLD)
-        begin
-          limp_threshold = Integer(limp_threshold_raw)
-        rescue ArgumentError
-          abort "LIMP_THRESHOLD must be a valid integer (got #{limp_threshold_raw.inspect})"
-        end
+        # Limp threshold reads from BSV::Wallet.config (which Integer()s
+        # the LIMP_THRESHOLD env var at Config#initialize, raising a
+        # clear error on bad input — the abort previously here is
+        # subsumed by that earlier failure).
+        limp_threshold = BSV::Wallet.config.limp_threshold
 
         # Arcade callbackToken: deterministic from the WIF so the SSE
         # listener (daemon-side) and the inline broadcast POST (engine-side)
@@ -126,9 +144,10 @@ module BSV
       #
       # When +BSV_WALLET_POSTGRES+ holds a base URL (e.g.
       # +postgres://postgres:postgres@localhost:5433/+), each named
-      # wallet maps to its own database +bsv_wallet_<name>+. This lets a
-      # single env var configure every wallet, removing the need for a
-      # dotenv file or per-wallet DATABASE_URL_<NAME> entries.
+      # wallet maps to its own database +bsv_wallet_<name>+. This lets
+      # a single env var configure every wallet without per-wallet
+      # +DATABASE_URL_<NAME>+ entries. (Dev/test fixture surface; #292
+      # plans to centralise this alongside the named-wallet WIFs.)
       #
       # Returns nil when no wallet name is given (the unnamed default
       # boot falls through to SQLite) or when the base is unset, so an
@@ -155,6 +174,18 @@ module BSV
         path = File.expand_path("~/.bsv-wallet/#{suffix}.db")
         FileUtils.mkdir_p(File.dirname(path))
         "sqlite://#{path}"
+      end
+
+      # Context-aware error message for the missing-WIF abort.
+      #
+      # @param wallet_name [String, nil]
+      # @return [String]
+      def missing_wif_message(wallet_name)
+        if wallet_name
+          "Set BSV_WALLET_WIF_#{wallet_name.upcase} (or WIF_#{wallet_name.upcase} / WIF)"
+        else
+          'Set WIF or configure c.wif in ~/.bsv-wallet/config.rb'
+        end
       end
 
       # Extract wallet name from the argument list.

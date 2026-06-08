@@ -31,13 +31,19 @@ RSpec.describe BSV::Wallet::Daemon do
     BSV.logger = original_logger
   end
 
-  # Join the watcher thread before mocks teardown so any late stop!
-  # invocation (which calls @scheduler.shutdown — a verifying double)
-  # lands inside the example lifecycle. Ruby 3.4 surfaced cases where
-  # the thread outlived the example and the late double call raised
-  # RSpec::Mocks::OutsideOfExampleError. after(:each) runs before
-  # rspec-mocks teardown, unlike the around hook's ensure block.
-  after { daemon.watcher_thread&.join(2) }
+  after do
+    # Join the watcher thread before mocks teardown so any late stop!
+    # invocation (which calls @scheduler.shutdown — a verifying double)
+    # lands inside the example lifecycle. Ruby 3.4 surfaced cases where
+    # the thread outlived the example and the late double call raised
+    # RSpec::Mocks::OutsideOfExampleError. after(:each) runs before
+    # rspec-mocks teardown, unlike the around hook's ensure block.
+    daemon.watcher_thread&.join(2)
+    # publish_beef_hint / hints_pull! read BSV::Wallet.config.hints_socket
+    # (#277). Reset so configure-block leakage from one example doesn't
+    # bleed into the next.
+    BSV::Wallet.reset_config!
+  end
 
   describe '#run!' do
     before do
@@ -66,9 +72,8 @@ RSpec.describe BSV::Wallet::Daemon do
       expect(broadcast).to have_received(:statuses_pull!)
     end
 
-    it 'calls hints_pull! on Broadcast with the env-configured socket path (#269)' do
-      allow(ENV).to receive(:fetch).and_call_original
-      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('ipc:///tmp/test-hints.sock')
+    it 'calls hints_pull! on Broadcast with the config-configured socket path (#269 / #277)' do
+      BSV::Wallet.configure { |c| c.hints_socket = 'ipc:///tmp/test-hints.sock' }
 
       Async do |task|
         daemon.run!
@@ -78,9 +83,8 @@ RSpec.describe BSV::Wallet::Daemon do
       expect(broadcast).to have_received(:hints_pull!).with(task: anything, socket_path: 'ipc:///tmp/test-hints.sock')
     end
 
-    it 'calls hints_pull! with socket_path: nil when BSV_WALLET_HINTS_SOCKET is unset (#269)' do
-      allow(ENV).to receive(:fetch).and_call_original
-      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return(nil)
+    it 'calls hints_pull! with socket_path: nil when hints_socket is unset (#269)' do
+      BSV::Wallet.configure { |c| c.hints_socket = nil }
 
       Async do |task|
         daemon.run!
@@ -90,16 +94,23 @@ RSpec.describe BSV::Wallet::Daemon do
       expect(broadcast).to have_received(:hints_pull!).with(task: anything, socket_path: nil)
     end
 
-    it 'treats a set-but-blank BSV_WALLET_HINTS_SOCKET as unset (would crash the fiber on bind otherwise)' do
-      allow(ENV).to receive(:fetch).and_call_original
-      allow(ENV).to receive(:fetch).with('BSV_WALLET_HINTS_SOCKET', nil).and_return('   ')
+    it 'treats a set-but-blank BSV_WALLET_HINTS_SOCKET as unset (full pipeline: env → Config → daemon)' do
+      # Drive via real ENV mutation so we exercise Config's
+      # blank-to-nil normalisation end-to-end. Restore on teardown.
+      saved = ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil)
+      begin
+        ENV['BSV_WALLET_HINTS_SOCKET'] = '   '
+        BSV::Wallet.reset_config!
 
-      Async do |task|
-        daemon.run!
-        task.stop
+        Async do |task|
+          daemon.run!
+          task.stop
+        end
+
+        expect(broadcast).to have_received(:hints_pull!).with(task: anything, socket_path: nil)
+      ensure
+        saved.nil? ? ENV.delete('BSV_WALLET_HINTS_SOCKET') : ENV['BSV_WALLET_HINTS_SOCKET'] = saved
       end
-
-      expect(broadcast).to have_received(:hints_pull!).with(task: anything, socket_path: nil)
     end
 
     it 'does NOT boot the SSE listener when callback_token: is nil (default)' do

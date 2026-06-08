@@ -19,6 +19,10 @@ module BSV
     # Structured event emission (BSV::Wallet.emit)
     require_relative 'wallet/events'
 
+    # End-user configuration surface (BSV::Wallet.configure block + Config singleton).
+    # Dev/test fixtures (named-wallet WIFs, BSV_WALLET_POSTGRES, etc.) live elsewhere; see #292.
+    require_relative 'wallet/config'
+
     autoload :VERSION, 'bsv/wallet/version'
 
     # BRC-100 interface and error classes come from bsv-sdk.

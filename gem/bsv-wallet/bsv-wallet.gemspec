@@ -24,7 +24,7 @@ Gem::Specification.new do |spec|
   }
 
   spec.files = Dir.chdir(__dir__) do
-    Dir.glob('lib/**/*') + Dir.glob('db/**/*') + Dir.glob('bin/*')
+    Dir.glob('lib/**/*') + Dir.glob('db/**/*') + Dir.glob('bin/*') + Dir.glob('config/*')
   end + %w[LICENSE CHANGELOG.md]
   spec.bindir = 'bin'
   spec.executables = ['walletd']

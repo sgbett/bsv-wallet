@@ -36,7 +36,7 @@ module BSV
           @broadcaster = broadcaster
           @applicator = applicator
           @callback_token = callback_token
-          @hydrated_tx_cache = hydrated_tx_cache || HydratedTxCache.from_env
+          @hydrated_tx_cache = hydrated_tx_cache || HydratedTxCache.from_config
         end
 
         attr_reader :hydrated_tx_cache
