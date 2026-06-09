@@ -22,12 +22,6 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     pubkey_hash = BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
     script = BSV::Script::Script.p2pkh_lock(pubkey_hash)
 
-    source_action = store.create_action(
-      action: { description: 'funding source', broadcast_intent: :none, outgoing: false }
-    )
-    source_wtxid = SecureRandom.random_bytes(32)
-    store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: DUMMY_RAW_TX)
-
     # Vary satoshi values per index so +smallest+ and +largest+ pick
     # distinct rows (otherwise ordering ties are undefined).
     outputs = count.times.map do |i|
@@ -40,7 +34,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         sender_identity_key: 'self'
       }
     end
-    store.promote_action(action_id: source_action[:id], outputs: outputs)
+    register_funded_outputs(outputs)
   end
 
   describe '#consolidate_step' do

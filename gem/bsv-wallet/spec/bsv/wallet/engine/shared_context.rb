@@ -105,12 +105,12 @@ RSpec.shared_context 'engine setup' do
   def fund_wallet(satoshis: 1000, count: 1, basket: 'default',
                   prefix: 'wallet payment', suffix: 'suffix',
                   sender_identity_key: 'self')
-    source_action = store.create_action(
-      action: { description: 'funding source', broadcast_intent: :none, outgoing: false }
-    )
-    source_wtxid = SecureRandom.random_bytes(32)
-    store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: dummy_raw_tx)
-
+    # Pre-compute output specs so we can build a real source tx whose
+    # outputs match the database promotion. Under strict
+    # validate_for_handoff! (#296 Phase B), the wallet refuses to
+    # construct outgoing BEEFs whose ancestry doesn't terminate at a
+    # proven anchor; a synthetic source with a random wtxid would fail
+    # at the next create_action.
     outputs = count.times.map do |i|
       out_suffix = count > 1 ? "#{suffix}#{i}" : suffix
 
@@ -134,6 +134,52 @@ RSpec.shared_context 'engine setup' do
         sender_identity_key: sender_identity_key
       }
     end
+
+    register_funded_outputs(outputs)
+  end
+
+  # Build a real BSV Transaction whose outputs match the spec at the
+  # given vouts. The single dummy input never gets walked at verify time
+  # because the resulting tx is anchored with a merkle_path (proven
+  # terminal short-circuits recursion).
+  def build_funding_source_tx(output_specs)
+    tx = BSV::Transaction::Transaction.new
+    tx.add_input(BSV::Transaction::TransactionInput.new(
+                   prev_wtxid: ("\x00".b * 32), prev_tx_out_index: 0,
+                   sequence: 0xffffffff, unlocking_script: BSV::Script::Script.new
+                 ))
+    output_specs.each do |spec|
+      tx.add_output(BSV::Transaction::TransactionOutput.new(
+                      satoshis: spec[:satoshis],
+                      locking_script: BSV::Script::Script.from_binary(spec[:locking_script])
+                    ))
+    end
+    tx
+  end
+
+  # Register the given output specs as spendable, backed by a realistic
+  # source tx + anchored proof (so strict validate_for_handoff! sees the
+  # closure). Used by tests that need to build their own funding
+  # arrangements rather than the shared fund_wallet pattern.
+  def register_funded_outputs(outputs, description: 'funding source')
+    source_tx = build_funding_source_tx(outputs)
+    source_wtxid = source_tx.wtxid
+    source_raw_tx = source_tx.to_binary
+
+    source_action = store.create_action(
+      action: { description: description, broadcast_intent: :none, outgoing: false }
+    )
+    store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: source_raw_tx)
+
+    merkle_path = BSV::Transaction::MerklePath.new(
+      block_height: 1,
+      path: [[BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: source_wtxid, txid: true)]]
+    )
+    store.save_proof(
+      wtxid: source_wtxid,
+      proof: { raw_tx: source_raw_tx, merkle_path: merkle_path.to_binary, height: 1 }
+    )
+
     store.promote_action(action_id: source_action[:id], outputs: outputs)
   end
 

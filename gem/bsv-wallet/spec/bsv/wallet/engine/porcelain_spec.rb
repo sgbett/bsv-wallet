@@ -18,28 +18,27 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
   def fund_wallet_for_auto(satoshis: 1_000_000, count: 1,
                            prefix: 'wallet payment', suffix: 'autofund')
-    derived_key = key_deriver.derive_private_key(
-      protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
-    )
-    script = p2pkh_locking_script_for(derived_key)
-
-    source_action = store.create_action(
-      action: { description: 'funding source', broadcast_intent: :none, outgoing: false }
-    )
-    source_wtxid = SecureRandom.random_bytes(32)
-    store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: dummy_raw_tx)
-
     outputs = count.times.map do |i|
+      out_suffix = count > 1 ? "#{suffix}#{i}" : suffix
+      # Derive per-output so the locking_script matches the per-output
+      # derivation_suffix the wallet will later use to derive the
+      # signing key. Sharing one key across outputs while varying the
+      # suffix produces locking scripts the wallet cannot satisfy.
+      derived_key = key_deriver.derive_private_key(
+        protocol_id: [2, prefix], key_id: out_suffix, counterparty: 'self'
+      )
+      script = p2pkh_locking_script_for(derived_key)
       {
         satoshis: satoshis, vout: i,
         locking_script: script.to_binary,
         basket: 'default',
         derivation_prefix: prefix,
-        derivation_suffix: count > 1 ? "#{suffix}#{i}" : suffix,
+        derivation_suffix: out_suffix,
         sender_identity_key: 'self'
       }
     end
-    store.promote_action(action_id: source_action[:id], outputs: outputs)
+
+    register_funded_outputs(outputs)
   end
 
   # --- send_payment ---
@@ -303,6 +302,10 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         # Regression for the synchronous caller-inputs path: generate_change
         # must forward caller_inputs to build_inputs so any caller-provided
         # unlocking_script overrides the wallet's P2PKH signing.
+        # Caller_script is a stub that wouldn't satisfy P2PKH — strict
+        # validate_for_handoff! (#296 Phase B) is stubbed because the
+        # assertion is about script forwarding, not BEEF validity.
+        allow_any_instance_of(BSV::Wallet::Engine::Action).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet_for_auto(satoshis: 100_000, count: 2)
 
         listed = engine_with_keys.list_outputs(basket: 'default')
@@ -390,24 +393,22 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         big_sats   = 500_000
         small_sats = 100_000
 
-        derived_key = key_deriver.derive_private_key(
-          protocol_id: [2, 'topup prefix'], key_id: 'b', counterparty: 'self'
+        big_key = key_deriver.derive_private_key(
+          protocol_id: [2, 'topup prefix'], key_id: 'big', counterparty: 'self'
         )
-        script = p2pkh_locking_script_for(derived_key)
-        source_action = store.create_action(
-          action: { description: 'topup funding', broadcast_intent: :none, outgoing: false }
+        small_key = key_deriver.derive_private_key(
+          protocol_id: [2, 'topup prefix'], key_id: 'small', counterparty: 'self'
         )
-        store.sign_action(action_id: source_action[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: dummy_raw_tx)
-        store.promote_action(
-          action_id: source_action[:id],
-          outputs: [
-            { satoshis: big_sats, vout: 0, locking_script: script.to_binary,
+        register_funded_outputs(
+          [
+            { satoshis: big_sats, vout: 0, locking_script: p2pkh_locking_script_for(big_key).to_binary,
               basket: 'default', derivation_prefix: 'topup prefix', derivation_suffix: 'big',
               sender_identity_key: 'self' },
-            { satoshis: small_sats, vout: 1, locking_script: script.to_binary,
+            { satoshis: small_sats, vout: 1, locking_script: p2pkh_locking_script_for(small_key).to_binary,
               basket: 'default', derivation_prefix: 'topup prefix', derivation_suffix: 'small',
               sender_identity_key: 'self' }
-          ]
+          ],
+          description: 'topup funding'
         )
 
         result = engine_with_keys.create_action(

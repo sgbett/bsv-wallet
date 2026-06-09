@@ -30,15 +30,6 @@ require 'json'
 require 'sequel'
 require 'bsv-wallet'
 
-# Structural-only chain tracker. Says yes to every merkle root lookup so
-# the BEEF's verify check fails on *structural* completeness alone (a
-# missing source_transaction wiring), not on on-chain validity.
-class AlwaysValidChainTracker < BSV::Transaction::ChainTracker
-  def initialize = super(nil)
-  def valid_root_for_height?(_root, _height) = true
-  def current_height = 1_000_000
-end
-
 RSpec.describe 'BEEF egress validity' do # rubocop:disable RSpec/DescribeClass
   let(:bin_dir) { File.expand_path('../../bin', __dir__) }
   let(:alice_db_url) { BSV::Wallet::Fixtures.wallet(:alice).database_url }
@@ -117,12 +108,12 @@ RSpec.describe 'BEEF egress validity' do # rubocop:disable RSpec/DescribeClass
 
       # The headline contract: a peer with no prior knowledge of alice's
       # state can verify the BEEF using only what alice carried in it.
-      # AlwaysValidChainTracker neutralises the on-chain header check so a
+      # TrustedSelfChainTracker neutralises the on-chain header check so a
       # failure here is structural — a missing source_transaction wiring,
       # an unwired unconfirmed ancestor, etc. Exactly what bob's verify
       # would catch — moved to alice's egress.
       expect do
-        subject_entry.transaction.verify(chain_tracker: AlwaysValidChainTracker.new)
+        subject_entry.transaction.verify(chain_tracker: BSV::Wallet::TrustedSelfChainTracker.new)
       end.not_to raise_error
     end
   end

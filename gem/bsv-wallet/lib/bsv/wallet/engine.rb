@@ -283,20 +283,30 @@ module BSV
           return { imported: false, satoshis: satoshis, dtxid: dtxid, reason: 'already_imported' }
         end
 
-        # Phase 1: Record the root-key UTXO
+        # Strict import (#296 Phase B): obtain the merkle_path BEFORE
+        # creating any state. The wallet's egress invariant requires every
+        # imported root UTXO to carry on-chain proof material for the
+        # BEEFs we build atop it. Acquiring it after the fact (the
+        # previous "best-effort" model) silently failed when the network
+        # provider didn't return +blockheight+, leaving the imported UTXO
+        # un-forwardable. Refusing at the boundary eliminates the state.
+        block_height, merkle_path_binary = fetch_proof_for_imported_utxo!(dtxid)
+
+        # Phase 1: Record the root-key UTXO atomically with its proof.
         import_action = @store.create_action(
           action: { description: 'imported UTXO', broadcast_intent: :none, outgoing: false }
         )
         @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
-        @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+        proof_id = @store.save_proof(
+          wtxid: wtxid,
+          proof: { raw_tx: raw_tx, merkle_path: merkle_path_binary, height: block_height }
+        )
+        @store.link_proof(action_id: import_action[:id], tx_proof_id: proof_id)
         output_ids = @store.promote_action(
           action_id: import_action[:id],
           outputs: [{ satoshis: satoshis, vout: vout, locking_script: locking_script.to_binary, output_type: 'root' }]
         )
         imported_output_id = output_ids.first
-
-        # Fetch and link merkle proof if mined
-        fetch_and_link_proof(import_action[:id], wtxid, dtxid, raw_tx)
 
         # Phase 2: Self-payment to a BRC-42-derived address.
         #
@@ -1282,11 +1292,57 @@ module BSV
         abort_action(reference: action_reference)
       end
 
-      # Fetch merkle proof from the network and link it to an action.
+      # Strict acquisition of a confirmed UTXO's merkle proof (#296 Phase B).
       #
-      # Queries :get_tx_details for block height, then :get_merkle_path
-      # for the TSC merkle proof. Saves the proof to ProofStore and links
-      # it to the action. No-op if the transaction is unconfirmed.
+      # Returns +[block_height, merkle_path_binary]+ for the named tx, or
+      # raises +BSV::Wallet::Error+ if the proof cannot be obtained. Used
+      # by +import_utxo+ which refuses to register any UTXO without
+      # on-chain proof material — the wallet's egress invariant depends
+      # on every root having complete closure.
+      #
+      # @param dtxid [String] 64-char hex transaction ID (display order)
+      # @return [Array(Integer, String)] block_height and merkle_path binary
+      # @raise [BSV::Wallet::Error] when get_tx_details / get_merkle_path
+      #   does not yield usable proof material
+      def fetch_proof_for_imported_utxo!(dtxid)
+        details_result = @network_provider.call(:get_tx_details, txid: dtxid)
+        unless details_result.http_success?
+          raise BSV::Wallet::Error,
+                "cannot import #{dtxid}: get_tx_details failed (HTTP #{details_result.status_code})"
+        end
+        unless details_result.data['blockheight']
+          raise BSV::Wallet::Error,
+                "cannot import #{dtxid}: transaction is not confirmed " \
+                '(network provider returned no blockheight). Strict import ' \
+                'refuses unconfirmed UTXOs — only confirmed UTXOs are importable.'
+        end
+
+        block_height = details_result.data['blockheight']
+
+        proof_result = @network_provider.call(:get_merkle_path, txid: dtxid)
+        unless proof_result.http_success? && proof_result.data.is_a?(Array) && proof_result.data.any?
+          raise BSV::Wallet::Error,
+                "cannot import #{dtxid}: merkle_path not available from chain (height=#{block_height}). " \
+                'Strict import refuses to proceed without proof material.'
+        end
+
+        tsc = proof_result.data.first
+        mp = BSV::Transaction::MerklePath.from_tsc(
+          dtxid_hex: tsc['txOrId'], index: tsc['index'],
+          nodes: tsc['nodes'], block_height: block_height
+        )
+        [block_height, mp.to_binary]
+      end
+
+      # Best-effort proof acquisition for ALREADY-EXISTING actions. The
+      # WBIKD-address slot recycler uses this — the slot's tx may or may
+      # not be on chain depending on whether the slot was previously
+      # broadcast. Slot recycling MUST NOT block on proof acquisition;
+      # silent return is the correct behaviour for this caller.
+      #
+      # NOTE: import_utxo no longer uses this — under the #296 Phase B
+      # strict-import contract, imports use +fetch_proof_for_imported_utxo!+
+      # which refuses rather than silently no-opping.
       #
       # @param action_id [Integer] the action to link the proof to
       # @param wtxid [String] 32-byte wire-order wtxid
