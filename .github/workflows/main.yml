@@ -62,7 +62,7 @@ jobs:
 
       - name: Upload coverage
         if: matrix.ruby == '3.4'
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           files: coverage/coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
