@@ -120,8 +120,7 @@ module E2E
       require 'bsv-wallet'
       require 'bsv/wallet/cli'
       @wallet_names.each do |wallet|
-        db_url = BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet) ||
-                 BSV::Wallet::CLI.derive_postgres_url(wallet)
+        db_url = BSV::Wallet::Fixtures.wallet(wallet)&.database_url
         next unless db_url
 
         store = BSV::Wallet::Store.connect(db_url)

@@ -34,42 +34,38 @@ module E2E
 
     module_function
 
-    # Derive the five test-wallet WIFs from +BSV_WALLET_WIF_SDK+ and
-    # install them into ENV. Idempotent — calling twice does no harm.
-    def install_derived_wifs!
-      sdk_wif = ENV.fetch('BSV_WALLET_WIF_SDK')
-      wifs = E2E::WalletDerivation.derive_by_name(sdk_wif: sdk_wif)
-      wifs.each do |name, wif|
-        ENV["BSV_WALLET_WIF_#{name.upcase}"] = wif
-      end
-    end
-
-    # Derive per-wallet Postgres URLs from +BSV_WALLET_POSTGRES+ and
-    # install them into ENV for each wallet name (+sdk+ + +w1+..+w5+).
-    # Reuses +CLI.derive_postgres_url+ so the derivation rule lives in
-    # one place.
+    # Register the funder + the five derived test wallets into the
+    # central +BSV::Wallet::Fixtures+ registry. Idempotent — calling
+    # twice does no harm; subsequent calls overwrite with the same
+    # values.
     #
-    # Respects explicit +DATABASE_URL_<NAME>+ overrides — only fills empty
-    # slots, so a single wallet can be pointed at a different host without
-    # losing derivation for the others. Diverges from +install_derived_wifs!+
-    # (unconditional overwrite) deliberately: WIFs are cryptographically
-    # derived and overrides aren't meaningful, DB URLs are operationally
-    # derived and overrides are.
+    # Replaces the previous ENV-mutation pattern (which set
+    # +BSV_WALLET_WIF_W1+ etc. in-process so +CLI.boot+'s legacy
+    # +env_fetch+ chain would find them). Post-#292 +CLI.boot+ reads
+    # named wallets through Fixtures, so the registration is the
+    # whole job.
     #
-    # Raises +KeyError+ when +BSV_WALLET_POSTGRES+ is unset, blank, or
-    # whitespace-only — matches +missing_env+'s whitespace-as-unset
-    # semantics so a blank base never silently falls through (a blank
-    # base would make +CLI.derive_postgres_url+ return nil, which would
-    # blank out +ENV[key]+ and crash downstream readers like
-    # +e2e_workload_spec.rb+'s +ENV.fetch+).
-    def install_derived_db_urls!
+    # Raises +KeyError+ when +BSV_WALLET_WIF_SDK+ is unset; raises a
+    # clear error when +BSV_WALLET_POSTGRES+ is unset/blank (the
+    # +Fixtures+ derivation would otherwise produce nil DB URLs and
+    # downstream readers like +e2e_workload_spec.rb+ would fail
+    # confusingly).
+    def install_fixtures!
       raise KeyError, 'key not found: "BSV_WALLET_POSTGRES"' if ENV['BSV_WALLET_POSTGRES'].to_s.strip.empty?
 
-      all_wallet_names.each do |name|
-        key = "DATABASE_URL_#{name.upcase}"
-        next if ENV[key].to_s.strip.length.positive?
+      # Load the gem default first so any subsequent +CLI.boot+ call
+      # within this process treats fixtures as already loaded (the
+      # +load_config_file!+ idempotence guard prevents the default
+      # from clobbering our derived registrations below).
+      BSV::Wallet::Fixtures.load_config_file!
 
-        ENV[key] = BSV::Wallet::CLI.derive_postgres_url(name)
+      sdk_wif = ENV.fetch('BSV_WALLET_WIF_SDK')
+      derived = E2E::WalletDerivation.derive_by_name(sdk_wif: sdk_wif)
+
+      BSV::Wallet::Fixtures.configure do |f|
+        f.postgres_base ||= ENV.fetch('BSV_WALLET_POSTGRES', nil)
+        f.wallet :sdk, wif: sdk_wif
+        derived.each { |name, wif| f.wallet name.to_sym, wif: wif }
       end
     end
 
@@ -77,8 +73,7 @@ module E2E
     # +'w1'+). Returns the +CLI.boot+ hash:
     #   { engine:, utxo_pool:, key_deriver:, db:, identity_key:, private_key: }
     def boot(name, network: :mainnet)
-      install_derived_wifs!
-      install_derived_db_urls!
+      install_fixtures!
       BSV::Wallet::CLI.boot(wallet_name: name, network: network)
     end
 

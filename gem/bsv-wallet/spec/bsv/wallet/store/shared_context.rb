@@ -19,7 +19,14 @@ require 'sequel'
 require 'bsv/wallet/cli'
 
 unless defined?(STORE_DB)
-  test_db_url = BSV::Wallet::CLI.derive_postgres_url('test')
+  # Test DB URL: register a :test fixture so the URL derives from
+  # BSV_WALLET_POSTGRES via Fixtures' standard derivation. Unset
+  # base → nil → SQLite fallback below.
+  BSV::Wallet::Fixtures.configure do |f|
+    f.postgres_base ||= ENV.fetch('BSV_WALLET_POSTGRES', nil)
+    f.wallet :test unless f[:test]
+  end
+  test_db_url = BSV::Wallet::Fixtures.wallet(:test)&.database_url
 
   if test_db_url
     STORE_INSTANCE = BSV::Wallet::Store::Postgres.new(url: test_db_url)

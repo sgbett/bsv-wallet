@@ -6,80 +6,59 @@ require_relative 'wallet_harness'
 
 RSpec.describe E2E::WalletHarness do # rubocop:disable RSpec/SpecFilePathFormat
   let(:sdk_wif) { BSV::Primitives::PrivateKey.generate.to_wif }
+  let(:base) { 'postgres://localhost:5432/' }
 
   around do |example|
     snapshot = ENV.to_h
     example.run
   ensure
     ENV.replace(snapshot)
+    BSV::Wallet::Fixtures.reset!
   end
 
-  describe '.install_derived_wifs!' do
-    it 'sets BSV_WALLET_WIF_W1..W5 from BSV_WALLET_WIF_SDK' do
+  describe '.install_fixtures!' do
+    it 'registers sdk + w1..w5 with WIFs derived from BSV_WALLET_WIF_SDK' do
       ENV['BSV_WALLET_WIF_SDK'] = sdk_wif
-      described_class.install_derived_wifs!
-      %w[W1 W2 W3 W4 W5].each do |slot|
-        expect(ENV.fetch("BSV_WALLET_WIF_#{slot}", nil)).to be_a(String)
-        expect(ENV.fetch("BSV_WALLET_WIF_#{slot}", nil)).not_to be_empty
+      ENV['BSV_WALLET_POSTGRES'] = base
+      described_class.install_fixtures!
+
+      expect(BSV::Wallet::Fixtures.wallet(:sdk).wif).to eq(sdk_wif)
+      %w[w1 w2 w3 w4 w5].each do |name|
+        wallet = BSV::Wallet::Fixtures.wallet(name.to_sym)
+        expect(wallet.wif).to be_a(String).and(satisfy { |w| !w.empty? })
+        expect(wallet.database_url).to eq("postgres://localhost:5432/bsv_wallet_#{name}")
       end
     end
 
-    it 'derives the same WIF for the same SDK key (deterministic)' do
+    it 'is deterministic — re-running yields the same derived WIFs' do
       ENV['BSV_WALLET_WIF_SDK'] = sdk_wif
-      described_class.install_derived_wifs!
-      first = (1..5).map { |i| ENV.fetch("BSV_WALLET_WIF_W#{i}", nil) }
+      ENV['BSV_WALLET_POSTGRES'] = base
+      described_class.install_fixtures!
+      first = (1..5).map { |i| BSV::Wallet::Fixtures.wallet(:"w#{i}").wif }
 
-      # Clear all five so the second pass genuinely re-derives the full set,
-      # guarding against a regression that only re-derives a subset.
-      (1..5).each { |i| ENV.delete("BSV_WALLET_WIF_W#{i}") }
-      described_class.install_derived_wifs!
-      second = (1..5).map { |i| ENV.fetch("BSV_WALLET_WIF_W#{i}", nil) }
+      BSV::Wallet::Fixtures.reset!
+      described_class.install_fixtures!
+      second = (1..5).map { |i| BSV::Wallet::Fixtures.wallet(:"w#{i}").wif }
 
       expect(first).to eq(second)
     end
 
     it 'raises a clear error when BSV_WALLET_WIF_SDK is not set' do
       ENV.delete('BSV_WALLET_WIF_SDK')
-      expect { described_class.install_derived_wifs! }.to raise_error(KeyError)
-    end
-  end
-
-  describe '.install_derived_db_urls!' do
-    let(:base) { 'postgres://localhost:5432/' }
-
-    it 'populates DATABASE_URL_SDK + W1..W5 derived from BSV_WALLET_POSTGRES' do
       ENV['BSV_WALLET_POSTGRES'] = base
-      %w[SDK W1 W2 W3 W4 W5].each { |s| ENV.delete("DATABASE_URL_#{s}") }
-      described_class.install_derived_db_urls!
-      expect(ENV.fetch('DATABASE_URL_SDK', nil)).to eq('postgres://localhost:5432/bsv_wallet_sdk')
-      expect(ENV.fetch('DATABASE_URL_W1', nil)).to eq('postgres://localhost:5432/bsv_wallet_w1')
-      expect(ENV.fetch('DATABASE_URL_W5', nil)).to eq('postgres://localhost:5432/bsv_wallet_w5')
-    end
-
-    it 'respects explicit DATABASE_URL_<NAME> overrides' do
-      ENV['BSV_WALLET_POSTGRES'] = base
-      ENV['DATABASE_URL_W3'] = 'postgres://other-host:5432/custom_w3'
-      %w[SDK W1 W2 W4 W5].each { |s| ENV.delete("DATABASE_URL_#{s}") }
-      described_class.install_derived_db_urls!
-      expect(ENV.fetch('DATABASE_URL_W3', nil)).to eq('postgres://other-host:5432/custom_w3')
-      expect(ENV.fetch('DATABASE_URL_W1', nil)).to eq('postgres://localhost:5432/bsv_wallet_w1')
-    end
-
-    it 'treats whitespace-only overrides as unset and fills them' do
-      ENV['BSV_WALLET_POSTGRES'] = base
-      ENV['DATABASE_URL_W2'] = '   '
-      described_class.install_derived_db_urls!
-      expect(ENV.fetch('DATABASE_URL_W2', nil)).to eq('postgres://localhost:5432/bsv_wallet_w2')
+      expect { described_class.install_fixtures! }.to raise_error(KeyError)
     end
 
     it 'raises a clear error when BSV_WALLET_POSTGRES is not set' do
+      ENV['BSV_WALLET_WIF_SDK'] = sdk_wif
       ENV.delete('BSV_WALLET_POSTGRES')
-      expect { described_class.install_derived_db_urls! }.to raise_error(KeyError)
+      expect { described_class.install_fixtures! }.to raise_error(KeyError)
     end
 
     it 'raises a clear error when BSV_WALLET_POSTGRES is blank or whitespace-only' do
+      ENV['BSV_WALLET_WIF_SDK'] = sdk_wif
       ENV['BSV_WALLET_POSTGRES'] = '   '
-      expect { described_class.install_derived_db_urls! }.to raise_error(KeyError)
+      expect { described_class.install_fixtures! }.to raise_error(KeyError)
     end
   end
 

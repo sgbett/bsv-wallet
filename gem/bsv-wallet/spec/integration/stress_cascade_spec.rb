@@ -42,35 +42,33 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
   let(:bin_dir) { File.expand_path('../../bin', __dir__) }
   let(:identity_keys) do
     wallet_names.to_h do |name|
-      wif = ENV.fetch("BSV_WALLET_WIF_#{name.upcase}")
+      wif = BSV::Wallet::Fixtures.wallet(name.to_sym).wif
       pk = BSV::Primitives::PrivateKey.from_wif(wif)
       [name, BSV::Wallet::KeyDeriver.new(private_key: pk).identity_key]
     end
   end
 
-  # Required env vars per wallet:
-  #   BSV_WALLET_WIF_{NAME}   — the wallet's private key (WIF)
-  #   DATABASE_URL_{NAME}     — Postgres URL (per-wallet DB)
-  # The wallet is Postgres-based by design; integration specs run against
-  # whatever +DATABASE_URL_*+ is in env (local +.env+ / direnv / CI). We do
-  # not override these — overriding strips the user's configuration.
+  # Required: each wallet needs a WIF and a derivable DB URL through
+  # the Fixtures registry (BSV_WALLET_WIF_<NAME> + BSV_WALLET_POSTGRES
+  # base, or DATABASE_URL_<NAME> per-wallet override).
   before do
-    required_env = wallet_names.flat_map do |n|
-      %W[BSV_WALLET_WIF_#{n.upcase} DATABASE_URL_#{n.upcase}]
+    BSV::Wallet::Fixtures.reset!
+    BSV::Wallet::Fixtures.load_config_file!
+    missing = wallet_names.reject do |n|
+      w = BSV::Wallet::Fixtures.wallet(n.to_sym)
+      w&.wif.to_s.strip.length.positive? && w&.database_url.to_s.strip.length.positive?
     end
-    missing = required_env.reject { |k| ENV[k].to_s.strip.length.positive? }
-    skip "Missing env: #{missing.join(', ')}" unless missing.empty?
+    skip "Missing fixtures: #{missing.join(', ')}" unless missing.empty?
 
     # Per-test isolation: TRUNCATE every table in each wallet's DB so each
-    # spec example starts from a clean slate. Sequel-level TRUNCATE works
-    # across Postgres + SQLite; CASCADE is Postgres-specific, but we don't
-    # need it here because the dependency order is handled by truncating
-    # all tables at once.
+    # spec example starts from a clean slate.
     wallet_names.each { |w| reset_wallet_db(w) }
   end
 
+  after { BSV::Wallet::Fixtures.reset! }
+
   def reset_wallet_db(wallet)
-    db = Sequel.connect(ENV.fetch("DATABASE_URL_#{wallet.upcase}"))
+    db = Sequel.connect(BSV::Wallet::Fixtures.wallet(wallet.to_sym).database_url)
     begin
       tables = db.tables - %i[schema_migrations schema_info]
       return if tables.empty?
@@ -128,7 +126,7 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
   # the payment unit — non-deterministic across runs. Action counts are
   # exact: one outbound per send_payment, one inbound per internalize.
   def action_counts(wallet)
-    db = Sequel.connect(ENV.fetch("DATABASE_URL_#{wallet.upcase}"))
+    db = Sequel.connect(BSV::Wallet::Fixtures.wallet(wallet.to_sym).database_url)
     begin
       {
         total: db[:actions].count,

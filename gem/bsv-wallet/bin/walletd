@@ -54,17 +54,19 @@ daemon_pool_size = BSV::Wallet.config.daemon_pool_size
 
 BSV.logger ||= Logger.new($stderr, level: Logger::INFO)
 
-# Resolve wallet credentials. Named wallets (alice/bob/etc.) are
-# dev/test fixtures handled by the legacy env_fetch chain until #292.
-# End-user (unnamed) mode reads BSV::Wallet.config.
-wif = wallet_name ? BSV::Wallet::CLI.env_fetch('WIF', wallet_name) : BSV::Wallet.config.wif
+# Resolve wallet credentials. Named wallets (alice/bob/etc.) resolve
+# through the Fixtures registry (#292); end-user (unnamed) mode reads
+# BSV::Wallet.config (#277).
+if wallet_name
+  BSV::Wallet::Fixtures.load_config_file!
+  fixture = BSV::Wallet::Fixtures.wallet(wallet_name)
+  wif = fixture&.wif
+  db_url = fixture&.database_url
+else
+  wif = BSV::Wallet.config.wif
+  db_url = BSV::Wallet.config.database_url
+end
 abort BSV::Wallet::CLI.missing_wif_message(wallet_name) if wif.nil? || wif.empty?
-
-db_url = if wallet_name
-           BSV::Wallet::CLI.env_fetch_optional('DATABASE_URL', wallet_name)
-         else
-           BSV::Wallet.config.database_url
-         end
 db_url ||= BSV::Wallet::CLI.default_sqlite_url(wallet_name)
 
 # Boot store + services (walletd doesn't need Engine or KeyDeriver)

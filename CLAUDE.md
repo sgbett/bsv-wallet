@@ -58,22 +58,24 @@ This is what README, install docs, and end-user-facing copy should foreground. E
 
 #### Dev/test mode (this repo — what we use)
 
-Multiple named wallets sharing one Postgres server. Configuration is via shell environment variables (`~/.zshenv` locally, `.github/workflows/ci.yml` or GitHub secrets in CI):
+Multiple named wallets sharing one Postgres server. Resolution goes through **`BSV::Wallet::Fixtures`** — a registry block that maps each name to a WIF + database_url. The gem ships a default `config/fixtures.rb` that reads shell ENV vars and is auto-loaded when no user override exists, so the existing shell-env-driven convention (`~/.zshenv` locally, GitHub secrets in CI) still "just works".
 
-- **`BSV_WALLET_POSTGRES`** — the Postgres base URL, e.g. `postgres://postgres:postgres@localhost:5433/`. The primary variable; per-wallet URLs are derived from it.
+Standard registered wallets:
 
-- **Named wallet `<name>`** (e.g. `alice`, `bob`, `carol`, `sdk`):
-  - WIF read from `BSV_WALLET_WIF_<NAME>` (e.g. `BSV_WALLET_WIF_ALICE`).
-  - Database derived as `<BSV_WALLET_POSTGRES>/bsv_wallet_<name>` (e.g. `…/bsv_wallet_alice`).
-  - In-repo named wallets: `alice` / `bob` / `carol` (integration specs), `sdk` (e2e harness), `w1`..`w5` (e2e wallet fleet).
+- `alice`, `bob`, `carol` — integration specs
+- `sdk` — e2e harness funder
+- `w1`..`w5` — e2e wallet fleet (WIFs derived at runtime from `:sdk`)
+- `test` — unit-spec DB (no WIF; specs generate their own keys)
 
-- **Unnamed wallet** (unit specs that don't bind to a real on-chain identity):
-  - No WIF required (specs generate their own keys).
-  - Database is `<BSV_WALLET_POSTGRES>/bsv_wallet_test`.
+ENV vars consumed by the default fixtures file:
 
-- **`BSV_WALLET_POSTGRES` unset** → unit specs fall back to in-memory SQLite (the SQLite-augmentation path). CLI tools that need a real wallet require it set.
+- **`BSV_WALLET_POSTGRES`** — base URL (e.g. `postgres://postgres:postgres@localhost:5433/`). Per-wallet DB derives as `<base>/bsv_wallet_<name>`.
+- **`BSV_WALLET_WIF_<NAME>`** — WIF per named wallet (e.g. `BSV_WALLET_WIF_ALICE`).
+- **`DATABASE_URL_<NAME>`** (rare override) — pin a specific wallet to a non-standard URL.
 
-`DATABASE_URL_<NAME>` (e.g. `DATABASE_URL_ALICE`) is an **override** for the derived URL, honored by `CLI.boot` for the rare case where a named wallet needs a non-standard host/port/db-name. It is not the primary mechanism — `BSV_WALLET_POSTGRES` is. Don't add `DATABASE_URL_<NAME>` to your environment unless you actually need the override.
+`BSV_WALLET_POSTGRES` unset → unit specs fall back to in-memory SQLite (the SQLite-augmentation path). CLI tools that need a real wallet require it set.
+
+Override the gem default by writing `~/.bsv-wallet/fixtures.rb` (or setting `BSV_WALLET_FIXTURES=<path>`). The user file fully replaces — register every wallet you want available. The e2e harness registers `w1`..`w5` at runtime via the same `Fixtures.configure` block.
 
 ### Conventions
 

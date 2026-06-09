@@ -14,10 +14,13 @@ module BSV
     #     +~/.bsv-wallet/config.rb+, falling back to ENV defaults). See
     #     +lib/bsv/wallet/config.rb+ and +config/config.example.rb+.
     #
-    #   * **Dev/test mode** (+wallet_name: 'alice'+ etc.): per-wallet WIF
-    #     and DB URL via +BSV_WALLET_WIF_<NAME>+, +DATABASE_URL_<NAME>+,
-    #     or derived from +BSV_WALLET_POSTGRES+. See #292 for the planned
-    #     centralised fixture surface.
+    #   * **Dev/test mode** (+wallet_name: 'alice'+ etc.): named-wallet
+    #     fixtures resolve through +BSV::Wallet::Fixtures+ (the
+    #     +configure+ block in +~/.bsv-wallet/fixtures.rb+, falling
+    #     back to the gem-bundled default which reads
+    #     +BSV_WALLET_WIF_<NAME>+ / +DATABASE_URL_<NAME>+ /
+    #     +BSV_WALLET_POSTGRES+ from shell ENV). See
+    #     +lib/bsv/wallet/fixtures.rb+ and +config/fixtures.rb+.
     #
     # @example
     #   wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
@@ -39,11 +42,12 @@ module BSV
         require 'logger'
         require 'bsv-wallet'
 
-        # Load the end-user configure block first so any consumer
-        # reading +BSV::Wallet.config.x+ during boot sees the user's
-        # overrides, not just the ENV defaults Config#initialize
-        # bakes in.
+        # Load both configuration files first so any consumer reading
+        # +BSV::Wallet.config.x+ or +BSV::Wallet::Fixtures.wallet(...)+
+        # during boot sees user/operator overrides, not just the ENV
+        # defaults baked into Config + Fixtures' example file.
         BSV::Wallet.load_config_file!
+        BSV::Wallet::Fixtures.load_config_file! if wallet_name
 
         # Network: explicit kwarg wins; otherwise read from config
         # (which itself defaults BSV_WALLET_NETWORK → :mainnet).
@@ -54,18 +58,17 @@ module BSV
           BSV.logger.level = Logger::DEBUG
         end
 
-        # Named wallets (alice/bob/etc.) are dev/test fixtures — keep the
-        # legacy env_fetch chain until #292 lands a centralised fixture
-        # surface. End-user (unnamed) mode reads BSV::Wallet.config.
-        wif = wallet_name ? env_fetch('WIF', wallet_name) : BSV::Wallet.config.wif
+        # Named wallets resolve through the Fixtures registry (#292);
+        # end-user (unnamed) mode reads BSV::Wallet.config (#277).
+        if wallet_name
+          fixture = BSV::Wallet::Fixtures.wallet(wallet_name)
+          wif = fixture&.wif
+          db_url = fixture&.database_url
+        else
+          wif = BSV::Wallet.config.wif
+          db_url = BSV::Wallet.config.database_url
+        end
         abort missing_wif_message(wallet_name) if wif.nil? || wif.empty?
-
-        db_url = if wallet_name
-                   env_fetch_optional('DATABASE_URL', wallet_name) ||
-                     derive_postgres_url(wallet_name)
-                 else
-                   BSV::Wallet.config.database_url
-                 end
         db_url ||= default_sqlite_url(wallet_name)
 
         store = BSV::Wallet::Store.connect(db_url)
@@ -140,30 +143,6 @@ module BSV
         }
       end
 
-      # Derive a per-wallet Postgres URL from a shared base.
-      #
-      # When +BSV_WALLET_POSTGRES+ holds a base URL (e.g.
-      # +postgres://postgres:postgres@localhost:5433/+), each named
-      # wallet maps to its own database +bsv_wallet_<name>+. This lets
-      # a single env var configure every wallet without per-wallet
-      # +DATABASE_URL_<NAME>+ entries. (Dev/test fixture surface; #292
-      # plans to centralise this alongside the named-wallet WIFs.)
-      #
-      # Returns nil when no wallet name is given (the unnamed default
-      # boot falls through to SQLite) or when the base is unset, so an
-      # explicit DATABASE_URL and the SQLite fallback both still apply.
-      #
-      # @param wallet_name [String, nil]
-      # @return [String, nil]
-      def derive_postgres_url(wallet_name)
-        return unless wallet_name
-
-        base = ENV.fetch('BSV_WALLET_POSTGRES', nil)&.strip
-        return if base.nil? || base.empty?
-
-        "#{base.chomp('/')}/bsv_wallet_#{wallet_name}"
-      end
-
       # Build the default SQLite URL when DATABASE_URL is unset.
       #
       # @param wallet_name [String, nil]
@@ -181,10 +160,19 @@ module BSV
       # @param wallet_name [String, nil]
       # @return [String]
       def missing_wif_message(wallet_name)
-        if wallet_name
-          "Set BSV_WALLET_WIF_#{wallet_name.upcase} (or WIF_#{wallet_name.upcase} / WIF)"
+        return 'Set WIF or configure c.wif in ~/.bsv-wallet/config.rb' unless wallet_name
+
+        registered = BSV::Wallet::Fixtures.registry.names.map { |n| ":#{n}" }.join(', ')
+        if BSV::Wallet::Fixtures.wallet(wallet_name)
+          # Wallet IS registered but its WIF is empty — operator just needs
+          # to set BSV_WALLET_WIF_<NAME> (the shipped default reads it).
+          "Fixture wallet :#{wallet_name} has no WIF. Set BSV_WALLET_WIF_#{wallet_name.upcase} or " \
+            "pin the WIF explicitly in ~/.bsv-wallet/fixtures.rb (registered: #{registered})."
         else
-          'Set WIF or configure c.wif in ~/.bsv-wallet/config.rb'
+          # Wallet NOT registered at all — operator needs to add the
+          # registration; setting an ENV var won't help.
+          "No fixture wallet :#{wallet_name} (registered: #{registered}). " \
+            "Add `f.wallet :#{wallet_name}, wif: ...` to ~/.bsv-wallet/fixtures.rb."
         end
       end
 
@@ -202,42 +190,6 @@ module BSV
           [first, argv[1..]]
         else
           [nil, argv.dup]
-        end
-      end
-
-      # Resolve an environment variable with optional wallet-name suffix.
-      #
-      # @example
-      #   env_fetch('WIF', 'alice')  # => ENV['BSV_WALLET_WIF_ALICE'] || ENV['WIF_ALICE'] || ENV['WIF'] || abort
-      #   env_fetch('WIF', nil)      # => ENV['WIF'] || abort
-      #
-      # @param base_name [String] e.g. "WIF", "DATABASE_URL"
-      # @param wallet_name [String, nil]
-      # @return [String]
-      def env_fetch(base_name, wallet_name)
-        if wallet_name
-          prefixed = "BSV_WALLET_#{base_name}_#{wallet_name.upcase}"
-          suffixed = "#{base_name}_#{wallet_name.upcase}"
-          ENV.fetch(prefixed) { ENV.fetch(suffixed) { ENV.fetch(base_name) { abort "Set #{prefixed} or #{suffixed}" } } }
-        else
-          ENV.fetch(base_name) { abort "Set #{base_name}" }
-        end
-      end
-
-      # Same fallback chain as env_fetch, but returns nil rather than
-      # aborting when nothing is set. Used for DATABASE_URL, which has
-      # backend-specific defaults applied downstream.
-      #
-      # @param base_name [String]
-      # @param wallet_name [String, nil]
-      # @return [String, nil]
-      def env_fetch_optional(base_name, wallet_name)
-        if wallet_name
-          prefixed = "BSV_WALLET_#{base_name}_#{wallet_name.upcase}"
-          suffixed = "#{base_name}_#{wallet_name.upcase}"
-          ENV.fetch(prefixed, nil) || ENV.fetch(suffixed, nil) || ENV.fetch(base_name, nil)
-        else
-          ENV.fetch(base_name, nil)
         end
       end
 
