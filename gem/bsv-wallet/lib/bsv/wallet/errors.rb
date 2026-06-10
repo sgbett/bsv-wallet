@@ -30,6 +30,17 @@ module BSV
       end
     end
 
+    # Raised by Engine::Action#validate_for_handoff! when the wallet's
+    # just-built outgoing BEEF would not verify against a peer's view.
+    # Distinct from {InvalidBeefError} (incoming peer data) — this one
+    # means the wallet's *own* state cannot produce a valid BEEF, almost
+    # always an upstream proof-closure gap (see #296).
+    class EgressBeefInvalidError < Error
+      def initialize(message = 'wallet cannot produce a valid BEEF for handoff')
+        super
+      end
+    end
+
     class LimpModeError < Error
       attr_reader :balance, :threshold
 

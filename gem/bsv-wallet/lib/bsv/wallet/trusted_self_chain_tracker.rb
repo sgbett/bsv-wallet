@@ -29,12 +29,13 @@ module BSV
     #   subject_tx.verify(chain_tracker: TrustedSelfChainTracker.new)
     #   # passes iff the BEEF is structurally complete; raises otherwise
     class TrustedSelfChainTracker < BSV::Transaction::ChainTracker
-      def valid_root_for_height?(_root, _height) = true
-
       # Sentinel chain tip — high enough that the SDK's coinbase maturity
       # check (offset-0 leaf must be >= 100 blocks deep) always passes.
       # Real height doesn't matter; this tracker is structural-only.
-      def current_height = 1_000_000
+      SENTINEL_HEIGHT = 1_000_000
+
+      def valid_root_for_height?(_root, _height) = true
+      def current_height = SENTINEL_HEIGHT
     end
   end
 end

@@ -575,14 +575,14 @@ module BSV
           beef = BSV::Transaction::Beef.from_binary(atomic_beef)
           subject_entry = beef.transactions.find { |e| e.wtxid == subject_wtxid }
           unless subject_entry&.transaction
-            raise BSV::Wallet::Error,
+            raise BSV::Wallet::EgressBeefInvalidError,
                   "egress validation: subject dtxid=#{subject_wtxid.reverse.unpack1('H*')} " \
                   'missing from constructed BEEF (internal inconsistency)'
           end
 
           subject_entry.transaction.verify(chain_tracker: BSV::Wallet::TrustedSelfChainTracker.new)
         rescue BSV::Transaction::VerificationError => e
-          raise BSV::Wallet::Error,
+          raise BSV::Wallet::EgressBeefInvalidError,
                 'wallet refuses to ship structurally invalid BEEF: ' \
                 "#{e.code} — #{e.message}. Upstream proof closure is incomplete " \
                 '(likely an ancestor missing merkle_path); investigate import / ' \
