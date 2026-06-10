@@ -3,7 +3,7 @@
 - **Date:** 2026-06-03
 - **Status:** ready for implementation (analyst phase to break down)
 - **Issue:** sgbett/bsv-wallet#251
-- **Parent:** #249 (umbrella), [ADR 20260603-broadcast-network-boundary](../../.architecture/decisions/adrs/20260603-broadcast-network-boundary.md)
+- **Parent:** #249 (umbrella). Boundary rationale lifted from the retired ADR into [`reference/state-boundaries.md`](../../reference/state-boundaries.md).
 - **Sibling already shipped:** #250 (Broadcaster + persisted affinity)
 
 ## TL;DR

@@ -50,7 +50,7 @@ The broadcast subsystem makes the boundary concrete:
 | Edge | Transition | Mechanism | Why this mechanism |
 |------|------------|-----------|--------------------|
 | 1 | → MINED | Block-driven resolver | Block data is globally shared across all ARC instances — immune to the per-instance problem by construction. |
-| 2 | → SEEN_ON_NETWORK / REJECTED / DOUBLE_SPEND | Push (SSE) from the metamorph instance that holds the tx | Mempool outcomes never land in a block; the block resolver is structurally blind to them. Only a push signal from the holding instance can deliver them. |
+| 2 | → SEEN_ON_NETWORK / REJECTED / DOUBLE_SPEND_ATTEMPTED | Push (SSE) from the metamorph instance that holds the tx | Mempool outcomes never land in a block; the block resolver is structurally blind to them. Only a push signal from the holding instance can deliver them. |
 
 The structural fact behind the table — block data globally shared, mempool outcomes per-instance — is a property of BSV's protocol surface, not a design choice. It dictates that **the wallet must run a push consumer** (only it can own that long-lived connection + cursor) and that **the wallet must run a block reconciler** (only it knows what is in flight). Both are stateful, both live in the wallet for that reason. See issues #250 and #251 for the implementation that landed on this basis.
 
