@@ -29,7 +29,7 @@ The schema is not documentation of what the application maintains; the applicati
 - **`tx_proofs.path_requires_block` CHECK** (`merkle_path IS NULL OR block_id IS NOT NULL`). A proof row cannot exist with a path but no anchor. The application doesn't validate this; it can't get past it.
 - **RESTRICT FK on outputs** prevents deleting an action whose outputs are referenced. Cascade order is forced top-down by the schema.
 - **`prevent_outbound_spendable` trigger** enforces that an outgoing action cannot have a spendable row before broadcast acceptance. This is the 4-phase invariant (output canonicalisation only post-broadcast) enforced *in the database*, not in `Engine::Action`.
-- **`inputs.output_id` UNIQUE** is how single-spend is enforced. Two concurrent `create_action` calls competing for the same output resolve in PostgreSQL — one wins on INSERT, the other gets a uniqueness violation. The Engine doesn't need a Ruby mutex.
+- **`inputs.output_id` UNIQUE** is how single-spend is enforced. Two concurrent `create_action` calls competing for the same output resolve in PostgreSQL: both use `INSERT ... ON CONFLICT (output_id) DO NOTHING`, so the loser's insert turns into a no-op rather than an exception. `Store#lock_inputs_atomic?` then checks whether every requested lock was actually inserted; the losing call's transaction rolls back. The Engine doesn't need a Ruby mutex, and neither caller has to handle a uniqueness exception explicitly — the schema's UNIQUE constraint plus the `ON CONFLICT` clause turns contention into a deterministic loser-rolls-back outcome.
 
 If a future bug allows the application to attempt invalid state, the schema raises and the operation aborts. The bug surfaces immediately and loudly. It cannot persist.
 
@@ -41,13 +41,17 @@ Every multi-write operation is one transaction. The Store owns this:
 def create_action(...)
   @db.transaction do
     action_id = @db[:actions].insert(...)
-    inputs.each { |i| @db[:inputs].insert(action_id:, ...) }
+    raise Sequel::Rollback unless lock_inputs_atomic?(action_id:, inputs:)
     action_id
   end
 end
+
+# lock_inputs_atomic? uses INSERT ... ON CONFLICT (output_id) DO NOTHING
+# for each row and returns true iff every requested lock was actually
+# inserted (i.e. no contender already held it).
 ```
 
-If `inputs.insert` raises (e.g. UNIQUE violation on `output_id` because another caller claimed it first), the action row rolls back. The Engine never sees a half-committed lifecycle — it sees either success or a specific error.
+If any lock contended (another caller already claimed that output), `lock_inputs_atomic?` returns false, the explicit `Sequel::Rollback` fires, and the action row plus any inputs inserted so far are unwound together. The Engine never sees a half-committed lifecycle — it sees either success or a clean rollback.
 
 The Engine never assembles multi-write sequences itself. It calls Store methods, each of which is a single transaction or composes others within its own transaction block. When the Engine needs to span what would otherwise be two Store calls (e.g. import_utxo's five Phase 1 writes), it wraps them explicitly in `@store.db.transaction` and the principle holds.
 
