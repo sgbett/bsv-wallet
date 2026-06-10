@@ -29,7 +29,6 @@ module BSV
     #   subject_tx.verify(chain_tracker: TrustedSelfChainTracker.new)
     #   # passes iff the BEEF is structurally complete; raises otherwise
     class TrustedSelfChainTracker < BSV::Transaction::ChainTracker
-      def initialize = super(nil)
       def valid_root_for_height?(_root, _height) = true
 
       # Sentinel chain tip — high enough that the SDK's coinbase maturity

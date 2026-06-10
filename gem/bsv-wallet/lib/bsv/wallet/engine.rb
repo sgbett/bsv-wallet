@@ -292,21 +292,30 @@ module BSV
         # un-forwardable. Refusing at the boundary eliminates the state.
         block_height, merkle_path_binary = fetch_proof_for_imported_utxo!(dtxid)
 
-        # Phase 1: Record the root-key UTXO atomically with its proof.
-        import_action = @store.create_action(
-          action: { description: 'imported UTXO', broadcast_intent: :none, outgoing: false }
-        )
-        @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
-        proof_id = @store.save_proof(
-          wtxid: wtxid,
-          proof: { raw_tx: raw_tx, merkle_path: merkle_path_binary, height: block_height }
-        )
-        @store.link_proof(action_id: import_action[:id], tx_proof_id: proof_id)
-        output_ids = @store.promote_action(
-          action_id: import_action[:id],
-          outputs: [{ satoshis: satoshis, vout: vout, locking_script: locking_script.to_binary, output_type: 'root' }]
-        )
-        imported_output_id = output_ids.first
+        # Phase 1: Record the root-key UTXO + its proof atomically. The
+        # transaction wrapper makes the five Store writes commit-or-rollback
+        # together: a partial failure (e.g. save_proof raises after
+        # create_action) would otherwise leave an orphan +actions+ row
+        # whose wtxid then short-circuits the next +import_utxo+ run as
+        # +already_imported+, locking the user out of re-importing.
+        import_action = nil
+        imported_output_id = nil
+        @store.db.transaction do
+          import_action = @store.create_action(
+            action: { description: 'imported UTXO', broadcast_intent: :none, outgoing: false }
+          )
+          @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
+          proof_id = @store.save_proof(
+            wtxid: wtxid,
+            proof: { raw_tx: raw_tx, merkle_path: merkle_path_binary, height: block_height }
+          )
+          @store.link_proof(action_id: import_action[:id], tx_proof_id: proof_id)
+          output_ids = @store.promote_action(
+            action_id: import_action[:id],
+            outputs: [{ satoshis: satoshis, vout: vout, locking_script: locking_script.to_binary, output_type: 'root' }]
+          )
+          imported_output_id = output_ids.first
+        end
 
         # Phase 2: Self-payment to a BRC-42-derived address.
         #
