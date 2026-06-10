@@ -107,7 +107,10 @@ RSpec.describe BSV::Wallet::Engine::Action do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          # 0 satoshis: exercises the deferred-sign lifecycle without
+          # creating value-from-nothing (which strict validate_for_handoff!
+          # would reject in #296 Phase B).
+          { satoshis: 0, locking_script: OP_TRUE,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
             sender_identity_key: 'self' }
         ]
@@ -131,7 +134,10 @@ RSpec.describe BSV::Wallet::Engine::Action do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          # 0 satoshis: exercises the deferred-sign lifecycle without
+          # creating value-from-nothing (which strict validate_for_handoff!
+          # would reject in #296 Phase B).
+          { satoshis: 0, locking_script: OP_TRUE,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
             sender_identity_key: 'self' }
         ]
@@ -152,7 +158,10 @@ RSpec.describe BSV::Wallet::Engine::Action do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          # 0 satoshis: exercises the deferred-sign lifecycle without
+          # creating value-from-nothing (which strict validate_for_handoff!
+          # would reject in #296 Phase B).
+          { satoshis: 0, locking_script: OP_TRUE,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
             sender_identity_key: 'self' }
         ]

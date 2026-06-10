@@ -51,6 +51,11 @@ module BSV
     # Key derivation (BRC-42/43)
     autoload :KeyDeriver, 'bsv/wallet/key_deriver'
 
+    # Egress validation tracker — wallet trusts its own persisted proofs;
+    # this is the chain_tracker the wallet hands to its own verify call
+    # at outgoing-BEEF validation time. NEVER for incoming peer data.
+    require_relative 'wallet/trusted_self_chain_tracker'
+
     # Network services (porcelain routing layer over SDK providers)
     require_relative 'network/services'
     require_relative 'network/chain_tracker'

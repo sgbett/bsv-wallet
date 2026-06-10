@@ -165,6 +165,10 @@ module BSV
           end
 
           atomic_beef = action.send(:build_atomic_beef, raw_tx, action_result[:id])
+          # SPV honesty contract: refuse to return a BEEF a peer wouldn't
+          # accept. Under strict create_action (#296 Phase B), returning
+          # from create_action implies a valid BEEF in hand.
+          action.send(:validate_for_handoff!, atomic_beef, wtxid)
           # Push the just-built BEEF as a cache hint so the daemon's
           # broadcast skips both Store#find_action and the input source-data
           # JOIN. BEEF is a strict superset of EF for the subject tx (parent
@@ -425,6 +429,9 @@ module BSV
 
           # Build Atomic BEEF envelope for the :tx return value
           atomic_beef = build_atomic_beef(raw_tx, @id)
+          # SPV honesty contract (#296 Phase B): refuse to ship invalid BEEF.
+          # Same contract as Action.create's synchronous path.
+          validate_for_handoff!(atomic_beef, wtxid)
 
           broadcast = @engine.send(:determine_broadcast, no_send, accept_delayed_broadcast)
 
@@ -542,6 +549,44 @@ module BSV
           dtxid = action[:wtxid].reverse.unpack1('H*')
           vouts = @engine.store.query_change_output_vouts(action_id: action_id)
           vouts.map { |vout| "#{dtxid}.#{vout}" }
+        end
+
+        # SPV honesty contract (#296 Phase B): validate the just-built
+        # BEEF before it leaves the wallet for any peer.
+        #
+        # The wallet trusts its own persisted proofs (those were validated
+        # against a real chain_tracker at proof-arrival time), so a
+        # structural-only verify with {TrustedSelfChainTracker} is
+        # sufficient and correct here: pass iff every leaf in the BEEF
+        # terminates at a merkle_path or wires through to one. Failure
+        # means the wallet's state cannot produce a valid handoff BEEF
+        # — almost always an upstream proof-closure gap that should have
+        # been caught at import or save_beef_proofs time.
+        #
+        # Refusing here keeps the SPV contract intact: the wallet does not
+        # ship structurally invalid BEEFs to peers under any circumstance.
+        #
+        # @param atomic_beef [String] BEEF binary as built by build_atomic_beef
+        # @param subject_wtxid [String] 32-byte wire-order wtxid of the
+        #   subject transaction (the action's own tx)
+        # @raise [BSV::Wallet::Error] when the BEEF would fail structural
+        #   verification — bug in upstream proof acquisition or wiring
+        def validate_for_handoff!(atomic_beef, subject_wtxid)
+          beef = BSV::Transaction::Beef.from_binary(atomic_beef)
+          subject_entry = beef.transactions.find { |e| e.wtxid == subject_wtxid }
+          unless subject_entry&.transaction
+            raise BSV::Wallet::EgressBeefInvalidError,
+                  "egress validation: subject dtxid=#{subject_wtxid.reverse.unpack1('H*')} " \
+                  'missing from constructed BEEF (internal inconsistency)'
+          end
+
+          subject_entry.transaction.verify(chain_tracker: BSV::Wallet::TrustedSelfChainTracker.new)
+        rescue BSV::Transaction::VerificationError => e
+          raise BSV::Wallet::EgressBeefInvalidError,
+                'wallet refuses to ship structurally invalid BEEF: ' \
+                "#{e.code} — #{e.message}. Upstream proof closure is incomplete " \
+                '(likely an ancestor missing merkle_path); investigate import / ' \
+                'save_beef_proofs path.'
         end
 
         # Outgoing BEEF: constructed from our own ProofStore — verification is

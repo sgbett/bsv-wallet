@@ -66,7 +66,7 @@ RSpec.describe BSV::Wallet::Engine do
         description: 'hint disabled',
         inputs: [],
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
@@ -87,7 +87,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'hint disabled by blank env',
           inputs: [],
           outputs: [
-            { satoshis: 500, locking_script: OP_TRUE,
+            { satoshis: 0, locking_script: OP_TRUE,
               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -109,7 +109,7 @@ RSpec.describe BSV::Wallet::Engine do
         description: 'hint enabled',
         inputs: [],
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
@@ -131,7 +131,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'hint fail swallowed',
           inputs: [],
           outputs: [
-            { satoshis: 500, locking_script: OP_TRUE,
+            { satoshis: 0, locking_script: OP_TRUE,
               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -147,7 +147,7 @@ RSpec.describe BSV::Wallet::Engine do
         inputs: [],
         no_send: true,
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
@@ -162,7 +162,10 @@ RSpec.describe BSV::Wallet::Engine do
         description: 'test payment',
         inputs: [],
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          # 0 satoshis: synthetic-fixture pattern that exercises
+          # create_action's lifecycle without value-from-nothing
+          # (strict validate_for_handoff! catches output_overflow).
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'payment', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
@@ -177,7 +180,7 @@ RSpec.describe BSV::Wallet::Engine do
         description: 'proof store test',
         inputs: [],
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
@@ -195,7 +198,7 @@ RSpec.describe BSV::Wallet::Engine do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'output', basket: 'deferred', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
@@ -228,7 +231,7 @@ RSpec.describe BSV::Wallet::Engine do
         inputs: [],
         no_send: true,
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'output', basket: 'pending', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
@@ -243,7 +246,7 @@ RSpec.describe BSV::Wallet::Engine do
         no_send: true,
         labels: %w[payment urgent],
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'output' }
         ]
       )
@@ -291,7 +294,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [],
           accept_delayed_broadcast: false,
           outputs: [
-            { satoshis: 500, locking_script: OP_TRUE,
+            { satoshis: 0, locking_script: OP_TRUE,
               output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -321,7 +324,7 @@ RSpec.describe BSV::Wallet::Engine do
             inputs: [],
             accept_delayed_broadcast: false,
             outputs: [
-              { satoshis: 500, locking_script: OP_TRUE,
+              { satoshis: 0, locking_script: OP_TRUE,
                 output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
             ]
           )
@@ -338,7 +341,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [],
           accept_delayed_broadcast: false,
           outputs: [
-            { satoshis: 500, locking_script: OP_TRUE,
+            { satoshis: 0, locking_script: OP_TRUE,
               output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -365,7 +368,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [],
           accept_delayed_broadcast: false,
           outputs: [
-            { satoshis: 500, locking_script: OP_TRUE,
+            { satoshis: 0, locking_script: OP_TRUE,
               output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -395,7 +398,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [],
           accept_delayed_broadcast: false,
           outputs: [
-            { satoshis: 500, locking_script: OP_TRUE,
+            { satoshis: 0, locking_script: OP_TRUE,
               output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -419,7 +422,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [],
           accept_delayed_broadcast: false,
           outputs: [
-            { satoshis: 500, locking_script: OP_TRUE,
+            { satoshis: 0, locking_script: OP_TRUE,
               output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -464,7 +467,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [],
           accept_delayed_broadcast: true,
           outputs: [
-            { satoshis: 500, locking_script: OP_TRUE,
+            { satoshis: 0, locking_script: OP_TRUE,
               output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -486,7 +489,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [],
           no_send: true,
           outputs: [
-            { satoshis: 500, locking_script: OP_TRUE,
+            { satoshis: 0, locking_script: OP_TRUE,
               output_description: 'output', basket: 'payments', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -518,7 +521,7 @@ RSpec.describe BSV::Wallet::Engine do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: locking_script,
+          { satoshis: 0, locking_script: locking_script,
             output_description: 'output', basket: 'deferred_sign', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
@@ -546,7 +549,7 @@ RSpec.describe BSV::Wallet::Engine do
       # Verify the transaction can be deserialized
       parsed = parse_beef_tx(result[:tx])
       expect(parsed.outputs.length).to eq(1)
-      expect(parsed.outputs[0].satoshis).to eq(500)
+      expect(parsed.outputs[0].satoshis).to eq(0)
 
       # Still no spendable rows — no broadcast acceptance was simulated.
       listed_after = engine.list_outputs(basket: 'deferred_sign')
@@ -560,7 +563,7 @@ RSpec.describe BSV::Wallet::Engine do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'output', basket: basket,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
             sender_identity_key: 'self' }
@@ -585,7 +588,7 @@ RSpec.describe BSV::Wallet::Engine do
       # The output is now in the canonical UTXO set.
       listed = engine.list_outputs(basket: basket)
       expect(listed[:total_outputs]).to eq(1)
-      expect(listed[:outputs].first[:satoshis]).to eq(500)
+      expect(listed[:outputs].first[:satoshis]).to eq(0)
     end
 
     it 'builds a valid Atomic BEEF before broadcast acceptance (outputs still promoted: false)' do
@@ -598,7 +601,7 @@ RSpec.describe BSV::Wallet::Engine do
         description: 'beef pre phase4',
         inputs: [],
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'output', basket: basket,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
             sender_identity_key: 'self' }
@@ -611,7 +614,7 @@ RSpec.describe BSV::Wallet::Engine do
 
       parsed = parse_beef_tx(create_result[:tx])
       expect(parsed.outputs.length).to eq(1)
-      expect(parsed.outputs[0].satoshis).to eq(500)
+      expect(parsed.outputs[0].satoshis).to eq(0)
     end
   end
 
@@ -630,35 +633,37 @@ RSpec.describe BSV::Wallet::Engine do
       )
     end
 
-    # Fund the wallet with a real P2PKH output that can be signed
+    # Fund the wallet with a real P2PKH output that can be signed.
+    #
+    # op_true_lock: lock outputs with OP_TRUE instead of P2PKH. Used by
+    # tests that exercise the caller-supplied-unlocking-script path —
+    # under strict validate_for_handoff! (#296 Phase B) the resulting
+    # BEEF must verify, which a stub unlocking script cannot satisfy
+    # against a P2PKH lock. OP_TRUE accepts any unlocking.
     def fund_wallet_with_keys(satoshis: 1000, count: 1,
                               prefix: 'wallet payment', suffix: 'suffix1',
-                              sender_identity_key: 'self')
-      derived_key = key_deriver.derive_private_key(
-        protocol_id: [2, prefix], key_id: suffix,
-        counterparty: sender_identity_key || 'self'
-      )
-      script = p2pkh_locking_script_for(derived_key)
-
-      # Create a source action with a wtxid (needed for input resolution)
-      source_action = store.create_action(
-        action: { description: 'funding source', broadcast_intent: :none, outgoing: false }
-      )
-      # Set a real wtxid on the source action
-      source_wtxid = SecureRandom.random_bytes(32)
-      store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: DUMMY_RAW_TX)
-
+                              sender_identity_key: 'self', op_true_lock: false)
       outputs = count.times.map do |i|
+        out_suffix = i.zero? ? suffix : "#{suffix}-#{i}"
+        script_binary = if op_true_lock
+                          op_true
+                        else
+                          derived_key = key_deriver.derive_private_key(
+                            protocol_id: [2, prefix], key_id: out_suffix,
+                            counterparty: sender_identity_key || 'self'
+                          )
+                          p2pkh_locking_script_for(derived_key).to_binary
+                        end
         {
           satoshis: satoshis, vout: i,
-          locking_script: script.to_binary,
+          locking_script: script_binary,
           basket: 'default',
           derivation_prefix: prefix,
-          derivation_suffix: i.zero? ? suffix : "#{suffix}-#{i}",
+          derivation_suffix: out_suffix,
           sender_identity_key: sender_identity_key
         }
       end
-      store.promote_action(action_id: source_action[:id], outputs: outputs)
+      register_funded_outputs(outputs)
     end
 
     context 'full deferred flow with P2PKH inputs' do
@@ -703,6 +708,13 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'caller provides unlocking scripts for all inputs' do
       it 'applies caller scripts without wallet signing' do
+        # White-box test exercising apply_spends's caller-unlock branch.
+        # The custom_unlock below is a 3-byte stub — proving the wallet
+        # applies whatever the caller provided verbatim — not a valid
+        # P2PKH unlock. Strict validate_for_handoff! (#296 Phase B) is
+        # stubbed because the assertion is about apply_spends's
+        # mechanism, not BEEF validity.
+        allow_any_instance_of(BSV::Wallet::Engine::Action).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet_with_keys(satoshis: 1000)
         output_script = OP_TRUE
 
@@ -737,7 +749,9 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'mixed signing' do
       it 'applies caller scripts for some inputs, wallet signs the rest' do
-        # Fund with two outputs
+        # White-box mechanism test — see comment in
+        # 'applies caller scripts without wallet signing' above.
+        allow_any_instance_of(BSV::Wallet::Engine::Action).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet_with_keys(satoshis: 1000, count: 2)
         output_script = OP_TRUE
 
@@ -778,7 +792,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'deferred invalid',
           inputs: [],
           sign_and_process: false,
-          outputs: [{ satoshis: 500, locking_script: OP_TRUE }]
+          outputs: [{ satoshis: 0, locking_script: OP_TRUE }]
         )
 
         reference = create_result[:signable_transaction][:reference]
@@ -800,7 +814,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [],
           sign_and_process: false,
           outputs: [
-            { satoshis: 500, locking_script: binary_script,
+            { satoshis: 0, locking_script: binary_script,
               basket: 'deferred_test', output_description: 'test output', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -814,7 +828,7 @@ RSpec.describe BSV::Wallet::Engine do
         action = store.find_action(reference: create_result[:signable_transaction][:reference])
         rows = BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).all
         expect(rows.size).to eq(1)
-        expect(rows.first.satoshis).to eq(500)
+        expect(rows.first.satoshis).to eq(0)
         expect(rows.first.promoted).to be(false)
       end
 
@@ -823,7 +837,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'deferred rawtx',
           inputs: [],
           sign_and_process: false,
-          outputs: [{ satoshis: 500, locking_script: OP_TRUE }]
+          outputs: [{ satoshis: 0, locking_script: OP_TRUE }]
         )
 
         action = store.find_action(reference: create_result[:signable_transaction][:reference])
@@ -832,7 +846,7 @@ RSpec.describe BSV::Wallet::Engine do
         # The unsigned raw_tx is a valid serialized transaction
         parsed = BSV::Transaction::Transaction.from_binary(action[:raw_tx])
         expect(parsed.outputs.length).to eq(1)
-        expect(parsed.outputs[0].satoshis).to eq(500)
+        expect(parsed.outputs[0].satoshis).to eq(0)
       end
     end
 
@@ -843,7 +857,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [],
           sign_and_process: false,
           outputs: [
-            { satoshis: 500, locking_script: OP_TRUE,
+            { satoshis: 0, locking_script: OP_TRUE,
               basket: 'cascade_test', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
@@ -862,6 +876,9 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'sequence number override' do
       it 'applies sequence number from spends' do
+        # White-box mechanism test — see comment in
+        # 'applies caller scripts without wallet signing' above.
+        allow_any_instance_of(BSV::Wallet::Engine::Action).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet_with_keys(satoshis: 1000)
         output_script = OP_TRUE
 
@@ -895,7 +912,7 @@ RSpec.describe BSV::Wallet::Engine do
         inputs: [],
         sign_and_process: false,
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'output' }
         ]
       )
@@ -928,7 +945,7 @@ RSpec.describe BSV::Wallet::Engine do
       result = engine.create_action(
         description: 'speculative inline',
         inputs: [],
-        outputs: [{ satoshis: 500, locking_script: OP_TRUE, output_description: 'out' }],
+        outputs: [{ satoshis: 0, locking_script: OP_TRUE, output_description: 'out' }],
         no_send: true
       )
       action_id = store.find_action(wtxid: result[:txid])[:id]
@@ -953,7 +970,7 @@ RSpec.describe BSV::Wallet::Engine do
       engine.create_action(
         description: 'internal action',
         inputs: [],
-        outputs: [{ satoshis: 500, locking_script: OP_TRUE, output_description: 'out' }],
+        outputs: [{ satoshis: 0, locking_script: OP_TRUE, output_description: 'out' }],
         no_send: true
       )
       action_id = store.send(:models)::Action.where(description: 'internal action').last.id
@@ -964,17 +981,20 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#list_actions' do
     before do
+      # Vary locking_script per action so they hash to distinct wtxids
+      # (actions.wtxid is UNIQUE). All three carry 0 satoshis to stay
+      # within strict validate_for_handoff!'s output_total <= input_total.
       engine.create_action(
         description: 'payment action', inputs: [], no_send: true, labels: ['payment'],
-        outputs: [{ satoshis: 100, output_description: 'output', locking_script: "\x01".b }]
+        outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x01".b }]
       )
       engine.create_action(
         description: 'transfer action', inputs: [], no_send: true, labels: ['transfer'],
-        outputs: [{ satoshis: 200, output_description: 'output', locking_script: "\x01".b }]
+        outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x02".b }]
       )
       engine.create_action(
         description: 'both labels', inputs: [], no_send: true, labels: %w[payment transfer],
-        outputs: [{ satoshis: 300, output_description: 'output', locking_script: "\x01".b }]
+        outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x03".b }]
       )
     end
 
@@ -1024,7 +1044,7 @@ RSpec.describe BSV::Wallet::Engine do
     # locking/unlocking scripts (trivially valid). Additional proven
     # ancestors are independent — they exist in the BEEF but are not
     # spent by the subject (matching the old build_test_beef shape).
-    def build_test_beef(satoshis: 500, with_proof: false, ancestor_count: 0,
+    def build_test_beef(satoshis: 0, with_proof: false, ancestor_count: 0,
                         input_satoshis: nil)
       actual_input = input_satoshis || (satoshis + 100)
 
@@ -1094,7 +1114,7 @@ RSpec.describe BSV::Wallet::Engine do
           {
             output_index: 0,
             protocol: :basket_insertion,
-            satoshis: 500,
+            satoshis: 0,
             insertion_remittance: {
               basket: 'tokens',
               tags: ['nft'],
@@ -1148,7 +1168,7 @@ RSpec.describe BSV::Wallet::Engine do
         description: 'wtxid storage test',
         labels: ['test'],
         outputs: [
-          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+          { output_index: 0, protocol: :basket_insertion, satoshis: 0,
             insertion_remittance: { basket: 'wtxid_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
@@ -1159,7 +1179,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'saves ancestor proofs to ProofStore' do
-      beef_data = build_test_beef(satoshis: 500, ancestor_count: 2)
+      beef_data = build_test_beef(satoshis: 0, ancestor_count: 2)
 
       # Parse to get ancestor txids
       beef = BSV::Transaction::Beef.from_binary(beef_data)
@@ -1171,7 +1191,7 @@ RSpec.describe BSV::Wallet::Engine do
         tx: beef_data,
         description: 'ancestor proof test',
         outputs: [
-          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+          { output_index: 0, protocol: :basket_insertion, satoshis: 0,
             insertion_remittance: { basket: 'ancestor_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
@@ -1185,7 +1205,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'links the subject proof to the action when subject is mined' do
-      beef_data = build_test_beef(satoshis: 500, with_proof: true)
+      beef_data = build_test_beef(satoshis: 0, with_proof: true)
 
       beef = BSV::Transaction::Beef.from_binary(beef_data)
       subject_wtxid = beef.subject_wtxid
@@ -1195,7 +1215,7 @@ RSpec.describe BSV::Wallet::Engine do
         description: 'proof link test',
         labels: ['proof-link'],
         outputs: [
-          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+          { output_index: 0, protocol: :basket_insertion, satoshis: 0,
             insertion_remittance: { basket: 'proof_link_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
@@ -1216,14 +1236,14 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'does not link proof when subject has no BUMP' do
-      beef_data = build_test_beef(satoshis: 500, with_proof: false)
+      beef_data = build_test_beef(satoshis: 0, with_proof: false)
 
       engine_with_tracker.internalize_action(
         tx: beef_data,
         description: 'no proof link test',
         labels: ['no-proof'],
         outputs: [
-          { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+          { output_index: 0, protocol: :basket_insertion, satoshis: 0,
             insertion_remittance: { basket: 'no_proof_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
@@ -1300,7 +1320,7 @@ RSpec.describe BSV::Wallet::Engine do
           tx: beef_data,
           description: 'valid beef passes',
           outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            { output_index: 0, protocol: :basket_insertion, satoshis: 0,
               insertion_remittance: { basket: 'spv_valid', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
@@ -1309,13 +1329,13 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it 'verifies merkle roots against chain tracker' do
-        beef_data = build_test_beef(satoshis: 500, with_proof: true)
+        beef_data = build_test_beef(satoshis: 0, with_proof: true)
 
         result = engine_with_tracker.internalize_action(
           tx: beef_data,
           description: 'chain tracker ok',
           outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            { output_index: 0, protocol: :basket_insertion, satoshis: 0,
               insertion_remittance: { basket: 'tracker_ok', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
@@ -1412,7 +1432,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'trustSelf and known_txids' do
       it 'accepts BEEF with all ancestors known in ProofStore' do
-        beef_data = build_test_beef(satoshis: 500, ancestor_count: 2)
+        beef_data = build_test_beef(satoshis: 0, ancestor_count: 2)
 
         # Pre-populate ProofStore with proofs for all ancestors
         beef = BSV::Transaction::Beef.from_binary(beef_data)
@@ -1430,7 +1450,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'all ancestors known',
           trust_self: 'known',
           outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            { output_index: 0, protocol: :basket_insertion, satoshis: 0,
               insertion_remittance: { basket: 'trust_all', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
@@ -1439,7 +1459,7 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it 'accepts BEEF with some ancestors known and others proven via BUMP' do
-        beef_data = build_test_beef(satoshis: 500, ancestor_count: 2)
+        beef_data = build_test_beef(satoshis: 0, ancestor_count: 2)
 
         # Only populate ProofStore for the first ancestor
         beef = BSV::Transaction::Beef.from_binary(beef_data)
@@ -1457,7 +1477,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'some known some bump',
           trust_self: 'known',
           outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            { output_index: 0, protocol: :basket_insertion, satoshis: 0,
               insertion_remittance: { basket: 'trust_some', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
@@ -1500,7 +1520,7 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it 'treats known_txids entries as known ancestors' do
-        beef_data = build_test_beef(satoshis: 500, ancestor_count: 1)
+        beef_data = build_test_beef(satoshis: 0, ancestor_count: 1)
 
         # Get the ancestor wtxid but do NOT put it in ProofStore
         beef = BSV::Transaction::Beef.from_binary(beef_data)
@@ -1514,7 +1534,7 @@ RSpec.describe BSV::Wallet::Engine do
           trust_self: 'known',
           known_txids: [ancestor_wtxid],
           outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            { output_index: 0, protocol: :basket_insertion, satoshis: 0,
               insertion_remittance: { basket: 'known_txids', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
@@ -1523,7 +1543,7 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it 'runs full validation without trust_self regardless of ProofStore' do
-        beef_data = build_test_beef(satoshis: 500, ancestor_count: 1)
+        beef_data = build_test_beef(satoshis: 0, ancestor_count: 1)
 
         # Pre-populate ProofStore — but since trust_self is nil, full validation runs
         beef = BSV::Transaction::Beef.from_binary(beef_data)
@@ -1542,7 +1562,7 @@ RSpec.describe BSV::Wallet::Engine do
           tx: beef_data,
           description: 'no trust self full',
           outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            { output_index: 0, protocol: :basket_insertion, satoshis: 0,
               insertion_remittance: { basket: 'no_trust', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
@@ -1555,7 +1575,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'ancestor proof chain storage' do
       it 'stores raw_tx for each ancestor in ProofStore' do
-        beef_data = build_test_beef(satoshis: 500, ancestor_count: 2)
+        beef_data = build_test_beef(satoshis: 0, ancestor_count: 2)
 
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         ancestor_wtxids = beef.transactions
@@ -1566,7 +1586,7 @@ RSpec.describe BSV::Wallet::Engine do
           tx: beef_data,
           description: 'raw_tx storage test',
           outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            { output_index: 0, protocol: :basket_insertion, satoshis: 0,
               insertion_remittance: { basket: 'raw_tx_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
@@ -1585,7 +1605,7 @@ RSpec.describe BSV::Wallet::Engine do
 
       it 'stores consistent format from BEEF and broadcast sources' do
         # BEEF source: internalize action stores merkle_path as BRC-74 binary
-        beef_data = build_test_beef(satoshis: 500, ancestor_count: 1)
+        beef_data = build_test_beef(satoshis: 0, ancestor_count: 1)
 
         beef = BSV::Transaction::Beef.from_binary(beef_data)
         ancestor_bt = beef.transactions.find do |bt|
@@ -1597,7 +1617,7 @@ RSpec.describe BSV::Wallet::Engine do
           tx: beef_data,
           description: 'format consistency',
           outputs: [
-            { output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            { output_index: 0, protocol: :basket_insertion, satoshis: 0,
               insertion_remittance: { basket: 'fmt_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
@@ -1627,13 +1647,13 @@ RSpec.describe BSV::Wallet::Engine do
       engine.create_action(
         description: 'create outputs', inputs: [], no_send: true,
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'first', basket: 'wallet', tags: ['payment'],
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
-          { satoshis: 300, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'second', basket: 'wallet', tags: ['change'],
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
-          { satoshis: 100, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'third', basket: 'other',
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
@@ -1662,7 +1682,7 @@ RSpec.describe BSV::Wallet::Engine do
       engine.create_action(
         description: 'with output', inputs: [], no_send: true,
         outputs: [
-          { satoshis: 500, locking_script: OP_TRUE,
+          { satoshis: 0, locking_script: OP_TRUE,
             output_description: 'to relinquish', basket: 'wallet',
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
@@ -2388,6 +2408,11 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'custom script input' do
       it 'applies a caller-provided unlocking script' do
+        # Custom_unlock below is a random byte blob — a stub demonstrating
+        # the wallet applies whatever the caller provides. Strict
+        # validate_for_handoff! (#296 Phase B) is stubbed because the
+        # assertion is about script forwarding, not BEEF validity.
+        allow_any_instance_of(BSV::Wallet::Engine::Action).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet(satoshis: 1000)
 
         listed = engine_with_keys.list_outputs(basket: 'default')
