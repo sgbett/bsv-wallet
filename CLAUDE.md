@@ -37,17 +37,28 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 
 `Transaction#wtxid` returns wire order (SDK v0.17.0+). `Transaction#txid` returns display order — a convenience method, never used in the data path. The `DisplayTxid` module provides `dtxid` on Sequel models.
 
-## Public Key Convention: hex throughout
+## Public Key Convention: identity hex, derived binary
 
-Public keys are **hex strings** in the wallet's data path, in the database, and at every BRC boundary — a deliberate carve-out from the binary-internal principle that applies to txids/scripts/hashes. New code that "fixes" pubkeys to binary is reversing a settled decision.
+Pubkeys split into two classes with different representation rules — both deliberate carve-outs from the binary-internal principle that applies to txids/scripts/hashes. New code that "fixes" identity-shaped pubkeys to binary is reversing a settled decision; new code that surfaces derived pubkeys as hex inside the data path is doing unnecessary conversion.
 
-### The rule
+### Identity-shaped pubkeys — hex
+
+Stable identifiers that cross BRC boundaries as JSON: the wallet's own identity, BRC-43 counterparty references, BRC-29 sender_identity_key, BRC-52 certificate fields. Hex storage, hex on the wire, hex internally for the dominant boundary-crossing path.
 
 - **`KeyDeriver#identity_key`** — hex (66-char compressed). The BRC-100 `getPublicKey` emission value.
 - **`KeyDeriver#identity_key_bytes`** — 33-byte binary. The accessor for crypto-op consumers (`hash160`, ECDH input). Never round-trip `identity_key` through `[hex].pack('H*')` — call `identity_key_bytes` instead.
 - **`KeyDeriver` counterparty params** — hex (`'self'`, `'anyone'`, or hex public key), per BRC-43.
 - **`outputs.sender_identity_key`** column — `:text`. BRC-29 interchange identifier.
 - **`certificates.{certifier, subject, verifier, signature}` + `certificate_fields.{value, master_key}`** — `:text`. BRC-52 interchange.
+
+### Derived / transient pubkeys — binary
+
+Outputs of BRC-42 derivation, fed directly into the next crypto operation — a `hash160` to produce a locking script, an ECDH input to derive a symmetric key. These never cross a BRC boundary *as themselves*; they're intermediates within one operation.
+
+- **`KeyDeriver#derive_public_key`** — returns 33-byte binary.
+- **`Engine#get_public_key(identity_key: false, …)`** — returns 33-byte binary.
+
+The BRC-100 binding layer converts these to hex when emitting a JSON response, the same way `dtxid` conversion happens at the txid boundary.
 
 ### Why pubkeys differ from txids
 
