@@ -39,7 +39,7 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 
 ## Public Key Convention: identity hex, derived binary
 
-Pubkeys split into two classes with different representation rules — both deliberate carve-outs from the binary-internal principle that applies to txids/scripts/hashes. New code that "fixes" identity-shaped pubkeys to binary is reversing a settled decision; new code that surfaces derived pubkeys as hex inside the data path is doing unnecessary conversion.
+Pubkeys split into two classes with different representation rules. Identity-shaped pubkeys (the BRC interchange identifiers) are a deliberate carve-out from the binary-internal principle that applies to txids/scripts/hashes — they stay hex throughout. Derived/transient pubkeys (BRC-42 outputs) follow the principle as written and stay binary. New code that "fixes" identity-shaped pubkeys to binary is reversing a settled decision; new code that surfaces derived pubkeys as hex inside the data path is doing unnecessary conversion.
 
 ### Identity-shaped pubkeys — hex
 
@@ -58,20 +58,20 @@ Outputs of BRC-42 derivation, fed directly into the next crypto operation — a 
 - **`KeyDeriver#derive_public_key`** — returns 33-byte binary.
 - **`Engine#get_public_key(identity_key: false, …)`** — returns 33-byte binary.
 
-The BRC-100 binding layer converts these to hex when emitting a JSON response, the same way `dtxid` conversion happens at the txid boundary.
+If/when these need to cross a JSON boundary (a future BRC-100 binding — issues #180, #223), conversion to hex happens at that emit point, the same way `dtxid` conversion happens at the txid boundary. Internally they stay binary.
 
 ### Why identity pubkeys are hex (and txids aren't)
 
 These four supports explain the identity-pubkey carve-out specifically. Derived pubkeys don't need supports — they're binary because they go straight from `derive_public_key` into the next crypto op.
 
 1. **The internal canonical form isn't bytes — it's a `PublicKey` object** (curve point). Hex and binary are both serializations of that. The wallet operates on `PublicKey` instances; it rarely manipulates identity pubkey bytes directly.
-2. **Identity pubkeys are protocol identifiers, not binary content.** Txids get hashed, recomputed from raw tx, and indexed by structural bytes (wire order has meaning). Identity pubkeys flow through unchanged as identity tokens — bytes have no structural meaning beyond serialising the point.
+2. **Identity pubkeys are protocol identifiers, not binary content.** Txids get hashed, recomputed from raw tx, and indexed by structural bytes (wire order has meaning). Identity pubkeys flow through unchanged as identity tokens — bytes have no structural meaning beyond serializing the point.
 3. **Identity pubkeys cross BRC boundaries more often than txids.** Every BRC-100 method takes or returns one (`identity_key`, `counterparty`, `subject`, `certifier`, `verifier`). BRC-29 and BRC-52 also specify hex at the wire. Hex storage moves conversion off the boundary-heavy path.
 4. **The binary-internal principle itself carves out spec-mandated hex.** Convert to hex *only* where the spec explicitly says hex string — identity pubkey BRC fields meet that test directly. Txids are an exception in the *other* direction (binary even though `TXIDHexString` is BRC-canonical) precisely because txid bytes have structural meaning that identity pubkey bytes don't.
 
 ### Source
 
-The reasoning is recorded in `project_pubkey_hex_exception` (memory). The decision was made at PR #18, cemented by HLR #28 (BRC-100 SDK alignment), and formalised in HLR #300 after the audit recovered the trace.
+The reasoning is recorded in `project_pubkey_hex_exception` (memory). The decision was made at PR #18, cemented by HLR #28 (BRC-100 SDK alignment), and formalized in HLR #300 after the audit recovered the trace.
 
 ## Load-bearing Principles
 

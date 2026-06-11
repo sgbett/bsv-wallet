@@ -45,7 +45,7 @@ RSpec.describe BSV::Wallet::KeyDeriver do
       expect(deriver.identity_key_bytes.unpack1('H*')).to eq(deriver.identity_key)
     end
 
-    it 'memoises the result' do
+    it 'memoizes the result' do
       expect(deriver.identity_key_bytes).to equal(deriver.identity_key_bytes)
     end
   end
