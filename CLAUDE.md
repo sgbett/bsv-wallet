@@ -37,6 +37,29 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 
 `Transaction#wtxid` returns wire order (SDK v0.17.0+). `Transaction#txid` returns display order — a convenience method, never used in the data path. The `DisplayTxid` module provides `dtxid` on Sequel models.
 
+## Public Key Convention: hex throughout
+
+Public keys are **hex strings** in the wallet's data path, in the database, and at every BRC boundary — a deliberate carve-out from the binary-internal principle that applies to txids/scripts/hashes. New code that "fixes" pubkeys to binary is reversing a settled decision.
+
+### The rule
+
+- **`KeyDeriver#identity_key`** — hex (66-char compressed). The BRC-100 `getPublicKey` emission value.
+- **`KeyDeriver#identity_key_bytes`** — 33-byte binary. The accessor for crypto-op consumers (`hash160`, ECDH input). Never round-trip `identity_key` through `[hex].pack('H*')` — call `identity_key_bytes` instead.
+- **`KeyDeriver` counterparty params** — hex (`'self'`, `'anyone'`, or hex public key), per BRC-43.
+- **`outputs.sender_identity_key`** column — `:text`. BRC-29 interchange identifier.
+- **`certificates.{certifier, subject, verifier, signature}` + `certificate_fields.{value, master_key}`** — `:text`. BRC-52 interchange.
+
+### Why pubkeys differ from txids
+
+1. **The internal canonical form isn't bytes — it's a `PublicKey` object** (curve point). Hex and binary are both serializations of that. The wallet operates on `PublicKey` instances; it rarely manipulates pubkey bytes directly.
+2. **Pubkeys are protocol identifiers, not binary content.** Txids get hashed, recomputed from raw tx, and indexed by structural bytes (wire order has meaning). Pubkeys mostly flow through unchanged as identity tokens — bytes have no structural meaning beyond serialising the point.
+3. **Pubkeys cross BRC boundaries more often than txids.** Every BRC-100 method takes or returns one (`identity_key`, `counterparty`, `subject`, `certifier`, `verifier`). BRC-29 and BRC-52 also specify hex at the wire. Hex storage moves conversion off the boundary-heavy path.
+4. **The binary-internal principle itself carves out spec-mandated hex.** Convert to hex *only* where the spec explicitly says hex string — pubkey BRC fields meet that test directly. Txids are an exception in the *other* direction (binary even though `TXIDHexString` is BRC-canonical) precisely because txid bytes have structural meaning that pubkey bytes don't.
+
+### Source
+
+The reasoning is recorded in `project_pubkey_hex_exception` (memory). The decision was made at PR #18, cemented by HLR #28 (BRC-100 SDK alignment), and formalised in HLR #300 after the audit recovered the trace.
+
 ## Load-bearing Principles
 
 Two design principles shape the wallet from the outside in. Both are documented in `reference/`; the canonical wording lives there, this section is the at-a-glance summary for coding sessions. New behaviour that contradicts either is almost certainly wrong.

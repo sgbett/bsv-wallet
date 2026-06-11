@@ -33,6 +33,23 @@ RSpec.describe BSV::Wallet::KeyDeriver do
     end
   end
 
+  describe '#identity_key_bytes' do
+    it 'returns the 33-byte binary compressed public key' do
+      bytes = deriver.identity_key_bytes
+      expect(bytes).to be_a(String)
+      expect(bytes.encoding).to eq(Encoding::BINARY)
+      expect(bytes.bytesize).to eq(33)
+    end
+
+    it 'matches the hex form when re-encoded' do
+      expect(deriver.identity_key_bytes.unpack1('H*')).to eq(deriver.identity_key)
+    end
+
+    it 'memoises the result' do
+      expect(deriver.identity_key_bytes).to equal(deriver.identity_key_bytes)
+    end
+  end
+
   describe '#derive_public_key' do
     context "with counterparty: 'self'" do
       it 'uses own public key for derivation' do
