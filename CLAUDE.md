@@ -37,6 +37,35 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 
 `Transaction#wtxid` returns wire order (SDK v0.17.0+). `Transaction#txid` returns display order — a convenience method, never used in the data path. The `DisplayTxid` module provides `dtxid` on Sequel models.
 
+## Load-bearing Principles
+
+Two design principles shape the wallet from the outside in. Both are documented in `reference/`; the canonical wording lives there, this section is the at-a-glance summary for coding sessions. New behaviour that contradicts either is almost certainly wrong.
+
+### Principle of state
+
+> The database schema is the canonical source of truth for what is valid. All state-changing operations mutate the database atomically from one valid state to another. Invalid state is structurally impossible because the schema's constraints will reject it.
+
+Practical consequences when working on this codebase:
+
+- **Application code orchestrates; the schema enforces.** If you're writing application code that "validates" state, ask whether the schema could enforce the same invariant. If yes, lift it to the schema.
+- **Multi-write operations belong in one `db.transaction` block.** If not, you're leaking the possibility of an intermediate invalid state.
+- **Status is never stored.** Derived properties (action status, output spendability) are computed from structural state at read time. There is no `status` column to drift.
+- **Caches are projections over canonical state, never beside it.** If deleting the cache and rebuilding from DB doesn't reproduce identical behaviour, the cache holds state that should be in the database.
+
+Full statement, manifestations, and follow-ups: `reference/principle-of-state.md`.
+
+### Stateless vs stateful (SDK / wallet)
+
+> Stateless behaviour belongs in the SDK. Stateful behaviour belongs in the wallet. SDK is operations, wallet is processes — same principle viewed from the temporal axis.
+
+Practical consequences when designing new surface area:
+
+- **Ask: does this need to remember anything between calls?** Yes → wallet. No → SDK. There is no half-stateful SDK feature that works after restart; the choice is wallet or broken.
+- **The SDK has no database, no daemon, no clock-spanning state.** A stateful "feature" added there either secretly relies on the caller to persist (caller is the wallet) or silently loses information on restart.
+- **The boundary is bidirectional and reviewable.** Surface area has moved both ways during the rebuild (BRC-100 interface + ProtoWallet ceded SDK → wallet). Future moves pass the same test in either direction.
+
+Full statement and worked examples: `reference/state-boundaries.md`.
+
 ## Database & Wallet Configuration
 
 This is a **Postgres-based** wallet. SQLite exists as a convenience for fast logic-only specs that don't depend on DB invariants — it is not the production target.

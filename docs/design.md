@@ -472,6 +472,13 @@ The schema's spendable table (~28 bytes/row, fits in buffer cache) gives tier 1 
 
 ## 6. Cross-Cutting Concerns
 
+### Load-bearing principles
+
+Two principles shape this codebase from the outside in. The downstream subsections in this chapter — error translation, derived status, concurrency — flow from them.
+
+- **Principle of state** — the database schema is the canonical source of truth for what is valid. State transitions are atomic; invalid state is structurally impossible. Full statement in [`reference/principle-of-state.md`](https://github.com/sgbett/bsv-wallet/blob/master/reference/principle-of-state.md).
+- **Stateless vs stateful (SDK / wallet)** — stateless behaviour belongs in the SDK; stateful behaviour belongs in the wallet. SDK is operations, wallet is processes. Full statement in [`reference/state-boundaries.md`](https://github.com/sgbett/bsv-wallet/blob/master/reference/state-boundaries.md).
+
 ### Binary-First Data Flow
 
 ```
@@ -496,19 +503,7 @@ A UNIQUE constraint violation in Layer 1 becomes an `InsufficientFundsError` in 
 
 ### State Derivation
 
-Status is never stored. It's derived at query time from structural state. The `promoted` flag on outputs distinguishes the send path's "signed but not yet broadcast-accepted" state from the post-promotion states:
-
-| Structural state | Derived status |
-|---|---|
-| `wtxid IS NULL` | unsigned |
-| `wtxid IS NOT NULL`, `tx_proof_id IS NOT NULL` | completed |
-| `wtxid IS NOT NULL`, `broadcast = 'none'`, no proof | internal |
-| `wtxid IS NOT NULL`, send path, at least one output with `promoted = true`, no proof | unproven |
-| `wtxid IS NOT NULL`, send path, broadcast `tx_status = 'REJECTED'` | failed |
-| `wtxid IS NOT NULL`, send path, broadcast row exists, no promoted outputs | sending |
-| `wtxid IS NOT NULL`, send path, no broadcast row | unprocessed |
-
-`:internal` replaces the previous `:nosend` label — the new name disambiguates from BRC-100's chained-send concept (deferred to #192).
+Status is never stored — it is computed from structural state at read time. Full derivation table in [`reference/principle-of-state.md`](https://github.com/sgbett/bsv-wallet/blob/master/reference/principle-of-state.md). `:internal` replaces the previous `:nosend` label — the new name disambiguates from BRC-100's chained-send concept (deferred to #192).
 
 ### Concurrency
 
