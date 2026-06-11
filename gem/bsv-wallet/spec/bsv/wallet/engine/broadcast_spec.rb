@@ -12,7 +12,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
   let(:broadcast) { described_class.new(store: store, broadcaster: broadcaster) }
 
   let(:action_id) { 42 }
-  # Real signed P2PKH transaction — parseable by Transaction.from_binary so
+  # Real signed P2PKH transaction — parseable by Transaction::Tx.from_binary so
   # the daemon submit path's EF reconstruction (#252) can hydrate from it.
   # The wtxid below is the SDK's hash of this raw_tx, but most specs use a
   # distinct +submit_wtxid+ for the action's stored wtxid to keep the
@@ -27,7 +27,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
   let(:submit_wtxid) { SecureRandom.random_bytes(32) }
   let(:action_hash) { { id: action_id, raw_tx: raw_tx, wtxid: submit_wtxid } }
   # Per-input source data that #hydrated_transaction_for attaches to the
-  # parsed Transaction. Matches the single input in +raw_tx+.
+  # parsed Transaction::Tx. Matches the single input in +raw_tx+.
   let(:resolved_inputs) do
     [{ source_satoshis: 1_500_000, source_locking_script: ["76a914#{'a' * 40}88ac"].pack('H*') }]
   end
@@ -122,7 +122,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     context 'when accepted with SEEN_ON_NETWORK' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -137,9 +137,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         )
       end
 
-      it 'calls broadcaster.broadcast with a hydrated Transaction and submit wtxid' do
+      it 'calls broadcaster.broadcast with a hydrated Transaction::Tx and submit wtxid' do
         broadcast.process(action_id)
-        expect(broadcaster).to have_received(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid)
+        expect(broadcaster).to have_received(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid)
       end
 
       it 'hydrates each input with source_satoshis and source_locking_script for EF (#252)' do
@@ -159,7 +159,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
 
       it 'short-circuits reconstruction when the EF cache has the action (#269 hit)' do
-        cached_tx = BSV::Transaction::Transaction.from_binary(raw_tx)
+        cached_tx = BSV::Transaction::Tx.from_binary(raw_tx)
         broadcast.hydrated_tx_cache.put(action_id, cached_tx)
         captured_tx = nil
         allow(broadcaster).to receive(:broadcast) { |tx, **|
@@ -176,7 +176,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
 
       it 'evicts the action from the EF cache after terminal success (#269)' do
-        broadcast.hydrated_tx_cache.put(action_id, BSV::Transaction::Transaction.from_binary(raw_tx))
+        broadcast.hydrated_tx_cache.put(action_id, BSV::Transaction::Tx.from_binary(raw_tx))
         expect(broadcast.hydrated_tx_cache.get(action_id)).not_to be_nil
 
         broadcast.process(action_id)
@@ -215,7 +215,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         merkle_path_binary = mp.to_binary
         proof_data = broadcast_data.merge(merkle_path: merkle_path_binary, block_height: 850_000, block_hash: SecureRandom.random_bytes(32))
         proof_response = BSV::Network::ProtocolResponse.new(nil, data: proof_data, http_success: true)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(proof_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(proof_response)
         allow(store).to receive(:save_proof).and_return(777)
 
         broadcast.process(action_id)
@@ -248,7 +248,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -266,7 +266,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -295,7 +295,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(http_response).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(true)
         allow(http_response).to receive(:is_a?).with(Net::HTTPServerError).and_return(false)
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(error_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(error_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -325,7 +325,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         allow(http_response).to receive(:is_a?).with(Net::HTTPTooManyRequests).and_return(false)
         allow(http_response).to receive(:is_a?).with(Net::HTTPServerError).and_return(true)
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(error_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(error_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:clear_broadcast_attempted)
         allow(store).to receive(:reject_action)
@@ -367,7 +367,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(stale_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(stale_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -416,7 +416,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(malformed_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(malformed_response)
         allow(store).to receive(:abort_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -447,7 +447,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(rejected_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(rejected_response)
         allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -469,7 +469,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
 
       it 'evicts the action from the EF cache after terminal rejection (#269)' do
-        broadcast.hydrated_tx_cache.put(action_id, BSV::Transaction::Transaction.from_binary(raw_tx))
+        broadcast.hydrated_tx_cache.put(action_id, BSV::Transaction::Tx.from_binary(raw_tx))
         broadcast.process(action_id)
         expect(broadcast.hydrated_tx_cache.get(action_id)).to be_nil
       end
@@ -487,7 +487,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(double_spend_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(double_spend_response)
         allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -520,7 +520,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(orphan_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(orphan_response)
         allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -561,7 +561,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
         allow(broadcaster).to receive(:broadcast)
-          .with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid)
+          .with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid)
           .and_return(broadcast_rejection_response)
         allow(store).to receive(:reject_action)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
@@ -595,7 +595,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     context 'when broadcast succeeds' do
       before do
         allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(success_response)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(success_response)
         allow(store).to receive(:record_broadcast_result).and_return(status_hash)
         allow(store).to receive(:broadcast_status).with(action_id: action_id).and_return(nil)
       end
@@ -976,7 +976,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       allow(store).to receive(:mark_broadcast_attempted) do |**|
         call_order << :stamp
       end
-      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid) do
+      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid) do
         call_order << :network
         success_response
       end
@@ -987,7 +987,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
     end
 
     it 'stamps the broadcast row even when broadcaster.broadcast raises' do
-      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_raise(StandardError, 'boom')
+      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_raise(StandardError, 'boom')
 
       expect { broadcast.process(action_id) }.to raise_error(StandardError, 'boom')
       expect(store).to have_received(:mark_broadcast_attempted).with(action_id: action_id)
@@ -995,7 +995,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
     it 'does not call record_broadcast_result when broadcaster.broadcast raises (crash-recovery state)' do
       allow(store).to receive(:record_broadcast_result)
-      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_raise(StandardError, 'boom')
+      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_raise(StandardError, 'boom')
 
       expect { broadcast.process(action_id) }.to raise_error(StandardError, 'boom')
       expect(store).not_to have_received(:record_broadcast_result)
@@ -1016,23 +1016,23 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
     it 'forwards the configured callback_token to broadcaster.broadcast' do
       allow(broadcaster).to receive(:broadcast)
-        .with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid, callback_token: callback_token)
+        .with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid, callback_token: callback_token)
         .and_return(success_response)
 
       broadcast_with_token.process(action_id)
 
       expect(broadcaster).to have_received(:broadcast)
-        .with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid, callback_token: callback_token)
+        .with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid, callback_token: callback_token)
     end
 
     it 'omits callback_token kwarg when not configured (lenient default)' do
       # Default constructor — no callback_token. The broadcaster call
       # carries only the wtxid kwarg.
-      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(success_response)
+      allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(success_response)
 
       broadcast.process(action_id)
 
-      expect(broadcaster).to have_received(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid)
+      expect(broadcaster).to have_received(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid)
     end
   end
 
@@ -1063,13 +1063,13 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
 
       it 'calls reject_action (cascade unwind)' do
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(rejected_400)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(rejected_400)
         broadcast.process(action_id)
         expect(store).to have_received(:reject_action).with(action_id: action_id)
       end
 
       it 'does not call clear_broadcast_attempted (terminal, not transient)' do
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(rejected_400)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(rejected_400)
         broadcast.process(action_id)
         expect(store).not_to have_received(:clear_broadcast_attempted)
       end
@@ -1088,13 +1088,13 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
 
       it 'does not call reject_action' do
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(non_terminal_400)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(non_terminal_400)
         broadcast.process(action_id)
         expect(store).not_to have_received(:reject_action)
       end
 
       it 'does not call clear_broadcast_attempted (row stays stamped for poll path)' do
-        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: submit_wtxid).and_return(non_terminal_400)
+        allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid).and_return(non_terminal_400)
         broadcast.process(action_id)
         expect(store).not_to have_received(:clear_broadcast_attempted)
       end
@@ -1406,7 +1406,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       # encoding correctness is the SDK's concern; the receiver's job is
       # to decode -> extract subject_tx -> put. Stub Beef.from_binary so
       # the spec stays focused on the wrapping behaviour.
-      let(:subject_tx) { BSV::Transaction::Transaction.from_binary(raw_tx) }
+      let(:subject_tx) { BSV::Transaction::Tx.from_binary(raw_tx) }
       let(:fake_beef) do
         double('Beef', subject_wtxid: subject_tx.wtxid).tap do |b|
           allow(b).to receive(:find_atomic_transaction).with(subject_tx.wtxid).and_return(subject_tx)

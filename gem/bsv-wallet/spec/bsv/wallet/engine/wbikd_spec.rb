@@ -127,7 +127,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
           BSV::Primitives::Digest.hash160(derived_pub)
         )
 
-        funding_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        funding_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
         funding_tx.add_output(
           BSV::Transaction::TransactionOutput.new(satoshis: 10_000, locking_script: locking_script)
         )
@@ -168,7 +168,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         locking_script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(derived_pub)
         )
-        funding_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        funding_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
         funding_tx.add_output(
           BSV::Transaction::TransactionOutput.new(satoshis: 25_000, locking_script: locking_script)
         )
@@ -210,7 +210,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         locking_script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(derived_pub)
         )
-        funding_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        funding_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
         funding_tx.add_output(
           BSV::Transaction::TransactionOutput.new(satoshis: 15_000, locking_script: locking_script)
         )
@@ -248,7 +248,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         locking_script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(derived_pub)
         )
-        funding_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        funding_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
         funding_tx.add_output(
           BSV::Transaction::TransactionOutput.new(satoshis: 10_000, locking_script: locking_script)
         )

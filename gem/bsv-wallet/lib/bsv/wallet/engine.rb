@@ -251,7 +251,7 @@ module BSV
         raise BSV::Wallet::Error, "failed to fetch tx #{dtxid}" unless result.http_success?
 
         raw_tx = [result.data.strip].pack('H*')
-        tx = BSV::Transaction::Transaction.from_binary(raw_tx)
+        tx = BSV::Transaction::Tx.from_binary(raw_tx)
 
         # Verify output exists and is P2PKH to our root key
         unless vout.is_a?(Integer) && vout >= 0 && vout < tx.outputs.length
@@ -756,7 +756,7 @@ module BSV
       # fee estimation; +source_satoshis+ does not enter the size formula.
       def estimate_sweep_fee(input_count:, recipient_script:)
         fee_model = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
-        skeleton = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+        skeleton = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
 
         signing_key = @key_deriver.root_private_key
         input_count.times do
@@ -1087,7 +1087,7 @@ module BSV
       # +find_action+ and the +resolve_inputs_for_signing+ JOIN. BEEF is
       # the natural hint payload: it's a strict superset of EF for the
       # subject tx, the producer has it built already (returned to the
-      # caller from +create_action+), and the same cached Transaction
+      # caller from +create_action+), and the same cached Transaction::Tx
       # serves a future BEEF-based p2p hand-off path without rebuilding.
       # Best-effort: when +BSV_WALLET_HINTS_SOCKET+ is unset, do
       # nothing. Push failures (daemon not listening, socket missing, OMQ
@@ -1254,7 +1254,7 @@ module BSV
         return unless result.respond_to?(:http_success?) && result.http_success?
 
         raw_tx = [result.data.strip].pack('H*')
-        tx = BSV::Transaction::Transaction.from_binary(raw_tx)
+        tx = BSV::Transaction::Tx.from_binary(raw_tx)
         output = tx.outputs[vout]
         return unless output
 
