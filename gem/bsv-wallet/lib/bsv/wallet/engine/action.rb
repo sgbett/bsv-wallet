@@ -174,7 +174,7 @@ module BSV
           # JOIN. BEEF is a strict superset of EF for the subject tx (parent
           # transactions are inlined), so the receiver can prime the cache
           # with a Transaction whose source_transaction is already wired;
-          # daemon's submit emits EF via Transaction#to_ef_hex on that same
+          # daemon's submit emits EF via Tx#to_ef_hex on that same
           # object. Producer pays zero extra queries (atomic_beef was built
           # for the caller's return value either way). Opt-in via
           # BSV_WALLET_HINTS_SOCKET; no-op otherwise. #269.
@@ -464,15 +464,15 @@ module BSV
         # and returns [wtxid, raw_tx, tx].
         #
         # @param spends [Hash{Integer => Hash}] vin => { unlocking_script:, sequence_number: }
-        # @return [Array(String, String, Transaction)] wtxid (32-byte wire
-        #   order), raw_tx (binary), tx (live Transaction with source data
+        # @return [Array(String, String, Tx)] wtxid (32-byte wire
+        #   order), raw_tx (binary), tx (live Tx with source data
         #   wired in for downstream EF serialisation).
         def apply_spends(spends)
           # Deserialise the unsigned transaction stored during create_action
           unsigned_raw = @row[:raw_tx]
           raise BSV::Wallet::Error, 'no unsigned transaction for deferred action' unless unsigned_raw
 
-          tx = BSV::Transaction::Transaction.from_binary(unsigned_raw)
+          tx = BSV::Transaction::Tx.from_binary(unsigned_raw)
 
           # Resolve inputs from the Store — needed for source data (satoshis,
           # locking script, derivation params) which are not in the wire format
@@ -596,7 +596,7 @@ module BSV
         # @param action_id [Integer] action whose inputs to resolve for ancestry
         # @return [String] Atomic BEEF binary
         def build_atomic_beef(raw_tx, action_id)
-          tx = BSV::Transaction::Transaction.from_binary(raw_tx)
+          tx = BSV::Transaction::Tx.from_binary(raw_tx)
           resolved_inputs = @engine.store.resolve_inputs_for_signing(action_id: action_id)
 
           resolved_inputs.each_with_index do |resolved, idx|
@@ -620,7 +620,7 @@ module BSV
         #
         # @param wtxid [String] 32-byte wire-order wtxid
         # @param visited [Set] prevents infinite loops on circular references
-        # @return [BSV::Transaction::Transaction, nil]
+        # @return [BSV::Transaction::Tx, nil]
         def wire_ancestor(wtxid, visited: Set.new)
           return if visited.include?(wtxid)
 
@@ -629,7 +629,7 @@ module BSV
           proof = @engine.store.find_proof(wtxid: wtxid)
           return unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
 
-          tx = BSV::Transaction::Transaction.from_binary(proof[:raw_tx])
+          tx = BSV::Transaction::Tx.from_binary(proof[:raw_tx])
 
           if proof[:merkle_path]
             tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
@@ -803,7 +803,7 @@ module BSV
         # @param version [Integer, nil] transaction version
         # @param randomize [Boolean] whether to shuffle output order
         # @param sign [Boolean] whether to sign P2PKH inputs (default: true)
-        # @return [Array(String, String, Hash, Transaction)] wtxid (32-byte
+        # @return [Array(String, String, Hash, Tx)] wtxid (32-byte
         #   wire order), raw_tx (binary), vout_mapping (original index ->
         #   new vout), and the assembled tx (signed when +sign:+ is true,
         #   needed downstream for EF serialisation).
@@ -813,7 +813,7 @@ module BSV
           tx_outputs, vout_mapping = build_outputs(outputs, randomize)
           tx_inputs, signing_keys = build_inputs(resolved_inputs, inputs)
 
-          tx = BSV::Transaction::Transaction.new(
+          tx = BSV::Transaction::Tx.new(
             version: version || 1,
             lock_time: lock_time || 0
           )
@@ -839,9 +839,9 @@ module BSV
         # with no top-up attempted. Auto-fund top-ups that exhaust the pool
         # surface as InsufficientFundsError (wrapping PoolDepletedError).
         #
-        # @return [Array(String, String, Hash, Array<Hash>, Transaction)]
+        # @return [Array(String, String, Hash, Array<Hash>, Tx)]
         #   wtxid, raw_tx, vout_mapping, change_outputs, tx — the
-        #   trailing +tx+ is the live +BSV::Transaction::Transaction+
+        #   trailing +tx+ is the live +BSV::Transaction::Tx+
         #   object with +source_satoshis+ / +source_locking_script+ wired
         #   on each input, ready for +to_ef+ at broadcast time.
         def run_funding_loop(action_id:, caller_outputs:,
@@ -914,7 +914,7 @@ module BSV
         #   Distribute before shuffle (Benford remainder targets @outputs.last).
         #   Shuffle before sign (sighash commits to final output positions).
         #
-        # The SDK's +Transaction#fee+ does not raise on insufficient inputs:
+        # The SDK's +Tx#fee+ does not raise on insufficient inputs:
         # +distribute_change+ silently drops all change outputs when
         # +available <= 0+. To get an explicit shortfall we call
         # +FeeModels::SatoshisPerKilobyte#compute_fee(tx)+ against the
@@ -976,7 +976,7 @@ module BSV
 
           # C2. Assemble transaction — change outputs last so SDK's
           # distribute_change targets them all.
-          tx = BSV::Transaction::Transaction.new(
+          tx = BSV::Transaction::Tx.new(
             version: version || 1, lock_time: lock_time || 0
           )
           tx_inputs.each { |inp| tx.add_input(inp) }
@@ -1044,7 +1044,7 @@ module BSV
         # Parse the +tx:+ parameter as BEEF and extract the subject transaction.
         #
         # @param data [String] binary BEEF data (Atomic, V1, or V2)
-        # @return [Array(BSV::Transaction::Beef, BSV::Transaction::Transaction)]
+        # @return [Array(BSV::Transaction::Beef, BSV::Transaction::Tx)]
         # @raise [InvalidBeefError] if the data is invalid or the subject tx
         #   is missing.
         def parse_beef(data)
@@ -1073,7 +1073,7 @@ module BSV
         # they know we have. from_binary can't wire those (no Transaction object).
         # This fills the gaps from local storage so verify can walk the full graph.
         #
-        # @param tx [BSV::Transaction::Transaction] transaction to hydrate
+        # @param tx [BSV::Transaction::Tx] transaction to hydrate
         def hydrate_known_sources!(tx)
           tx.inputs.each do |input|
             next if input.source_transaction
@@ -1085,10 +1085,10 @@ module BSV
         # Full SPV verification of an incoming transaction via the SDK.
         #
         # Replaces validate_beef! + validate_fee_adequacy! with a single
-        # Transaction#verify call that checks scripts, merkle proofs, and
+        # Tx#verify call that checks scripts, merkle proofs, and
         # fee adequacy (output <= input).
         #
-        # @param subject_tx [BSV::Transaction::Transaction]
+        # @param subject_tx [BSV::Transaction::Tx]
         # @raise [InvalidBeefError] wrapping SDK VerificationError
         def verify_incoming_transaction!(subject_tx)
           raise BSV::Wallet::InvalidBeefError, 'chain_tracker required for SPV verification' unless @engine.chain_tracker

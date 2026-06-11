@@ -135,7 +135,7 @@ RSpec.describe 'e2e SSE broadcast scenarios' do # rubocop:disable RSpec/Describe
     source_tx = beef.find_transaction(source_payment[:txid])
     raise 'source_tx not found in BEEF' unless source_tx
 
-    competing = BSV::Transaction::Transaction.new
+    competing = BSV::Transaction::Tx.new
     input_total = 0
     source_tx.inputs.each do |inp|
       ancestor = beef.find_transaction(inp.prev_wtxid)

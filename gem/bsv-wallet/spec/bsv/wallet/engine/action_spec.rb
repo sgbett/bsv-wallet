@@ -231,7 +231,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
 
     def build_internalize_beef(satoshis: 500)
-      ancestor = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      ancestor = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
       ancestor.add_output(BSV::Transaction::TransactionOutput.new(
                             satoshis: satoshis + 100,
                             locking_script: BSV::Script::Script.from_binary(OP_TRUE)
@@ -245,7 +245,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
         ]]
       )
 
-      subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
       subject_tx.add_input(BSV::Transaction::TransactionInput.new(
                              prev_wtxid: ancestor.wtxid,
                              prev_tx_out_index: 0,
@@ -584,7 +584,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       expect(result.keys).to contain_exactly(:wtxid, :raw_tx, :tx, :vout_mapping, :change_outputs)
       expect(result[:wtxid].bytesize).to eq(32)
       expect(result[:raw_tx]).to be_a(String)
-      expect(result[:tx]).to be_a(BSV::Transaction::Transaction)
+      expect(result[:tx]).to be_a(BSV::Transaction::Tx)
       expect(result[:vout_mapping]).to eq(0 => 0) # randomize: false, caller out first
       expect(result[:change_outputs].length).to eq(1)
       expect(result[:change_outputs].first[:satoshis]).to be > 0
@@ -771,7 +771,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       tx_inputs, signing_keys = build_inputs(resolved, nil)
 
       # Build a minimal transaction to verify signing works end-to-end
-      tx = BSV::Transaction::Transaction.new
+      tx = BSV::Transaction::Tx.new
       tx.add_input(tx_inputs[0])
       tx.add_output(BSV::Transaction::TransactionOutput.new(satoshis: 900, locking_script: script))
 
@@ -943,7 +943,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     it 'produces a serialized tx that can be deserialized back' do
       _txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
 
-      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      parsed = BSV::Transaction::Tx.from_binary(raw_tx)
       expect(parsed.inputs.length).to eq(1)
       expect(parsed.outputs.length).to eq(1)
       expect(parsed.outputs[0].satoshis).to eq(900)
@@ -952,14 +952,14 @@ RSpec.describe BSV::Wallet::Engine::Action do
     it 'round-trips: serialize -> deserialize -> re-serialize produces identical bytes' do
       _txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
 
-      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      parsed = BSV::Transaction::Tx.from_binary(raw_tx)
       expect(parsed.to_binary).to eq(raw_tx)
     end
 
     it 'sets version and lock_time correctly' do
       _txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, 500, 2, false)
 
-      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      parsed = BSV::Transaction::Tx.from_binary(raw_tx)
       expect(parsed.version).to eq(2)
       expect(parsed.lock_time).to eq(500)
     end
@@ -967,7 +967,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     it 'defaults version to 1 and lock_time to 0' do
       _txid, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
 
-      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      parsed = BSV::Transaction::Tx.from_binary(raw_tx)
       expect(parsed.version).to eq(1)
       expect(parsed.lock_time).to eq(0)
     end
@@ -976,7 +976,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       _, raw_tx, _vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
 
       # Reconstruct the transaction with source data for verification
-      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      parsed = BSV::Transaction::Tx.from_binary(raw_tx)
       parsed.inputs[0].source_satoshis = resolved_inputs[0][:source_satoshis]
       parsed.inputs[0].source_locking_script = BSV::Script::Script.from_binary(
         resolved_inputs[0][:source_locking_script]
@@ -991,7 +991,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
 
       _, raw_tx, vout_mapping = build_transaction(1, nil, caller_outputs, nil, nil, false)
 
-      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      parsed = BSV::Transaction::Tx.from_binary(raw_tx)
       expect(parsed.inputs.length).to eq(0)
       expect(parsed.outputs.length).to eq(1)
       expect(vout_mapping).to eq({ 0 => 0 })
@@ -1016,7 +1016,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
 
       _, raw_tx, = build_transaction(1, nil, multi_outputs, nil, nil, false)
 
-      parsed = BSV::Transaction::Transaction.from_binary(raw_tx)
+      parsed = BSV::Transaction::Tx.from_binary(raw_tx)
       expect(parsed.inputs.length).to eq(2)
       expect(parsed.outputs.length).to eq(2)
 
@@ -1053,7 +1053,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
 
   describe '#wire_ancestor (private)' do
     def make_fake_tx(satoshis:, inputs: [])
-      tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
       inputs.each do |inp|
         tx.add_input(BSV::Transaction::TransactionInput.new(
                        prev_wtxid: inp[:prev_wtxid],
@@ -1095,7 +1095,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       )
 
       result = wire_ancestor(wtxid)
-      expect(result).to be_a(BSV::Transaction::Transaction)
+      expect(result).to be_a(BSV::Transaction::Tx)
       expect(result.merkle_path).to be_a(BSV::Transaction::MerklePath)
       expect(result.merkle_path.block_height).to eq(800_000)
     end
@@ -1123,11 +1123,11 @@ RSpec.describe BSV::Wallet::Engine::Action do
       )
 
       result = wire_ancestor(parent_wtxid)
-      expect(result).to be_a(BSV::Transaction::Transaction)
+      expect(result).to be_a(BSV::Transaction::Tx)
       expect(result.merkle_path).to be_nil
 
       # The input's source_transaction should be wired to the grandparent
-      expect(result.inputs.first.source_transaction).to be_a(BSV::Transaction::Transaction)
+      expect(result.inputs.first.source_transaction).to be_a(BSV::Transaction::Tx)
       expect(result.inputs.first.source_transaction.merkle_path).to be_a(BSV::Transaction::MerklePath)
       expect(result.inputs.first.source_transaction.merkle_path.block_height).to eq(799_000)
     end
@@ -1148,7 +1148,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       # Walk from wtxid_a → loads tx_a → input references wtxid_b →
       # loads tx_b → input references wtxid_a → ALREADY VISITED → stops.
       result = wire_ancestor(wtxid_a)
-      expect(result).to be_a(BSV::Transaction::Transaction)
+      expect(result).to be_a(BSV::Transaction::Tx)
     end
 
     it 'returns nil for missing proofs' do
@@ -1181,14 +1181,14 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
 
     it 'raises InvalidBeefError when chain_tracker is nil' do
-      subject_tx = instance_double(BSV::Transaction::Transaction)
+      subject_tx = instance_double(BSV::Transaction::Tx)
       expect do
         verify_incoming(engine, subject_tx)
       end.to raise_error(BSV::Wallet::InvalidBeefError, /chain_tracker required/)
     end
 
-    it 'delegates to Transaction#verify on success' do
-      subject_tx = instance_double(BSV::Transaction::Transaction)
+    it 'delegates to Tx#verify on success' do
+      subject_tx = instance_double(BSV::Transaction::Tx)
       allow(subject_tx).to receive(:verify).with(chain_tracker: chain_tracker_mock).and_return(true)
 
       expect(verify_incoming(engine_with_tracker, subject_tx)).to be true
@@ -1196,7 +1196,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
 
     it 'wraps VerificationError(:invalid_merkle_proof) into InvalidBeefError' do
-      subject_tx = instance_double(BSV::Transaction::Transaction)
+      subject_tx = instance_double(BSV::Transaction::Tx)
       allow(subject_tx).to receive(:verify).and_raise(
         BSV::Transaction::VerificationError.new(:invalid_merkle_proof, 'bad proof')
       )
@@ -1207,7 +1207,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
 
     it 'wraps VerificationError(:script_failure) into InvalidBeefError' do
-      subject_tx = instance_double(BSV::Transaction::Transaction)
+      subject_tx = instance_double(BSV::Transaction::Tx)
       allow(subject_tx).to receive(:verify).and_raise(
         BSV::Transaction::VerificationError.new(:script_failure, 'script failed')
       )
@@ -1218,7 +1218,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
 
     it 'wraps VerificationError(:output_overflow) into InvalidBeefError' do
-      subject_tx = instance_double(BSV::Transaction::Transaction)
+      subject_tx = instance_double(BSV::Transaction::Tx)
       allow(subject_tx).to receive(:verify).and_raise(
         BSV::Transaction::VerificationError.new(:output_overflow, 'outputs exceed inputs')
       )
@@ -1229,7 +1229,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
 
     it 'wraps VerificationError(:missing_source) into InvalidBeefError' do
-      subject_tx = instance_double(BSV::Transaction::Transaction)
+      subject_tx = instance_double(BSV::Transaction::Tx)
       allow(subject_tx).to receive(:verify).and_raise(
         BSV::Transaction::VerificationError.new(:missing_source, 'no source data')
       )
@@ -1246,7 +1246,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     # This validates the highest-risk assumption in the chain tracker pivot:
     # that make_txid_only (which mutates the BEEF's @transactions list)
     # does NOT invalidate in-memory source_transaction pointers wired by
-    # Beef.from_binary. Transaction#verify walks via input.source_transaction,
+    # Beef.from_binary. Tx#verify walks via input.source_transaction,
     # not the BEEF list, so verification must succeed after TXID-only conversion.
 
     let(:chain_tracker_mock) do
@@ -1277,14 +1277,14 @@ RSpec.describe BSV::Wallet::Engine::Action do
 
     it 'verify succeeds after replace_known_ancestors! converts ancestors to TXID-only' do
       # Build a BEEF with a proven ancestor that the subject spends
-      ancestor = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      ancestor = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
       ancestor.add_output(BSV::Transaction::TransactionOutput.new(
                             satoshis: 1000,
                             locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                           ))
       ancestor.merkle_path = build_merkle_path(ancestor, 800_000)
 
-      subject_tx = BSV::Transaction::Transaction.new(version: 1, lock_time: 0)
+      subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
       subject_tx.add_input(BSV::Transaction::TransactionInput.new(
                              prev_wtxid: ancestor.wtxid,
                              prev_tx_out_index: 0,

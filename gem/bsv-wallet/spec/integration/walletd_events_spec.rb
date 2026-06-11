@@ -119,7 +119,7 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
 
     # --- Network stubs ---
     allow(broadcaster).to receive(:get_tx_status).with(wtxid: wtxid, dtxid: dtxid).and_return(proof_response)
-    allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Transaction), wtxid: wtxid).and_return(broadcast_response)
+    allow(broadcaster).to receive(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: wtxid).and_return(broadcast_response)
   end
 
   it 'emits the canonical event sequence across one broadcast and one proof cycle' do

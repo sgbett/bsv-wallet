@@ -84,7 +84,7 @@ RSpec.shared_context 'engine setup' do
 
   # Parse Atomic BEEF and extract the subject transaction.
   def parse_beef_tx(beef_data)
-    BSV::Transaction::Transaction.from_beef(beef_data)
+    BSV::Transaction::Tx.from_beef(beef_data)
   end
 
   # Constants defined at top level (before shared_context) to avoid RSpec/LeakyConstantDeclaration.
@@ -143,7 +143,7 @@ RSpec.shared_context 'engine setup' do
   # because the resulting tx is anchored with a merkle_path (proven
   # terminal short-circuits recursion).
   def build_funding_source_tx(output_specs)
-    tx = BSV::Transaction::Transaction.new
+    tx = BSV::Transaction::Tx.new
     tx.add_input(BSV::Transaction::TransactionInput.new(
                    prev_wtxid: ("\x00".b * 32), prev_tx_out_index: 0,
                    sequence: 0xffffffff, unlocking_script: BSV::Script::Script.new

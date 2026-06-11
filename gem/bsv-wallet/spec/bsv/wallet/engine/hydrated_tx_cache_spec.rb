@@ -4,9 +4,9 @@ require 'spec_helper'
 require 'bsv-wallet'
 
 RSpec.describe BSV::Wallet::Engine::HydratedTxCache do
-  let(:alpha_tx) { instance_double(BSV::Transaction::Transaction, wtxid: ("\x01" * 32).b) }
-  let(:beta_tx) { instance_double(BSV::Transaction::Transaction, wtxid: ("\x02" * 32).b) }
-  let(:gamma_tx) { instance_double(BSV::Transaction::Transaction, wtxid: ("\x03" * 32).b) }
+  let(:alpha_tx) { instance_double(BSV::Transaction::Tx, wtxid: ("\x01" * 32).b) }
+  let(:beta_tx) { instance_double(BSV::Transaction::Tx, wtxid: ("\x02" * 32).b) }
+  let(:gamma_tx) { instance_double(BSV::Transaction::Tx, wtxid: ("\x03" * 32).b) }
 
   describe '#initialize' do
     it 'defaults to DEFAULT_CAPACITY' do
@@ -143,7 +143,7 @@ RSpec.describe BSV::Wallet::Engine::HydratedTxCache do
       threads = 4.times.map do |i|
         Thread.new do
           50.times do |j|
-            cache.put((i * 100) + j, instance_double(BSV::Transaction::Transaction))
+            cache.put((i * 100) + j, instance_double(BSV::Transaction::Tx))
             cache.get((i * 100) + j)
           end
         end

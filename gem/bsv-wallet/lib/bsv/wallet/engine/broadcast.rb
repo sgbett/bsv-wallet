@@ -99,7 +99,7 @@ module BSV
         # action's Atomic BEEF; receiver parses, extracts the subject
         # Transaction (whose inputs have +source_transaction+ wired by
         # +Beef.from_binary+), and primes the cache so a subsequent
-        # broadcast emits EF via +Transaction#to_ef_hex+ without the JOIN.
+        # broadcast emits EF via +Tx#to_ef_hex+ without the JOIN.
         #
         # Optional: when +socket_path+ is nil, no fiber is started and the
         # cache fills only via intra-process producers.
@@ -221,7 +221,7 @@ module BSV
         # raw-tx parse.
         #
         # @param action [Hash] action record carrying +:id+ and +:raw_tx+
-        # @return [BSV::Transaction::Transaction]
+        # @return [BSV::Transaction::Tx]
         # @raise [BSV::Wallet::Error] when the DB input count disagrees with
         #   the parsed transaction's input count (a contract violation
         #   upstream; should never fire under the normal create_action flow).
@@ -232,7 +232,7 @@ module BSV
           cached = @hydrated_tx_cache.get(action[:id])
           return cached if cached
 
-          tx = BSV::Transaction::Transaction.from_binary(action[:raw_tx])
+          tx = BSV::Transaction::Tx.from_binary(action[:raw_tx])
           sources = @store.resolve_inputs_for_signing(action_id: action[:id])
           if tx.inputs.length != sources.length
             raise BSV::Wallet::Error,

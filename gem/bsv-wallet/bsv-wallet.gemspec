@@ -32,7 +32,7 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency 'async'
   spec.add_dependency 'async-http', '~> 0.95'
-  spec.add_dependency 'bsv-sdk'
+  spec.add_dependency 'bsv-sdk', '~> 0.24'
   spec.add_dependency 'logger'
   spec.add_dependency 'omq'
   spec.add_dependency 'sequel', '~> 5.0'

@@ -91,8 +91,8 @@ RSpec.describe BSV::Network::Broadcaster do
       expect(result.error_message).to include('no provider')
     end
 
-    it 'accepts a Transaction-shaped payload (inline path) without narrowing' do
-      tx_object = double('Transaction', wtxid: wtxid)
+    it 'accepts a Tx-shaped payload (inline path) without narrowing' do
+      tx_object = double('Tx', wtxid: wtxid)
       provider = stub_provider('ARC', { broadcast: success({ 'txid' => 'abc' }) })
       broadcaster = described_class.new(providers: [provider])
 
