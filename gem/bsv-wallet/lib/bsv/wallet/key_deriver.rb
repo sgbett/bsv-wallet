@@ -37,9 +37,28 @@ module BSV
 
       # Returns the compressed public key hex of the everyday key.
       #
+      # This is the BRC-100 +getPublicKey+ emission value — the
+      # *identity* key crosses BRC boundaries as hex by spec, so the
+      # canonical accessor returns hex. Crypto-op consumers (hash160,
+      # ECDH input bytes) should use +identity_key_bytes+ instead of
+      # round-tripping this through +[hex].pack('H*')+.
+      #
+      # Derived pubkeys (+derive_public_key+) are returned as binary —
+      # they don't cross a BRC boundary as themselves. See the
+      # "Public Key Convention" section of CLAUDE.md for the full rule.
+      #
       # @return [String] 66-character hex-encoded compressed public key
       def identity_key
         @identity_key ||= @root_key.public_key.to_hex
+      end
+
+      # Returns the compressed public key as 33 raw bytes — the binary
+      # form for crypto-op consumers (hash160, ECDH input). Memoised
+      # symmetrically with +identity_key+.
+      #
+      # @return [String] 33-byte binary string (compressed public key)
+      def identity_key_bytes
+        @identity_key_bytes ||= @root_key.public_key.compressed
       end
 
       # Derive a child public key using BRC-42.

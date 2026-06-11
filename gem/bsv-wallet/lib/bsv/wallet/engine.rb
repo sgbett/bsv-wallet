@@ -1022,6 +1022,7 @@ module BSV
       def validate_output_ownership!(outputs)
         return unless outputs && @key_deriver
 
+        root_hash = nil
         outputs.each_with_index do |out, idx|
           next unless out[:output_type] == 'root'
 
@@ -1033,9 +1034,7 @@ module BSV
             )
           end
 
-          root_hash = BSV::Primitives::Digest.hash160(
-            [@key_deriver.identity_key].pack('H*')
-          )
+          root_hash ||= BSV::Primitives::Digest.hash160(@key_deriver.identity_key_bytes)
           pubkey_hash = script.chunks[2].data
           next if pubkey_hash == root_hash
 

@@ -1,12 +1,14 @@
 # BSV Wallet — Project Instructions
 
-## Language Convention: American English
+## Language Convention
 
-**Override global preference:** This project uses **American English** throughout — code, comments, documentation, and commit messages.
+**Code identifiers** — American English. Method names, classes, schema columns, ENUM values, file names, constants. This is the only hard constraint: the BRC-100 spec defines `internalizeAction`, `randomizeOutputs`, etc., and mixing British Ruby identifiers (`internalise_action`) with American spec names creates confusion about which convention applies where.
 
-The BRC-100 specification defines method names using American English (`internalizeAction`, `randomizeOutputs`). Using British English for Ruby method names (`internalise_action`, `randomise_outputs`) while the spec uses American creates confusion about which convention applies where. Consistency wins: American English everywhere.
+Examples: `internalize`, `randomize`, `behavior`, `color`, `organization`, `optimize`, `summarize`, `favor`, `center`.
 
-Examples: behavior, color, organization, optimize, summarize, favor, center, internalize, randomize.
+**Free prose** — author's voice (British for this author, per the global preference). CLAUDE.md, `reference/`, READMEs, HLR bodies, PR descriptions, commit message bodies, RSpec `it` descriptions, RDoc/YARD comments, code comments. No translation required. Visual jar between a British comment and an American identifier in the same file is acceptable.
+
+This narrows an earlier rule that demanded American everywhere. The identifier rationale (spec consistency) still holds; extending it to prose was a friction cost without a corresponding benefit.
 
 ## Transaction ID Convention: wtxid / dtxid
 
@@ -36,6 +38,42 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 ### Source
 
 `Transaction#wtxid` returns wire order (SDK v0.17.0+). `Transaction#txid` returns display order — a convenience method, never used in the data path. The `DisplayTxid` module provides `dtxid` on Sequel models.
+
+## Public Key Convention: identity hex, derived binary
+
+Pubkeys split into two classes with different representation rules. Identity-shaped pubkeys (the BRC interchange identifiers) are a deliberate carve-out from the binary-internal principle that applies to txids/scripts/hashes — they stay hex throughout. Derived/transient pubkeys (BRC-42 outputs) follow the principle as written and stay binary. New code that "fixes" identity-shaped pubkeys to binary is reversing a settled decision; new code that surfaces derived pubkeys as hex inside the data path is doing unnecessary conversion.
+
+### Identity-shaped pubkeys — hex
+
+Stable identifiers that cross BRC boundaries as JSON: the wallet's own identity, BRC-43 counterparty references, BRC-29 sender_identity_key, BRC-52 certificate fields. Hex storage, hex on the wire, hex internally for the dominant boundary-crossing path.
+
+- **`KeyDeriver#identity_key`** — hex (66-char compressed). The BRC-100 `getPublicKey` emission value.
+- **`KeyDeriver#identity_key_bytes`** — 33-byte binary. The accessor for crypto-op consumers (`hash160`, ECDH input). Never round-trip `identity_key` through `[hex].pack('H*')` — call `identity_key_bytes` instead.
+- **`KeyDeriver` counterparty params** — hex (`'self'`, `'anyone'`, or hex public key), per BRC-43.
+- **`outputs.sender_identity_key`** column — `:text`. BRC-29 interchange identifier.
+- **`certificates.{certifier, subject, verifier, signature}` + `certificate_fields.{value, master_key}`** — `:text`. BRC-52 interchange.
+
+### Derived / transient pubkeys — binary
+
+Outputs of BRC-42 derivation, fed directly into the next crypto operation — a `hash160` to produce a locking script, an ECDH input to derive a symmetric key. These never cross a BRC boundary *as themselves*; they're intermediates within one operation.
+
+- **`KeyDeriver#derive_public_key`** — returns 33-byte binary.
+- **`Engine#get_public_key(identity_key: false, …)`** — returns 33-byte binary.
+
+If/when these need to cross a JSON boundary (a future BRC-100 binding — issues #180, #223), conversion to hex happens at that emit point, the same way `dtxid` conversion happens at the txid boundary. Internally they stay binary.
+
+### Why identity pubkeys are hex (and txids aren't)
+
+These four supports explain the identity-pubkey carve-out specifically. Derived pubkeys don't need supports — they're binary because they go straight from `derive_public_key` into the next crypto op.
+
+1. **The internal canonical form isn't bytes — it's a `PublicKey` object** (curve point). Hex and binary are both serializations of that. The wallet operates on `PublicKey` instances; it rarely manipulates identity pubkey bytes directly.
+2. **Identity pubkeys are protocol identifiers, not binary content.** Txids get hashed, recomputed from raw tx, and indexed by structural bytes (wire order has meaning). Identity pubkeys flow through unchanged as identity tokens — bytes have no structural meaning beyond serialising the point.
+3. **Identity pubkeys cross BRC boundaries more often than txids.** Every BRC-100 method takes or returns one (`identity_key`, `counterparty`, `subject`, `certifier`, `verifier`). BRC-29 and BRC-52 also specify hex at the wire. Hex storage moves conversion off the boundary-heavy path.
+4. **The binary-internal principle itself carves out spec-mandated hex.** Convert to hex *only* where the spec explicitly says hex string — identity pubkey BRC fields meet that test directly. Txids are an exception in the *other* direction (binary even though `TXIDHexString` is BRC-canonical) precisely because txid bytes have structural meaning that identity pubkey bytes don't.
+
+### Source
+
+The reasoning is recorded in `project_pubkey_hex_exception` (memory). The decision was made at PR #18, cemented by HLR #28 (BRC-100 SDK alignment), and formalised in HLR #300 after the audit recovered the trace.
 
 ## Load-bearing Principles
 
