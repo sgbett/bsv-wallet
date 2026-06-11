@@ -1187,7 +1187,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       end.to raise_error(BSV::Wallet::InvalidBeefError, /chain_tracker required/)
     end
 
-    it 'delegates to Tx#verify on success' do
+    it 'delegates to Transaction::Tx#verify on success' do
       subject_tx = instance_double(BSV::Transaction::Tx)
       allow(subject_tx).to receive(:verify).with(chain_tracker: chain_tracker_mock).and_return(true)
 
@@ -1246,7 +1246,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     # This validates the highest-risk assumption in the chain tracker pivot:
     # that make_txid_only (which mutates the BEEF's @transactions list)
     # does NOT invalidate in-memory source_transaction pointers wired by
-    # Beef.from_binary. Tx#verify walks via input.source_transaction,
+    # Beef.from_binary. Transaction::Tx#verify walks via input.source_transaction,
     # not the BEEF list, so verification must succeed after TXID-only conversion.
 
     let(:chain_tracker_mock) do

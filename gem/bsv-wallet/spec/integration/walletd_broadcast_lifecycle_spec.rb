@@ -34,7 +34,7 @@ RSpec.describe 'Engine::Broadcast#process lifecycle (#270)', :postgres do # rubo
   let(:database_url) { ENV.fetch('DATABASE_URL') }
   let(:store) { BSV::Wallet::Store.connect(database_url).tap(&:migrate!) }
 
-  # Real signed P2PKH transaction — parseable by Tx.from_binary
+  # Real signed P2PKH transaction — parseable by Transaction::Tx.from_binary
   # so +Engine::Broadcast#hydrated_transaction_for+ can reconstruct it
   # for the broadcaster call. The exact bytes don't matter for the
   # rejection paths (broadcaster.broadcast is stubbed) but the parse

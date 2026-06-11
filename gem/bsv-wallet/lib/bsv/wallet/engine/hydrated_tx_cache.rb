@@ -3,10 +3,10 @@
 module BSV
   module Wallet
     class Engine
-      # Bounded in-process LRU cache for *hydrated* +Tx+
+      # Bounded in-process LRU cache for *hydrated* +Transaction::Tx+
       # objects, keyed by +action_id+. "Hydrated" here means every
       # input has +source_transaction+ populated with the full parent
-      # +Tx+, which is what lets the cached object serialise
+      # +Transaction::Tx+, which is what lets the cached object serialise
       # to EF (for broadcast) or BEEF (for p2p hand-off) without
       # touching the DB. Populated by parsing the producer-side
       # Atomic BEEF that +Engine#create_action+ already builds, so
@@ -58,7 +58,7 @@ module BSV
           @lock = Mutex.new
         end
 
-        # @return [BSV::Transaction::Tx, nil]
+        # @return [Transaction::Tx, nil]
         def get(action_id)
           @lock.synchronize do
             value = @entries.delete(action_id)
@@ -68,7 +68,7 @@ module BSV
         end
 
         # @param action_id [Integer]
-        # @param transaction [BSV::Transaction::Tx]
+        # @param transaction [Transaction::Tx]
         def put(action_id, transaction)
           return if @capacity.zero?
 

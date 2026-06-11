@@ -11,7 +11,7 @@
 #   (the same entrypoint the Daemon's PULL fiber drives), assert
 #   +broadcasts.provider+ is populated post-submit.
 # - Inline path: call +Engine#inline_broadcast+ with a signed
-#   +Tx+, assert +broadcasts.provider+ is populated.
+#   +Transaction::Tx+, assert +broadcasts.provider+ is populated.
 #
 # Postgres-only — exercises a real DB column added in migration 009.
 
@@ -26,7 +26,7 @@ RSpec.describe 'walletd broadcaster.provider end-to-end', :postgres do # rubocop
   let(:store) { BSV::Wallet::Store.connect(database_url).tap(&:migrate!) }
 
   # Zero-input transaction with a single OP_TRUE output. Two reasons:
-  # 1) parseable by +Tx.from_binary+ so the delayed path's
+  # 1) parseable by +Transaction::Tx.from_binary+ so the delayed path's
   #    +Engine::Broadcast#hydrated_transaction_for+ (#252) doesn't crash
   #    on random bytes;
   # 2) zero inputs means the +tx.inputs.length != sources.length+ guard
@@ -106,7 +106,7 @@ RSpec.describe 'walletd broadcaster.provider end-to-end', :postgres do # rubocop
   end
 
   describe 'inline broadcast path (Engine#inline_broadcast)' do
-    # Build a real signed Transaction so +tx.wtxid+ returns a usable
+    # Build a real signed Transaction::Tx so +tx.wtxid+ returns a usable
     # value -- inline_broadcast extracts the wtxid from the transaction
     # object the caller supplies.
     let(:signed_tx) do

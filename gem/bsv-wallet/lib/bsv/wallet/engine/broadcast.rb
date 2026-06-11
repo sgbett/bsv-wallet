@@ -97,9 +97,9 @@ module BSV
         # BEEF hint receiver -- pulls cross-process producer hints (CLI tools,
         # API, UI) into the in-process EF cache. Each hint carries the
         # action's Atomic BEEF; receiver parses, extracts the subject
-        # Transaction (whose inputs have +source_transaction+ wired by
+        # Transaction::Tx (whose inputs have +source_transaction+ wired by
         # +Beef.from_binary+), and primes the cache so a subsequent
-        # broadcast emits EF via +Tx#to_ef_hex+ without the JOIN.
+        # broadcast emits EF via +Transaction::Tx#to_ef_hex+ without the JOIN.
         #
         # Optional: when +socket_path+ is nil, no fiber is started and the
         # cache fills only via intra-process producers.
@@ -214,19 +214,19 @@ module BSV
 
         private
 
-        # Parse +action[:raw_tx]+ into a Transaction and re-attach per-input
+        # Parse +action[:raw_tx]+ into a Transaction::Tx and re-attach per-input
         # source data (+source_satoshis+ / +source_locking_script+) from the
         # Store so the SDK can serialize Extended Format. Inputs are ordered
         # by +inputs.vin+, which matches the order of +tx.inputs+ from the
         # raw-tx parse.
         #
         # @param action [Hash] action record carrying +:id+ and +:raw_tx+
-        # @return [BSV::Transaction::Tx]
+        # @return [Transaction::Tx]
         # @raise [BSV::Wallet::Error] when the DB input count disagrees with
         #   the parsed transaction's input count (a contract violation
         #   upstream; should never fire under the normal create_action flow).
         def hydrated_transaction_for(action)
-          # Cache hit: producer already supplied the hydrated Transaction
+          # Cache hit: producer already supplied the hydrated Transaction::Tx
           # (intra-process create_action or out-of-process via the OMQ
           # hint receiver). Skip the parse + resolve_inputs JOIN. #269.
           cached = @hydrated_tx_cache.get(action[:id])
@@ -246,10 +246,10 @@ module BSV
 
         # Initial broadcast -- submit Extended Format to ARC.
         #
-        # Reconstructs the Transaction from +action[:raw_tx]+ + per-input
+        # Reconstructs the Transaction::Tx from +action[:raw_tx]+ + per-input
         # source data via #hydrated_transaction_for so the SDK's broadcaster
         # serializes to EF (Arcade rejects raw-tx submits with "'PreviousTx'
-        # not supplied"). The inline path passes its in-memory Transaction
+        # not supplied"). The inline path passes its in-memory Transaction::Tx
         # directly; the daemon path reconstructs from the DB. #252.
         #
         # Stamps broadcast_at in a committed transaction *before* the
@@ -279,10 +279,10 @@ module BSV
           BSV::Primitives::Hex.validate_wtxid!(action[:wtxid], name: 'Engine::Broadcast#submit wtxid')
 
           @store.mark_broadcast_attempted(action_id: action_id)
-          # Hydrate a Transaction from raw_tx + DB-resolved source data so
+          # Hydrate a Transaction::Tx from raw_tx + DB-resolved source data so
           # the SDK can serialize Extended Format on the wire (Arcade rejects
           # raw-tx submits with "'PreviousTx' not supplied"). The inline path
-          # already ships a Transaction; #252 closes the daemon-side gap.
+          # already ships a Transaction::Tx; #252 closes the daemon-side gap.
           tx = hydrated_transaction_for(action)
           # Conditional kwarg: Broadcaster also drops nil callback_token to
           # avoid polluting the Provider#call signature, but skipping it
@@ -332,7 +332,7 @@ module BSV
           # could die between recording and promotion.
           link_proof_if_present(action_id, data)
           # Terminal-success eviction: the action is in mempool or on
-          # chain; the hydrated Transaction is dead weight from here. LRU
+          # chain; the hydrated Transaction::Tx is dead weight from here. LRU
           # is the safety net if eviction is skipped for any reason. #269.
           @hydrated_tx_cache.evict(action_id)
           BSV::Wallet.emit('task.succeeded',
@@ -383,7 +383,7 @@ module BSV
         def handle_submit_terminal(action_id, response)
           @store.reject_action(action_id: action_id)
           # Terminal-rejection eviction: the cascade just deleted the
-          # action; a cached Transaction would dangle. #269.
+          # action; a cached Transaction::Tx would dangle. #269.
           @hydrated_tx_cache.evict(action_id)
           # arc_status carries the status-poll shape's txStatus when present
           # (Arcade's {txStatus, extraInfo} body); arc_reason carries the

@@ -1087,7 +1087,7 @@ module BSV
       # +find_action+ and the +resolve_inputs_for_signing+ JOIN. BEEF is
       # the natural hint payload: it's a strict superset of EF for the
       # subject tx, the producer has it built already (returned to the
-      # caller from +create_action+), and the same cached Transaction
+      # caller from +create_action+), and the same cached Transaction::Tx
       # serves a future BEEF-based p2p hand-off path without rebuilding.
       # Best-effort: when +BSV_WALLET_HINTS_SOCKET+ is unset, do
       # nothing. Push failures (daemon not listening, socket missing, OMQ

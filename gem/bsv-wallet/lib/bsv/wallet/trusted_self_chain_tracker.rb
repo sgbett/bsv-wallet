@@ -4,7 +4,7 @@ module BSV
   module Wallet
     # Structural-only chain tracker for the wallet's own egress validation.
     #
-    # Satisfies the SDK's {BSV::Transaction::ChainTracker} duck type by
+    # Satisfies the SDK's {Transaction::ChainTracker} duck type by
     # saying "yes" to every merkle root lookup. This is correct, not lax,
     # for one specific use: validating a BEEF the wallet itself just built
     # from its own persisted proofs.

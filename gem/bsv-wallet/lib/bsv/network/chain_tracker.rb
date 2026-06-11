@@ -3,8 +3,8 @@
 module BSV
   module Network
     # Write-through chain tracker backed by the +blocks+ table and the
-    # Services routing layer. Satisfies the SDK's {BSV::Transaction::ChainTracker}
-    # duck type so it can be passed to +Tx#verify+.
+    # Services routing layer. Satisfies the SDK's {Transaction::ChainTracker}
+    # duck type so it can be passed to +Transaction::Tx#verify+.
     #
     # Fast path: look up the block by height in the local +blocks+ table.
     # Miss path: fetch the header from the network via Services, persist it,

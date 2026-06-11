@@ -52,7 +52,7 @@ module BSV
       # walletd) always supply one.
       #
       # @param payload [Object] payload accepted by the underlying provider's
-      #   +:broadcast+ command (raw bytes for the daemon path, +Tx+
+      #   +:broadcast+ command (raw bytes for the daemon path, +Transaction::Tx+
       #   for the inline path -- no narrowing).
       # @param wtxid [String] 32-byte binary wire-order wtxid the wallet
       #   computed pre-broadcast. Required.

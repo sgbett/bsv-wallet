@@ -1023,7 +1023,7 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#internalize_action' do
     # Mock chain tracker that accepts all merkle roots.
-    # Tx#verify delegates merkle proof validation here.
+    # Transaction::Tx#verify delegates merkle proof validation here.
     let(:chain_tracker_mock) do
       tracker = double('ChainTracker')
       allow(tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
@@ -1038,7 +1038,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     # Build a verifiable BEEF with a proven ancestor, OP_1 scripts, and
-    # proper input wiring so Tx#verify succeeds.
+    # proper input wiring so Transaction::Tx#verify succeeds.
     #
     # The subject transaction spends from a proven ancestor via OP_1
     # locking/unlocking scripts (trivially valid). Additional proven
@@ -1310,7 +1310,7 @@ RSpec.describe BSV::Wallet::Engine do
       end.to raise_error(BSV::Wallet::InvalidBeefError, /chain_tracker required/)
     end
 
-    # --- SPV verification via Tx#verify ---
+    # --- SPV verification via Transaction::Tx#verify ---
 
     context 'SPV verification' do
       it 'accepts valid BEEF that passes full verification' do
@@ -2350,7 +2350,7 @@ RSpec.describe BSV::Wallet::Engine do
         expect(result).to include(:txid, :tx, :no_send_change)
         expect(result[:txid].bytesize).to eq(32)
 
-        # Transaction is valid
+        # Transaction::Tx is valid
         parsed = parse_beef_tx(result[:tx])
         parsed.inputs[0].source_satoshis = 1000
         parsed.inputs[0].source_locking_script = p2pkh_locking_script_for(derive_key)

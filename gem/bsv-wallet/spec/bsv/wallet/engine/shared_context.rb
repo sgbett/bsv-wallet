@@ -138,7 +138,7 @@ RSpec.shared_context 'engine setup' do
     register_funded_outputs(outputs)
   end
 
-  # Build a real BSV Transaction whose outputs match the spec at the
+  # Build a real Transaction::Tx whose outputs match the spec at the
   # given vouts. The single dummy input never gets walked at verify time
   # because the resulting tx is anchored with a merkle_path (proven
   # terminal short-circuits recursion).

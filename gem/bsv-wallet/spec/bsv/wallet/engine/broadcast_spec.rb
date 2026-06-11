@@ -12,7 +12,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
   let(:broadcast) { described_class.new(store: store, broadcaster: broadcaster) }
 
   let(:action_id) { 42 }
-  # Real signed P2PKH transaction — parseable by Tx.from_binary so
+  # Real signed P2PKH transaction — parseable by Transaction::Tx.from_binary so
   # the daemon submit path's EF reconstruction (#252) can hydrate from it.
   # The wtxid below is the SDK's hash of this raw_tx, but most specs use a
   # distinct +submit_wtxid+ for the action's stored wtxid to keep the
@@ -27,7 +27,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
   let(:submit_wtxid) { SecureRandom.random_bytes(32) }
   let(:action_hash) { { id: action_id, raw_tx: raw_tx, wtxid: submit_wtxid } }
   # Per-input source data that #hydrated_transaction_for attaches to the
-  # parsed Transaction. Matches the single input in +raw_tx+.
+  # parsed Transaction::Tx. Matches the single input in +raw_tx+.
   let(:resolved_inputs) do
     [{ source_satoshis: 1_500_000, source_locking_script: ["76a914#{'a' * 40}88ac"].pack('H*') }]
   end
@@ -137,7 +137,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         )
       end
 
-      it 'calls broadcaster.broadcast with a hydrated Tx and submit wtxid' do
+      it 'calls broadcaster.broadcast with a hydrated Transaction::Tx and submit wtxid' do
         broadcast.process(action_id)
         expect(broadcaster).to have_received(:broadcast).with(kind_of(BSV::Transaction::Tx), wtxid: submit_wtxid)
       end

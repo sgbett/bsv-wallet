@@ -19,7 +19,7 @@ module BSV
         # bytes). The locking script is wrapped in +BSV::Script::Script+
         # for the SDK's EF serializer.
         #
-        # @param input  [BSV::Transaction::TransactionInput]
+        # @param input  [Transaction::TransactionInput]
         # @param source [Hash] row from Store#resolve_inputs_for_signing
         def attach!(input, source)
           input.source_satoshis = source[:source_satoshis]
