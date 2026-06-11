@@ -1,12 +1,14 @@
 # BSV Wallet — Project Instructions
 
-## Language Convention: American English
+## Language Convention
 
-**Override global preference:** This project uses **American English** throughout — code, comments, documentation, and commit messages.
+**Code identifiers** — American English. Method names, classes, schema columns, ENUM values, file names, constants. This is the only hard constraint: the BRC-100 spec defines `internalizeAction`, `randomizeOutputs`, etc., and mixing British Ruby identifiers (`internalise_action`) with American spec names creates confusion about which convention applies where.
 
-The BRC-100 specification defines method names using American English (`internalizeAction`, `randomizeOutputs`). Using British English for Ruby method names (`internalise_action`, `randomise_outputs`) while the spec uses American creates confusion about which convention applies where. Consistency wins: American English everywhere.
+Examples: `internalize`, `randomize`, `behavior`, `color`, `organization`, `optimize`, `summarize`, `favor`, `center`.
 
-Examples: behavior, color, organization, optimize, summarize, favor, center, internalize, randomize.
+**Free prose** — author's voice (British for this author, per the global preference). CLAUDE.md, `reference/`, READMEs, HLR bodies, PR descriptions, commit message bodies, RSpec `it` descriptions, RDoc/YARD comments, code comments. No translation required. Visual jar between a British comment and an American identifier in the same file is acceptable.
+
+This narrows an earlier rule that demanded American everywhere. The identifier rationale (spec consistency) still holds; extending it to prose was a friction cost without a corresponding benefit.
 
 ## Transaction ID Convention: wtxid / dtxid
 
@@ -65,13 +67,13 @@ If/when these need to cross a JSON boundary (a future BRC-100 binding — issues
 These four supports explain the identity-pubkey carve-out specifically. Derived pubkeys don't need supports — they're binary because they go straight from `derive_public_key` into the next crypto op.
 
 1. **The internal canonical form isn't bytes — it's a `PublicKey` object** (curve point). Hex and binary are both serializations of that. The wallet operates on `PublicKey` instances; it rarely manipulates identity pubkey bytes directly.
-2. **Identity pubkeys are protocol identifiers, not binary content.** Txids get hashed, recomputed from raw tx, and indexed by structural bytes (wire order has meaning). Identity pubkeys flow through unchanged as identity tokens — bytes have no structural meaning beyond serializing the point.
+2. **Identity pubkeys are protocol identifiers, not binary content.** Txids get hashed, recomputed from raw tx, and indexed by structural bytes (wire order has meaning). Identity pubkeys flow through unchanged as identity tokens — bytes have no structural meaning beyond serialising the point.
 3. **Identity pubkeys cross BRC boundaries more often than txids.** Every BRC-100 method takes or returns one (`identity_key`, `counterparty`, `subject`, `certifier`, `verifier`). BRC-29 and BRC-52 also specify hex at the wire. Hex storage moves conversion off the boundary-heavy path.
 4. **The binary-internal principle itself carves out spec-mandated hex.** Convert to hex *only* where the spec explicitly says hex string — identity pubkey BRC fields meet that test directly. Txids are an exception in the *other* direction (binary even though `TXIDHexString` is BRC-canonical) precisely because txid bytes have structural meaning that identity pubkey bytes don't.
 
 ### Source
 
-The reasoning is recorded in `project_pubkey_hex_exception` (memory). The decision was made at PR #18, cemented by HLR #28 (BRC-100 SDK alignment), and formalized in HLR #300 after the audit recovered the trace.
+The reasoning is recorded in `project_pubkey_hex_exception` (memory). The decision was made at PR #18, cemented by HLR #28 (BRC-100 SDK alignment), and formalised in HLR #300 after the audit recovered the trace.
 
 ## Load-bearing Principles
 

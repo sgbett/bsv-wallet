@@ -53,7 +53,7 @@ module BSV
       end
 
       # Returns the compressed public key as 33 raw bytes — the binary
-      # form for crypto-op consumers (hash160, ECDH input). Memoized
+      # form for crypto-op consumers (hash160, ECDH input). Memoised
       # symmetrically with +identity_key+.
       #
       # @return [String] 33-byte binary string (compressed public key)
