@@ -13,7 +13,7 @@ The specification is written against a TypeScript reference, where the interface
 ## Decision Drivers
 
 * **Idiomatic Ruby, designed from the spec.** Ruby expresses an abstract contract as a module of methods with keyword arguments and hash returns. There is no need to reconstruct a foreign type system to satisfy a behavioural specification.
-* **The schema is canon; the interface is presentation (ADR-003).** BRC-100 is the RPC skin over the canonical database. It orchestrates the components that read and write the schema; it is not itself a source of truth. This is the Layer-3 role in the SOA (`SOA-WIP.md`).
+* **The schema is canon; the interface is presentation (ADR-003).** BRC-100 is the RPC skin over the canonical database. It orchestrates the components that read and write the schema; it is not itself a source of truth. This is the Layer-3 role in the SOA (`docs/design.md`).
 * **Asynchrony is an infrastructure property, not a method property (ADR-018).** Stateful, clock-spanning work belongs to the wallet's runtime (the daemon), not to the interface contract. A method that returns a value is simpler to reason about and to test than one that returns a promise.
 * **One conversion edge (ADR-008).** Hex ↔ binary conversion happens at this boundary and nowhere inside it, so the interface is where the spec's hex strings meet the wallet's internal binary.
 
@@ -90,5 +90,5 @@ A plain Ruby module is the minimum that satisfies a behavioural specification in
 * `reference/BRC100.md` — the 28-method specification.
 * `gem/bsv-wallet/lib/bsv/wallet/engine.rb` — the Layer-3 realisation; `gem/bsv-wallet/lib/bsv/wallet/daemon.rb` — the Async runtime.
 * `bsv-sdk` (`~> 0.24`) `lib/bsv/wallet/interface/brc100.rb` — the contract module.
-* `SOA-WIP.md` — four-layer SOA; BRC-100 is Layer 3 (business-process orchestration).
+* `docs/design.md` — four-layer SOA; BRC-100 is Layer 3 (business-process orchestration).
 * HLR/issue trail for the deferred name/calling-convention pass (interface move to the SDK), not asserted complete here.
