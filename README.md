@@ -1,11 +1,9 @@
 # BSV Wallet
 
-[![CI](https://github.com/sgbett/bsv-wallet/actions/workflows/ci.yml/badge.svg)](https://github.com/sgbett/bsv-wallet/actions/workflows/ci.yml)
-[![Ruby](https://img.shields.io/badge/ruby-%3E%3D%202.7-red)](https://rubygems.org/gems/bsv-wallet)
+[![CI](https://github.com/sgbett/bsv-wallet/actions/workflows/main.yml/badge.svg)](https://github.com/sgbett/bsv-wallet/actions/workflows/main.yml)
+[![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.3-red)](https://rubygems.org/gems/bsv-wallet)
 
-A Ruby implementation of the [BRC-100](https://github.com/bitcoin-sv/BRCs/blob/master/wallet/0100.md) wallet interface — managing UTXO lifecycle, transaction construction, broadcasting, and proof management for BSV applications.
-
-Built on the [BSV Ruby SDK](https://github.com/sgbett/bsv-ruby-sdk) for all cryptographic operations (signing, key derivation, script handling, BEEF serialization). The wallet handles state transitions and data integrity: which outputs are spendable, which inputs are locked, which transactions are proven, and which proofs are valid.
+A single-user, high-throughput BSV wallet built on the [BSV Ruby SDK](https://github.com/sgbett/bsv-ruby-sdk), implementing the [BRC-100](https://github.com/bitcoin-sv/BRCs/blob/master/wallet/0100.md) interface: UTXO lifecycle, transaction construction, broadcasting, and proof management.
 
 ## Table of Contents
 
@@ -20,20 +18,13 @@ Built on the [BSV Ruby SDK](https://github.com/sgbett/bsv-ruby-sdk) for all cryp
 
 ## Acknowledgements
 
-This gem owes a debt to the BSV Association's development team, whose work on the [TypeScript SDK](https://github.com/bsv-blockchain/ts-sdk) and wallet-toolkit packages served as the inspiration for our initial Ruby port. That port demonstrated the approach was viable and laid the foundation on which this new gem is built.
-
-The wallet specification itself:
-
-- [BRC-100](https://github.com/bitcoin-sv/BRCs/blob/master/wallet/0100.md) — the unified wallet-to-application interface
-- [TypeScript SDK](https://github.com/bsv-blockchain/ts-sdk) — the reference implementation that inspired this work
+This gem owes a debt to the BSV Association's development team, whose work on the [TypeScript SDK](https://github.com/bsv-blockchain/ts-sdk) and wallet-toolkit packages inspired our approach. An earlier Ruby port proved the idea was viable; this gem is a clean-room rebuild that carried those lessons forward.
 
 ## Objective
 
-Deliver a native Ruby implementation of a BRC-100 compliant wallet that targets performance and scaling through a contract-based interface and pluggable architecture.
+Run the BRC-100 surface at the throughput BSV is built for, with as little between Ruby and the database as possible.
 
-The philosophy is pragmatic: provide standard implementations as sensible defaults that work out of the box, then allow teams to extend or replace individual components with more sophisticated implementations geared toward their specific use case. A single-user wallet and a high-throughput payment processor use the same Engine — the same `create_action`, `internalize_action`, `list_outputs` calls — but compose it with different backing stores, UTXO selection strategies, and broadcast policies.
-
-The interface stays the same; the architecture underneath scales with you.
+The design choices follow from that: no heavy dependencies, a light Ruby-native stack, and a clean division of labour — **the wallet validates, the database enforces**. State is derived, never stored; invalid state is structurally impossible. The reasoning is recorded in the [architecture decision records](.architecture/decisions/adrs/) and the [design doc](docs/design.md).
 
 ### Architecture
 
@@ -48,7 +39,7 @@ Four-layer SOA — each layer has a single responsibility:
 │  Engine — 28 spec-mandated methods, pure orchestration  │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 2: Services                                      │
-│  Store, BroadcastQueue, ProofStore, UTXOPool            │
+│  Store, UTXOPool, Broadcaster, Services                 │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 1: Operational Systems                           │
 │  PostgreSQL, ARC, workers, callback endpoints           │
@@ -63,7 +54,7 @@ End-user configuration lives in the `BSV::Wallet.configure do |c| ... end` block
 
 ### Database Backends
 
-The wallet supports both SQLite and PostgreSQL via Sequel. SQLite is the default; set `DATABASE_URL` to a `postgres://` URL (or `c.database_url` in your config file) to use PostgreSQL (requires the `pg` gem).
+The wallet is built for **PostgreSQL** — set `DATABASE_URL` to a `postgres://` URL (or `c.database_url` in your config file; requires the `pg` gem). **SQLite** is a zero-setup fallback for development and fast logic-only tests, and is the default when no `DATABASE_URL` is set. Both run through Sequel.
 
 A `docker-compose.yml` is provided for local PostgreSQL development:
 
@@ -73,14 +64,11 @@ docker compose up -d postgres
 
 It runs `postgres:18` on port `5433` (to avoid clashing with a host install on `5432`) with user/password `postgres`/`postgres`. Data is bind-mounted to `./tmp/postgres-data` (gitignored) — wipe it with `rm -rf tmp/postgres-data` to start fresh.
 
-On first init, `docker/postgres/initdb/01-create-databases.sql` creates three empty databases:
-
-- `bsv_wallet_test` — for `DATABASE_URL=postgres://…/bsv_wallet_test bundle exec rspec` (RSpec runs its own schema migrations)
-- `bsv_wallet_alice` / `bsv_wallet_bob` — for hand-driven CLI sessions against Postgres (the wallet boots and migrates per-process)
+On first init it creates a handful of empty databases (one for the test suite, a couple for hand-driven CLI sessions); the wallet boots and migrates each per-process.
 
 #### Pre-production migration model
 
-The wallet is pre-production — there is no installed user base whose data must survive a schema change. Schema work amends the existing migrations in place (`gem/bsv-wallet/db/migrations/001_create_schema.rb` and `003_schema_constraints.rb`) rather than stacking new migrations on top. The trade-off is intentional: a clean migration history while the schema is still being shaped.
+The wallet is pre-production — there is no installed user base whose data must survive a schema change. Schema work edits the migrations under `gem/bsv-wallet/db/migrations/` directly — existing migrations are amended, not only appended — so there is no expectation of forward-migrating a diff. The trade-off is intentional: a clean, re-runnable schema while it is still being shaped.
 
 What this means in practice: **after pulling a branch that touches the schema, wipe and re-migrate** rather than expecting Sequel to migrate the diff forward.
 
@@ -100,9 +88,9 @@ If `bundle exec rspec` starts failing with constraint/column errors after a `git
 
 ### Requirements
 
-- Ruby >= 2.7
+- Ruby >= 3.3
 - [bsv-sdk](https://github.com/sgbett/bsv-ruby-sdk) gem
-- PostgreSQL (optional — requires the `pg` gem; defaults to SQLite)
+- PostgreSQL (the production target — requires the `pg` gem; SQLite is the zero-setup development fallback)
 
 ### Installation
 
@@ -122,14 +110,25 @@ require 'bsv-wallet'
 store = BSV::Wallet::Store.connect('sqlite://wallet.db')
 store.migrate!
 
+# Key derivation from your WIF
+key_deriver = BSV::Wallet::KeyDeriver.new(
+  private_key: BSV::Primitives::PrivateKey.from_wif(wif)
+)
+
+# A broadcast provider (GorillaPool / Arcade) drives broadcast + status;
+# Services routes chain queries, ChainTracker verifies incoming proofs.
+provider = BSV::Network::Providers::GorillaPool.default(testnet: false)
+services = BSV::Network::Services.new(providers: [provider])
+
 # Compose the wallet
 engine = BSV::Wallet::Engine.new(
-  store:           store,
-  utxo_pool:       BSV::Wallet::Store::UTXOPool.new(store: store),
-  broadcast_queue: BSV::Wallet::Store::BroadcastQueue.new(db: store.db),
-  proof_store:     BSV::Wallet::Store::ProofStore.new(db: store.db),
-  key_deriver:     BSV::Wallet::KeyDeriver.new(private_key),
-  network:         :mainnet
+  store:         store,
+  utxo_pool:     BSV::Wallet::Store::UTXOPool.new(store: store),
+  broadcaster:   BSV::Network::Broadcaster.new(providers: [provider], store: store),
+  services:      services,
+  key_deriver:   key_deriver,
+  chain_tracker: BSV::Network::ChainTracker.new(store: store, services: services),
+  network:       :mainnet
 )
 
 # Create a transaction (BRC-100 createAction)
@@ -149,7 +148,7 @@ result = engine.create_action(
 
 - **BRC-100 Interface** — All 28 wallet methods: transaction creation, signing, internalization, listing, key management, cryptography, certificates, authentication, and network queries.
 - **Action Lifecycle** — Phase-based state machine: create (lock inputs) → sign (attach wtxid) → broadcast → promote (write outputs). Status derived from structure, never stored.
-- **SPV Validation** — Structural BEEF verification, optional merkle root checking via chain tracker, fee adequacy enforcement (BRC-67).
+- **SPV Validation** — Structural BEEF verification via the SDK's `Transaction::Tx#verify`, with optional merkle-root checking through the chain tracker.
 - **Proof Management** — Merkle proof storage from BEEF ancestry and ARC callbacks, automatic linking to actions.
 - **Broadcast Lifecycle** — Immediate and delayed broadcast via ARC, webhook callback handling, stale broadcast polling.
 - **UTXO Management** — Basket-based output organization, tag filtering, coin selection, structural locking (INSERT ON CONFLICT) for concurrency safety.
@@ -161,6 +160,7 @@ result = engine.create_action(
 Full documentation is available at **[sgbett.github.io/bsv-wallet](https://sgbett.github.io/bsv-wallet/)**.
 
 - [Design Document](docs/design.md) — architecture, philosophy, implementation approach
+- [Architecture Decision Records](.architecture/decisions/adrs/) — the foundational design decisions and their rationale
 - [API Reference](https://sgbett.github.io/bsv-wallet/reference/) — auto-generated from YARD annotations
 - [BRC-100 Specification](https://github.com/bitcoin-sv/BRCs/blob/master/wallet/0100.md) — the external contract this wallet implements
 
