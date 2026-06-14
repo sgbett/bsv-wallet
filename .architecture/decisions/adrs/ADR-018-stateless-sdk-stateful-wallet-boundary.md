@@ -66,7 +66,7 @@ Keep orchestration SDK-side; let the caller inject storage.
 
 * Every placement decision has one test to apply, so new surface area lands on the correct side without re-arguing scale or lifecycle each time.
 * The SDK stays a clean library — pure operations, reusable outside this wallet, with no hidden dependence on a caller's database or daemon.
-* The structural ADRs get a clean seam: ADR-013 (fee/change is a stateless SDK operation) and ADR-015 (`Transaction#verify` is stateless; `ChainTracker` is the wallet-side stateful bridge) are worked instances, not special cases.
+* The structural ADRs get a clean seam: ADR-013 (fee/change is a stateless SDK operation) and ADR-015 (`Transaction::Tx#verify` is stateless; `ChainTracker` is the wallet-side stateful bridge) are worked instances, not special cases.
 
 ### Negative
 
@@ -99,7 +99,7 @@ Acceptance criteria — each a checkable consequence of the decision (the standi
 * ADR-002 — design for scale, the wallet-node model; the temporal framing of the same SDK-is-operations / wallet-is-processes split.
 * ADR-006 — single relational store; the wallet's state lives in one ACID boundary, and the SDK has none.
 * ADR-013 — auto-fund; fee/change computation as a stateless SDK operation (a worked instance of the boundary).
-* ADR-015 — chain tracker; the SDK's `Transaction#verify` is stateless, `ChainTracker` is the wallet-side stateful bridge (a worked instance of the boundary).
+* ADR-015 — chain tracker; the SDK's `Transaction::Tx#verify` is stateless, `ChainTracker` is the wallet-side stateful bridge (a worked instance of the boundary).
 * `.architecture/reviews/chain-tracker-pivot.md` — the `ChainTracker` write-through bridge in full.
 * HLR #302 — promoted both load-bearing principles to first-class reference docs; retired the broadcast-network-boundary ADR into `reference/state-boundaries.md`.
 * #250 — `BSV::Network::Broadcaster` + persisted broadcast affinity (stateful broadcast orchestration, wallet-side). #251 — Arcade SSE push resolution (stateful push consumer, wallet-side).
