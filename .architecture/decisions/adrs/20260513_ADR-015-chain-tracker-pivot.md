@@ -25,11 +25,11 @@ The SDK's `Transaction::ChainTracker` is the injection seam: a two-method duck t
 
 ## Decision
 
-**Adopt `Transaction::Tx#verify(chain_tracker:)` as the verification path and delete the hand-rolled walker.** `resolve_ancestor`, `collect_input_ancestry`, `validate_beef!`, and `validate_fee_adequacy!` are removed wholesale. Ancestry collection for BEEF construction reduces to `wire_ancestor` — a ProofStore-only load-and-attach, used by `build_atomic_beef` (`engine/action.rb`); verification is the SDK's job.
+**Adopt `Transaction::Tx#verify(chain_tracker:)` as the verification path and delete the hand-rolled walker.** `resolve_ancestor`, `collect_input_ancestry`, `validate_beef!`, and `validate_fee_adequacy!` are removed wholesale. Ancestry collection for BEEF construction reduces to `wire_ancestor` — a ProofStore-only load-and-attach, used by `build_atomic_beef` (`gem/bsv-wallet/lib/bsv/wallet/engine/action.rb`); verification is the SDK's job.
 
-**`BSV::Network::ChainTracker` is a write-through cache bridging the database and the network** (`lib/bsv/network/chain_tracker.rb`). It inherits the SDK's `Transaction::ChainTracker` duck type. `valid_root_for_height?` answers from the local `blocks` table first (`Store#find_block`); on a miss it fetches the header through the `BSV::Network::Services` routing layer, persists it (`Store#record_block_header`), then answers. `current_height` reads the network, falling back to `Store#max_block_height`. It **fails closed** — any error returns `false`, so verification fails rather than passing on incomplete data. The header database thus self-populates through normal verification, with no separate orchestration.
+**`BSV::Network::ChainTracker` is a write-through cache bridging the database and the network** (`gem/bsv-wallet/lib/bsv/network/chain_tracker.rb`). It inherits the SDK's `Transaction::ChainTracker` duck type. `valid_root_for_height?` answers from the local `blocks` table first (`Store#find_block`); on a miss it fetches the header through the `BSV::Network::Services` routing layer, persists it (`Store#record_block_header`), then answers. `current_height` reads the network, falling back to `Store#max_block_height`. It **fails closed** — any error returns `false`, so verification fails rather than passing on incomplete data. The header database thus self-populates through normal verification, with no separate orchestration.
 
-**Incoming transactions are verified against real chain state.** `internalize_action` goes through `verify_incoming_transaction!`, which hard-requires `@engine.chain_tracker` (the network-backed `ChainTracker`) and runs full SPV — untrusted merkle roots are checked against real headers (`engine/action.rb`). Where no chain-tracker is configured it raises, rather than degrading to structural-only as the old path did: accepting unverified merkle roots is the bug being closed.
+**Incoming transactions are verified against real chain state.** `internalize_action` goes through `verify_incoming_transaction!`, which hard-requires `@engine.chain_tracker` (the network-backed `ChainTracker`) and runs full SPV — untrusted merkle roots are checked against real headers (`gem/bsv-wallet/lib/bsv/wallet/engine/action.rb`). Where no chain-tracker is configured it raises, rather than degrading to structural-only as the old path did: accepting unverified merkle roots is the bug being closed.
 
 **Architectural components affected:** the engine's BEEF construction and verification paths (`build_atomic_beef`, `wire_ancestor`, `verify_incoming_transaction!`); the new `BSV::Network::ChainTracker`; the `blocks` table and its three Store accessors (`find_block`, `record_block_header`, `max_block_height`); `BSV::Network::Services` as the miss-path provider.
 
@@ -78,10 +78,10 @@ This is a correction, not a feature: the wallet duplicated a walk the SDK alread
 
 ## Validation
 
-* `BSV::Network::ChainTracker` inherits `BSV::Transaction::ChainTracker` and implements `valid_root_for_height?` (DB-first, network-miss, persist, fail-closed) and `current_height` (`lib/bsv/network/chain_tracker.rb:15,29,63`).
-* `resolve_ancestor`, `collect_input_ancestry`, `validate_beef!`, `validate_fee_adequacy!` are absent from the codebase; ancestry attach is `wire_ancestor` (ProofStore-only, `engine/action.rb:624`).
-* Incoming verification calls `subject_tx.verify(chain_tracker: @engine.chain_tracker)` and raises when no tracker is configured (`engine/action.rb:1093-1096`).
-* The miss path persists via `Store#record_block_header` (`lib/bsv/network/chain_tracker.rb:75`); reads hit `Store#find_block` / `Store#max_block_height` (`:36,:67`); the `blocks` table is `bytea` merkle_root / block_hash (`reference/schema.md`).
+* `BSV::Network::ChainTracker` inherits `BSV::Transaction::ChainTracker` and implements `valid_root_for_height?` (DB-first, network-miss, persist, fail-closed) and `current_height` (`gem/bsv-wallet/lib/bsv/network/chain_tracker.rb:15,29,63`).
+* `resolve_ancestor`, `collect_input_ancestry`, `validate_beef!`, `validate_fee_adequacy!` are absent from the codebase; ancestry attach is `wire_ancestor` (ProofStore-only, `gem/bsv-wallet/lib/bsv/wallet/engine/action.rb:624`).
+* Incoming verification calls `subject_tx.verify(chain_tracker: @engine.chain_tracker)` and raises when no tracker is configured (`gem/bsv-wallet/lib/bsv/wallet/engine/action.rb:1093-1096`).
+* The miss path persists via `Store#record_block_header` (`gem/bsv-wallet/lib/bsv/network/chain_tracker.rb:75`); reads hit `Store#find_block` / `Store#max_block_height` (`:36,:67`); the `blocks` table is `bytea` merkle_root / block_hash (`reference/schema.md`).
 
 ## References
 

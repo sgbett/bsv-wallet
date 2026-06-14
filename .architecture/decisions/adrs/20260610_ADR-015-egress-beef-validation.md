@@ -25,11 +25,11 @@ This is the egress mirror of the incoming-verify decision, made roughly a month 
 
 ## Decision
 
-**(a) Egress validity assertion — `Engine::Action#validate_for_handoff!`.** Every outgoing BEEF is verified before it leaves the wallet (`engine/action.rb:574`). The assertion parses the constructed atomic BEEF, finds the subject transaction by wtxid, and runs `Transaction::Tx#verify` against a `BSV::Wallet::TrustedSelfChainTracker` — a chain-tracker whose `valid_root_for_height?` returns `true` unconditionally and whose `current_height` returns a sentinel (`lib/bsv/wallet/trusted_self_chain_tracker.rb`). Neutralising on-chain validity reduces `verify` to a pure structural-completeness check: the BEEF passes iff every leaf terminates at a merkle_path or wires through to one. Failure raises `BSV::Wallet::EgressBeefInvalidError` (`lib/bsv/wallet/errors.rb`), surfacing the underlying `VerificationError` code. It is wired into both `Action.create` and `Action#sign!` (`engine/action.rb:171,434`).
+**(a) Egress validity assertion — `Engine::Action#validate_for_handoff!`.** Every outgoing BEEF is verified before it leaves the wallet (`gem/bsv-wallet/lib/bsv/wallet/engine/action.rb:574`). The assertion parses the constructed atomic BEEF, finds the subject transaction by wtxid, and runs `Transaction::Tx#verify` against a `BSV::Wallet::TrustedSelfChainTracker` — a chain-tracker whose `valid_root_for_height?` returns `true` unconditionally and whose `current_height` returns a sentinel (`gem/bsv-wallet/lib/bsv/wallet/trusted_self_chain_tracker.rb`). Neutralising on-chain validity reduces `verify` to a pure structural-completeness check: the BEEF passes iff every leaf terminates at a merkle_path or wires through to one. Failure raises `BSV::Wallet::EgressBeefInvalidError` (`gem/bsv-wallet/lib/bsv/wallet/errors.rb`), surfacing the underlying `VerificationError` code. It is wired into both `Action.create` and `Action#sign!` (`gem/bsv-wallet/lib/bsv/wallet/engine/action.rb:171,434`).
 
 This is correct, not lax: re-validating merkle roots the wallet already validated at proof-arrival time would be redundant network work, and would couple egress (which should always succeed for sound internal state) to network reachability. The trusted tracker isolates the structural check from chain validity. Its class comment forbids its use on incoming data — that path must use the network-backed `ChainTracker` (the incoming/own-egress trust asymmetry is the substance of this decision).
 
-**(b) Strict import — `Engine#fetch_proof_for_imported_utxo!`.** Importing a UTXO now refuses to register it without on-chain proof material (`engine.rb:1314`): it requires a confirmed `blockheight` from `get_tx_details` and a non-empty merkle_path from `get_merkle_path`, raising otherwise. This eliminates the silent-no-op path in the previous `fetch_and_link_proof` that left imported UTXOs unforwardable — closing the originating cause upstream so the egress assertion is a backstop, not the only line of defence.
+**(b) Strict import — `Engine#fetch_proof_for_imported_utxo!`.** Importing a UTXO now refuses to register it without on-chain proof material (`gem/bsv-wallet/lib/bsv/wallet/engine.rb:1314`): it requires a confirmed `blockheight` from `get_tx_details` and a non-empty merkle_path from `get_merkle_path`, raising otherwise. This eliminates the silent-no-op path in the previous `fetch_and_link_proof` that left imported UTXOs unforwardable — closing the originating cause upstream so the egress assertion is a backstop, not the only line of defence.
 
 **Architectural components affected:** `Engine::Action#validate_for_handoff!` and its wiring into `Action.create` / `Action#sign!`; the new `BSV::Wallet::TrustedSelfChainTracker`; `BSV::Wallet::EgressBeefInvalidError`; `Engine#fetch_proof_for_imported_utxo!` (strict import), with `import_utxo` re-pointed off the lenient `fetch_and_link_proof`.
 
@@ -76,11 +76,11 @@ This is a correction to an observed, reproduced fault — the wallet shipping in
 
 ## Validation
 
-* `Engine::Action#validate_for_handoff!` parses the BEEF, finds the subject by wtxid, and runs `verify(chain_tracker: BSV::Wallet::TrustedSelfChainTracker.new)`, raising `EgressBeefInvalidError` on `VerificationError` (`engine/action.rb:574-590`).
-* It is wired into `Action.create` (`engine/action.rb:171`) and `Action#sign!` (`engine/action.rb:434`).
-* `BSV::Wallet::TrustedSelfChainTracker < BSV::Transaction::ChainTracker`; `valid_root_for_height?` returns `true` and `current_height` returns `SENTINEL_HEIGHT = 1_000_000` (`lib/bsv/wallet/trusted_self_chain_tracker.rb:31,35,37,38`).
-* `BSV::Wallet::EgressBeefInvalidError < Error` (`lib/bsv/wallet/errors.rb:38`).
-* `Engine#fetch_proof_for_imported_utxo!` raises unless `get_tx_details` returns a `blockheight` and `get_merkle_path` returns a non-empty array; `import_utxo` calls it (`engine.rb:293,1314-1342`).
+* `Engine::Action#validate_for_handoff!` parses the BEEF, finds the subject by wtxid, and runs `verify(chain_tracker: BSV::Wallet::TrustedSelfChainTracker.new)`, raising `EgressBeefInvalidError` on `VerificationError` (`gem/bsv-wallet/lib/bsv/wallet/engine/action.rb:574-590`).
+* It is wired into `Action.create` (`gem/bsv-wallet/lib/bsv/wallet/engine/action.rb:171`) and `Action#sign!` (`gem/bsv-wallet/lib/bsv/wallet/engine/action.rb:434`).
+* `BSV::Wallet::TrustedSelfChainTracker < BSV::Transaction::ChainTracker`; `valid_root_for_height?` returns `true` and `current_height` returns `SENTINEL_HEIGHT = 1_000_000` (`gem/bsv-wallet/lib/bsv/wallet/trusted_self_chain_tracker.rb:31,35,37,38`).
+* `BSV::Wallet::EgressBeefInvalidError < Error` (`gem/bsv-wallet/lib/bsv/wallet/errors.rb:38`).
+* `Engine#fetch_proof_for_imported_utxo!` raises unless `get_tx_details` returns a `blockheight` and `get_merkle_path` returns a non-empty array; `import_utxo` calls it (`gem/bsv-wallet/lib/bsv/wallet/engine.rb:293,1314-1342`).
 
 ## References
 
