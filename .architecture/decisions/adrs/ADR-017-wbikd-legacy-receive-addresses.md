@@ -40,7 +40,7 @@ Slot derivation (the random `BSV::Wallet.random_derivation` prefix protecting th
 The original design (HLR #102, merged): `derivation_prefix = base64(int64 action.id)`, `derivation_suffix = base64(int64 output.id)`. Enumerable for recovery — walk `action_id × output_id` and check each derived address.
 **Pros:** recoverable by bounded enumeration; trivially deterministic; no OP_RETURN needed.
 **Cons:** couples recovery to *this* schema's sequential `bigint` primary keys; a wallet on another store would have to maintain its own monotonic sequences to match; not expressible in the store-agnostic draft BRC.
-**Rejected** — superseded by HLR #108. On-chain parameters (txid/vout) give the same recoverability without binding the scheme to our primary-key allocation, so the capability ports to any BRC-100 wallet. (The current code carries one stale docstring header asserting the old integer-ID rationale — see UNVERIFIED CLAIMS — but the code path derives from txid/vout.)
+**Rejected** — superseded by HLR #108. On-chain parameters (txid/vout) give the same recoverability without binding the scheme to our primary-key allocation, so the capability ports to any BRC-100 wallet. (The current code carries one stale docstring header asserting the old integer-ID rationale — tracked in #308 — but the code path derives from txid/vout.)
 
 ### B. A dedicated address / watchlist table
 

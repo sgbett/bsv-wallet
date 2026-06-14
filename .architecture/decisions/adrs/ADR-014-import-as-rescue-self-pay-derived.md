@@ -106,7 +106,3 @@ The decision is the minimal way to admit a non-conforming input without weakenin
 * `gem/bsv-wallet/db/migrations/001_create_schema.rb` (`actions.tx_proof_id` FK), `003_schema_constraints.rb` (`output_type` ENUM, CHECK pairs, `prevent_outbound_spendable`).
 * `reference/schema.md` — `output_type` profiles (`root` = "imported UTXOs, transitional shim"); `tx_proof_id` as settlement receipt.
 * HLR / PR: #296 (strict import — proof obtained before state), #297 (closed the `import_utxo` cross-call atomicity gap).
-
-## UNVERIFIED CLAIMS
-
-none.

@@ -95,7 +95,3 @@ This taxonomy is a response to an observed failure (a multi-thousand-line spec c
 * HLR #64 (open) — separate engine-intent tests from store-invariant tests (the originating force).
 * HLR #228 (closed) — flip to Postgres-default / SQLite-augmentation. HLR #123 (closed, superseded) — the earlier SQLite-default posture.
 * CLAUDE.md — "Running Specs", "Database & Wallet Configuration", "Conventions".
-
-## UNVERIFIED CLAIMS
-
-none.

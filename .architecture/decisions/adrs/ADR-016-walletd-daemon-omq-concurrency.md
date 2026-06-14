@@ -98,7 +98,3 @@ The high-risk move would be reaching for a heavyweight job-queue dependency and 
 * ADR-015 — the chain-tracker as a daemon-driven write-through cache; the SSE statuses path is its push-side counterpart.
 * HLR #156 (walletd daemon with OMQ logical models and scheduler), #128 (ZeroMQ / `omq` messaging architecture).
 * `gem/bsv-wallet/lib/bsv/wallet/daemon.rb`, `scheduler.rb`, `engine/broadcast.rb`, `engine/tx_proof.rb`, `engine/omq_support.rb`, `events.rb`; `network/sse_listener.rb`; `bin/walletd`. `omq` v0.27.0.
-
-## UNVERIFIED CLAIMS
-
-none.

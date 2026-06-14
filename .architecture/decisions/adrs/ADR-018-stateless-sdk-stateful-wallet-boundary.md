@@ -103,7 +103,3 @@ Acceptance criteria — each a checkable consequence of the decision (the standi
 * `.architecture/reviews/chain-tracker-pivot.md` — the `ChainTracker` write-through bridge in full.
 * HLR #302 — promoted both load-bearing principles to first-class reference docs; retired the broadcast-network-boundary ADR into `reference/state-boundaries.md`.
 * #250 — `BSV::Network::Broadcaster` + persisted broadcast affinity (stateful broadcast orchestration, wallet-side). #251 — Arcade SSE push resolution (stateful push consumer, wallet-side).
-
-## UNVERIFIED CLAIMS
-
-none.
