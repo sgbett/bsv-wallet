@@ -25,9 +25,9 @@ The point: real broadcasts reach ARC, real proofs confirm, real edge cases (reje
 
 ## Horizon 2 — Tighten the engine
 
-The orchestrator is 2,120 lines of procedural lifecycle code with shared state and no structure. It works, but it is hard to extend, hard to test in isolation, and hard to reason about under concurrency. This horizon makes it boring.
+The orchestrator is ~1,400 lines of procedural lifecycle code. `Engine::Action` (#214) extracted a first skeleton around the four-phase lifecycle, but the bulk of the work — breaking the monolith into manageable, isolated, testable units — is still ahead (#291). It works, but it is hard to extend, hard to test in isolation, and hard to reason about under concurrency. This horizon makes it boring.
 
-- **#214 — `Engine::Action` logical model.** Encapsulate the four-phase lifecycle in a single object with explicit state transitions. This is the architectural unlock for #213, #60, and #192 — they each become small once `Engine::Action` exists.
+- **#291 — Monolith to Manageable: the Engine refactor.** `Engine::Action` (#214, landed) is only the skeleton — a first object around the four-phase lifecycle. The substantive refactor lives here: breaking the orchestrator into isolated units with explicit state transitions. This is the architectural unlock for #213, #60, and #192 — they each become small once the refactor lands.
 - **#213 — Retry Phase 1 lock on contention.** TOCTOU between selection and lock currently raises `InsufficientFundsError`. With `Engine::Action` in place, the retry loop is a state transition rather than a procedural patch.
 - **#60 — Wallet decides, constraints enforce.** Eliminate inference patterns (`promote_with_outputs`, `resolve_internalize_output` peering at field presence). Wallet decides intent; the schema enforces. Becomes a refactor of named state on `Engine::Action`.
 - **#192 — noSend / sendWith chained-send and batching.** BRC-100 feature gap. Chained construction of multiple transactions before broadcast, atomic delivery. Maps cleanly onto `Engine::Action` once it owns lifecycle.
@@ -87,7 +87,7 @@ The day TruffleRuby's GraalVM JIT measurably speeds up BSV script interpretation
 ## Continuous
 
 - **#227 — AI reviewer guidance.** Keep `.github/copilot-instructions.md` and the architecture team docs aligned with the code as it evolves.
-- **Documentation accuracy.** `DESIGN.md` is the canonical architectural narrative; `README.md` is the entry point; this file is the schedule. When a horizon lands, update DESIGN to reflect the new normal and prune this file's "Status of the foundations."
+- **Documentation accuracy.** `docs/design.md` is the canonical architectural narrative; `README.md` is the entry point; this file is the schedule. When a horizon lands, update the design doc to reflect the new normal and prune this file's "Status of the foundations."
 
 ## How to read this file
 
