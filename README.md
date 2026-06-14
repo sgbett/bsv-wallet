@@ -110,7 +110,8 @@ require 'bsv-wallet'
 store = BSV::Wallet::Store.connect('sqlite://wallet.db')
 store.migrate!
 
-# Key derivation from your WIF
+# Key derivation from your WIF (the wallet reads it from the environment)
+wif = ENV.fetch('WIF')
 key_deriver = BSV::Wallet::KeyDeriver.new(
   private_key: BSV::Primitives::PrivateKey.from_wif(wif)
 )
