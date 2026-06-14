@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-04-30 (commit `b355dc8`, "feat: initial gem scaffolding with BRC-100 interface and machinery contracts") — the clean-room rebuild begins in a fresh repository, schema-first; the schema itself follows days later at `d08edd3` (HLR #1).
+
 ## Context
 
 The wallet exists as a TypeScript implementation (wallet-toolbox) and a Ruby port of it. The port inherits the TypeScript approach wholesale: the schema is a reverse-engineered SQLite dump — JSONB blobs that accept anything, no real foreign keys, status flags maintained by application code. The schema arrived *after* the code, as a consequence of how the code happened to interact with the blockchain.

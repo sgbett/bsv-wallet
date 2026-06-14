@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-05-05 (commit `d08edd3`, "feat: PostgreSQL schema, migration, and Sequel models", HLR #1) — the principle is established with the original schema: derived state (no `status` column), structural single-spend (`UNIQUE(inputs.output_id)`), and constraints-as-enforcement. Later work (HLR #183 restored the strict 4-phase design, PR #297 closed an atomicity gap) manifests the principle rather than re-deciding it.
+
 ## Context
 
 The wallet is a ground-up, clean-room rebuild (ADR-001). Its predecessor was a Ruby port of the TypeScript wallet-toolbox, whose schema was reverse-engineered from a SQLite dump rather than designed. Partway through that work the inversion became clear: the schema was arriving *after* the code, as a by-product of how the code happened to interact with the blockchain, rather than being designed in its own right. The question this ADR answers is the one that stop-and-rethink raised — from the ground up, what is a wallet's database, and what makes a state in it valid?
@@ -27,7 +29,7 @@ Adopt **schema-as-canonical-state** as the wallet's foundational design principl
 Concretely:
 
 * **State is derived, not stored.** No `status` column on `actions`; no `spendable` boolean on `outputs`. Status is computed from structural state at read time; spendability is set membership (presence of a `spendable` row, absence of an `inputs` row). No boolean, no enum, no duplication — the truth is structural, drawn from relationships rather than a flag someone has to remember to flip. The single exception is genuinely non-derivable *intent*: the `broadcast_intent` ENUM.
-* **Constraints are the enforcement layer.** CHECK, FK (RESTRICT), ENUM, NOT NULL, UNIQUE, and triggers are load-bearing. Application code orchestrates; it never re-implements a rule the schema can enforce. Application-level validation is either a boundary check on caller input or a duplicate of a schema rule. (*Which* mechanism enforces *which* invariant — declarative constraint, trigger, or transactional invariant — is refined in ADR-019, the constraint-enforcement hierarchy.)
+* **Constraints are the enforcement layer.** CHECK, FK (RESTRICT), ENUM, NOT NULL, UNIQUE, and triggers are load-bearing. Application code orchestrates; it never re-implements a rule the schema can enforce. Application-level validation is either a boundary check on caller input or a duplicate of a schema rule. (ADR-019 works a concrete instance: a cross-table invariant a single-row CHECK cannot express is kept in the schema by denormalising so a declarative constraint *can* express it — chosen over a hot-path trigger — rather than dropped to unenforced application code.)
 * **Atomic transitions = one database transaction.** Multi-write operations are wrapped in a single `db.transaction`; no intermediate state is ever visible or persistable. The Store owns that boundary (ADR-006); the Engine never holds a transaction open across a network call.
 
 **Architectural components affected:** the entire schema; `Store` (owns all transactions); `Engine` and every collaborator (orchestrate, never enforce); the daemon (drives the DB forward through atomic transitions, coordinating via the database rather than locks).
@@ -95,6 +97,6 @@ Acceptance criteria — each a checkable invariant restating one element of the 
 * ADR-006 — one relational store, one ACID boundary.
 * ADR-010 — derivation on outputs; the inference ban.
 * ADR-011 — scalability-tempered immutability and post-broadcast promotion.
-* ADR-019 — the constraint-enforcement hierarchy (which mechanism enforces which invariant).
+* ADR-019 — broadcasts-intent: keeping a cross-table invariant in the database declaratively (a concrete exemplar of this ADR).
 * `.architecture/principles.md` — principles #9 (the database IS the state), #11 (constraints at the schema level), #12 (Store owns atomicity).
 * HLR #183 — restored the strict 4-phase design after drift. HLR #192 — batched sending under this principle. PR #297 — closed an `import_utxo` cross-call atomicity gap. #269 / #296 — `HydratedTxCache` as a performance projection *over* canonical state.

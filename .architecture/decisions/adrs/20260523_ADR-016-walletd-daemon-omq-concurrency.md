@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-05-23 (commit `297c1ab`, PR #161 — "create Daemon with Async reactor hosting"; HLR #156, walletd daemon with OMQ logical models) — the daemon recreated on the Async/ZeroMQ-`omq` substrate after the earlier polling-loop version (PR #89, `81f30fc`, 2026-05-13) was retired; the OMQ messaging architecture itself was settled at HLR #128 (closed 2026-05-20).
+
 ## Context
 
 The wallet has no persistent process. Between CLI invocations nothing acts on incomplete database state — pending broadcasts are not retried, proofs are not acquired, status polling never runs. Background work happens only when a CLI tool triggers it inline. The wallet-node model (ADR-002) requires a process that hosts the wallet and drives its background loops; this ADR records that process and the concurrency substrate it runs on.

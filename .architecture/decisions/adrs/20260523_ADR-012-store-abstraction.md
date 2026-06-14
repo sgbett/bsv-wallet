@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-05-23 (commit `c17f5da`, PR #142 — "consolidate Postgres store into main wallet gem (#134)"; HLR #134) — the two-gem split (SQLite store + `bsv-wallet-postgres`) was collapsed into one store with a `database_type` branch and per-backend adapters, the abstraction this ADR records. The `Store#connect` factory landed earlier at PR #116 (`10d238f`, 2026-05-16).
+
 ## Context
 
 The wallet persists everything behind one relational store, one ACID boundary (ADR-006), and that store leans on Postgres-native primitives — `bytea`, ENUM, CHECK, partial indexes, `INSERT … ON CONFLICT`, partitioning, triggers (ADR-009). PostgreSQL is the production target. But the unit suite needs a backend that boots in-process, with no server to provision, so logic-only specs run fast and a fresh checkout has something to run against before anyone installs Postgres.

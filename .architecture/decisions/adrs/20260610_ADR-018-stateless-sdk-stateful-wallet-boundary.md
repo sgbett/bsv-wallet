@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-06-10 (commit `2854d2b`, "docs(reference): add principle-of-state + state-boundaries; retire broadcast-boundary ADR"; HLR #302) — the boundary was promoted to a first-class load-bearing principle in `reference/state-boundaries.md`, retiring the predecessor broadcast-network-boundary ADR; the underlying placements (#250 broadcast affinity, #251 SSE push) had already settled on the wallet side.
+
 ## Context
 
 The wallet is built on the BSV Ruby SDK and ships as a separate gem from it. Two gems, two roles — and a recurring question every time new surface area is designed: does this behaviour belong in the SDK or the wallet? Asked ad hoc, it gets answered by convenience ("the SDK already has the provider, put it there"), and surface area accretes on the wrong side. We need a single test that decides the placement structurally, not by taste.
