@@ -87,10 +87,10 @@ This is a classification rule, not new machinery — it adds no code, only a tes
 
 Acceptance criteria — each a checkable consequence of the decision (the standing compliance test lives in `reference/state-boundaries.md`):
 
-- [ ] Nothing in the SDK persists state across calls or depends on a caller-supplied store to function — every SDK surface is a complete-in-itself operation.
-- [ ] Provider selection and affinity (`broadcasts.provider`, recorded via the Store) live wallet-side in `BSV::Network::Broadcaster`; protocol-named commands (`:arc` / `:arcade`) and per-call protocol overrides are rejected at the SDK Provider edge.
-- [ ] The action lifecycle, push-resolution consumers, and block-driven reconciliation are wallet-side, since each spans calls and survives restart.
-- [ ] Any move of surface area across the boundary cites the "does it need state across calls?" test as its justification.
+* Nothing in the SDK persists state across calls or depends on a caller-supplied store to function — every SDK surface is a complete-in-itself operation.
+* Provider selection and affinity (`broadcasts.provider`, recorded via the Store) live wallet-side in `BSV::Network::Broadcaster`; protocol-named commands (`:arc` / `:arcade`) and per-call protocol overrides are rejected at the SDK Provider edge.
+* The action lifecycle, push-resolution consumers, and block-driven reconciliation are wallet-side, since each spans calls and survives restart.
+* Any move of surface area across the boundary cites the "does it need state across calls?" test as its justification.
 
 ## References
 

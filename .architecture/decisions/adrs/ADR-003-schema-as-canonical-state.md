@@ -80,10 +80,10 @@ The derived-state principle is appropriate engineering for a concrete, *already-
 
 Acceptance criteria — each a checkable invariant restating one element of the decision (the standing compliance tests live in `reference/principle-of-state.md`):
 
-- [ ] Every invariant the application cares about is expressible as a database constraint, or is consciously flagged where it is not (e.g. `validate_for_handoff!`) — the *constraints-as-enforcement* element.
-- [ ] Every multi-write operation is a single transaction — the *atomic-transitions* element.
-- [ ] No derived property is stored alongside its source — the *derived-not-stored* element.
-- [ ] After a crash mid-operation the database is in a valid state, with no replay or fix-up needed — the *crash-safety* driver.
+* Every invariant the application cares about is expressible as a database constraint, or is consciously flagged where it is not (e.g. `validate_for_handoff!`) — the *constraints-as-enforcement* element.
+* Every multi-write operation is a single transaction — the *atomic-transitions* element.
+* No derived property is stored alongside its source — the *derived-not-stored* element.
+* After a crash mid-operation the database is in a valid state, with no replay or fix-up needed — the *crash-safety* driver.
 
 ## References
 
