@@ -415,15 +415,14 @@ module BSV
       #
       # Finds or creates a pre-funded UTXO slot in basket 'p wbikd', locks it
       # with a zero-output no-send action, then derives a BRC-42 address from
-      # the locking action's ID and slot output ID.
+      # the slot's on-chain coordinates — its source txid and vout.
       #
-      # Derivation params are base64-encoded big-endian int64 values of the
-      # database IDs. This is intentionally deterministic — if the wallet
-      # database is lost but the identity key is retained, funds can be
-      # recovered by enumerating (action_id, output_id) combinations and
-      # checking each derived address for UTXOs. Security as an economic
-      # function: cost of recovery scales with the number of addresses
-      # ever generated.
+      # Derivation params are the slot's display txid (dtxid) and vout, both
+      # on-chain data with no database dependency. That is what makes the
+      # scheme recoverable: if the wallet database is lost but the identity
+      # key is retained, addresses are re-derived by walking the chain for
+      # the slot transactions — no original (action_id, output_id) needed.
+      # Recovery cost scales with the number of addresses ever generated.
       #
       # @return [Hash] { address:, derivation_prefix:, derivation_suffix: }
       def generate_receive_address
