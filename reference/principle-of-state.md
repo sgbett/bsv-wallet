@@ -18,6 +18,10 @@ The corollary, which is the test for whether we've followed the principle:
 
 This is what makes the wallet **crash-safe by construction**, and what makes async / fiber / multi-process composition tractable — the database is the single coordination point. No distributed locking, no leader election, no application-layer mutexes.
 
+## A note on scale
+
+Not every part of this principle earns its place the same way. The **derived-state core** — no stored status, structural locking, single-transaction transitions — is justified by drift-prevention and correctness at *any* scale; it makes invalid state impossible regardless of throughput. The **full immutability** of the `outputs` table (append-only but for two narrow, vacuum-neutral deviations — a one-shot `promoted` flip and failure-bounded deletes of unpromoted outputs) is a different kind of bet: at ordinary wallet volumes its performance benefit is marginal, and it is justified specifically by the wallet's millions-of-tx/s target, where rows rewritten on every state change would accumulate dead tuples and vacuum contention would become the scaling ceiling. The decision, the alternatives weighed against it, and that conditionality are recorded in [ADR-011](../.architecture/decisions/adrs/ADR-011-post-broadcast-promotion-and-tempered-immutability.md).
+
 ## How this manifests
 
 ### Schema as canon
