@@ -16,7 +16,7 @@ Hash-shaped data — transaction IDs, block hashes, merkle paths, raw transactio
 
 ## Decision
 
-Store and pass hash-shaped data as binary (`bytea`) throughout — database, models, wallet, SDK. Convert to hex **only** where a specification explicitly requires a hex string: the BRC-100 API boundary, logs, CLI output. The naming convention enforces it: wire-order binary is `wtxid` (internal); display-order hex is `dtxid` (boundary). A model-layer hex accessor was tried and removed — presentation belongs at the API edge, not the data layer.
+Store and pass hash-shaped data as binary (`bytea`) throughout — database, models, wallet, SDK. Convert to hex **only** where a specification explicitly requires a hex string: the BRC-100 API boundary, logs, CLI output. The naming convention enforces it: wire-order binary is `wtxid` (internal); display-order hex is `dtxid` (boundary). Display hex is *derived* from the canonical binary only at the point of emission (logs, JSON, CLI) — never stored, never read back into the data path.
 
 **Carve-out — identity-shaped public keys stay hex.** The wallet's own identity key, BRC-43 counterparty references, BRC-29 `sender_identity_key`, BRC-52 certificate fields are stable interchange identifiers that cross BRC boundaries as JSON; they are hex throughout. Derived/transient public keys (BRC-42 outputs feeding straight into a crypto op) stay binary. The full rationale lives in CLAUDE.md and HLR #300.
 
@@ -25,8 +25,8 @@ Store and pass hash-shaped data as binary (`bytea`) throughout — database, mod
 ### A. Hex / `text` for hash-shaped data (the reference's habit)
 **Rejected.** Hex is a display encoding, not data; `bytea` is smaller and faster, conversion hides at the boundary, and no JOINs key on these values anyway. The hex-everywhere habit is an artifact of JavaScript's string model, not a design choice to inherit.
 
-### B. A hex accessor on the models
-**Rejected** — wrong layer. Presentation is the API's concern; the data layer stays binary.
+### B. Hex in the data path (a stored hex column, or a hex value passed between internal calls)
+**Rejected** — it puts a second, derivable representation inside the canonical layer, the drift this ADR exists to prevent. A *derived display* reader is fine: `Store::Models::DisplayTxid#dtxid` computes display-order hex from the binary `wtxid` for emission and is never read internally. (That derivation is currently also open-coded at ~15 log/CLI sites; centralising it into one `BSV::Primitives::Hex` converter is #311.)
 
 ## Consequences
 
@@ -46,7 +46,7 @@ This plays to Ruby's binary strength rather than inheriting a JavaScript limitat
 
 ## Validation
 
-* Hash-shaped columns are `bytea`; models return binary strings.
+* Hash-shaped columns are `bytea`; display hex is derived on demand (`DisplayTxid#dtxid`), not stored.
 * Hex appears only at the BRC-100 boundary, logs, and CLI (`dtxid`).
 * Identity-shaped pubkeys are the documented hex exception; derived pubkeys are binary.
 
