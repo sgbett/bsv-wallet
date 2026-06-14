@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-05-05 (commit `d08edd3`, "feat: PostgreSQL schema, migration, and Sequel models", HLR #1) — the original schema carries no `users` table and no `user_id` column or FK anywhere; identity is a construction parameter, fixed from the first migration.
+
 ## Context
 
 The reference implementation modelled multi-tenant hosting — a storage server holding many users' wallets, so every row carried a `user_id`. That shape is dead weight for what this is: a single wallet, constructed with one identity key, meant to run as a dedicated high-throughput process (ADR-002). The wallet knows who it is because it was built with a key — that is a runtime parameter, not a row in a table.

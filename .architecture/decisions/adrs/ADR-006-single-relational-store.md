@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-05-05 (commit `d08edd3`, "feat: PostgreSQL schema, migration, and Sequel models", HLR #1) — one relational store, one ACID boundary, one schema (`public`, no namespacing) with `actions.tx_proof_id` as an in-database FK was the original schema shape; proofs and work-queue tables were never split to a separate backend.
+
 ## Context
 
 The schema is one tightly-related set of tables: an action links to its proof (`actions.tx_proof_id → tx_proofs`), proofs anchor to blocks, outputs reference actions, inputs reference outputs. Almost every operation joins across them, and the invariants that keep state valid — the foreign keys, the derived statuses — only hold if the related rows commit together.

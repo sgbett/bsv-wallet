@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-05-05 (commit `d08edd3`, "feat: PostgreSQL schema, migration, and Sequel models", HLR #1) — the ledger model (outputs as ledger entries, `inputs` as debits, the DAG derivable but not the primary model) is fixed by the original schema; no adjacency-list or closure structures were ever introduced.
+
 ## Context
 
 A wallet could model the full transaction DAG — every output traced back through its spending chain toward its origin. That is what a *node* needs: to decide a UTXO is valid, walk the graph. A wallet's question is different — "what can I spend, and what did I spend it on?" — which is double-entry bookkeeping, not graph traversal. And merkle proofs remove the need to walk at all: a proof shows a transaction is in a block, so each settled output stands as an independent fact. The "Back to Genesis" ancestry walk is unnecessary.

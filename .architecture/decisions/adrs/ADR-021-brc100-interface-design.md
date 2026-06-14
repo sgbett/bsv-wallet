@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-05-05 (commit `7049f27`, PR #35 — "feat!: align to SDK's canonical BRC-100 interface and error classes (#28)") — the interface as a plain Ruby module owned by the SDK and `include`d by the Engine, realising the design recorded here. The Engine's BRC-100 realisation first appeared at the initial scaffolding (`b355dc8`, 2026-04-30); the later pubkey-hex carve-out doc (PR #303/#300, 2026-06-11) refines ADR-008, not this interface design.
+
 ## Context
 
 BRC-100 defines a wallet-to-application interface: 28 methods spanning transaction creation, signing, encryption, certificates, key linkage, and chain queries (`reference/BRC100.md`). The wallet must present that interface. The question is what shape it takes in Ruby.

@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-05-05 (commit `d08edd3`, "feat: PostgreSQL schema, migration, and Sequel models", HLR #1) — the scale target is realised as the structural schema choices (single-spend `UNIQUE`, outputs/spendable partition, derived state) that the downstream ADRs cite; the wallet-node framing in `.architecture/reviews/wallet-node-architecture.md` followed (2026-05-23, `63ca625`).
+
 ## Context
 
 Bitcoin SV's thesis is unbounded on-chain throughput. A wallet built for occasional payments — the browser-resident, promise-returning model — is a client, not infrastructure, and cannot meet that. We are building a wallet meant to run as a persistent process and sustain high transaction rates.

@@ -4,6 +4,8 @@
 
 Accepted.
 
+**Decided:** 2026-05-05 (commit `d08edd3`, "feat: PostgreSQL schema, migration, and Sequel models", HLR #1) — the original schema uses Postgres-native primitives (`bytea`, ENUM, CHECK, partial indexes, `ON CONFLICT`, partitioning, triggers) rather than a portable subset; SQLite carries them by translation as a logic-only convenience.
+
 ## Context
 
 Designing the schema from first principles (ADR-001) means designing it for the database it actually runs on. The reference schema was SQLite-shaped — `TEXT` for everything, integer flags for booleans, no real types — because that is what SQLite offers. The integrity guarantees this design relies on are not expressible in a lowest-common-denominator SQL subset: structural single-spend needs `UNIQUE … ON CONFLICT`; the typed-vs-derived and range invariants need CHECK constraints; intent needs an ENUM; the outbound-spendable ban needs a trigger; scale needs partitioning.

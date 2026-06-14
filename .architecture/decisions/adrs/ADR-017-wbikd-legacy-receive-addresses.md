@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted.
+Draft — the capability is implemented against the *draft* WBIKD BRC (`reference/brc-draft-wbikd.md`, not yet a ratified standard); daemon automation of address scanning (HLR #114) is still pending.
+
+**Decided:** 2026-05-14 (commit `b2fba01`, PR #109 — "feat: on-chain derivation params and OP_RETURN recovery markers (#108)"; HLR #108, WBIKD store-agnostic redesign) — the store-agnostic redesign that derives from on-chain txid/vout (not database integer IDs) and recovers via OP_RETURN markers, the design recorded here, superseding the original DB-ID derivation (HLR #102).
 
 ## Context
 
