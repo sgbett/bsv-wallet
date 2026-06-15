@@ -5,7 +5,7 @@ The ADRs in this directory are reconstructed decision records. **The filename nu
 Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 
 - **Numbers are stable IDs.** No renumbering in this pass; re-ordering by number is deferred to a later step now that every ADR is dated.
-- **Filenames are date-prefixed** — `YYYYMMDD_ADR-NNN-slug.md`, the date being the ADR's latest decision — so the directory itself lists chronologically while `ADR-NNN` stays the immutable ID. Split ADRs (011, 015) carry distinct prefixes for their two decision dates.
+- **Filenames are date-prefixed** — `YYYYMMDD_ADR-NNN-slug.md`, so the directory lists chronologically while `ADR-NNN` stays the immutable ID. The date is the ADR's **authoring** date going forward (ADRs begin as Draft, written at decision time); the reconstructed ADR-001..024 raft was backdated to each decision's date — a one-off exception, since those decisions predated their write-up — not the forward rule. Split ADRs (011, 015) carry distinct prefixes for their two (decision) dates.
 - **Same-time decisions** share one ADR, labelled (a)/(b)/(c) (e.g. ADR-004, ADR-008, ADR-013).
 - **Different-time decisions** are split into one file per decision, sharing the parent number by slug (ADR-011 → delete / promotion; ADR-015 → pivot / egress).
 - A changed decision is recorded as a **new** dated ADR that supersedes the old one; decisions are not edited in place (only corrections and the Status line).
