@@ -122,8 +122,8 @@ module BSV
             )
           end
 
-          # Send-path outputs written with promoted: false. spendable rows
-          # deferred until Phase 4 (broadcast acceptance). Internal-path
+          # Send-path outputs are plain INSERTs (no promotions row yet).
+          # spendable rows deferred until Phase 4 (broadcast acceptance). Internal-path
           # callers pass an empty outputs array and reach the canonical UTXO
           # set via promote_action; change_outputs follow the same lifecycle
           # as the action's broadcast intent.
@@ -137,7 +137,7 @@ module BSV
         BSV.logger&.debug { "[Store] stage_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
         @db.transaction do
           write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
-          # Deferred-path outputs persisted with promoted: false. The BRC-100
+          # Deferred-path outputs persisted as plain INSERTs (no promotions row). The BRC-100
           # signAction call later updates raw_tx + wtxid but doesn't reach
           # the outputs again; their metadata must live in the row from now on.
           write_pending_outputs(action_id: action_id, outputs: outputs)
@@ -168,7 +168,8 @@ module BSV
             )
 
             wallet_owned = out[:derivation_prefix] || out[:output_type] == 'root'
-            models::Spendable.create(output_id: output.id, action_id: action_id) if wallet_owned
+            # INSERT … ON CONFLICT (output_id) DO NOTHING — idempotent / concurrency-safe.
+            models::Spendable.dataset.insert_conflict(target: :output_id).insert(output_id: output.id, action_id: action_id) if wallet_owned
 
             write_output_associations(output: output, action_id: action_id, spec: out)
 
@@ -195,7 +196,10 @@ module BSV
             wallet_owned = output.derivation_prefix || output.output_type == 'root' || change_output?(output_id: output.id)
             next unless wallet_owned
 
-            models::Spendable.create(output_id: output.id, action_id: action_id)
+            # INSERT … ON CONFLICT (output_id) DO NOTHING: concurrent Phase-4
+            # promotion (duplicate ARC events / poll + SSE) is a no-op, not a
+            # unique violation.
+            models::Spendable.dataset.insert_conflict(target: :output_id).insert(output_id: output.id, action_id: action_id)
             promoted << output.id
           end
           promoted
@@ -617,7 +621,10 @@ module BSV
                                          )
                                          .all
           change_outputs.each do |output|
-            models::Spendable.create(output_id: output.id, action_id: action_id)
+            # INSERT … ON CONFLICT (output_id) DO NOTHING — the exclude() above
+            # is a fast path; this makes concurrent calls race-safe, not a
+            # unique violation.
+            models::Spendable.dataset.insert_conflict(target: :output_id).insert(output_id: output.id, action_id: action_id)
           end
         end
       end
@@ -675,9 +682,8 @@ module BSV
           #
           # Atomicity here closes a crash-recovery gap: without it the
           # broadcasts row could carry a terminal status (so the
-          # resolution loop won't rediscover it) while outputs remained
-          # promoted: false. Single transaction = single recoverable
-          # state.
+          # resolution loop won't rediscover it) while the promotions row was
+          # never recorded. Single transaction = single recoverable state.
           status_upper = tx_status.to_s.upcase
           if !status_upper.empty? && !BSV::Wallet::ArcStatus::REJECTED.include?(status_upper)
             promote_action_outputs(action_id: action_id, authorising_status: tx_status)
@@ -981,7 +987,7 @@ module BSV
         end
       end
 
-      # Write send-path output rows as promoted: false. Spendable rows are
+      # Write send-path output rows (plain INSERTs; no promotions row yet). Spendable rows are
       # deferred until Phase 4 (broadcast acceptance). Caller is responsible
       # for wrapping in a transaction.
       def write_pending_outputs(action_id:, outputs:)
