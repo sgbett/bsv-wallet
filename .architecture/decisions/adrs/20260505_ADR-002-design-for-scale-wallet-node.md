@@ -4,7 +4,7 @@
 
 Accepted.
 
-**Decided:** 2026-05-05 (commit `d08edd3`, "feat: PostgreSQL schema, migration, and Sequel models", HLR #1) — the scale target is realised as the structural schema choices (single-spend `UNIQUE`, outputs/spendable partition, derived state) that the downstream ADRs cite; the wallet-node framing in `.architecture/reviews/wallet-node-architecture.md` followed (2026-05-23, `63ca625`).
+**Decided:** 2026-05-05 (commit `d08edd3`, "feat: PostgreSQL schema, migration, and Sequel models", HLR #1) — the scale target is realised as the structural schema choices (single-spend `UNIQUE`, outputs/spendable partition, derived state) that the downstream ADRs cite; the wallet-node framing in `.architecture/reviews/20260523_wallet-node-architecture.md` followed (2026-05-23, `63ca625`).
 
 ## Context
 
@@ -64,4 +64,4 @@ This is the design's one large forward bet, made consciously. **Necessity** ride
 ## References
 
 * ADR-003 (principle of state) and ADR-011 (tempered immutability) — both rest on this target.
-* `.architecture/reviews/wallet-node-architecture.md` — the wallet-node framing in full.
+* `.architecture/reviews/20260523_wallet-node-architecture.md` — the wallet-node framing in full.

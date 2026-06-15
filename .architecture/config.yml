@@ -9,10 +9,21 @@ project:
 settings:
   pragmatic_mode: true
   review_depth: thorough
-  adr_numbering: sequential
+  # date-prefixed sequential: YYYYMMDD_ADR-NNN-kebab-title.md
+  # YYYYMMDD = the AUTHORING date (ADRs begin as Draft, written at decision time).
+  # Exception: the reconstructed ADR-001..024 raft was backdated to each
+  # decision's date, since those decisions predated their write-up (and some
+  # were ratified over time) — a one-off, not the forward rule.
+  adr_numbering: date-prefixed-sequential
   auto_detect_changes: true
 
 review:
   default_scope: full
   include_security: true
   include_performance: true
+  # Output layout — convention applied by the orchestrating agent, NOT enforced
+  # by the single-shot specialist-review skill (which writes a flat file and is
+  # unaware of sibling reviews):
+  output_dir: .architecture/reviews
+  file_prefix: "YYYYMMDD_"                       # date-prefix every review file
+  multi_review_subfolder: "YYYYMMDD_<subject>/"  # group an item's reviews once it has more than one

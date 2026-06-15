@@ -5,7 +5,7 @@ The ADRs in this directory are reconstructed decision records. **The filename nu
 Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 
 - **Numbers are stable IDs.** No renumbering in this pass; re-ordering by number is deferred to a later step now that every ADR is dated.
-- **Filenames are date-prefixed** — `YYYYMMDD_ADR-NNN-slug.md`, the date being the ADR's latest decision — so the directory itself lists chronologically while `ADR-NNN` stays the immutable ID. Split ADRs (011, 015) carry distinct prefixes for their two decision dates.
+- **Filenames are date-prefixed** — `YYYYMMDD_ADR-NNN-slug.md`, so the directory lists chronologically while `ADR-NNN` stays the immutable ID. The date is the ADR's **authoring** date going forward (ADRs begin as Draft, written at decision time); the reconstructed ADR-001..024 raft was backdated to each decision's date — a one-off exception, since those decisions predated their write-up — not the forward rule. Split ADRs (011, 015) carry distinct prefixes for their two (decision) dates.
 - **Same-time decisions** share one ADR, labelled (a)/(b)/(c) (e.g. ADR-004, ADR-008, ADR-013).
 - **Different-time decisions** are split into one file per decision, sharing the parent number by slug (ADR-011 → delete / promotion; ADR-015 → pivot / egress).
 - A changed decision is recorded as a **new** dated ADR that supersedes the old one; decisions are not edited in place (only corrections and the Status line).
@@ -33,7 +33,8 @@ Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 | 19 | [ADR-013](20260527_ADR-013-auto-fund-create-action.md) | 2026-05-27 | Accepted | Auto-funding createAction (selection, fees, change) |
 | 20 | [ADR-019](20260527_ADR-019-broadcasts-intent-declarative-enforcement.md) | 2026-05-27 | Accepted | broadcasts-intent: a cross-table invariant kept declarative in the schema |
 | 21 | [ADR-011 (delete)](20260530_ADR-011-delete-unpromoted-outputs.md) | 2026-05-30 | Accepted | Failure-bounded DELETE of unpromoted outputs |
-| 22 | [ADR-015 (egress)](20260610_ADR-015-egress-beef-validation.md) | 2026-06-10 | Accepted | Egress-BEEF validation — never ship an invalid BEEF |
-| 23 | [ADR-018](20260610_ADR-018-stateless-sdk-stateful-wallet-boundary.md) | 2026-06-10 | Accepted | Stateless SDK / stateful wallet boundary |
-| 24 | [ADR-022](20260610_ADR-022-state-as-a-fk-row.md) | 2026-06-10 | Accepted | State as a FK row (the general membership-row pattern) |
-| 25 | [ADR-023](20260615_ADR-023-promotion-as-a-row.md) | 2026-06-15 | Accepted | Promotion is a row, not a column (supersedes ADR-011 promotion) |
+| 22 | [ADR-024](20260607_ADR-024-engine-decomposition-deferred-sends.md) | 2026-06-07 | Accepted | Decompose the Engine — precondition for restoring the deferred sends (#291) |
+| 23 | [ADR-015 (egress)](20260610_ADR-015-egress-beef-validation.md) | 2026-06-10 | Accepted | Egress-BEEF validation — never ship an invalid BEEF |
+| 24 | [ADR-018](20260610_ADR-018-stateless-sdk-stateful-wallet-boundary.md) | 2026-06-10 | Accepted | Stateless SDK / stateful wallet boundary |
+| 25 | [ADR-022](20260610_ADR-022-state-as-a-fk-row.md) | 2026-06-10 | Accepted | State as a FK row (the general membership-row pattern) |
+| 26 | [ADR-023](20260615_ADR-023-promotion-as-a-row.md) | 2026-06-15 | Accepted | Promotion is a row, not a column (supersedes ADR-011 promotion) |
