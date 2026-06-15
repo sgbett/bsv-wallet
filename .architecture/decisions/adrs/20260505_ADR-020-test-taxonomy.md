@@ -4,7 +4,7 @@
 
 Draft — the taxonomy is decided; the test-suite split it prescribes (HLR #64) is not yet complete.
 
-**Decided:** 2026-06-14 (commit `8f5375d`, "docs: add ADR-020 test taxonomy (engine-intent vs store-invariant)") — the date the taxonomy was articulated as this ADR; there is no separate implementing commit because the prescribed split (HLR #64, open since 2026-05-05) is not yet done. Dated to the ADR's own authoring, not a code decision.
+**Decided:** 2026-05-05 (HLR #64, "Testing strategy — separate engine intent tests from store data-invariant tests") — dated to when the taxonomy was decided, i.e. when #64 was raised, not to the later write-up. The test-suite reorganisation it prescribes (#64) is still open, hence Draft.
 
 ## Context
 

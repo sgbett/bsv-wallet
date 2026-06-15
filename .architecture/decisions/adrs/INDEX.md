@@ -22,18 +22,18 @@ Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 | 8 | [ADR-008](20260505_ADR-008-binary-internal-hex-at-boundaries.md) | 2026-05-05 | Accepted | (a) binary internally, hex at boundaries · (b) identity-pubkey carve-out |
 | 9 | [ADR-009](20260505_ADR-009-postgres-native-primitives.md) | 2026-05-05 | Accepted | Postgres-native primitives over a portable subset |
 | 10 | [ADR-021](20260505_ADR-021-brc100-interface-design.md) | 2026-05-05 | Accepted | BRC-100 interface as a plain Ruby module over the schema |
-| 11 | [ADR-010](20260506_ADR-010-derivation-placement-output-type.md) | 2026-05-06 | Accepted | Derivation data on outputs; the inference ban |
-| 12 | [ADR-014](20260506_ADR-014-import-as-rescue-self-pay-derived.md) | 2026-05-06 | Accepted | output_type ENUM / root; import-as-rescue, self-pay to a derived address |
-| 13 | [ADR-015 (pivot)](20260513_ADR-015-chain-tracker-pivot.md) | 2026-05-13 | Accepted | Chain-tracker pivot to the SDK's `Transaction::Tx#verify` |
-| 14 | [ADR-017](20260514_ADR-017-wbikd-legacy-receive-addresses.md) | 2026-05-14 | Draft | Legacy receive addresses via WBIKD, on existing machinery |
-| 15 | [ADR-012](20260523_ADR-012-store-abstraction.md) | 2026-05-23 | Accepted | Store abstraction over a relational floor |
-| 16 | [ADR-016](20260523_ADR-016-walletd-daemon-omq-concurrency.md) | 2026-05-23 | Accepted | walletd daemon + ZeroMQ/OMQ concurrency |
-| 17 | [ADR-011 (promotion)](20260527_ADR-011-post-broadcast-promotion.md) | 2026-05-27 | Superseded by ADR-023 | Post-broadcast promotion: a one-shot UPDATE on outputs |
-| 18 | [ADR-013](20260527_ADR-013-auto-fund-create-action.md) | 2026-05-27 | Accepted | Auto-funding createAction (selection, fees, change) |
-| 19 | [ADR-019](20260527_ADR-019-broadcasts-intent-declarative-enforcement.md) | 2026-05-27 | Accepted | broadcasts-intent: a cross-table invariant kept declarative in the schema |
-| 20 | [ADR-011 (delete)](20260530_ADR-011-delete-unpromoted-outputs.md) | 2026-05-30 | Accepted | Failure-bounded DELETE of unpromoted outputs |
-| 21 | [ADR-015 (egress)](20260610_ADR-015-egress-beef-validation.md) | 2026-06-10 | Accepted | Egress-BEEF validation — never ship an invalid BEEF |
-| 22 | [ADR-018](20260610_ADR-018-stateless-sdk-stateful-wallet-boundary.md) | 2026-06-10 | Accepted | Stateless SDK / stateful wallet boundary |
-| 23 | [ADR-022](20260610_ADR-022-state-as-a-fk-row.md) | 2026-06-10 | Accepted | State as a FK row (the general membership-row pattern) |
-| 24 | [ADR-020](20260614_ADR-020-test-taxonomy.md) | 2026-06-14 | Draft | Test taxonomy — engine-intent vs store-invariant |
+| 11 | [ADR-020](20260505_ADR-020-test-taxonomy.md) | 2026-05-05 | Draft | Test taxonomy — engine-intent vs store-invariant |
+| 12 | [ADR-010](20260506_ADR-010-derivation-placement-output-type.md) | 2026-05-06 | Accepted | Derivation data on outputs; the inference ban |
+| 13 | [ADR-014](20260506_ADR-014-import-as-rescue-self-pay-derived.md) | 2026-05-06 | Accepted | output_type ENUM / root; import-as-rescue, self-pay to a derived address |
+| 14 | [ADR-015 (pivot)](20260513_ADR-015-chain-tracker-pivot.md) | 2026-05-13 | Accepted | Chain-tracker pivot to the SDK's `Transaction::Tx#verify` |
+| 15 | [ADR-017](20260514_ADR-017-wbikd-legacy-receive-addresses.md) | 2026-05-14 | Draft | Legacy receive addresses via WBIKD, on existing machinery |
+| 16 | [ADR-012](20260523_ADR-012-store-abstraction.md) | 2026-05-23 | Accepted | Store abstraction over a relational floor |
+| 17 | [ADR-016](20260523_ADR-016-walletd-daemon-omq-concurrency.md) | 2026-05-23 | Accepted | walletd daemon + ZeroMQ/OMQ concurrency |
+| 18 | [ADR-011 (promotion)](20260527_ADR-011-post-broadcast-promotion.md) | 2026-05-27 | Superseded by ADR-023 | Post-broadcast promotion: a one-shot UPDATE on outputs |
+| 19 | [ADR-013](20260527_ADR-013-auto-fund-create-action.md) | 2026-05-27 | Accepted | Auto-funding createAction (selection, fees, change) |
+| 20 | [ADR-019](20260527_ADR-019-broadcasts-intent-declarative-enforcement.md) | 2026-05-27 | Accepted | broadcasts-intent: a cross-table invariant kept declarative in the schema |
+| 21 | [ADR-011 (delete)](20260530_ADR-011-delete-unpromoted-outputs.md) | 2026-05-30 | Accepted | Failure-bounded DELETE of unpromoted outputs |
+| 22 | [ADR-015 (egress)](20260610_ADR-015-egress-beef-validation.md) | 2026-06-10 | Accepted | Egress-BEEF validation — never ship an invalid BEEF |
+| 23 | [ADR-018](20260610_ADR-018-stateless-sdk-stateful-wallet-boundary.md) | 2026-06-10 | Accepted | Stateless SDK / stateful wallet boundary |
+| 24 | [ADR-022](20260610_ADR-022-state-as-a-fk-row.md) | 2026-06-10 | Accepted | State as a FK row (the general membership-row pattern) |
 | 25 | [ADR-023](20260615_ADR-023-promotion-as-a-row.md) | 2026-06-15 | Accepted | Promotion is a row, not a column (supersedes ADR-011 promotion) |
