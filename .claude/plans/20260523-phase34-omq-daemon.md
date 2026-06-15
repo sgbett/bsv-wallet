@@ -3,7 +3,7 @@
 **Date**: 2026-05-23
 **Status**: Plan
 **Depends on**: Phase 2+3 strip (merged as PR #155)
-**Related**: .claude/plans/20260523-walletd-omq-architecture.md, .architecture/reviews/store-walletd-boundary.md
+**Related**: .claude/plans/20260523-walletd-omq-architecture.md, .architecture/reviews/20260523_store-walletd-boundary.md
 
 ---
 
