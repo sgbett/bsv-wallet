@@ -399,27 +399,43 @@ RSpec.describe 'Schema constraints', :postgres, :store do
   # --- spendable (pure membership) ---
 
   describe 'spendable' do
+    # spendable.action_id is FK'd to promotions(action_id) (#307) — a spendable
+    # row cannot exist without a promotions row for the same action. These
+    # use an internal-path promotion (intent='none', NULL status).
     it 'allows thin spendable row for root output' do
-      action_id = insert_action
+      action_id = insert_action(broadcast_intent: 'none')
       output_id = create_output(action_id: action_id, output_type: 'root')
+      db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: nil)
       expect do
         db[:spendable].insert(output_id: output_id, action_id: action_id)
       end.not_to raise_error
     end
 
     it 'allows thin spendable row for derived output' do
-      action_id = insert_action
+      action_id = insert_action(broadcast_intent: 'none')
       output_id = create_output(action_id: action_id, output_type: nil,
                                 derivation_prefix: 'prefix', derivation_suffix: 'suffix',
                                 sender_identity_key: 'self')
+      db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: nil)
       expect do
         db[:spendable].insert(output_id: output_id, action_id: action_id)
       end.not_to raise_error
     end
 
+    it 'rejects a spendable row with no promotions row (FK to promotions)' do
+      action_id = insert_action(broadcast_intent: 'none')
+      output_id = create_output(action_id: action_id, output_type: 'root')
+      expect do
+        db.transaction(savepoint: true) do
+          db[:spendable].insert(output_id: output_id, action_id: action_id)
+        end
+      end.to raise_error(Sequel::ForeignKeyConstraintViolation)
+    end
+
     it 'rejects spendable row for outbound output' do
-      action_id = insert_action
+      action_id = insert_action(broadcast_intent: 'none')
       output_id = create_output(action_id: action_id, output_type: 'outbound')
+      db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: nil)
       expect do
         db.transaction(savepoint: true) do
           db[:spendable].insert(output_id: output_id, action_id: action_id)
@@ -428,12 +444,113 @@ RSpec.describe 'Schema constraints', :postgres, :store do
     end
   end
 
+  # --- promotions (promotion-as-a-row, #307) ---
+  #
+  # The promotions row is the canonical-state fact that an action's outputs
+  # are spendable. Its gating constraints are the heart of the feature.
+
+  describe 'promotions' do
+    # promo_path: internal => NULL status; send => a status.
+    it 'rejects an internal promotion (intent=none) carrying a status (promo_path)' do
+      # intent='none' with a non-NULL status violates promo_path. (An action
+      # with broadcast_intent='none' can't have a broadcasts row either, so the
+      # composite FK is moot — promo_path is the gate under test.)
+      action_id = insert_action(broadcast_intent: 'none')
+      expect do
+        db.transaction(savepoint: true) do
+          db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: 'QUEUED')
+        end
+      end.to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    it 'rejects a send promotion (intent<>none) with a NULL status (promo_path)' do
+      action_id = insert_action(broadcast_intent: 'delayed')
+      expect do
+        db.transaction(savepoint: true) do
+          db[:promotions].insert(action_id: action_id, intent: 'delayed', authorising_status: nil)
+        end
+      end.to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    # auth_not_rejected: a present status must not be terminal-rejected.
+    it "rejects authorising_status = 'REJECTED' (auth_not_rejected)" do
+      action_id = insert_action(broadcast_intent: 'delayed')
+      db[:broadcasts].insert(action_id: action_id, intent: 'delayed', tx_status: 'REJECTED')
+      expect do
+        db.transaction(savepoint: true) do
+          db[:promotions].insert(action_id: action_id, intent: 'delayed', authorising_status: 'REJECTED')
+        end
+      end.to raise_error(Sequel::CheckConstraintViolation)
+    end
+
+    # composite FK (action_id, authorising_status) -> broadcasts(action_id, tx_status):
+    # a send promotion requires a broadcasts row holding that status.
+    it 'rejects a send promotion when no broadcasts row holds that tx_status (composite FK)' do
+      action_id = insert_action(broadcast_intent: 'delayed')
+      db[:broadcasts].insert(action_id: action_id, intent: 'delayed', tx_status: 'QUEUED')
+      expect do
+        db.transaction(savepoint: true) do
+          # SEEN_ON_NETWORK is non-rejected (passes the CHECKs) but no broadcasts
+          # row holds it — the composite FK must reject.
+          db[:promotions].insert(action_id: action_id, intent: 'delayed', authorising_status: 'SEEN_ON_NETWORK')
+        end
+      end.to raise_error(Sequel::ForeignKeyConstraintViolation)
+    end
+
+    # spendable.action_id -> promotions(action_id) ON DELETE CASCADE: deleting
+    # the promotions row removes the dependent spendable row.
+    it 'cascades to spendable when the promotions row is deleted (ON DELETE CASCADE)' do
+      action_id = insert_action(broadcast_intent: 'none')
+      output_id = create_output(action_id: action_id, output_type: 'root')
+      db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: nil)
+      db[:spendable].insert(output_id: output_id, action_id: action_id)
+      expect(db[:spendable].where(output_id: output_id).count).to eq(1)
+
+      db[:promotions].where(action_id: action_id).delete
+
+      expect(db[:promotions].where(action_id: action_id).count).to eq(0)
+      expect(db[:spendable].where(output_id: output_id).count).to eq(0)
+    end
+
+    # ON UPDATE CASCADE on the broadcasts composite FK: advancing tx_status
+    # among non-rejected values syncs promotions.authorising_status...
+    it 'cascades authorising_status when broadcasts.tx_status advances (ON UPDATE CASCADE)' do
+      action_id = insert_action(broadcast_intent: 'delayed')
+      db[:broadcasts].insert(action_id: action_id, intent: 'delayed', tx_status: 'QUEUED')
+      db[:promotions].insert(action_id: action_id, intent: 'delayed', authorising_status: 'QUEUED')
+
+      db[:broadcasts].where(action_id: action_id).update(tx_status: 'SEEN_ON_NETWORK')
+
+      expect(db[:promotions].where(action_id: action_id).get(:authorising_status)).to eq('SEEN_ON_NETWORK')
+    end
+
+    # ...but flipping tx_status to REJECTED while a promotions row exists is
+    # rejected: the ON UPDATE CASCADE would set authorising_status='REJECTED',
+    # which violates auth_not_rejected. reject_action must delete the promotions
+    # row first.
+    it 'rejects flipping broadcasts.tx_status to REJECTED while a promotions row exists (cascade hits auth_not_rejected)' do
+      action_id = insert_action(broadcast_intent: 'delayed')
+      db[:broadcasts].insert(action_id: action_id, intent: 'delayed', tx_status: 'QUEUED')
+      db[:promotions].insert(action_id: action_id, intent: 'delayed', authorising_status: 'QUEUED')
+
+      expect do
+        db.transaction(savepoint: true) do
+          db[:broadcasts].where(action_id: action_id).update(tx_status: 'REJECTED')
+        end
+      end.to raise_error(Sequel::CheckConstraintViolation)
+    end
+  end
+
   # --- internal-action delete guard (008) ---
 
   describe 'prevent_internal_action_delete' do
-    it 'forbids deleting an internal action that owns a promoted output (received UTXO history)' do
+    it 'forbids deleting an internal action that has a promotions row (received UTXO history)' do
       action_id = insert_action(broadcast_intent: 'none')
-      create_output(action_id: action_id) # promoted defaults to true
+      create_output(action_id: action_id)
+      # The promotions row (intent='none') is now what marks the internal
+      # action's outputs canonical (#307) — the trigger reads promotions, not
+      # outputs.promoted.
+      db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: nil)
       expect do
         db.transaction(savepoint: true) { db[:actions].where(id: action_id).delete }
       end.to raise_error(Sequel::DatabaseError, /cannot delete internal action/)

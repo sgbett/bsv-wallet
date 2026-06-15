@@ -92,9 +92,15 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
       expect(action.derived_status).to eq(:internal)
     end
 
-    it 'returns :unproven when outputs exist but no proof' do
+    it 'returns :unproven when a promotions row exists but no proof' do
+      # :unproven now gates on the existence of a promotions row (#307) — the
+      # post-broadcast-acceptance fact, not merely the presence of outputs.
       action = described_class.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
       BSV::Wallet::Store::Models::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      # Send-path promotion: the broadcasts row holds the authorising tx_status
+      # that the promotions row's composite FK references.
+      BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed', tx_status: 'QUEUED')
+      BSV::Wallet::Store::Models::Promotion.create(action_id: action.id, intent: 'delayed', authorising_status: 'QUEUED')
       expect(action.reload.derived_status).to eq(:unproven)
     end
 

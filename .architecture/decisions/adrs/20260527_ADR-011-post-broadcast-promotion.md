@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (the UPDATE deviation). The *promote-authorisation enforcement* is an open defect — see "Open defect" below, tracked in #307.
+**Superseded by [ADR-023](20260615_ADR-023-promotion-as-a-row.md)** (#307). The one-shot UPDATE deviation and the open promote-authorisation defect recorded below are resolved there: promotion became the existence of a `promotions` row with a declarative composite-FK backstop, and `outputs.promoted` no longer exists. This ADR is retained as the record of the interim flag-based design.
 
 **Decided:** 2026-05-27 (PR #194, restore Phase-4 promotion; `1efb77a`)
 

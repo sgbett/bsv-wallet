@@ -58,7 +58,7 @@ module BSV
         # life with +broadcast_at IS NULL+ (queued, not yet attempted).
         #
         # When +outputs+ or +change_outputs+ are present, writes the
-        # corresponding output rows (with +promoted: false+) and their
+        # corresponding output rows (with no promotions row yet) and their
         # association rows (output_details, output_baskets, output_tags)
         # in the same transaction. No spendable rows — promotion to the
         # canonical UTXO set happens at Phase 4 via {#promote_action_outputs}
@@ -73,12 +73,12 @@ module BSV
         # @param wtxid [String] 32-byte binary wtxid (wire byte order)
         # @param raw_tx [String] binary-encoded signed transaction
         # @param outputs [Array<Hash>] optional caller-declared outputs to write
-        #   atomically with +promoted: false+. Each: :satoshis, :vout,
+        #   atomically with no promotions row yet. Each: :satoshis, :vout,
         #   :locking_script, :output_type, :derivation_prefix,
         #   :derivation_suffix, :sender_identity_key, :basket, :tags,
         #   :description, :custom_instructions
         # @param change_outputs [Array<Hash>] optional change outputs to write
-        #   atomically with +promoted: false+. Each: :satoshis, :vout,
+        #   atomically with no promotions row yet. Each: :satoshis, :vout,
         #   :locking_script, :derivation_prefix, :derivation_suffix,
         #   :sender_identity_key
         def sign_action(action_id:, wtxid:, raw_tx:, outputs: [], change_outputs: [])
@@ -94,7 +94,7 @@ module BSV
         # must wait for the real {#sign_action} call (via BRC-100
         # +signAction+) to avoid pushing an unsigned transaction to ARC.
         #
-        # Outputs are written with +promoted: false+ (no spendable rows yet)
+        # Outputs are written with no promotions row yet (no spendable rows yet)
         # so the BRC-100 +signAction+ — which does not receive the +outputs+
         # array again — finds the caller's metadata already persisted. Phase 4
         # promotion happens later via {#promote_action_outputs} on broadcast
@@ -105,7 +105,7 @@ module BSV
         # @param raw_tx [String] binary-encoded transaction with placeholder
         #   unlocking scripts
         # @param outputs [Array<Hash>] caller's declared outputs to persist
-        #   with +promoted: false+. Each: :satoshis, :vout, :locking_script,
+        #   with no promotions row yet. Each: :satoshis, :vout, :locking_script,
         #   :output_type, :derivation_prefix, :derivation_suffix,
         #   :sender_identity_key, :basket, :tags, :description,
         #   :custom_instructions
@@ -113,11 +113,12 @@ module BSV
           raise NotImplementedError
         end
 
-        # Internal-path Phase 4: Write outputs as already promoted.
+        # Internal-path Phase 4: Write an action's outputs as canonical.
         #
-        # Inserts output rows (+promoted: true+), spendable entries for
-        # wallet-owned outputs, basket memberships, output details, and tags
-        # in one transaction. Used by paths where the action's broadcast
+        # Records the per-action +promotions+ row (intent='none', #307), then
+        # inserts output rows, spendable entries for wallet-owned outputs,
+        # basket memberships, output details, and tags in one transaction.
+        # Used by paths where the action's broadcast
         # intent is +'none'+ — incoming actions, root UTXO imports, wbikd —
         # so outputs join the canonical UTXO set immediately.
         #
@@ -130,22 +131,24 @@ module BSV
           raise NotImplementedError
         end
 
-        # Send-path Phase 4: Promote pre-existing output rows for an action.
+        # Send-path Phase 4: Promote an action by recording its promotions row.
         #
-        # Flips +outputs.promoted+ from false to true and inserts spendable
+        # Inserts the per-action +promotions+ row (the canonical-state fact,
+        # #307) with the given +authorising_status+, then creates spendable
         # rows for wallet-owned outputs (caller outputs with derivation
-        # parameters, root outputs, or change outputs). Idempotent — outputs
-        # already promoted are skipped, and existing spendable rows are not
-        # duplicated.
+        # parameters, root outputs, or change outputs). The promotions row's
+        # composite FK to +broadcasts(action_id, tx_status)+ means it can only
+        # be recorded while the broadcast holds that (non-rejected) status.
+        # Idempotent — a second call finds the promotions row present and no-ops.
         #
         # Called when ARC accepts a broadcast (inline or via the daemon).
-        # The output rows themselves were written at sign time via
-        # {#sign_action} with +promoted: false+.
         #
         # @param action_id [Integer]
-        # @return [Array<Integer>] IDs of outputs newly promoted (empty when
+        # @param authorising_status [String] the broadcast tx_status authorising
+        #   the promotion (the broadcasts row's current, non-rejected status)
+        # @return [Array<Integer>] IDs of outputs made spendable (empty when
         #   already promoted — idempotent guard)
-        def promote_action_outputs(action_id:)
+        def promote_action_outputs(action_id:, authorising_status:)
           raise NotImplementedError
         end
 

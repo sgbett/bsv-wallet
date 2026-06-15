@@ -70,6 +70,9 @@ RSpec.shared_context 'store setup' do
     end
 
     output = BSV::Wallet::Store::Models::Output.create(attrs)
+    # The promotions row authorises the spendable row (#307); intent='none'
+    # matches this internal/incoming funding fixture.
+    BSV::Wallet::Store::Models::Promotion.create(action_id: action.id, intent: 'none', authorising_status: nil)
     BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: action.id)
 
     if basket && basket != 'default'

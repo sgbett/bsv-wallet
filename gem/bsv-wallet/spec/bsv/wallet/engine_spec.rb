@@ -209,20 +209,20 @@ RSpec.describe BSV::Wallet::Engine do
       expect(result[:signable_transaction][:tx]).to be_a(String)
       expect(result[:signable_transaction][:tx].bytesize).to be >= 10
 
-      # Send-path outputs are persisted with promoted: false at stage time —
-      # they exist in the outputs table but aren't in the canonical UTXO set
-      # until Phase 4 (broadcast acceptance) flips promoted: true and inserts
-      # spendable rows. list_outputs is gated on spendable, so total is 0.
+      # Send-path outputs are persisted unpromoted at stage time — they exist
+      # in the outputs table but aren't in the canonical UTXO set until Phase 4
+      # (broadcast acceptance) records the promotions row and inserts spendable
+      # rows. list_outputs is gated on spendable, so total is 0.
       listed = engine.list_outputs(basket: 'deferred')
       expect(listed[:total_outputs]).to eq(0)
 
       action = store.find_action(reference: result[:signable_transaction][:reference])
       expect(action[:raw_tx]).to be_a(String)
 
-      # The pending output row exists with promoted: false.
+      # The pending output row exists, but there is no promotions row yet.
       rows = BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).all
       expect(rows.size).to eq(1)
-      expect(rows.first.promoted).to be(false)
+      expect(BSV::Wallet::Store::Models::Promotion.where(action_id: action[:id]).any?).to be(false)
     end
 
     it 'creates a no-send action' do
@@ -529,9 +529,9 @@ RSpec.describe BSV::Wallet::Engine do
       reference = create_result[:signable_transaction][:reference]
 
       # Send-path outputs aren't in the canonical UTXO set yet — they were
-      # written with promoted: false at stage time. Phase 4 (broadcast
-      # acceptance) is what flips them to promoted: true and inserts the
-      # spendable rows that list_outputs queries.
+      # written unpromoted at stage time. Phase 4 (broadcast acceptance) is
+      # what records the promotions row and inserts the spendable rows that
+      # list_outputs queries.
       listed_before = engine.list_outputs(basket: 'deferred_sign')
       expect(listed_before[:total_outputs]).to eq(0)
 
@@ -581,9 +581,10 @@ RSpec.describe BSV::Wallet::Engine do
       # Outputs still pending — no Phase 4 yet.
       expect(engine.list_outputs(basket: basket)[:total_outputs]).to eq(0)
 
-      # Simulate the daemon flipping promoted: true on broadcast acceptance.
-      promoted_ids = store.promote_action_outputs(action_id: action[:id])
-      expect(promoted_ids.size).to eq(1)
+      # Simulate the daemon recording a non-rejected broadcast result on
+      # acceptance — record_broadcast_result promotes (QUEUED is non-rejected).
+      store.record_broadcast_result(action_id: action[:id], tx_status: 'QUEUED')
+      expect(BSV::Wallet::Store::Models::Promotion.where(action_id: action[:id]).any?).to be(true)
 
       # The output is now in the canonical UTXO set.
       listed = engine.list_outputs(basket: basket)
@@ -591,10 +592,10 @@ RSpec.describe BSV::Wallet::Engine do
       expect(listed[:outputs].first[:satoshis]).to eq(0)
     end
 
-    it 'builds a valid Atomic BEEF before broadcast acceptance (outputs still promoted: false)' do
+    it 'builds a valid Atomic BEEF before broadcast acceptance (no promotions row yet)' do
       # BEEF construction resolves *source* outputs of the new action's
       # inputs (parent transactions), not the new action's own outputs.
-      # Even with the new action's outputs sitting at promoted: false,
+      # Even with the new action unpromoted (no promotions row),
       # BEEF construction should produce a valid envelope.
       basket = 'beef_before_phase4'
       create_result = engine.create_action(
@@ -610,7 +611,8 @@ RSpec.describe BSV::Wallet::Engine do
 
       action = store.find_action(wtxid: create_result[:txid])
       rows = BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).all
-      expect(rows.map(&:promoted)).to all(be(false))
+      expect(rows).not_to be_empty
+      expect(BSV::Wallet::Store::Models::Promotion.where(action_id: action[:id]).any?).to be(false)
 
       parsed = parse_beef_tx(create_result[:tx])
       expect(parsed.outputs.length).to eq(1)
@@ -807,7 +809,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     context 'output persistence at stage time' do
-      it 'writes outputs with promoted: false during deferred create_action' do
+      it 'writes outputs with no promotions row during deferred create_action' do
         binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
         create_result = engine.create_action(
           description: 'deferred promo',
@@ -824,12 +826,12 @@ RSpec.describe BSV::Wallet::Engine do
         listed = engine.list_outputs(basket: 'deferred_test')
         expect(listed[:total_outputs]).to eq(0)
 
-        # The output row itself exists with promoted: false.
+        # The output row itself exists, but no promotions row has been recorded.
         action = store.find_action(reference: create_result[:signable_transaction][:reference])
         rows = BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).all
         expect(rows.size).to eq(1)
         expect(rows.first.satoshis).to eq(0)
-        expect(rows.first.promoted).to be(false)
+        expect(BSV::Wallet::Store::Models::Promotion.where(action_id: action[:id]).any?).to be(false)
       end
 
       it 'stores unsigned raw_tx on the action' do
@@ -942,17 +944,16 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#reject_action' do
     it 'delegates to Store#reject_action and returns a structured result' do
-      result = engine.create_action(
-        description: 'speculative inline',
-        inputs: [],
-        outputs: [{ satoshis: 0, locking_script: OP_TRUE, output_description: 'out' }],
-        no_send: true
+      # A rejectable send action: broadcast_intent='inline', a broadcasts row
+      # holding REJECTED, and (per #307) no promotions row — the promotions row
+      # pins intent='none' so it can't be flipped to 'inline' after the fact;
+      # build the inline action directly instead.
+      action = store.send(:models)::Action.create(
+        outgoing: true, description: 'speculative inline', nlocktime: 0,
+        broadcast_intent: 'inline',
+        wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)
       )
-      action_id = store.find_action(wtxid: result[:txid])[:id]
-
-      # Manually flip to inline + add broadcasts row to make it a valid
-      # reject_action target (no_send actions raise per design).
-      store.db[:actions].where(id: action_id).update(broadcast_intent: 'inline')
+      action_id = action.id
       store.db[:broadcasts].insert(action_id: action_id, intent: 'inline', tx_status: 'REJECTED')
 
       response = engine.reject_action(action_id: action_id)
