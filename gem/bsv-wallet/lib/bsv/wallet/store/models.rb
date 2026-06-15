@@ -26,6 +26,7 @@ module BSV
         autoload :Basket,           'bsv/wallet/store/models/basket'
         autoload :Output,           'bsv/wallet/store/models/output'
         autoload :Spendable,        'bsv/wallet/store/models/spendable'
+        autoload :Promotion,        'bsv/wallet/store/models/promotion'
         autoload :OutputDetail,     'bsv/wallet/store/models/output_detail'
         autoload :OutputBasket,     'bsv/wallet/store/models/output_basket'
         autoload :Input,            'bsv/wallet/store/models/input'

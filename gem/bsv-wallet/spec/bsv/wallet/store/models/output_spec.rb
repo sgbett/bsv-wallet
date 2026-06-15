@@ -3,7 +3,9 @@
 require_relative '../shared_context'
 
 RSpec.describe BSV::Wallet::Store::Models::Output, :store do
-  let(:action) { BSV::Wallet::Store::Models::Action.create(outgoing: true, description: 'test action', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
+  # broadcast_intent: 'none' so the funded-fixture promotions row (intent='none',
+  # no authorising status) satisfies promo_path (#307).
+  let(:action) { BSV::Wallet::Store::Models::Action.create(outgoing: true, description: 'test action', broadcast_intent: 'none', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
 
   def create_spendable_output(action_id: action.id, satoshis: 1000, vout: 0, **attrs)
     attrs[:locking_script] ||= SecureRandom.random_bytes(25)
@@ -11,6 +13,11 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
     attrs[:derivation_suffix] ||= '1'
     attrs[:sender_identity_key] ||= 'self'
     output = described_class.create(action_id: action_id, satoshis: satoshis, vout: vout, **attrs)
+    # spendable.action_id is FK'd to promotions(action_id) (#307) — the
+    # promotions row must exist before the spendable row.
+    unless BSV::Wallet::Store::Models::Promotion.where(action_id: action_id).any?
+      BSV::Wallet::Store::Models::Promotion.create(action_id: action_id, intent: 'none', authorising_status: nil)
+    end
     BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: action_id)
     output
   end

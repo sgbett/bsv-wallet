@@ -40,10 +40,9 @@ module BSV
             return :unsigned   if wtxid.nil?
             return :completed  if tx_proof_id
             return :internal   if values[:broadcast_intent] == 'none'
-            # Send-path outputs are persisted at sign time with promoted: false
-            # (#194). Only outputs flipped to promoted: true at Phase 4 mean
-            # the broadcast was accepted — the :unproven gate.
-            return :unproven   if outputs_dataset.where(promoted: true).any?
+            # A promotions row is recorded only at Phase 4, when the broadcast
+            # was accepted (#307) — its existence is the :unproven gate.
+            return :unproven   if BSV::Wallet::Store::Models::Promotion.where(action_id: id).any?
             return :failed     if broadcast_entry&.tx_status == 'REJECTED'
             return :sending    if broadcast_entry
 

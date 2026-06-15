@@ -28,7 +28,7 @@ Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 | 14 | [ADR-017](20260514_ADR-017-wbikd-legacy-receive-addresses.md) | 2026-05-14 | Draft | Legacy receive addresses via WBIKD, on existing machinery |
 | 15 | [ADR-012](20260523_ADR-012-store-abstraction.md) | 2026-05-23 | Accepted | Store abstraction over a relational floor |
 | 16 | [ADR-016](20260523_ADR-016-walletd-daemon-omq-concurrency.md) | 2026-05-23 | Accepted | walletd daemon + ZeroMQ/OMQ concurrency |
-| 17 | [ADR-011 (promotion)](20260527_ADR-011-post-broadcast-promotion.md) | 2026-05-27 | Accepted — promote-authorisation open (#307) | Post-broadcast promotion: a one-shot UPDATE on outputs |
+| 17 | [ADR-011 (promotion)](20260527_ADR-011-post-broadcast-promotion.md) | 2026-05-27 | Superseded by ADR-023 | Post-broadcast promotion: a one-shot UPDATE on outputs |
 | 18 | [ADR-013](20260527_ADR-013-auto-fund-create-action.md) | 2026-05-27 | Accepted | Auto-funding createAction (selection, fees, change) |
 | 19 | [ADR-019](20260527_ADR-019-broadcasts-intent-declarative-enforcement.md) | 2026-05-27 | Accepted | broadcasts-intent: a cross-table invariant kept declarative in the schema |
 | 20 | [ADR-011 (delete)](20260530_ADR-011-delete-unpromoted-outputs.md) | 2026-05-30 | Accepted | Failure-bounded DELETE of unpromoted outputs |
@@ -36,3 +36,4 @@ Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 | 22 | [ADR-018](20260610_ADR-018-stateless-sdk-stateful-wallet-boundary.md) | 2026-06-10 | Accepted | Stateless SDK / stateful wallet boundary |
 | 23 | [ADR-022](20260610_ADR-022-state-as-a-fk-row.md) | 2026-06-10 | Accepted | State as a FK row (the general membership-row pattern) |
 | 24 | [ADR-020](20260614_ADR-020-test-taxonomy.md) | 2026-06-14 | Draft | Test taxonomy — engine-intent vs store-invariant |
+| 25 | [ADR-023](20260615_ADR-023-promotion-as-a-row.md) | 2026-06-15 | Accepted | Promotion is a row, not a column (supersedes ADR-011 promotion) |
