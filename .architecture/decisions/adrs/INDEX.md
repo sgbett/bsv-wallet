@@ -33,7 +33,8 @@ Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 | 19 | [ADR-013](20260527_ADR-013-auto-fund-create-action.md) | 2026-05-27 | Accepted | Auto-funding createAction (selection, fees, change) |
 | 20 | [ADR-019](20260527_ADR-019-broadcasts-intent-declarative-enforcement.md) | 2026-05-27 | Accepted | broadcasts-intent: a cross-table invariant kept declarative in the schema |
 | 21 | [ADR-011 (delete)](20260530_ADR-011-delete-unpromoted-outputs.md) | 2026-05-30 | Accepted | Failure-bounded DELETE of unpromoted outputs |
-| 22 | [ADR-015 (egress)](20260610_ADR-015-egress-beef-validation.md) | 2026-06-10 | Accepted | Egress-BEEF validation — never ship an invalid BEEF |
-| 23 | [ADR-018](20260610_ADR-018-stateless-sdk-stateful-wallet-boundary.md) | 2026-06-10 | Accepted | Stateless SDK / stateful wallet boundary |
-| 24 | [ADR-022](20260610_ADR-022-state-as-a-fk-row.md) | 2026-06-10 | Accepted | State as a FK row (the general membership-row pattern) |
-| 25 | [ADR-023](20260615_ADR-023-promotion-as-a-row.md) | 2026-06-15 | Accepted | Promotion is a row, not a column (supersedes ADR-011 promotion) |
+| 22 | [ADR-024](20260607_ADR-024-engine-decomposition-deferred-sends.md) | 2026-06-07 | Accepted | Decompose the Engine — precondition for restoring the deferred sends (#291) |
+| 23 | [ADR-015 (egress)](20260610_ADR-015-egress-beef-validation.md) | 2026-06-10 | Accepted | Egress-BEEF validation — never ship an invalid BEEF |
+| 24 | [ADR-018](20260610_ADR-018-stateless-sdk-stateful-wallet-boundary.md) | 2026-06-10 | Accepted | Stateless SDK / stateful wallet boundary |
+| 25 | [ADR-022](20260610_ADR-022-state-as-a-fk-row.md) | 2026-06-10 | Accepted | State as a FK row (the general membership-row pattern) |
+| 26 | [ADR-023](20260615_ADR-023-promotion-as-a-row.md) | 2026-06-15 | Accepted | Promotion is a row, not a column (supersedes ADR-011 promotion) |
