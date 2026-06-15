@@ -9,7 +9,7 @@ project:
 settings:
   pragmatic_mode: true
   review_depth: thorough
-  adr_numbering: sequential
+  adr_numbering: date + sequential e.g. YYYYMMDD_ADR-NNN-dasherize-title.md
   auto_detect_changes: true
 
 review:
