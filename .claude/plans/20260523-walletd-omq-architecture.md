@@ -3,7 +3,7 @@
 **Date**: 2026-05-23
 **Status**: Plan (brainstormed, not yet broken into implementation tasks)
 **Source**: Extended brainstorm covering store consolidation, boundary violations, physical/logical model separation, OMQ wiring, daemon architecture.
-**Related**: #36 (daemon), #128 (async/scheduler), .architecture/reviews/store-walletd-boundary.md, .architecture/reviews/wallet-node-architecture.md
+**Related**: #36 (daemon), #128 (async/scheduler), .architecture/reviews/20260523_store-walletd-boundary.md, .architecture/reviews/20260523_wallet-node-architecture.md
 
 ---
 

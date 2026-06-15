@@ -51,7 +51,7 @@ ADR numbers follow rough decision/dependency order — roots first — not stric
 | # | ADR (provisional) | Verdict | Source |
 |---|------|---------|--------|
 | B1 | **Clean-room redesign, schema-first** — rebuild rather than port; the schema is the lynchpin, not a byproduct of code | KEEP | `20260501_clean-room` :147-196,427-441; `20260501_brc100-impl` (clean break to fresh repo, #9) |
-| B2 | **Design for BSV scale / the "wallet-node" north star** — millions-tx/s target drives partition, immutability, concurrency; walletd hosts the wallet (Unicorn model), ABI-over-sockets is the protocol, JSON BRC-100 is the RPC skin | KEEP (formalise) | `clean-room` :1264-1426; `chain-tracker` :6100-6234; `.architecture/reviews/wallet-node-architecture.md`; memory `project_scaling_vision` |
+| B2 | **Design for BSV scale / the "wallet-node" north star** — millions-tx/s target drives partition, immutability, concurrency; walletd hosts the wallet (Unicorn model), ABI-over-sockets is the protocol, JSON BRC-100 is the RPC skin | KEEP (formalise) | `clean-room` :1264-1426; `chain-tracker` :6100-6234; `.architecture/reviews/20260523_wallet-node-architecture.md`; memory `project_scaling_vision` |
 
 ## Tier C — the schema spine (buried in the clean-room transcript)
 
@@ -93,7 +93,7 @@ ADR numbers follow rough decision/dependency order — roots first — not stric
 
 | # | ADR (provisional) | Verdict | Source |
 |---|------|---------|--------|
-| G1 | **Chain-tracker pivot** — SDK `Transaction#verify` replaces hand-rolled ancestry walking; `ChainTracker` as DB↔network write-through cache; verify-incoming-only trust asymmetry | KEEP | `chain-tracker` :232-330,83-100; HLR #95; `.architecture/reviews/chain-tracker-pivot.md` |
+| G1 | **Chain-tracker pivot** — SDK `Transaction#verify` replaces hand-rolled ancestry walking; `ChainTracker` as DB↔network write-through cache; verify-incoming-only trust asymmetry | KEEP | `chain-tracker` :232-330,83-100; HLR #95; `.architecture/reviews/20260513_chain-tracker-pivot.md` |
 | G2 | **walletd daemon & OMQ concurrency** — ZeroMQ-direct (no abstract scheduler); idempotent stateless tasks (query-is-job-queue); 3-channel taxonomy; framework owns the clock, tasks own retry | KEEP | `chain-tracker` :5513-5996; HLR #156/#128; memory `project_background_processing` |
 | G3 | **Network Services routing layer** — provider fallback, normalise-at-boundary, graceful degradation (NB: memory says belongs in SDK namespace — flag) | KEEP | `20260510_services`; HLR #77/#81; memory `project_network_services` |
 | G4 | **WBIKD legacy receive addresses** — derived from existing action/basket machinery; on-chain-recoverable derivation (integer-ID → txid/vout + OP_RETURN marker supersession) | KEEP | `chain-tracker` :4645-4773; HLR #102/#108; memory `feedback_wbikd_derivation_recoverability` |

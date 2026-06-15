@@ -3,7 +3,7 @@
 **Date**: 2026-05-23
 **Status**: Plan
 **Depends on**: Phase 1 (store consolidation, merged as PR #142)
-**Related**: .architecture/reviews/store-walletd-boundary.md, .claude/plans/20260523-walletd-omq-architecture.md
+**Related**: .architecture/reviews/20260523_store-walletd-boundary.md, .claude/plans/20260523-walletd-omq-architecture.md
 
 ---
 

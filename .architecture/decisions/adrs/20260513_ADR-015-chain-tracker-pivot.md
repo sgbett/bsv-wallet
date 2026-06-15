@@ -91,7 +91,7 @@ This is a correction, not a feature: the wallet duplicated a walk the SDK alread
 * ADR-018 — stateless SDK / stateful wallet; `Transaction::Tx#verify` is the stateless operation, the header cache and proof state are the wallet's.
 * ADR-015 (egress-BEEF validation) — the later, separate egress decision (`TrustedSelfChainTracker` / `validate_for_handoff!`); the trust asymmetry between incoming and own-egress data is settled there, not here.
 * HLR #95 (chain-tracker pivot), PR #100 (`feat/95-chain-tracker-pivot`); builds on #79/#80 (`blocks` normalisation), #83 (Services routing).
-* `.architecture/reviews/chain-tracker-pivot.md` — multi-perspective review (assessment: Strong).
+* `.architecture/reviews/20260513_chain-tracker-pivot.md` — multi-perspective review (assessment: Strong).
 * `gem/bsv-wallet/lib/bsv/network/chain_tracker.rb`; `gem/bsv-wallet/lib/bsv/wallet/engine/action.rb`; `reference/schema.md`; `bsv-sdk` `lib/bsv/transaction/tx.rb` (`#verify`), `lib/bsv/transaction/chain_tracker.rb`.
 
 ## Unverified claims
