@@ -61,7 +61,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
     action = store.create_action(
       action: {
         description: 'funding strategy test target',
-        broadcast_intent: :delayed, outgoing: true, nlocktime: 0
+        broadcast_intent: :delayed, nlocktime: 0
       },
       inputs: []
     )
@@ -76,7 +76,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
     funding = store.create_action(
       action: {
         description: 'funding strategy spec source',
-        broadcast_intent: :none, outgoing: false, nlocktime: 0
+        broadcast_intent: :none, nlocktime: 0
       }
     )
     store.sign_action(action_id: funding[:id], wtxid: SecureRandom.random_bytes(32),

@@ -23,7 +23,7 @@ RSpec.describe 'Schema migration', :store do
     it 'rejects invalid broadcast_intent values' do
       expect do
         db.transaction(savepoint: true) do
-          db[:actions].insert(description: 'test action 12345', outgoing: true, nlocktime: 0, reference: SecureRandom.uuid, broadcast_intent: 'bogus')
+          db[:actions].insert(description: 'test action 12345', nlocktime: 0, reference: SecureRandom.uuid, broadcast_intent: 'bogus')
         end
       end.to raise_error(Sequel::DatabaseError)
     end
@@ -189,7 +189,7 @@ RSpec.describe 'Schema migration', :store do
     end
 
     it 'generates reference UUID by default on actions' do
-      action = BSV::Wallet::Store::Models::Action.create(description: 'uuid test 12345', outgoing: true, nlocktime: 0)
+      action = BSV::Wallet::Store::Models::Action.create(description: 'uuid test 12345', nlocktime: 0)
       expect(action.reference.to_s).to match(/\A[0-9a-f]{8}-[0-9a-f]{4}-/)
     end
 

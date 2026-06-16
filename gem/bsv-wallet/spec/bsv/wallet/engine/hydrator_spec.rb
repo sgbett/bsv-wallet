@@ -152,7 +152,7 @@ RSpec.describe BSV::Wallet::Engine::Hydrator do
       # so the inputs/outputs JOIN can find it. Persist its wtxid and an
       # output row at vout 0.
       source_action = store.create_action(
-        action: { description: 'source', broadcast_intent: :none, outgoing: false }
+        action: { description: 'source', broadcast_intent: :none }
       )
       store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: source_raw)
       source_output_ids = store.promote_action(
@@ -166,7 +166,7 @@ RSpec.describe BSV::Wallet::Engine::Hydrator do
       # Subject action: lock the source output as input. Outgoing rows
       # must carry nlocktime per the schema's CHECK constraint.
       subject_action = store.create_action(
-        action: { description: 'subject', broadcast_intent: :none, outgoing: true, nlocktime: 0 }
+        action: { description: 'subject', broadcast_intent: :none, nlocktime: 0 }
       )
       store.lock_inputs(
         action_id: subject_action[:id],

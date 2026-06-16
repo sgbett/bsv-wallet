@@ -319,8 +319,8 @@ RSpec.describe BSV::Wallet::Engine::Action do
 
   describe '.list' do
     it 'returns the BRC-100 { total_actions:, actions: } hash shape' do
-      store.create_action(action: { description: 'list smoke other', broadcast_intent: :none, outgoing: false })
-      action = store.create_action(action: { description: 'list smoke target', broadcast_intent: :none, outgoing: false })
+      store.create_action(action: { description: 'list smoke other', broadcast_intent: :none })
+      action = store.create_action(action: { description: 'list smoke target', broadcast_intent: :none })
       described_class.attach_labels(engine: engine, action_id: action[:id], labels: ['list-smoke'])
 
       result = described_class.list(engine: engine, labels: ['list-smoke'])
@@ -331,7 +331,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
 
     it 'is the entry point Engine#list_actions delegates to' do
-      action = store.create_action(action: { description: 'list delegator smoke', broadcast_intent: :none, outgoing: false })
+      action = store.create_action(action: { description: 'list delegator smoke', broadcast_intent: :none })
       described_class.attach_labels(engine: engine, action_id: action[:id], labels: ['list-delegator'])
 
       expect(engine.list_actions(labels: ['list-delegator'])).to include(total_actions: 1)
@@ -340,7 +340,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
 
   describe '.find' do
     it 'returns an Action when a row exists for the reference' do
-      row = store.create_action(action: { description: 'findable smoke', broadcast_intent: :none, outgoing: false })
+      row = store.create_action(action: { description: 'findable smoke', broadcast_intent: :none })
 
       found = described_class.find(engine: engine, reference: row[:reference])
 
@@ -355,7 +355,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
 
   describe '.find_by_id' do
     it 'returns an Action when a row exists for the id' do
-      row = store.create_action(action: { description: 'findable by id smoke', broadcast_intent: :none, outgoing: false })
+      row = store.create_action(action: { description: 'findable by id smoke', broadcast_intent: :none })
 
       found = described_class.find_by_id(engine: engine, id: row[:id])
 
@@ -370,14 +370,14 @@ RSpec.describe BSV::Wallet::Engine::Action do
 
   describe '.attach_labels' do
     it 'is a no-op for nil labels' do
-      action = store.create_action(action: { description: 'no labels', broadcast_intent: :none, outgoing: false })
+      action = store.create_action(action: { description: 'no labels', broadcast_intent: :none })
       expect do
         described_class.attach_labels(engine: engine, action_id: action[:id], labels: nil)
       end.not_to(change { store.query_actions(labels: ['anything'])[:total] })
     end
 
     it 'creates labels and links them to the action' do
-      action = store.create_action(action: { description: 'with labels', broadcast_intent: :none, outgoing: false })
+      action = store.create_action(action: { description: 'with labels', broadcast_intent: :none })
       described_class.attach_labels(engine: engine, action_id: action[:id], labels: %w[smoke unit])
 
       result = store.query_actions(labels: ['smoke'], label_query_mode: :any, include_labels: true)

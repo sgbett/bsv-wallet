@@ -5,7 +5,7 @@ require_relative 'shared_context'
 RSpec.describe BSV::Wallet::Store, :store do
   # Helpers
   def create_funded_output(satoshis: 1000, vout: 0, basket: nil)
-    source = BSV::Wallet::Store::Models::Action.create(outgoing: false, description: 'test action',
+    source = BSV::Wallet::Store::Models::Action.create(description: 'test action',
                                                        broadcast_intent: 'none',
                                                        wtxid: SecureRandom.random_bytes(32),
                                                        raw_tx: SecureRandom.random_bytes(100))
@@ -1364,7 +1364,7 @@ RSpec.describe BSV::Wallet::Store, :store do
                              derivation_prefix: nil, derivation_suffix: nil,
                              sender_identity_key: nil)
       locking_script ||= SecureRandom.random_bytes(25)
-      source_action = BSV::Wallet::Store::Models::Action.create(outgoing: false, description: 'test action',
+      source_action = BSV::Wallet::Store::Models::Action.create(description: 'test action',
                                                                 broadcast_intent: 'none',
                                                                 wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
       output = BSV::Wallet::Store::Models::Output.create(
@@ -1482,7 +1482,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     it 'raises when source action has nil wtxid' do
       # Create a source output whose parent action has no wtxid
-      source_action = BSV::Wallet::Store::Models::Action.create(outgoing: false, description: 'test action', broadcast_intent: 'none')
+      source_action = BSV::Wallet::Store::Models::Action.create(description: 'test action', broadcast_intent: 'none')
       output = BSV::Wallet::Store::Models::Output.create(
         action_id: source_action.id, satoshis: 500, vout: 0,
         locking_script: SecureRandom.random_bytes(25),
@@ -1507,7 +1507,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       # constraint catches this before the application ever sees it.
       hex_wtxid = 'a' * 64
       expect do
-        BSV::Wallet::Store::Models::Action.create(outgoing: false, description: 'test action',
+        BSV::Wallet::Store::Models::Action.create(description: 'test action',
                                                   wtxid: Sequel.blob(hex_wtxid),
                                                   raw_tx: SecureRandom.random_bytes(100))
       end.to raise_error(Sequel::CheckConstraintViolation, /wtxid_length/)
@@ -1555,7 +1555,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     it 'excludes outputs locked by inputs' do
       output = create_funded_output(satoshis: 9999, vout: 0)
-      lock_action = BSV::Wallet::Store::Models::Action.create(outgoing: true, description: 'test action', nlocktime: 0)
+      lock_action = BSV::Wallet::Store::Models::Action.create(description: 'test action', nlocktime: 0)
       BSV::Wallet::Store::Models::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
       candidates = store.find_spendable(satoshis: 9999, basket: 'default')
@@ -1643,7 +1643,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#record_broadcast_result' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'test action', nlocktime: 0,
+        description: 'test action', nlocktime: 0,
         wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
@@ -1754,7 +1754,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#broadcast_status' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'test action', nlocktime: 0,
+        description: 'test action', nlocktime: 0,
         wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
@@ -1776,7 +1776,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#pending_resolutions' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'test action', nlocktime: 0,
+        description: 'test action', nlocktime: 0,
         wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
@@ -1857,7 +1857,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#pending_submissions' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'test action', nlocktime: 0,
+        description: 'test action', nlocktime: 0,
         wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
@@ -1894,7 +1894,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'respects the limit' do
       3.times do |i|
         a = BSV::Wallet::Store::Models::Action.create(
-          outgoing: true, description: "test action #{i}", nlocktime: 0,
+          description: "test action #{i}", nlocktime: 0,
           wtxid: SecureRandom.random_bytes(32),
           raw_tx: SecureRandom.random_bytes(100)
         )
@@ -1912,7 +1912,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#mark_broadcast_attempted' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'test action', nlocktime: 0,
+        description: 'test action', nlocktime: 0,
         wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
@@ -1970,7 +1970,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#clear_broadcast_attempted' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'test action', nlocktime: 0,
+        description: 'test action', nlocktime: 0,
         wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
@@ -2088,9 +2088,9 @@ RSpec.describe BSV::Wallet::Store, :store do
   # --- Pending Proofs ---
 
   describe '#pending_proofs' do
-    def create_signed_action(broadcast_intent: 'delayed', outgoing: true, tx_proof_id: nil)
+    def create_signed_action(broadcast_intent: 'delayed', tx_proof_id: nil)
       action = BSV::Wallet::Store::Models::Action.create(
-        outgoing: outgoing, description: 'test action', nlocktime: 0,
+        description: 'test action', nlocktime: 0,
         broadcast_intent: broadcast_intent,
         wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
@@ -2124,14 +2124,9 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.pending_proofs).to be_empty
     end
 
-    it 'excludes non-outgoing actions' do
-      create_signed_action(outgoing: false)
-      expect(store.pending_proofs).to be_empty
-    end
-
     it 'excludes unsigned actions (no wtxid)' do
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'unsigned', nlocktime: 0, broadcast_intent: 'delayed'
+        description: 'unsigned', nlocktime: 0, broadcast_intent: 'delayed'
       )
       expect(store.pending_proofs).to be_empty
     end

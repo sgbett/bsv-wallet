@@ -83,7 +83,7 @@ module BSV
             action: {
               description: description, broadcast_intent: broadcast,
               nlocktime: lock_time || 0, version: version,
-              input_beef: input_beef, outgoing: true
+              input_beef: input_beef
             },
             inputs: []
           )
@@ -261,7 +261,7 @@ module BSV
 
           # Create action (incoming, no broadcast, already completed)
           action_result = engine.store.create_action(
-            action: { description: description, broadcast_intent: :none, outgoing: false }
+            action: { description: description, broadcast_intent: :none }
           )
 
           # Store wtxid and raw_tx on the action

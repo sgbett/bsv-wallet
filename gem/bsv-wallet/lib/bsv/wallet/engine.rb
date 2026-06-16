@@ -321,7 +321,7 @@ module BSV
         imported_output_id = nil
         @store.db.transaction do
           import_action = @store.create_action(
-            action: { description: 'imported UTXO', broadcast_intent: :none, outgoing: false }
+            action: { description: 'imported UTXO', broadcast_intent: :none }
           )
           @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
           proof_id = @store.save_proof(
@@ -454,7 +454,7 @@ module BSV
         # Uses @store.create_action directly — this is an internal operation
         # that should not enforce limp mode.
         locking_action = @store.create_action(
-          action: { description: 'wbikd address lock', broadcast_intent: :none, nlocktime: 0, outgoing: true },
+          action: { description: 'wbikd address lock', broadcast_intent: :none, nlocktime: 0 },
           inputs: [{ output_id: slot[:id], vin: 0 }]
         )
         # Slot may have been locked by a concurrent caller — retry with a different slot
@@ -1270,7 +1270,7 @@ module BSV
         # 3. Create incoming action (same pattern as import_utxo)
         wtxid = tx.wtxid
         import_action = @store.create_action(
-          action: { description: 'wbikd received funds', broadcast_intent: :none, outgoing: false }
+          action: { description: 'wbikd received funds', broadcast_intent: :none }
         )
         @store.sign_action(action_id: import_action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })

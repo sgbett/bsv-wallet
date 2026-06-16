@@ -7,7 +7,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     let(:wtxid) { SecureRandom.random_bytes(32) }
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'test action', nlocktime: 0,
+        description: 'test action', nlocktime: 0,
         wtxid: Sequel.blob(wtxid),
         raw_tx: SecureRandom.random_bytes(100)
       )
@@ -50,7 +50,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     let(:wtxid) { SecureRandom.random_bytes(32) }
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'test action', nlocktime: 0,
+        description: 'test action', nlocktime: 0,
         wtxid: Sequel.blob(wtxid),
         raw_tx: SecureRandom.random_bytes(100)
       )

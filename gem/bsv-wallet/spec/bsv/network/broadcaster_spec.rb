@@ -217,7 +217,7 @@ RSpec.describe BSV::Network::Broadcaster do
 
     def insert_signed_action(wtxid:)
       BSV::Wallet::Store::Models::Action.create(
-        outgoing: true, description: 'test action', nlocktime: 0,
+        description: 'test action', nlocktime: 0,
         wtxid: Sequel.blob(wtxid),
         raw_tx: SecureRandom.random_bytes(100)
       ).tap do |action|

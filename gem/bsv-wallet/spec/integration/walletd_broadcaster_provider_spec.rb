@@ -81,7 +81,6 @@ RSpec.describe 'walletd broadcaster.provider end-to-end', :postgres do # rubocop
     let(:action_id) do
       store.db[:actions].insert(
         description: 'delayed broadcast test',
-        outgoing: true,
         broadcast_intent: 'delayed',
         wtxid: Sequel.blob(wtxid),
         raw_tx: Sequel.blob(raw_tx),
@@ -121,7 +120,6 @@ RSpec.describe 'walletd broadcaster.provider end-to-end', :postgres do # rubocop
     let(:action_id) do
       store.db[:actions].insert(
         description: 'inline broadcast test',
-        outgoing: true,
         broadcast_intent: 'inline',
         wtxid: Sequel.blob(tx_wtxid),
         raw_tx: Sequel.blob(signed_tx.to_binary),

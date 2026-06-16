@@ -70,7 +70,6 @@ RSpec.describe 'Engine::Broadcast#process lifecycle (#270)', :postgres do # rubo
   let(:action_id) do
     id = store.db[:actions].insert(
       description: 'lifecycle test',
-      outgoing: true,
       broadcast_intent: 'delayed',
       wtxid: Sequel.blob(wtxid),
       raw_tx: Sequel.blob(raw_tx),

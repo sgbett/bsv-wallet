@@ -167,7 +167,7 @@ RSpec.shared_context 'engine setup' do
     source_raw_tx = source_tx.to_binary
 
     source_action = store.create_action(
-      action: { description: description, broadcast_intent: :none, outgoing: false }
+      action: { description: description, broadcast_intent: :none }
     )
     store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: source_raw_tx)
 

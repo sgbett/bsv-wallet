@@ -21,7 +21,7 @@ module BSV
         # competing for the same outputs are resolved by the database.
         #
         # @param action [Hash] :description, :broadcast (:delayed/:inline/:none),
-        #   :nlocktime, :version, :input_beef, :outgoing
+        #   :nlocktime, :version, :input_beef
         # @param inputs [Array<Hash>] each: :output_id, :vin, :nsequence, :description
         # @return [Hash] the created action with :id, :reference
         # @raise [InsufficientFundsError] if not enough inputs could be locked
@@ -249,9 +249,9 @@ module BSV
 
         # Query actions needing proof acquisition.
         #
-        # Returns outgoing actions that have been signed (wtxid set) but
-        # have no proof yet (tx_proof_id nil), excluding no-send actions
-        # (broadcast_intent: 'none') which receive proofs via other channels.
+        # Returns signed actions (wtxid set) that have no proof yet
+        # (tx_proof_id nil), excluding internal actions (broadcast_intent:
+        # 'none') which receive proofs via other channels.
         #
         # @param limit [Integer] maximum records to return
         # @return [Array<Hash>] action hashes (same shape as find_action)
