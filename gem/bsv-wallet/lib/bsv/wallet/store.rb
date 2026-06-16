@@ -1126,6 +1126,14 @@ module BSV
         end
       end
 
+      # Little-endian uint32 read from raw_tx at +offset+ (0 = version,
+      # -4 = nlocktime). nil if raw_tx is absent or shorter than 4 bytes.
+      def raw_tx_uint32(raw_tx, offset)
+        return unless raw_tx && raw_tx.bytesize >= 4
+
+        raw_tx[offset, 4].unpack1('V')
+      end
+
       def action_to_hash(record, include_labels: false, include_inputs: false,
                          include_input_locking_scripts: false,
                          include_outputs: false, include_output_locking_scripts: false, **)
@@ -1134,9 +1142,11 @@ module BSV
           reference: record.reference, status: record.derived_status,
           outgoing: record.values[:broadcast_intent].to_s != 'none', description: record.description,
           # version / nlocktime are the leading / trailing four LE bytes of
-          # raw_tx — derived, not stored (#351). nil for an unsigned action.
-          version: record.raw_tx && record.raw_tx[0, 4].unpack1('V'),
-          nlocktime: record.raw_tx && record.raw_tx[-4, 4].unpack1('V'),
+          # raw_tx — derived, not stored (#351). nil for an unsigned action,
+          # or one whose raw_tx is too short to slice (no min-length CHECK on
+          # actions.raw_tx, so stay defensive).
+          version: raw_tx_uint32(record.raw_tx, 0),
+          nlocktime: raw_tx_uint32(record.raw_tx, -4),
           broadcast_intent: record.values[:broadcast_intent], created_at: record.created_at,
           tx_proof_id: record.tx_proof_id
         }

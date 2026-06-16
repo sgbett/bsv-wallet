@@ -984,6 +984,28 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'returns nil when not found' do
       expect(store.find_action(id: 999_999)).to be_nil
     end
+
+    it 'derives version/nlocktime from raw_tx (leading/trailing LE uint32)' do
+      result = store.create_action(action: { description: 'derive fields' })
+      raw_tx = [2].pack('V') + ("\x00" * 90) + [500].pack('V') # version=2, nlocktime=500
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: Sequel.blob(raw_tx))
+      found = store.find_action(id: result[:id])
+      expect(found[:version]).to eq(2)
+      expect(found[:nlocktime]).to eq(500)
+    end
+
+    it 'tolerates an actions.raw_tx too short to slice (no min-length CHECK there)' do
+      # actions.raw_tx has no min-length constraint (unlike tx_proofs.raw_tx),
+      # so action_to_hash must guard the version/nlocktime byte slices.
+      action = BSV::Wallet::Store::Models::Action.create(
+        description: 'short raw_tx', wtxid: SecureRandom.random_bytes(32),
+        raw_tx: Sequel.blob("\x01\x02".b)
+      )
+      found = store.find_action(id: action.id)
+      expect(found[:version]).to be_nil
+      expect(found[:nlocktime]).to be_nil
+    end
   end
 
   describe '#find_output' do
