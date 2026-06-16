@@ -20,7 +20,7 @@ This is what makes the wallet **crash-safe by construction**, and what makes asy
 
 ## A note on scale
 
-Not every part of this principle earns its place the same way. The **derived-state core** — no stored status, structural locking, single-transaction transitions — is justified by drift-prevention and correctness at *any* scale; it makes invalid state impossible regardless of throughput. The **full immutability** of the `outputs` table (append-only but for two narrow, vacuum-neutral deviations — a one-shot `promoted` flip and failure-bounded deletes of unpromoted outputs) is a different kind of bet: at ordinary wallet volumes its performance benefit is marginal, and it is justified specifically by the wallet's millions-of-tx/s target, where rows rewritten on every state change would accumulate dead tuples and vacuum contention would become the scaling ceiling. The decision, the alternatives weighed against it, and that conditionality are recorded in [ADR-011 (post-broadcast promotion)](../.architecture/decisions/adrs/20260527_ADR-011-post-broadcast-promotion.md) and [ADR-011 (failure-bounded delete)](../.architecture/decisions/adrs/20260530_ADR-011-delete-unpromoted-outputs.md) — the `promoted` flip and the unpromoted-output delete respectively.
+Not every part of this principle earns its place the same way. The **derived-state core** — no stored status, structural locking, single-transaction transitions — is justified by drift-prevention and correctness at *any* scale; it makes invalid state impossible regardless of throughput. The **full immutability** of the `outputs` table (append-only, with one narrow deviation: failure-bounded deletes of un-promoted outputs) is a different kind of bet: at ordinary wallet volumes its performance benefit is marginal, and it is justified specifically by the wallet's millions-of-tx/s target, where rows rewritten on every state change would accumulate dead tuples and vacuum contention would become the scaling ceiling. The decision, the alternatives weighed against it, and that conditionality are recorded in [ADR-011 (post-broadcast promotion)](../.architecture/decisions/adrs/20260527_ADR-011-post-broadcast-promotion.md) and [ADR-011 (failure-bounded delete)](../.architecture/decisions/adrs/20260530_ADR-011-delete-unpromoted-outputs.md). The earlier design carried a second deviation — a one-shot `promoted` flag flip on each output — but #012 (ADR-023, *promotion-as-a-row*) replaced that flag with the existence of a per-action `promotions` row, restoring `outputs` to pure append-only-but-for-failure-deletes: promotion is now itself a structural fact, not a column mutation.
 
 ## How this manifests
 
@@ -68,9 +68,9 @@ There is no `actions.status` column. Status is computed at read time from struct
 | `wtxid IS NULL` | unsigned |
 | `wtxid IS NOT NULL`, `tx_proof_id IS NOT NULL` | completed |
 | `wtxid IS NOT NULL`, `broadcast_intent = 'none'`, no proof | internal |
-| `wtxid IS NOT NULL`, send path, ≥1 promoted output, no proof | unproven |
+| `wtxid IS NOT NULL`, send path, a `promotions` row exists, no proof | unproven |
 | `wtxid IS NOT NULL`, send path, broadcast `tx_status = 'REJECTED'` | failed |
-| `wtxid IS NOT NULL`, send path, broadcast row exists, no promoted outputs | sending |
+| `wtxid IS NOT NULL`, send path, broadcast row exists, no `promotions` row | sending |
 | `wtxid IS NOT NULL`, send path, no broadcast row | unprocessed |
 
 A status column would be a denormalisation that *might* drift from the structural truth. By not having one, drift is impossible.
@@ -149,6 +149,7 @@ A "no" to any of these is the principle leaking. Sometimes the leak is deliberat
 ## Related
 
 - [`reference/state-boundaries.md`](state-boundaries.md) — companion load-bearing principle. Where the principle of state defines *what* the wallet maintains (a DB always in a valid state), state-boundaries defines *where* that maintenance lives by the stateless/stateful axis (SDK / wallet).
+- [`reference/state-representations.md`](state-representations.md) — the living conformance register: a per-element classification of every state representation in the schema against this principle, with the conscious exceptions named.
 - `reference/schema.md` — the schema design that operationalises this principle. Principle #11 ("the database is the last line of defense") is the schema-side restatement.
 - `reference/schema-intent.md` — why the schema chose Postgres-native primitives rather than portable subsets.
 - `docs/design.md` §6 (Cross-Cutting Concerns) — high-level summary that defers to this document for detail.

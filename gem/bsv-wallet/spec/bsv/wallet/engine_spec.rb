@@ -23,7 +23,7 @@ RSpec.describe BSV::Wallet::Engine do
   describe 'wtxid validation' do
     it 'Store#sign_action rejects display-order hex as wtxid' do
       action = store.create_action(
-        action: { description: 'validation test', broadcast_intent: :none, outgoing: false }
+        action: { description: 'validation test', broadcast_intent: :none }
       )
       hex_dtxid = 'a' * 64 # 64-char hex string, not 32-byte binary
       expect do
@@ -949,8 +949,7 @@ RSpec.describe BSV::Wallet::Engine do
       # pins intent='none' so it can't be flipped to 'inline' after the fact;
       # build the inline action directly instead.
       action = store.send(:models)::Action.create(
-        outgoing: true, description: 'speculative inline', nlocktime: 0,
-        broadcast_intent: 'inline',
+        description: 'speculative inline', broadcast_intent: 'inline',
         wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)
       )
       action_id = action.id

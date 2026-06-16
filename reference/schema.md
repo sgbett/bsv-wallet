@@ -117,10 +117,7 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | tx_proof_id | bigint | REFERENCES tx_proofs (id) |
 | wtxid | bytea | UNIQUE WHERE NOT NULL |
 | reference | uuid | NOT NULL UNIQUE DEFAULT uuidv7() |
-| outgoing | bool | NOT NULL DEFAULT true |
 | description | text | NOT NULL |
-| version | integer | |
-| nlocktime | bigint | |
 | broadcast_intent | broadcast_intent | NOT NULL DEFAULT 'delayed' |
 | raw_tx | bytea | |
 | input_beef | bytea | |
@@ -130,7 +127,6 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 **Constraints:**
 - `CHECK wtxid IS NULL OR length(wtxid) = 32`
 - `CHECK length(description) BETWEEN 5 AND 50`
-- `CHECK NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)` — outgoing actions require nlocktime; incoming actions may omit it
 - `CHECK (wtxid IS NULL) = (raw_tx IS NULL)` — an action is either unsigned (both NULL) or signed (both set)
 
 **`reference` UUIDv7:** Time-ordered UUID (#198/#222). Postgres uses the native `uuidv7()` function (PG 18+) as the column default. SQLite calls `SecureRandom.uuid_v7` (Ruby 3.3+) from `Action#before_create`. Sequential inserts on the UNIQUE index — no B-tree page splits or fragmentation that random UUIDv4 caused.
@@ -233,7 +229,7 @@ Every `createAction` is a series of small atomic database transactions. No datab
 
 ```
 BEGIN
-  INSERT INTO actions (broadcast_intent, nlocktime, description, ...)
+  INSERT INTO actions (broadcast_intent, description, ...)
     -- wtxid IS NULL, raw_tx IS NULL — the action is unsigned
   INSERT INTO inputs (action_id, output_id, vin, nsequence, description)
     ON CONFLICT (output_id) DO NOTHING RETURNING output_id
@@ -467,7 +463,7 @@ The output rows are written to the immutable log at `createAction` time so the c
 ```
 BEGIN
   -- Phase 1: Lock (same as synchronous)
-  INSERT INTO actions (broadcast_intent, nlocktime, description, ...)
+  INSERT INTO actions (broadcast_intent, description, ...)
     -- wtxid IS NULL initially
   INSERT INTO inputs (action_id, output_id, vin, nsequence, description)
     ON CONFLICT (output_id) DO NOTHING RETURNING output_id
@@ -541,7 +537,7 @@ BEGIN
   INSERT INTO blocks (height, merkle_root, block_hash)
     VALUES (?, ?, ?) ON CONFLICT (height) DO NOTHING
   INSERT INTO tx_proofs (wtxid, block_id, ...) ON CONFLICT DO UPDATE ...
-  INSERT INTO actions (tx_proof_id, wtxid, outgoing: false, broadcast_intent: 'none', ...)
+  INSERT INTO actions (tx_proof_id, wtxid, broadcast_intent: 'none', ...)
   -- Internal path: outputs written directly with promoted = true,
   -- spendable rows inserted in the same transaction. No Phase 3.
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,

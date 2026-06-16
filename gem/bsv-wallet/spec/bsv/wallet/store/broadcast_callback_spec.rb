@@ -11,9 +11,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastCallback, :store do
 
   let(:action) do
     BSV::Wallet::Store::Models::Action.create(
-      outgoing: true,
       description: 'test action',
-      nlocktime: 0,
       wtxid: SecureRandom.random_bytes(32),
       raw_tx: SecureRandom.random_bytes(100)
     )

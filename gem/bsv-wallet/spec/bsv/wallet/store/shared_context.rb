@@ -54,7 +54,7 @@ RSpec.shared_context 'store setup' do
                            sender_identity_key: nil)
     sender_identity_key ||= valid_identity_key
     action = BSV::Wallet::Store::Models::Action.create(
-      description: 'fund action 12345', outgoing: false, broadcast_intent: 'none'
+      description: 'fund action 12345', broadcast_intent: 'none'
     )
     action.update(wtxid: Sequel.blob(SecureRandom.random_bytes(32)),
                   raw_tx: Sequel.blob(valid_raw_tx))
@@ -84,7 +84,7 @@ RSpec.shared_context 'store setup' do
   end
 
   def insert_action(description: 'test action 12345', **overrides)
-    defaults = { description: description, outgoing: true, nlocktime: 0, reference: SecureRandom.uuid }
+    defaults = { description: description, reference: SecureRandom.uuid }
     db[:actions].insert(defaults.merge(overrides))
   end
 end

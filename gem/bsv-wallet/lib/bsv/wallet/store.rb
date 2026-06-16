@@ -31,7 +31,7 @@ module BSV
     # Usage:
     #   store = BSV::Wallet::Store.connect('sqlite://wallet.db')
     #   store.migrate!
-    #   store.create_action(action: { description: 'payment', nlocktime: 0 })
+    #   store.create_action(action: { description: 'payment' })
     class Store
       include BSV::Wallet::Interface::Store
 
@@ -84,9 +84,6 @@ module BSV
           record = models::Action.create(
             description: action[:description],
             broadcast_intent: action[:broadcast_intent]&.to_s || 'delayed',
-            nlocktime: action[:nlocktime],
-            version: action[:version],
-            outgoing: action.fetch(:outgoing, true),
             input_beef: action[:input_beef]
           )
 
@@ -383,8 +380,10 @@ module BSV
       end
 
       def pending_proofs(limit: 100)
+        # broadcast_intent != 'none' is the "outgoing/broadcastable" predicate
+        # (every internal action is 'none'); the sibling reap query selects the
+        # same set the same way. The dropped outgoing column added nothing here.
         models::Action
-          .where(outgoing: true)
           .where(Sequel.~(wtxid: nil))
           .where(tx_proof_id: nil)
           .where(Sequel.~(broadcast_intent: 'none'))
@@ -1127,14 +1126,27 @@ module BSV
         end
       end
 
+      # Little-endian uint32 read from raw_tx at +offset+ (0 = version,
+      # -4 = nlocktime). nil if raw_tx is absent or shorter than 4 bytes.
+      def raw_tx_uint32(raw_tx, offset)
+        return unless raw_tx && raw_tx.bytesize >= 4
+
+        raw_tx[offset, 4].unpack1('V')
+      end
+
       def action_to_hash(record, include_labels: false, include_inputs: false,
                          include_input_locking_scripts: false,
                          include_outputs: false, include_output_locking_scripts: false, **)
         h = {
           id: record.id, wtxid: record.wtxid, raw_tx: record.raw_tx,
           reference: record.reference, status: record.derived_status,
-          outgoing: record.outgoing, description: record.description,
-          version: record.version, nlocktime: record.nlocktime,
+          outgoing: record.values[:broadcast_intent].to_s != 'none', description: record.description,
+          # version / nlocktime are the leading / trailing four LE bytes of
+          # raw_tx — derived, not stored (#351). nil for an unsigned action,
+          # or one whose raw_tx is too short to slice (no min-length CHECK on
+          # actions.raw_tx, so stay defensive).
+          version: raw_tx_uint32(record.raw_tx, 0),
+          nlocktime: raw_tx_uint32(record.raw_tx, -4),
           broadcast_intent: record.values[:broadcast_intent], created_at: record.created_at,
           tx_proof_id: record.tx_proof_id
         }

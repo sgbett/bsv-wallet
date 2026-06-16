@@ -70,11 +70,9 @@ RSpec.describe 'Engine::Broadcast#process lifecycle (#270)', :postgres do # rubo
   let(:action_id) do
     id = store.db[:actions].insert(
       description: 'lifecycle test',
-      outgoing: true,
       broadcast_intent: 'delayed',
       wtxid: Sequel.blob(wtxid),
-      raw_tx: Sequel.blob(raw_tx),
-      nlocktime: 0
+      raw_tx: Sequel.blob(raw_tx)
     )
     store.db[:broadcasts].insert(action_id: id, intent: 'delayed')
     allow(store).to receive(:resolve_inputs_for_signing).with(action_id: id).and_return(
