@@ -259,8 +259,12 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
       # first call returns one row, the second returns two (the lock
       # grew between).
       resolve_lengths = []
+      # Capture the original method before stubbing — explicit and stable,
+      # rather than relying on Method#super_method finding the unstubbed
+      # implementation through RSpec's singleton-class stub.
+      original_resolve = store.method(:resolve_inputs_for_signing)
       allow(store).to receive(:resolve_inputs_for_signing) do |args|
-        rows = store.method(:resolve_inputs_for_signing).super_method.call(**args)
+        rows = original_resolve.call(**args)
         resolve_lengths << rows.length
         rows
       end

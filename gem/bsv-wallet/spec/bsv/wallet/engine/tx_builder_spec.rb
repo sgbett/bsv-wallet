@@ -66,9 +66,13 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
       decoded = BSV::Transaction::Tx.from_binary(result[:raw_tx])
       expect(decoded.inputs.length).to eq(1)
       expect(decoded.outputs.length).to eq(1)
-      # Signed: unlocking script is non-empty.
-      expect(result[:tx].inputs[0].unlocking_script).not_to be_nil
-      expect(result[:tx].inputs[0].unlocking_script.to_binary).not_to be_empty
+      # Signed: the unlocking script actually satisfies the source P2PKH.
+      # verify_input evaluates sig+pubkey against the attached source data,
+      # so it catches InputSource-wiring or key-derivation regressions that
+      # a mere "non-empty script" check would miss — TxBuilder is now the
+      # signing boundary. result[:tx] carries source_satoshis /
+      # source_locking_script wired by build_inputs, so no re-attach needed.
+      expect(result[:tx].verify_input(0)).to be true
     end
 
     it 'yields a deserialisable unsigned tx when sign: false' do
@@ -119,12 +123,13 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
       expect(result[:tx].inputs[0].unlocking_script).to be_a(BSV::Script::Script)
     end
 
-    it 'records the shuffled vout positions when randomize is true' do
+    it 'maps each original output index to its final vout position when randomize is true' do
       resolved = [resolved_p2pkh_input(vin: 0, satoshis: 50_000)]
 
-      # Force a deterministic shuffle so the assertion is stable.
-      allow(Array).to receive(:new).and_call_original
-      # Five outputs maximises the chance the shuffle reorders them.
+      # Distinct satoshi values tag each output so we can assert the mapping
+      # tracks content to its final position. Order-agnostic: shuffle! may
+      # legitimately return the identity permutation (~1/120 for five
+      # outputs), so we assert correspondence, never that reordering happened.
       outputs = 5.times.map { |i| { satoshis: 1_000 + i, locking_script: op_true } }
       result = builder.build(
         resolved_inputs: resolved, caller_outputs: outputs, caller_inputs: nil,
@@ -133,6 +138,10 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
 
       expect(result[:vout_mapping].keys.sort).to eq([0, 1, 2, 3, 4])
       expect(result[:vout_mapping].values.sort).to eq([0, 1, 2, 3, 4])
+      # The output at each mapped position carries original output i's content.
+      outputs.each_with_index do |orig, i|
+        expect(result[:tx].outputs[result[:vout_mapping][i]].satoshis).to eq(orig[:satoshis])
+      end
     end
   end
 
