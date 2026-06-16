@@ -32,6 +32,7 @@ module BSV
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
+      autoload :Hydrator,              'bsv/wallet/engine/hydrator'
       autoload :TxBuilder,             'bsv/wallet/engine/tx_builder'
       autoload :TxProof,               'bsv/wallet/engine/tx_proof'
       autoload :OmqSupport,            'bsv/wallet/engine/omq_support'
@@ -45,7 +46,7 @@ module BSV
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
       attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker,
-                  :funding_strategy, :tx_builder
+                  :funding_strategy, :tx_builder, :hydrator
 
       # Engine collaborator surface exposed for Engine::Action use.
       # Not public API — these are internal handles for in-process logical models.
@@ -88,6 +89,11 @@ module BSV
           key_deriver: @key_deriver,
           fee_model: BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
         )
+        # Hydrator — store-reading ProofStore→Tx wiring service. Owns
+        # the deep hydration (wire_ancestor) + egress BEEF assembly
+        # (build_atomic_beef) + egress SPV honesty contract
+        # (validate_for_handoff!). See ADR-024 / #343.
+        @hydrator = Hydrator.new(store: @store)
       end
 
       # Is the wallet in limp mode? When true, all outbound operations

@@ -716,7 +716,7 @@ RSpec.describe BSV::Wallet::Engine do
         # P2PKH unlock. Strict validate_for_handoff! (#296 Phase B) is
         # stubbed because the assertion is about apply_spends's
         # mechanism, not BEEF validity.
-        allow_any_instance_of(BSV::Wallet::Engine::Action).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
+        allow_any_instance_of(BSV::Wallet::Engine::Hydrator).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet_with_keys(satoshis: 1000)
         output_script = OP_TRUE
 
@@ -753,7 +753,7 @@ RSpec.describe BSV::Wallet::Engine do
       it 'applies caller scripts for some inputs, wallet signs the rest' do
         # White-box mechanism test — see comment in
         # 'applies caller scripts without wallet signing' above.
-        allow_any_instance_of(BSV::Wallet::Engine::Action).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
+        allow_any_instance_of(BSV::Wallet::Engine::Hydrator).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet_with_keys(satoshis: 1000, count: 2)
         output_script = OP_TRUE
 
@@ -880,7 +880,7 @@ RSpec.describe BSV::Wallet::Engine do
       it 'applies sequence number from spends' do
         # White-box mechanism test — see comment in
         # 'applies caller scripts without wallet signing' above.
-        allow_any_instance_of(BSV::Wallet::Engine::Action).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
+        allow_any_instance_of(BSV::Wallet::Engine::Hydrator).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet_with_keys(satoshis: 1000)
         output_script = OP_TRUE
 
@@ -2337,7 +2337,7 @@ RSpec.describe BSV::Wallet::Engine do
         # the wallet applies whatever the caller provides. Strict
         # validate_for_handoff! (#296 Phase B) is stubbed because the
         # assertion is about script forwarding, not BEEF validity.
-        allow_any_instance_of(BSV::Wallet::Engine::Action).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
+        allow_any_instance_of(BSV::Wallet::Engine::Hydrator).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet(satoshis: 1000)
 
         listed = engine_with_keys.list_outputs(basket: 'default')

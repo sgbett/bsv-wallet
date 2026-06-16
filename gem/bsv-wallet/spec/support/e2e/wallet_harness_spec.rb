@@ -10,6 +10,12 @@ RSpec.describe E2E::WalletHarness do # rubocop:disable RSpec/SpecFilePathFormat
 
   around do |example|
     snapshot = ENV.to_h
+    # Reset BEFORE as well as after: the Fixtures registry is global, and an
+    # earlier store spec may have set postgres_base to the CI env (5433),
+    # which install_fixtures!'s `postgres_base ||=` cannot then override back
+    # to this spec's 5432. Without a pre-reset the example is order-dependent
+    # (fails when a store spec ran first); latent since #292.
+    BSV::Wallet::Fixtures.reset!
     example.run
   ensure
     ENV.replace(snapshot)
