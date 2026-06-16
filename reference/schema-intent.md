@@ -159,8 +159,10 @@ isn't called `transactions`.
 signed), a `reference` UUID (lookup key during deferred signing — should
 be UUIDv7 for B-tree friendliness; tracked in #198), a `description`
 (5–50 chars per BRC-100's `DescriptionString5to50Characters`), the
-optional `version` and `nlocktime`, the `broadcast_intent` enum, the
-`raw_tx`, an optional `input_beef`, and the FK `tx_proof_id`.
+`broadcast_intent` enum, the `raw_tx`, an optional `input_beef`, and the
+FK `tx_proof_id`. `version` and `nlocktime` are **not** stored — they are
+the leading / trailing four bytes of `raw_tx`, derived at the interface
+(#351).
 
 **Can be derived:** The action's *status* in BRC-100 terms (unsigned,
 unprocessed, sending, unproven, completed, internal, failed) is computed

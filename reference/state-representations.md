@@ -45,7 +45,7 @@ The goal is zero class-F. A/B/C are the compliant forms; D/E are legitimate when
 - **`sse_cursors.last_event_id`** — external stream position (ARC SSE); a cursor is current-value-only by nature.
 
 ### E — Value attributes (data, not lifecycle state)
-`actions`: `version`, `nlocktime`, `raw_tx`, `input_beef`, `reference`. `outputs`: `satoshis`, `vout`, `locking_script`, `output_type`*, `derivation_prefix/suffix`, `sender_identity_key`. `output_details`: `type`, `purpose`, `provided_by`, `description`, `custom_instructions`, `script_length/offset`. Plus `blocks.*`, `tx_proofs.merkle_path/raw_tx/block_index`, `certificates.*`, `certificate_fields.*`, `broadcasts.block_hash/height/merkle_path/provider/callback_token`, `settings.value`.
+`actions`: `raw_tx`, `input_beef`, `reference`. `outputs`: `satoshis`, `vout`, `locking_script`, `output_type`*, `derivation_prefix/suffix`, `sender_identity_key`. `output_details`: `type`, `purpose`, `provided_by`, `description`, `custom_instructions`, `script_length/offset`. Plus `blocks.*`, `tx_proofs.merkle_path/raw_tx/block_index`, `certificates.*`, `certificate_fields.*`, `broadcasts.block_hash/height/merkle_path/provider/callback_token`, `settings.value`.
 <br>*`output_type` is an immutable classification attribute, not lifecycle state.
 
 ### F — Driftable flags (the anti-pattern — target is empty)
@@ -53,13 +53,12 @@ The goal is zero class-F. A/B/C are the compliant forms; D/E are legitimate when
 - **`tx_reqs.status`** — the only literal `status` column the schema ever had; **removed entirely** in `004_drop_tx_reqs.rb`. Historical exemplar of the anti-pattern excised, not merely avoided.
 - **`actions.satoshis` — RESOLVED.** A net-amount **stored aggregate** (Σ outputs − Σ inputs) on `actions`; **dropped** in `003_schema_constraints.rb` (the `add_column` in that migration's `down` block is the rollback, not the live state). A derivable denormalisation removed in favour of deriving the figure on demand — the [ADR-005](../.architecture/decisions/adrs/20260505_ADR-005-accounting-ledger-not-dag.md) instinct applied. (`outputs.satoshis` is unrelated and remains — a class-E value attribute.)
 - **`actions.outgoing` — RESOLVED (#349).** A direction flag with **no load-bearing consumer**: its one runtime reader (`pending_proofs`) conjoined `outgoing: true` with `broadcast_intent != 'none'`, which already implies it (every `outgoing: false` action was created `broadcast_intent: 'none'`); the sibling reap query selects the same set on `broadcast_intent` alone. Its only echo, `action_to_hash`, fed an interface field no caller or spec consumed. Its only hard dependency was the `nlocktime_range` CHECK — a constraint on `actions.nlocktime`, itself never read by the builder (`lock_time` is threaded in-memory and baked into `raw_tx`) and recoverable from `raw_tx`. Column and constraint **dropped** in `013_drop_actions_outgoing.rb`; the interface field is now derived as `broadcast_intent != 'none'`.
+- **`actions.nlocktime` / `actions.version` — RESOLVED (#351).** Stored projections of `raw_tx` — nLockTime is its trailing four bytes (LE), version its leading four. The builder reads neither (`lock_time`/`version` flow in-memory into `tx_builder.build`, baked into `raw_tx` at sign time); the sole reader, `action_to_hash`, now derives them from `raw_tx`. **Dropped** in `014_drop_actions_nlocktime_version.rb`. No constraint depended on them (the `nlocktime_range` guard went with `outgoing` in #349). Non-final transactions (#192) are unaffected — the nLockTime value stays in `raw_tx`; the non-final *intent* needs its own marker, not this value column.
 
-No class-F representation remains in the live schema. One item below needs a derivability check.
+No class-F representation remains in the live schema, and the open candidates are resolved.
 
 ## Open candidates (probes)
-These are *not yet classified with confidence* — each needs investigation:
-
-1. **`actions.nlocktime` and `actions.version`** — both are stored projections of `raw_tx` (nLockTime is its trailing four bytes; version its leading four), and the builder reads neither — `lock_time`/`version` are threaded in-memory and baked into `raw_tx` at sign time. So they are class-E value attributes that duplicate `raw_tx`, the canonical serialised transaction. Surfaced by the `actions.outgoing` removal (#349), which dropped the `nlocktime_range` CHECK that was their only guard. Probe: should the interface serve these from `raw_tx` rather than storing them? (The same "stored vs derived" question one layer down — `raw_tx` is the source of truth.)
+None outstanding. The two prior probes are resolved: `actions.outgoing` (#349) and `actions.nlocktime`/`version` (#351) were both dropped — see class F above. New candidates are added here as the audit (or future schema changes) surface them.
 
 ## Known documentation drift (finding)
 [`principle-of-state.md`](principle-of-state.md) predates #012 and is stale in two places:
@@ -68,7 +67,7 @@ These are *not yet classified with confidence* — each needs investigation:
 Reconciling it (and adding a reciprocal link to this catalogue) is tracked as a probe in the audit HLR.
 
 ## Conformance summary
-The schema is substantially compliant: the lifecycle is carried by structural and temporal facts (A/B), the only literal `status` column was deleted, and all three prior denormalisations — the `promoted` flag, the `actions.satoshis` aggregate, and the `actions.outgoing` direction flag — are resolved (converted to a fact, dropped, and dropped, respectively). The standing residue is two principled value-column exceptions to name (`broadcasts.tx_status`, `sse_cursors.last_event_id`/`retry_count`), one open candidate (`actions.nlocktime`/`version` as `raw_tx` projections), and one stale companion document to reconcile (`principle-of-state.md`).
+The schema is substantially compliant: the lifecycle is carried by structural and temporal facts (A/B), the only literal `status` column was deleted, and every prior denormalisation is resolved — the `promoted` flag (→ a `promotions` fact), the `actions.satoshis` aggregate (dropped), the `actions.outgoing` direction flag (dropped, #349), and `actions.nlocktime`/`version` (dropped, derived from `raw_tx`, #351). No open candidates remain. The standing residue is two principled value-column exceptions, named and kept by design (`broadcasts.tx_status`, `sse_cursors.last_event_id`/`retry_count`), and one stale companion document to reconcile (`principle-of-state.md`, tracked under #348).
 
 ## Related
 - [`principle-of-state.md`](principle-of-state.md) — the principle this register tests against.

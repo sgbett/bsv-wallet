@@ -118,8 +118,6 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | wtxid | bytea | UNIQUE WHERE NOT NULL |
 | reference | uuid | NOT NULL UNIQUE DEFAULT uuidv7() |
 | description | text | NOT NULL |
-| version | integer | |
-| nlocktime | bigint | |
 | broadcast_intent | broadcast_intent | NOT NULL DEFAULT 'delayed' |
 | raw_tx | bytea | |
 | input_beef | bytea | |
@@ -231,7 +229,7 @@ Every `createAction` is a series of small atomic database transactions. No datab
 
 ```
 BEGIN
-  INSERT INTO actions (broadcast_intent, nlocktime, description, ...)
+  INSERT INTO actions (broadcast_intent, description, ...)
     -- wtxid IS NULL, raw_tx IS NULL — the action is unsigned
   INSERT INTO inputs (action_id, output_id, vin, nsequence, description)
     ON CONFLICT (output_id) DO NOTHING RETURNING output_id
@@ -465,7 +463,7 @@ The output rows are written to the immutable log at `createAction` time so the c
 ```
 BEGIN
   -- Phase 1: Lock (same as synchronous)
-  INSERT INTO actions (broadcast_intent, nlocktime, description, ...)
+  INSERT INTO actions (broadcast_intent, description, ...)
     -- wtxid IS NULL initially
   INSERT INTO inputs (action_id, output_id, vin, nsequence, description)
     ON CONFLICT (output_id) DO NOTHING RETURNING output_id
