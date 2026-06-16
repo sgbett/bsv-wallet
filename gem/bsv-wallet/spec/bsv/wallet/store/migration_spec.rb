@@ -215,11 +215,27 @@ RSpec.describe 'Schema migration', :store do
       Sequel.extension :migration
       migrations_path = File.expand_path('../../../../db/migrations', __dir__)
 
-      Sequel::Migrator.run(db, migrations_path, target: 8)
-      expect(db.schema(:broadcasts).to_h).not_to have_key(:provider)
+      # SQLite migrations that rebuild a table (to drop a column/CHECK) rewrite
+      # the FKs that reference it — unless foreign_keys / legacy_alter_table are
+      # toggled, and those PRAGMAs are no-ops *inside a transaction*. The :store
+      # wrapper runs each example in a rollback transaction, so the SQLite
+      # round-trip needs a dedicated connection outside it (this is how
+      # production migrate! runs). Postgres uses native DDL with no rebuild, so
+      # the shared, in-transaction db is fine there.
+      if db.database_type == :sqlite
+        rt = BSV::Wallet::Store.connect('sqlite::memory:').db
+        Sequel::Migrator.run(rt, migrations_path)
+      else
+        rt = db
+      end
 
-      Sequel::Migrator.run(db, migrations_path)
-      expect(db.schema(:broadcasts).to_h).to have_key(:provider)
+      Sequel::Migrator.run(rt, migrations_path, target: 8)
+      expect(rt.schema(:broadcasts).to_h).not_to have_key(:provider)
+
+      Sequel::Migrator.run(rt, migrations_path)
+      expect(rt.schema(:broadcasts).to_h).to have_key(:provider)
+
+      rt.disconnect unless rt.equal?(db)
     end
   end
 end
