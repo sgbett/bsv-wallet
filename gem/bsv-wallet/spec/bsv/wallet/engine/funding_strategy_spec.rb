@@ -107,7 +107,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
         caller_outputs: [{ satoshis: 4_000 }],
         caller_supplied_inputs: false,
         caller_inputs: nil,
-        build: -> { success_result(tx: tx) }
+        build: ->(_resolved) { success_result(tx: tx) }
       )
 
       expect(utxo_pool).to have_received(:select).with(satoshis: 4_000, exclude: [])
@@ -117,7 +117,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
       action_id = create_empty_action
       tx = fake_tx(total_input_satoshis: 0)
       calls = 0
-      build = lambda do
+      build = lambda do |_resolved|
         calls += 1
         success_result(tx: tx)
       end
@@ -145,7 +145,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
       allow(utxo_pool).to receive(:select).and_return([candidate(output_id, satoshis: 10_000)])
       tx = fake_tx(total_input_satoshis: 10_000)
       attempts = 0
-      build = lambda do
+      build = lambda do |_resolved|
         attempts += 1
         success_result(tx: tx)
       end
@@ -176,7 +176,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
 
       tx_ok = fake_tx(total_input_satoshis: 8_000)
       attempts = 0
-      build = lambda do
+      build = lambda do |_resolved|
         attempts += 1
         attempts == 1 ? { shortfall: 200 } : success_result(tx: tx_ok)
       end
@@ -197,6 +197,134 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
     end
   end
 
+  describe 'resolve relocation (#336 — store-free build seam)' do
+    it 'passes the resolved input set across the build seam' do
+      output_id = create_spendable_output(satoshis: 5_000)
+      action_id = create_empty_action
+      allow(utxo_pool).to receive(:select).and_return([candidate(output_id, satoshis: 5_000)])
+      tx = fake_tx(total_input_satoshis: 5_000)
+
+      received = nil
+      build = lambda do |resolved|
+        received = resolved
+        success_result(tx: tx)
+      end
+
+      strategy.acquire(
+        action_id: action_id,
+        caller_outputs: [{ satoshis: 4_000 }],
+        caller_supplied_inputs: false,
+        caller_inputs: nil,
+        build: build
+      )
+
+      expect(received).to be_an(Array)
+      expect(received.length).to eq(1)
+      expect(received.first).to include(:vin, :source_wtxid, :source_satoshis,
+                                        :source_locking_script)
+      expect(received.first[:source_satoshis]).to eq(5_000)
+    end
+
+    it 'resolves exactly once per build attempt' do
+      output_id = create_spendable_output(satoshis: 10_000)
+      action_id = create_empty_action
+      allow(utxo_pool).to receive(:select).and_return([candidate(output_id, satoshis: 10_000)])
+      tx = fake_tx(total_input_satoshis: 10_000)
+
+      allow(store).to receive(:resolve_inputs_for_signing).and_call_original
+
+      strategy.acquire(
+        action_id: action_id,
+        caller_outputs: [{ satoshis: 4_000 }],
+        caller_supplied_inputs: false,
+        caller_inputs: nil,
+        build: ->(_resolved) { success_result(tx: tx) }
+      )
+
+      expect(store).to have_received(:resolve_inputs_for_signing).once
+    end
+
+    it 'resolves twice across a top-up — the second after the second lock' do
+      first_id  = create_spendable_output(satoshis: 4_000)
+      second_id = create_spendable_output(satoshis: 4_000)
+      action_id = create_empty_action
+
+      allow(utxo_pool).to receive(:select).with(satoshis: 4_000, exclude: [])
+                                          .and_return([candidate(first_id, satoshis: 4_000)])
+      allow(utxo_pool).to receive(:select).with(satoshis: 200, exclude: [first_id])
+                                          .and_return([candidate(second_id, satoshis: 4_000)])
+      tx_ok = fake_tx(total_input_satoshis: 8_000)
+
+      # Each resolve snapshot reflects the current locked set — the
+      # first call returns one row, the second returns two (the lock
+      # grew between).
+      resolve_lengths = []
+      # Capture the original method before stubbing — explicit and stable,
+      # rather than relying on Method#super_method finding the unstubbed
+      # implementation through RSpec's singleton-class stub.
+      original_resolve = store.method(:resolve_inputs_for_signing)
+      allow(store).to receive(:resolve_inputs_for_signing) do |args|
+        rows = original_resolve.call(**args)
+        resolve_lengths << rows.length
+        rows
+      end
+
+      attempts = 0
+      build = lambda do |_resolved|
+        attempts += 1
+        attempts == 1 ? { shortfall: 200 } : success_result(tx: tx_ok)
+      end
+
+      strategy.acquire(
+        action_id: action_id,
+        caller_outputs: [{ satoshis: 4_000 }],
+        caller_supplied_inputs: false,
+        caller_inputs: nil,
+        build: build
+      )
+
+      expect(resolve_lengths).to eq([1, 2])
+    end
+
+    it 'resolves once on the caller-supplied (single-attempt) path' do
+      output_id = create_spendable_output(satoshis: 10_000)
+      action_id = create_empty_action
+      allow(utxo_pool).to receive(:select)
+      tx = fake_tx(total_input_satoshis: 10_000)
+      allow(store).to receive(:resolve_inputs_for_signing).and_call_original
+
+      strategy.acquire(
+        action_id: action_id,
+        caller_outputs: [{ satoshis: 4_000 }],
+        caller_supplied_inputs: true,
+        caller_inputs: [{ output_id: output_id, vin: 0 }],
+        build: ->(_resolved) { success_result(tx: tx) }
+      )
+
+      expect(store).to have_received(:resolve_inputs_for_signing).once
+    end
+
+    it 'passes an empty array to build on the zero-output path' do
+      action_id = create_empty_action
+      tx = fake_tx(total_input_satoshis: 0)
+      received = nil
+      allow(utxo_pool).to receive(:select)
+
+      strategy.acquire(
+        action_id: action_id,
+        caller_outputs: [],
+        caller_supplied_inputs: false,
+        caller_inputs: nil,
+        build: lambda do |resolved|
+          received = resolved
+          success_result(tx: tx)
+        end
+      )
+
+      expect(received).to eq([])
+    end
+  end
+
   describe 'pool depletion' do
     it 'raises InsufficientFundsError when initial selection cannot meet target' do
       action_id = create_empty_action
@@ -208,7 +336,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
           caller_outputs: [{ satoshis: 4_000 }],
           caller_supplied_inputs: false,
           caller_inputs: nil,
-          build: -> { raise 'should not be reached' }
+          build: ->(_resolved) { raise 'should not be reached' }
         )
       end.to raise_error(BSV::Wallet::InsufficientFundsError)
     end
@@ -222,7 +350,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
       allow(utxo_pool).to receive(:select).with(satoshis: 200, exclude: [first_id])
                                           .and_raise(BSV::Wallet::PoolDepletedError.new('default'))
 
-      build = -> { { shortfall: 200 } }
+      build = ->(_resolved) { { shortfall: 200 } }
 
       expect do
         strategy.acquire(
@@ -241,7 +369,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
       output_id = create_spendable_output(satoshis: 4_000)
       action_id = create_empty_action
       allow(utxo_pool).to receive(:select)
-      build = -> { { shortfall: 500 } }
+      build = ->(_resolved) { { shortfall: 500 } }
 
       expect do
         strategy.acquire(
@@ -266,7 +394,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
         caller_outputs: [{ satoshis: 4_000 }],
         caller_supplied_inputs: true,
         caller_inputs: [{ output_id: output_id, vin: 0 }],
-        build: -> { success_result(tx: tx) }
+        build: ->(_resolved) { success_result(tx: tx) }
       )
 
       expect(result[:total_input_satoshis]).to eq(10_000)
@@ -297,7 +425,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
         caller_outputs: [{ satoshis: 4_000 }],
         caller_supplied_inputs: false,
         caller_inputs: nil,
-        build: -> { success_result(tx: tx) }
+        build: ->(_resolved) { success_result(tx: tx) }
       )
     end
 
@@ -341,7 +469,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
 
       tx_ok = fake_tx(total_input_satoshis: 8_000)
       attempts = 0
-      build = lambda do
+      build = lambda do |_resolved|
         attempts += 1
         attempts == 1 ? { shortfall: 200 } : success_result(tx: tx_ok)
       end
@@ -378,7 +506,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
         excluded << c
       end
 
-      build = -> { { shortfall: 200 } }
+      build = ->(_resolved) { { shortfall: 200 } }
 
       expect do
         strategy.acquire(
@@ -408,7 +536,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
         caller_outputs: [{ satoshis: 4_000 }],
         caller_supplied_inputs: false,
         caller_inputs: nil,
-        build: -> { success_result(tx: tx_ok) }
+        build: ->(_resolved) { success_result(tx: tx_ok) }
       )
 
       expect(result[:total_input_satoshis]).to eq(4_000)
@@ -437,7 +565,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
           caller_outputs: [{ satoshis: 4_000 }],
           caller_supplied_inputs: false,
           caller_inputs: nil,
-          build: -> { raise 'unreachable' }
+          build: ->(_resolved) { raise 'unreachable' }
         )
       end.to raise_error(BSV::Wallet::InsufficientFundsError)
       expect(call_count).to eq(1)

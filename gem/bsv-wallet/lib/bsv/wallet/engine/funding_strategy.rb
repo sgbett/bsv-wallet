@@ -55,7 +55,13 @@ module BSV
           max_iterations = [@utxo_pool.spendable_count + 1, 2].max
 
           max_iterations.times do
-            result = build.call
+            # Resolve the locked input set AFTER each lock (initial or
+            # top-up) so the builder sees the grown set, not a stale
+            # one. Exactly one resolve per build attempt — the "≤1
+            # resolve per build attempt" property from #323 carried
+            # forward across the store-free TxBuilder seam (#336).
+            resolved = @store.resolve_inputs_for_signing(action_id: action_id)
+            result = build.call(resolved)
 
             return result.merge(total_input_satoshis: result[:tx].total_input_satoshis) unless result[:shortfall]
 

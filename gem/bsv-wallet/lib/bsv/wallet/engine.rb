@@ -32,6 +32,7 @@ module BSV
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
+      autoload :TxBuilder,             'bsv/wallet/engine/tx_builder'
       autoload :TxProof,               'bsv/wallet/engine/tx_proof'
       autoload :OmqSupport,            'bsv/wallet/engine/omq_support'
       autoload :InputSource,           'bsv/wallet/engine/input_source'
@@ -43,7 +44,8 @@ module BSV
       LIMP_THRESHOLD     = 50_000  # default: 50K sats
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
-      attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker, :funding_strategy
+      attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker,
+                  :funding_strategy, :tx_builder
 
       # Engine collaborator surface exposed for Engine::Action use.
       # Not public API — these are internal handles for in-process logical models.
@@ -78,6 +80,14 @@ module BSV
         # Funding strategy — owns input acquisition (initial + top-up) and
         # the build collaborator's fixpoint loop. See ADR-024 / #323.
         @funding_strategy = FundingStrategy.new(store: @store, utxo_pool: @utxo_pool)
+        # Transaction builder — store-free scribe that constructs, fee-
+        # balances, and signs transactions over a resolved input set. The
+        # fee model value matches +estimate_sweep_fee+'s inline rate
+        # (#336): a sweep-size-parity coupling preserved byte-for-byte.
+        @tx_builder = TxBuilder.new(
+          key_deriver: @key_deriver,
+          fee_model: BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
+        )
       end
 
       # Is the wallet in limp mode? When true, all outbound operations
@@ -444,9 +454,14 @@ module BSV
         # Slot may have been locked by a concurrent caller — retry with a different slot
         return generate_receive_address unless locking_action
 
-        wtxid, raw_tx, = Action.new(engine: self, row: { id: locking_action[:id] }).send(
-          :build_transaction, locking_action[:id], [{ output_id: slot[:id] }], [], nil, nil, false
+        resolved = @store.resolve_inputs_for_signing(action_id: locking_action[:id])
+        build_result = @tx_builder.build(
+          resolved_inputs: resolved, caller_outputs: [],
+          caller_inputs: [{ output_id: slot[:id] }],
+          lock_time: nil, version: nil, randomize: false, sign: true
         )
+        wtxid = build_result[:wtxid]
+        raw_tx = build_result[:raw_tx]
         @store.sign_action(action_id: locking_action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         attach_labels(locking_action[:id], ['wbikd'])
@@ -1028,7 +1043,7 @@ module BSV
         outputs.each_with_index do |out, idx|
           next unless out[:output_type] == 'root'
 
-          script = Action.resolve_locking_script(out[:locking_script])
+          script = TxBuilder.resolve_locking_script(out[:locking_script])
           unless script.p2pkh?
             raise BSV::Wallet::InvalidParameterError.new(
               "outputs[#{idx}].output_type",

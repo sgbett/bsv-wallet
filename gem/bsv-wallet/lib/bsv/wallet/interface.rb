@@ -9,6 +9,7 @@ module BSV
     module Interface
       autoload :FundingStrategy, 'bsv/wallet/interface/funding_strategy'
       autoload :Store,           'bsv/wallet/interface/store'
+      autoload :TxBuilder,       'bsv/wallet/interface/tx_builder'
       autoload :UTXOPool,        'bsv/wallet/interface/utxo_pool'
     end
   end
