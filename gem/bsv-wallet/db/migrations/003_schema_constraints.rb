@@ -1,16 +1,17 @@
 # frozen_string_literal: true
 
+# CHECK constraints, NOT NULL settings, and the two BEFORE-row triggers that
+# express invariants the structural schema (001/002) cannot.
+#
+# Kept distinct from 001 partly because Postgres CHECKs and the SQLite text
+# equivalents diverge enough that grouping them with table creation would
+# clutter 001, and partly because the SQLite emulation rebuilds the table on
+# every alter — keeping the alter_table operations grouped by table here
+# minimises rebuild churn relative to mixing them into create_table.
+
 Sequel.migration do
   up do
     postgres = database_type == :postgres
-
-    c = {}
-    c[:output_type] = postgres ? :output_type : :text
-
-    if postgres
-      extension :pg_enum
-      create_enum(:output_type, %w[root outbound])
-    end
 
     # --- 1. blocks ---
     alter_table(:blocks) do
@@ -32,20 +33,15 @@ Sequel.migration do
 
     # --- 3. actions ---
     alter_table(:actions) do
-      drop_column :satoshis
       set_column_not_null :description
       add_constraint(:wtxid_length, 'wtxid IS NULL OR length(wtxid) = 32')
       add_constraint(:description_length, 'length(description) BETWEEN 5 AND 50')
-      add_constraint(:nlocktime_range, 'NOT outgoing OR (nlocktime IS NOT NULL AND nlocktime >= 0)')
       add_constraint(:wtxid_raw_tx_parity, '(wtxid IS NULL) = (raw_tx IS NULL)')
       add_constraint(:broadcast_intent_values, "broadcast_intent IN ('delayed', 'inline', 'none')") if !postgres
     end
 
     if postgres
-      # Convert reference from text to uuid
       run 'ALTER TABLE actions ALTER COLUMN reference SET NOT NULL'
-      run 'ALTER TABLE actions ALTER COLUMN reference TYPE uuid USING reference::uuid'
-      run 'ALTER TABLE actions ALTER COLUMN reference SET DEFAULT uuidv7()'
     else
       alter_table(:actions) do
         set_column_not_null :reference
@@ -65,18 +61,14 @@ Sequel.migration do
           "tx_status IS NULL OR tx_status IN ('UNKNOWN', 'QUEUED', 'RECEIVED', 'STORED', " \
           "'ANNOUNCED_TO_NETWORK', 'REQUESTED_BY_NETWORK', 'SENT_TO_NETWORK', " \
           "'ACCEPTED_BY_NETWORK', 'SEEN_IN_ORPHAN_MEMPOOL', 'SEEN_ON_NETWORK', " \
-          "'DOUBLE_SPEND_ATTEMPTED', 'REJECTED', 'MINED_IN_STALE_BLOCK', 'MINED', 'IMMUTABLE')"
+          "'SEEN_MULTIPLE_NODES', 'DOUBLE_SPEND_ATTEMPTED', 'REJECTED', " \
+          "'MINED_IN_STALE_BLOCK', 'MINED', 'IMMUTABLE')"
         )
       end
     end
 
     # --- 5. baskets ---
-    # Drop partial index before dropping the column it references (SQLite
-    # rebuilds the table on alter_table and chokes on dangling index refs).
-    run 'DROP INDEX IF EXISTS baskets_name_index'
     alter_table(:baskets) do
-      drop_column :deleted_at
-      add_unique_constraint :name, name: :baskets_name_unique
       add_constraint(:name_length, 'length(name) BETWEEN 1 AND 300')
       add_constraint(:name_not_default, "name != 'default'")
       add_constraint(:target_count_range, 'target_count IS NULL OR target_count >= 0')
@@ -86,7 +78,6 @@ Sequel.migration do
     # --- 6. outputs ---
     alter_table(:outputs) do
       set_column_not_null :locking_script
-      add_column :output_type, c[:output_type]
       add_constraint(:satoshis_range)          { satoshis >= 0 }
       add_constraint(:vout_range)              { vout >= 0 }
       add_constraint(:locking_script_min)      { length(locking_script) >= 1 }
@@ -135,6 +126,45 @@ Sequel.migration do
       SQL
     end
 
+    # Database-level guard protecting canonical received UTXO history from
+    # deletion — defense-in-depth mirroring Store#reject_action's
+    # CannotRejectInternalActionError. An internal-path action (broadcast_intent
+    # = 'none') with a promotions row owns canonical received UTXO history and
+    # must not be deleted. A CHECK cannot express this — CHECKs fire on
+    # INSERT/UPDATE, never DELETE — so a BEFORE DELETE trigger is the only
+    # mechanism. check_violation ERRCODE → Sequel::CheckConstraintViolation.
+    if postgres
+      run <<~SQL
+        CREATE FUNCTION prevent_internal_action_delete() RETURNS trigger AS $$
+        BEGIN
+          IF OLD.broadcast_intent = 'none'
+             AND EXISTS (SELECT 1 FROM promotions WHERE action_id = OLD.id) THEN
+            RAISE EXCEPTION 'cannot delete internal action % (broadcast_intent=none with a promotions row)', OLD.id
+              USING ERRCODE = 'check_violation';
+          END IF;
+          RETURN OLD;
+        END;
+        $$ LANGUAGE plpgsql;
+      SQL
+      run <<~SQL
+        CREATE TRIGGER check_internal_action_delete
+          BEFORE DELETE ON actions
+          FOR EACH ROW
+          EXECUTE FUNCTION prevent_internal_action_delete();
+      SQL
+    else
+      run <<~SQL
+        CREATE TRIGGER check_internal_action_delete
+          BEFORE DELETE ON actions
+          FOR EACH ROW
+          WHEN OLD.broadcast_intent = 'none'
+        BEGIN
+          SELECT RAISE(ABORT, 'cannot delete internal action (broadcast_intent=none with a promotions row)')
+          WHERE EXISTS (SELECT 1 FROM promotions WHERE action_id = OLD.id);
+        END;
+      SQL
+    end
+
     # --- 8. output_details ---
     alter_table(:output_details) do
       set_column_not_null :action_id
@@ -152,91 +182,28 @@ Sequel.migration do
     end
 
     # --- 11. labels ---
-    run 'DROP INDEX IF EXISTS labels_label_index'
     alter_table(:labels) do
-      drop_column :deleted_at
-      add_unique_constraint :label, name: :labels_label_unique
       add_constraint(:label_length, 'length(label) BETWEEN 1 AND 300')
     end
 
-    # --- 12. action_labels ---
-    alter_table(:action_labels) do
-      drop_column :deleted_at
-      drop_foreign_key [:action_id]
-      add_foreign_key [:action_id], :actions, on_delete: :cascade
-    end
-
     # --- 13. tags ---
-    run 'DROP INDEX IF EXISTS tags_tag_index'
     alter_table(:tags) do
-      drop_column :deleted_at
-      add_unique_constraint :tag, name: :tags_tag_unique
       add_constraint(:tag_length, 'length(tag) BETWEEN 1 AND 300')
-    end
-
-    # --- 14. output_tags ---
-    alter_table(:output_tags) do
-      drop_column :deleted_at
-    end
-
-    # --- 15. certificates ---
-    alter_table(:certificates) do
-      drop_column :deleted_at
-    end
-
-    # --- 16. tx_reqs ---
-    alter_table(:tx_reqs) do
-      add_constraint(:wtxid_length) { length(wtxid) =~ 32 }
-      add_constraint(:status_values, "status IN ('unmined', 'completed', 'failed')")
-      add_constraint(:attempts_range) { attempts >= 0 }
     end
   end
 
   down do
     postgres = database_type == :postgres
 
-    c = {}
-    c[:timestamptz] = postgres ? :timestamptz : :datetime
-
-    # --- 16. tx_reqs ---
-    alter_table(:tx_reqs) do
-      drop_constraint :wtxid_length
-      drop_constraint :status_values
-      drop_constraint :attempts_range
-    end
-
-    # --- 15. certificates ---
-    alter_table(:certificates) do
-      add_column :deleted_at, c[:timestamptz]
-    end
-
-    # --- 14. output_tags ---
-    alter_table(:output_tags) do
-      add_column :deleted_at, c[:timestamptz]
-    end
-
     # --- 13. tags ---
     alter_table(:tags) do
       drop_constraint :tag_length
-      drop_constraint :tags_tag_unique, type: :unique
-      add_column :deleted_at, c[:timestamptz]
-    end
-    run 'CREATE UNIQUE INDEX tags_tag_index ON tags (tag) WHERE deleted_at IS NULL'
-
-    # --- 12. action_labels ---
-    alter_table(:action_labels) do
-      drop_foreign_key [:action_id]
-      add_foreign_key [:action_id], :actions
-      add_column :deleted_at, c[:timestamptz]
     end
 
     # --- 11. labels ---
     alter_table(:labels) do
       drop_constraint :label_length
-      drop_constraint :labels_label_unique, type: :unique
-      add_column :deleted_at, c[:timestamptz]
     end
-    run 'CREATE UNIQUE INDEX labels_label_index ON labels (label) WHERE deleted_at IS NULL'
 
     # --- 10. inputs ---
     alter_table(:inputs) do
@@ -252,6 +219,14 @@ Sequel.migration do
     # --- 8. output_details ---
     alter_table(:output_details) do
       set_column_allow_null :action_id
+    end
+
+    # --- internal-action-delete trigger ---
+    if postgres
+      run 'DROP TRIGGER IF EXISTS check_internal_action_delete ON actions'
+      run 'DROP FUNCTION IF EXISTS prevent_internal_action_delete()'
+    else
+      run 'DROP TRIGGER IF EXISTS check_internal_action_delete'
     end
 
     # --- 7. spendable ---
@@ -276,7 +251,6 @@ Sequel.migration do
       drop_constraint :satoshis_range
       drop_constraint :vout_range
       drop_constraint :locking_script_min
-      drop_column :output_type
       set_column_allow_null :locking_script
     end
 
@@ -286,10 +260,7 @@ Sequel.migration do
       drop_constraint :name_not_default
       drop_constraint :target_count_range
       drop_constraint :target_value_range
-      drop_constraint :baskets_name_unique, type: :unique
-      add_column :deleted_at, c[:timestamptz]
     end
-    run 'CREATE UNIQUE INDEX baskets_name_index ON baskets (name) WHERE deleted_at IS NULL'
 
     # --- 4. broadcasts ---
     alter_table(:broadcasts) do
@@ -300,7 +271,6 @@ Sequel.migration do
 
     # --- 3. actions ---
     if postgres
-      run 'ALTER TABLE actions ALTER COLUMN reference TYPE text USING reference::text'
       run 'ALTER TABLE actions ALTER COLUMN reference DROP NOT NULL'
     else
       alter_table(:actions) do
@@ -310,11 +280,9 @@ Sequel.migration do
     alter_table(:actions) do
       drop_constraint :wtxid_length
       drop_constraint :description_length
-      drop_constraint :nlocktime_range
       drop_constraint :wtxid_raw_tx_parity
       drop_constraint :broadcast_intent_values if !postgres
       set_column_allow_null :description
-      add_column :satoshis, :bigint
     end
 
     # --- 2. tx_proofs ---
@@ -331,7 +299,5 @@ Sequel.migration do
       drop_constraint :merkle_root_length
       drop_constraint :block_hash_length
     end
-
-    drop_enum(:output_type) if postgres
   end
 end

@@ -1,6 +1,12 @@
 # frozen_string_literal: true
 
-# Original Postgres schema with SQLite compatibility guards.
+# Final schema structure: every table in its end-state shape, including the two
+# tables added post-001 (sse_cursors #249, promotions #307 / ADR-022 / ADR-023)
+# and the SEEN_MULTIPLE_NODES tx_status value (#011 folded inline).
+#
+# Pre-release "amend in place" policy (#353): migrations express the canonical
+# structure rather than its change history. CHECKs, NOT NULLs, and triggers
+# remain in 003; the denormalised action_id cascade FKs remain in 002.
 #
 # Guard convention:
 #   postgres = database_type == :postgres
@@ -16,16 +22,19 @@ Sequel.migration do
     c[:timestamptz] = postgres ? :timestamptz : :datetime
     c[:broadcast_intent] = postgres ? :broadcast_intent : :text
     c[:tx_status] = postgres ? :tx_status : :text
+    c[:output_type] = postgres ? :output_type : :text
     c[:now] = postgres ? Sequel.function(:now) : Sequel::CURRENT_TIMESTAMP
 
     # ARC tx_status vocabulary, per
     # https://github.com/bitcoin-sv/arc internal/metamorph/metamorph_api/metamorph_api.proto.
-    # IMMUTABLE appended for the wallet's TERMINAL_STATUSES (anticipates an
-    # ARC addition; #198/#220 design intent).
+    # SEEN_MULTIPLE_NODES appears between SEEN_ON_NETWORK and DOUBLE_SPEND_ATTEMPTED
+    # (Arcade emits it, #011). IMMUTABLE appended for the wallet's TERMINAL_STATUSES
+    # (anticipates an ARC addition; #198/#220 design intent).
     arc_tx_statuses = %w[
       UNKNOWN QUEUED RECEIVED STORED
       ANNOUNCED_TO_NETWORK REQUESTED_BY_NETWORK SENT_TO_NETWORK
       ACCEPTED_BY_NETWORK SEEN_IN_ORPHAN_MEMPOOL SEEN_ON_NETWORK
+      SEEN_MULTIPLE_NODES
       DOUBLE_SPEND_ATTEMPTED REJECTED MINED_IN_STALE_BLOCK MINED IMMUTABLE
     ]
 
@@ -33,6 +42,7 @@ Sequel.migration do
       extension :pg_enum
       create_enum(:broadcast_intent, %w[delayed inline none])
       create_enum(:tx_status, arc_tx_statuses)
+      create_enum(:output_type, %w[root outbound])
     end
 
     # 1. blocks — known block headers (chain tracker's local view)
@@ -70,15 +80,11 @@ Sequel.migration do
         # the UNIQUE index, no page splits or fragmentation. Native to
         # Postgres 18. SQLite has no default — the Action model generates
         # via SecureRandom.uuid_v7 in before_create.
-        column :reference, :text, unique: true, default: Sequel.function(:uuidv7)
+        column :reference, :uuid, unique: true, default: Sequel.function(:uuidv7)
       else
         column :reference, :text, unique: true
       end
-      column :outgoing, :boolean, null: false, default: true
-      column :satoshis, :bigint
       column :description, :text
-      column :version, :integer
-      column :nlocktime, :bigint
       column :broadcast_intent, c[:broadcast_intent], null: false, default: 'delayed'
       column :raw_tx, c[:bytea]
       column :input_beef, c[:bytea]
@@ -113,8 +119,12 @@ Sequel.migration do
       column :competing_txs, postgres ? 'text[]' : :text
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
+      column :retry_count, :integer, null: false, default: 0
+      column :provider, :text
 
       unique :action_id
+      # Composite FK target for promotions(action_id, authorising_status) → broadcasts.
+      unique %i[action_id tx_status], name: :broadcasts_action_id_tx_status_key
       # ON UPDATE RESTRICT makes the immutability of actions.broadcast_intent
       # explicit at the schema level — any path that tries to mutate the
       # parent's intent while a broadcasts row exists is rejected, rather
@@ -133,16 +143,15 @@ Sequel.migration do
       column :target_value, :integer
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
-      column :deleted_at, c[:timestamptz]
 
-      index :name, unique: true, where: Sequel.lit('deleted_at IS NULL')
+      unique :name, name: :baskets_name_unique
     end
 
     # 6. outputs — immutable append-only log
     create_table(:outputs) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
-      foreign_key :action_id, :actions, type: :bigint, null: false
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :restrict
       column :satoshis, :bigint, null: false
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :locking_script, c[:bytea]
@@ -150,6 +159,7 @@ Sequel.migration do
       column :sender_identity_key, :text
       column :derivation_prefix, :text
       column :derivation_suffix, :text
+      column :output_type, c[:output_type]
 
       unique %i[action_id vout]
     end
@@ -211,20 +221,18 @@ Sequel.migration do
       column :label, :text, null: false
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
-      column :deleted_at, c[:timestamptz]
 
-      index :label, unique: true, where: Sequel.lit('deleted_at IS NULL')
+      unique :label, name: :labels_label_unique
     end
 
     # 12. action_labels — join table
     create_table(:action_labels) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
-      foreign_key :action_id, :actions, type: :bigint, null: false
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
       foreign_key :label_id, :labels, type: :bigint, null: false
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
-      column :deleted_at, c[:timestamptz]
 
       unique %i[action_id label_id]
       index :label_id
@@ -237,9 +245,8 @@ Sequel.migration do
       column :tag, :text, null: false
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
-      column :deleted_at, c[:timestamptz]
 
-      index :tag, unique: true, where: Sequel.lit('deleted_at IS NULL')
+      unique :tag, name: :tags_tag_unique
     end
 
     # 14. output_tags — join table
@@ -250,7 +257,6 @@ Sequel.migration do
       foreign_key :tag_id, :tags, type: :bigint, null: false
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
-      column :deleted_at, c[:timestamptz]
 
       unique %i[output_id tag_id]
       index :tag_id
@@ -269,7 +275,6 @@ Sequel.migration do
       column :signature, :text
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
-      column :deleted_at, c[:timestamptz]
 
       unique %i[type serial_number certifier]
       index :certifier
@@ -290,27 +295,7 @@ Sequel.migration do
       unique %i[certificate_id name]
     end
 
-    # 17. tx_reqs — proof-harvesting work queue
-    create_table(:tx_reqs) do
-      column :id, :bigint, primary_key: true, identity: :always if postgres
-      primary_key :id if !postgres
-      foreign_key :tx_proof_id, :tx_proofs, type: :bigint
-      column :wtxid, c[:bytea], null: false, unique: true
-      column :status, :text, null: false, default: 'unmined'
-      column :attempts, :integer, null: false, default: 0
-      column :notified, :boolean, null: false, default: false
-      column :history, :text
-      column :notify, :text
-      column :batch, :text
-      column :raw_tx, c[:bytea]
-      column :input_beef, c[:bytea]
-      column :created_at, c[:timestamptz], null: false, default: c[:now]
-      column :updated_at, c[:timestamptz], null: false, default: c[:now]
-
-      index :status
-    end
-
-    # 18. settings — key-value wallet configuration
+    # 17. settings — key-value wallet configuration
     create_table(:settings) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
@@ -319,18 +304,91 @@ Sequel.migration do
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
     end
+
+    # 18. sse_cursors — Arcade SSE /events cursor persistence (#249)
+    #
+    # Token has no FK — it is a wallet-derived identifier (HMAC-from-WIF
+    # via +BSV::Wallet::CallbackToken#derive+) that the wallet supplies to
+    # Arcade for callback scoping, not a row in any other wallet table.
+    # last_event_id is the SSE id field, a nanosecond timestamp emitted by
+    # Arcade (PR #50): bigint accommodates the full 19-digit value.
+    create_table(:sse_cursors) do
+      String :token, primary_key: true
+      Bignum :last_event_id, null: false
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
+    end
+
+    # 19. promotions — promote-authorisation as a FK row (#307 / ADR-022 / ADR-023)
+    #
+    # A promotions row means "this action's outputs are canonical". It is gated:
+    #   - intent tracks the parent action (composite FK to actions(id, broadcast_intent)),
+    #     exactly as broadcasts.intent does (ADR-019).
+    #   - authorising_status names the broadcast tx_status that authorised a
+    #     send-path promotion; NULL on the internal path.
+    #   - promo_path CHECK (003): internal => no status; send => a status.
+    #   - auth_not_rejected CHECK (003): a present status is in the optimistic set
+    #     (anything except REJECTED / DOUBLE_SPEND_ATTEMPTED).
+    #   - composite FK (action_id, authorising_status) → broadcasts(action_id, tx_status)
+    #     ON UPDATE CASCADE: a send promotion can exist only while its broadcast is
+    #     in a non-rejected status (NULL skips the FK; MATCH SIMPLE — internal path
+    #     needs no broadcast). The cascade keeps authorising_status synced as
+    #     tx_status advances; a flip to REJECTED requires deleting the promotions
+    #     row first, else the cascade would hit auth_not_rejected.
+    #
+    # Created after actions and broadcasts so the composite FK targets exist.
+    if postgres
+      run <<~SQL
+        CREATE TABLE promotions (
+          action_id          bigint PRIMARY KEY REFERENCES actions(id) ON DELETE CASCADE,
+          intent             broadcast_intent NOT NULL,
+          authorising_status tx_status,
+          CONSTRAINT promo_path CHECK (
+            (intent = 'none' AND authorising_status IS NULL)
+            OR (intent <> 'none' AND authorising_status IS NOT NULL)
+          ),
+          CONSTRAINT auth_not_rejected CHECK (
+            authorising_status IS NULL
+            OR authorising_status NOT IN ('REJECTED', 'DOUBLE_SPEND_ATTEMPTED')
+          ),
+          CONSTRAINT promotions_action_intent_fkey
+            FOREIGN KEY (action_id, intent) REFERENCES actions (id, broadcast_intent),
+          CONSTRAINT promotions_broadcast_status_fkey
+            FOREIGN KEY (action_id, authorising_status)
+            REFERENCES broadcasts (action_id, tx_status) ON UPDATE CASCADE
+        )
+      SQL
+    else
+      create_table(:promotions) do
+        column :action_id, :bigint, primary_key: true
+        column :intent, :text, null: false
+        column :authorising_status, :text
+        foreign_key [:action_id], :actions, key: [:id], on_delete: :cascade
+        foreign_key %i[action_id intent], :actions, key: %i[id broadcast_intent]
+        foreign_key %i[action_id authorising_status], :broadcasts,
+                    key: %i[action_id tx_status], on_update: :cascade
+        constraint(:promo_path, Sequel.lit(
+                                  "(intent = 'none' AND authorising_status IS NULL) " \
+                                  "OR (intent <> 'none' AND authorising_status IS NOT NULL)"
+                                ))
+        constraint(:auth_not_rejected, Sequel.lit(
+                                         'authorising_status IS NULL ' \
+                                         "OR authorising_status NOT IN ('REJECTED', 'DOUBLE_SPEND_ATTEMPTED')"
+                                       ))
+      end
+    end
   end
 
   down do
     postgres = database_type == :postgres
 
-    drop_table :settings, :tx_reqs, :certificate_fields, :certificates,
+    drop_table :promotions, :sse_cursors, :settings, :certificate_fields, :certificates,
                :output_tags, :tags, :action_labels, :labels, :inputs,
                :output_baskets, :output_details, :spendable, :outputs,
                :baskets, :broadcasts, :actions, :tx_proofs, :blocks
 
     if postgres
       extension :pg_enum
+      drop_enum(:output_type)
       drop_enum(:tx_status)
       drop_enum(:broadcast_intent)
     end
