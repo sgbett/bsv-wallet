@@ -32,6 +32,7 @@ module BSV
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
+      autoload :TxBuilder,             'bsv/wallet/engine/tx_builder'
       autoload :TxProof,               'bsv/wallet/engine/tx_proof'
       autoload :OmqSupport,            'bsv/wallet/engine/omq_support'
       autoload :InputSource,           'bsv/wallet/engine/input_source'
@@ -43,7 +44,8 @@ module BSV
       LIMP_THRESHOLD     = 50_000  # default: 50K sats
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
-      attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker, :funding_strategy
+      attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker,
+                  :funding_strategy, :tx_builder
 
       # Engine collaborator surface exposed for Engine::Action use.
       # Not public API — these are internal handles for in-process logical models.
@@ -78,6 +80,14 @@ module BSV
         # Funding strategy — owns input acquisition (initial + top-up) and
         # the build collaborator's fixpoint loop. See ADR-024 / #323.
         @funding_strategy = FundingStrategy.new(store: @store, utxo_pool: @utxo_pool)
+        # Transaction builder — store-free scribe that constructs, fee-
+        # balances, and signs transactions over a resolved input set. The
+        # fee model value matches +estimate_sweep_fee+'s inline rate
+        # (#336): a sweep-size-parity coupling preserved byte-for-byte.
+        @tx_builder = TxBuilder.new(
+          key_deriver: @key_deriver,
+          fee_model: BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
+        )
       end
 
       # Is the wallet in limp mode? When true, all outbound operations
