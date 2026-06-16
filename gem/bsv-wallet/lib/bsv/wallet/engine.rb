@@ -31,6 +31,7 @@ module BSV
 
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
+      autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
       autoload :TxProof,               'bsv/wallet/engine/tx_proof'
       autoload :OmqSupport,            'bsv/wallet/engine/omq_support'
       autoload :InputSource,           'bsv/wallet/engine/input_source'

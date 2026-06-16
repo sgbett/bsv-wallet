@@ -108,9 +108,6 @@ module BSV
         #   specs (raw BRC-100 input hashes including any custom
         #   +unlocking_script+ / +sequence_number+ overrides). +nil+ when
         #   the wallet selects inputs itself.
-        # @param change_count [Integer] number of BRC-42 change outputs the
-        #   builder should derive on each attempt. Captured pre-lock by
-        #   the caller so target sizing reflects the wallet's full pool.
         # @param build [#call] the build collaborator. Called as
         #   +build.call+ on every fixpoint iteration. Must return either
         #   +{ wtxid:, raw_tx:, tx:, vout_mapping:, change_outputs: }+ on
@@ -130,7 +127,7 @@ module BSV
         #   contention-retry budget for #213 was exhausted without a
         #   successful lock.
         def acquire(action_id:, caller_outputs:, caller_supplied_inputs:,
-                    caller_inputs:, change_count:, build:)
+                    caller_inputs:, build:)
           raise NotImplementedError
         end
       end
