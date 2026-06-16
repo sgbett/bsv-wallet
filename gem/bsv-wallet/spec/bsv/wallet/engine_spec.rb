@@ -2063,84 +2063,8 @@ RSpec.describe BSV::Wallet::Engine do
   # Direct tests for #build_outputs moved to action_spec.rb in #288.
 
   # --- Input Selection Primitive (#208) ---
-
-  describe '#select_inputs (private)' do
-    def select_inputs(target_satoshis:, exclude: [])
-      engine.send(:select_inputs, target_satoshis: target_satoshis, exclude: exclude)
-    end
-
-    it 'returns input specs whose satoshis cover the target' do
-      fund_wallet(satoshis: 2000, count: 3, basket: 'select-inputs', suffix: 'a')
-
-      specs = select_inputs(target_satoshis: 3500)
-
-      total = specs.sum { |s| BSV::Wallet::Store::Models::Output[s[:output_id]].satoshis }
-      expect(total).to be >= 3500
-      expect(specs).to all(match(a_hash_including(:output_id, :vin)))
-    end
-
-    it 'returns an empty array when target is zero' do
-      expect(select_inputs(target_satoshis: 0)).to eq([])
-    end
-
-    it 'raises PoolDepletedError when the target exceeds the pool' do
-      # Reserve UTXO is 100_000 sats; ask for 10x that.
-      expect { select_inputs(target_satoshis: 1_000_000) }
-        .to raise_error(BSV::Wallet::PoolDepletedError)
-    end
-
-    it 'meets the target with a single large UTXO when one suffices' do
-      fund_wallet(satoshis: 50_000, count: 1, basket: 'select-inputs-large', suffix: 'big')
-
-      specs = select_inputs(target_satoshis: 40_000)
-
-      expect(specs.length).to eq(1)
-    end
-
-    it 'meets the target with multiple UTXOs when no single one suffices' do
-      # Reserve UTXO is 100_000 sats; add three 50K outputs and target
-      # 180K — no single output covers it, so selection must combine.
-      fund_wallet(satoshis: 50_000, count: 3, basket: 'select-inputs-small', suffix: 's')
-
-      specs = select_inputs(target_satoshis: 180_000)
-
-      expect(specs.length).to be >= 2
-    end
-
-    it 'assigns sequential vin indices starting at 0' do
-      fund_wallet(satoshis: 1000, count: 4, basket: 'select-inputs-vins', suffix: 'v')
-
-      specs = select_inputs(target_satoshis: 3000)
-
-      expect(specs.map { |s| s[:vin] }).to eq((0...specs.length).to_a)
-    end
-
-    context 'with exclude:' do
-      it 'skips supplied output_ids even when they would otherwise fit' do
-        fund_wallet(satoshis: 5000, count: 3, basket: 'select-inputs-excl', suffix: 'e')
-
-        first = select_inputs(target_satoshis: 4000)
-        # Exclude the just-picked output; next call must select a different one.
-        excluded_ids = first.map { |s| s[:output_id] }
-
-        second = select_inputs(target_satoshis: 4000, exclude: excluded_ids)
-
-        expect(second.map { |s| s[:output_id] } & excluded_ids).to be_empty
-      end
-
-      it 'raises PoolDepletedError when exclude leaves insufficient balance' do
-        fund_wallet(satoshis: 5000, count: 1, basket: 'select-inputs-excl-empty', suffix: 'only')
-
-        # Pull the one funded UTXO, exclude it, then try to spend more than
-        # the reserve covers — should fail.
-        sole = select_inputs(target_satoshis: 5000)
-        excluded_ids = sole.map { |s| s[:output_id] }
-
-        expect { select_inputs(target_satoshis: 1_000_000, exclude: excluded_ids) }
-          .to raise_error(BSV::Wallet::PoolDepletedError)
-      end
-    end
-  end
+  # Direct tests for input selection moved to engine/funding_strategy_spec.rb
+  # in #323; selection now lives on Engine::FundingStrategy.
 
   # --- generate_change: explicit fee detection + shortfall reporting (#209) ---
   # Direct tests for #generate_change moved to action_spec.rb in #288.

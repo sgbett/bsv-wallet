@@ -74,36 +74,29 @@ module BSV
           pre_lock_change_count = change_count || engine.utxo_pool.change_output_count
           engine.send(:enforce_headroom_against!, pre_lock_balance, output_total) unless deferred
 
-          # Phase 1: resolve initial inputs and lock the action.
-          # - caller_supplied_inputs (including empty array): use as-is.
-          # - inputs: nil + outputs present: select to cover sum(outputs).
-          # - inputs: nil + no outputs: no selection (nothing to fund).
-          initial_inputs =
-            if caller_supplied_inputs
-              build_input_specs(inputs)
-            elsif output_total.positive?
-              engine.send(:select_inputs, target_satoshis: output_total)
-            else
-              []
-            end
-
+          # Phase 1a: create the empty action row. Input acquisition runs
+          # through FundingStrategy against this row's +action_id+; an
+          # input-less action row is already routine (the deferred path
+          # and the no-output path both produce one). See option (a) in
+          # `reference/createaction-lifecycle.md`.
           action_result = engine.store.create_action(
             action: {
               description: description, broadcast_intent: broadcast,
               nlocktime: lock_time || 0, version: version,
               input_beef: input_beef, outgoing: true
             },
-            inputs: initial_inputs
+            inputs: []
           )
-          raise BSV::Wallet::InsufficientFundsError if action_result.nil?
 
           attach_labels(engine: engine, action_id: action_result[:id], labels: labels)
 
           action = new(engine: engine, row: action_result)
 
           # Deferred path: assemble unsigned tx, stage, return signable handle.
-          # No change generation on this path (preserved from prior behaviour).
+          # Always caller-supplied inputs (enforced above). Lock the caller's
+          # inputs atomically against the empty action row, then build.
           if deferred
+            lock_caller_inputs!(engine: engine, action_id: action_result[:id], inputs: inputs)
             wtxid, raw_tx, vout_mapping = action.send(
               :build_transaction,
               action_result[:id], inputs, outputs,
@@ -127,8 +120,10 @@ module BSV
 
           # Synchronous path. The empty-inputs case (OP_RETURN-only) skips
           # change generation — already detected above to keep the
-          # key_deriver check honest.
+          # key_deriver check honest. Caller inputs (if any) are caller-
+          # supplied; lock them once, no funding loop.
           if skip_change
+            lock_caller_inputs!(engine: engine, action_id: action_result[:id], inputs: inputs)
             wtxid, raw_tx, vout_mapping, = action.send(
               :build_transaction,
               action_result[:id], inputs, outputs,
@@ -136,19 +131,38 @@ module BSV
             )
             change_outputs = []
           else
-            wtxid, raw_tx, vout_mapping, change_outputs, = action.send(
-              :run_funding_loop,
-              action_id: action_result[:id],
-              caller_outputs: outputs || [],
-              caller_supplied_inputs: caller_supplied_inputs,
-              caller_inputs: caller_supplied_inputs ? inputs : nil,
-              initial_locked_output_ids: initial_inputs.map { |i| i[:output_id] },
-              change_count: pre_lock_change_count,
-              lock_time: lock_time, version: version,
-              randomize_outputs: randomize_outputs
-            )
-            # Exact post-loop headroom check: actual fee is now known.
-            actual_fee = action.send(:total_input_satoshis_for, action_result[:id]) -
+            # FundingStrategy owns input acquisition (initial + top-up) and
+            # the build collaborator's fixpoint loop. On +InsufficientFundsError+
+            # (caller-supplied shortfall, pool depletion, or contention-retry
+            # exhaustion) abort the empty action row so no orphan is left.
+            begin
+              funding = engine.funding_strategy.acquire(
+                action_id: action_result[:id],
+                caller_outputs: outputs || [],
+                caller_supplied_inputs: caller_supplied_inputs,
+                caller_inputs: caller_supplied_inputs ? inputs : nil,
+                build: lambda {
+                  action.send(
+                    :generate_change,
+                    action_id: action_result[:id], caller_outputs: outputs || [],
+                    caller_inputs: caller_supplied_inputs ? inputs : nil,
+                    lock_time: lock_time, version: version, randomize: randomize_outputs,
+                    change_count: pre_lock_change_count
+                  )
+                }
+              )
+            rescue BSV::Wallet::InsufficientFundsError
+              engine.store.abort_action(action_id: action_result[:id])
+              raise
+            end
+            wtxid          = funding[:wtxid]
+            raw_tx         = funding[:raw_tx]
+            vout_mapping   = funding[:vout_mapping]
+            change_outputs = funding[:change_outputs]
+            # Exact post-loop headroom check: actual fee is now known. Use the
+            # by-value sat-total from FundingStrategy so we don't re-fetch
+            # resolved inputs.
+            actual_fee = funding[:total_input_satoshis] -
                          output_total - change_outputs.sum { |c| c[:satoshis] }
             engine.send(:enforce_headroom_against!, pre_lock_balance, output_total + actual_fee)
           end
@@ -322,6 +336,24 @@ module BSV
         end
 
         # ---- Class helpers (used by non-lifecycle porcelain) ---------------
+
+        # Lock the caller-supplied inputs against the empty action row.
+        # Used by the deferred and +skip_change+ (zero-input or pure
+        # OP_RETURN) paths — neither runs the funding loop, so they
+        # bypass +FundingStrategy+ and use the atomic Store primitive
+        # directly. A short-count from +store.lock_inputs+ surfaces as
+        # +InsufficientFundsError+, matching the wallet-selected path's
+        # behaviour on caller-supplied contention (fail-fast, no retry).
+        def self.lock_caller_inputs!(engine:, action_id:, inputs:)
+          specs = build_input_specs(inputs)
+          return if specs.empty?
+
+          locked = engine.store.lock_inputs(action_id: action_id, inputs: specs)
+          return if locked == specs.size
+
+          engine.store.abort_action(action_id: action_id)
+          raise BSV::Wallet::InsufficientFundsError
+        end
 
         # Translate caller input specs into Store input specs.
         def self.build_input_specs(inputs)
@@ -827,77 +859,6 @@ module BSV
           wtxid = tx.wtxid
 
           [wtxid, raw_tx, vout_mapping, tx]
-        end
-
-        # Funding loop (#210): drive generate_change until inputs cover the
-        # actual fee. On a shortfall, top up via select_inputs + lock_inputs
-        # and re-evaluate. Bounded by the spendable-pool size to prevent
-        # pathological infinite loops; in practice converges in one or two
-        # iterations.
-        #
-        # Caller-supplied inputs are fixed — a shortfall raises immediately
-        # with no top-up attempted. Auto-fund top-ups that exhaust the pool
-        # surface as InsufficientFundsError (wrapping PoolDepletedError).
-        #
-        # @return [Array(String, String, Hash, Array<Hash>, Transaction::Tx)]
-        #   wtxid, raw_tx, vout_mapping, change_outputs, tx — the
-        #   trailing +tx+ is the live +Transaction::Tx+
-        #   object with +source_satoshis+ / +source_locking_script+ wired
-        #   on each input, ready for +to_ef+ at broadcast time.
-        def run_funding_loop(action_id:, caller_outputs:,
-                             caller_supplied_inputs:, caller_inputs:,
-                             initial_locked_output_ids:,
-                             change_count:,
-                             lock_time:, version:, randomize_outputs:)
-          locked_output_ids = initial_locked_output_ids.dup
-          max_iterations = [@engine.utxo_pool.spendable_count + 1, 2].max
-
-          max_iterations.times do
-            result = generate_change(
-              action_id: action_id, caller_outputs: caller_outputs,
-              caller_inputs: caller_inputs,
-              lock_time: lock_time, version: version, randomize: randomize_outputs,
-              change_count: change_count
-            )
-            unless result[:shortfall]
-              return [result[:wtxid], result[:raw_tx], result[:vout_mapping],
-                      result[:change_outputs], result[:tx]]
-            end
-
-            raise BSV::Wallet::InsufficientFundsError if caller_supplied_inputs
-
-            begin
-              extra = @engine.send(:select_inputs, target_satoshis: result[:shortfall], exclude: locked_output_ids)
-            rescue BSV::Wallet::PoolDepletedError
-              raise BSV::Wallet::InsufficientFundsError
-            end
-            raise BSV::Wallet::InsufficientFundsError if extra.empty?
-
-            # Re-vin against the existing lock count so vin numbering stays
-            # contiguous on the inputs table.
-            base_vin = locked_output_ids.length
-            top_up = extra.each_with_index.map do |spec, i|
-              { output_id: spec[:output_id], vin: base_vin + i }
-            end
-            # Store#lock_inputs returns the count actually locked. Anything less
-            # than top_up.size means at least one row was contended and the whole
-            # batch rolled back. Treat that as a funding failure rather than
-            # silently advancing locked_output_ids (which would desynchronise
-            # base_vin from the real inputs table). Phase-1 contention-retry is
-            # tracked separately (see #213).
-            locked = @engine.store.lock_inputs(action_id: action_id, inputs: top_up)
-            raise BSV::Wallet::InsufficientFundsError unless locked == top_up.size
-
-            locked_output_ids.concat(top_up.map { |i| i[:output_id] })
-          end
-
-          raise BSV::Wallet::InsufficientFundsError
-        end
-
-        # Sum source_satoshis across all inputs currently locked to action_id.
-        # Used by the exact post-loop headroom check.
-        def total_input_satoshis_for(action_id)
-          @engine.store.resolve_inputs_for_signing(action_id: action_id).sum { |r| r[:source_satoshis] }
         end
 
         # Build a transaction with BRC-42 change derivation, explicit fee

@@ -43,7 +43,7 @@ module BSV
       LIMP_THRESHOLD     = 50_000  # default: 50K sats
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
-      attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker
+      attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker, :funding_strategy
 
       # Engine collaborator surface exposed for Engine::Action use.
       # Not public API — these are internal handles for in-process logical models.
@@ -75,6 +75,9 @@ module BSV
         # the post-submit accept / reject / promote bookkeeping.
         @broadcast_worker = Broadcast.new(store: @store, broadcaster: @broadcaster,
                                           callback_token: @callback_token)
+        # Funding strategy — owns input acquisition (initial + top-up) and
+        # the build collaborator's fixpoint loop. See ADR-024 / #323.
+        @funding_strategy = FundingStrategy.new(store: @store, utxo_pool: @utxo_pool)
       end
 
       # Is the wallet in limp mode? When true, all outbound operations
@@ -93,19 +96,18 @@ module BSV
       # Create a BRC-100 action (Phases 1, 2, optionally 3, optionally 4).
       #
       # Composes the funding primitives:
-      #   1. Phase 1 picks the initial input set:
-      #      - inputs: nil and outputs present  → select_inputs(sum(outputs))
-      #      - inputs: [] / empty                → no selection (explicit zero-input tx)
-      #      - inputs: [...]                     → caller-supplied, used as-is
-      #      Followed by an atomic Store#create_action that inserts the
-      #      action row and the input rows together.
-      #   2. Phase 2 runs the funding loop: generate_change builds + templates
-      #      the transaction, computes the exact fee, and either returns the
-      #      finished {wtxid, raw_tx, vout_mapping, change_outputs} or a
-      #      shortfall. On shortfall (wallet-selected inputs only) the loop
-      #      tops up via select_inputs + Store#lock_inputs and re-evaluates.
-      #      Caller-supplied input shortfalls raise InsufficientFundsError
-      #      immediately.
+      #   1. Phase 1a creates an empty action row (inputs: []) — option (a)
+      #      seam, so initial and top-up locks share one retried path.
+      #   2. Phase 1b acquires inputs via Engine::FundingStrategy:
+      #      - inputs: nil  → selects to cover sum(outputs); fixpoint loop
+      #        tops up on shortfall (#213 bounded retry on contention).
+      #      - inputs: [...] → locked as-is once; shortfall raises
+      #        InsufficientFundsError immediately (no top-up).
+      #      generate_change is invoked through a one-way build seam
+      #      and returns the finished {wtxid, raw_tx, vout_mapping,
+      #      change_outputs, tx} on convergence.
+      #      Pool depletion or contention-retry exhaustion ⇒
+      #      InsufficientFundsError; the empty action row is aborted.
       #   3. Phase 3 / 4 follow the broadcast intent (send path versus
       #      internal path); see docs/design.md.
       #
@@ -542,9 +544,9 @@ module BSV
       # Send a BRC-42 derived payment to a recipient.
       #
       # Generates derivation parameters, derives a P2PKH locking script for
-      # the recipient via BRC-42, and calls create_action — which composes
-      # select_inputs and generate_change inside its funding loop to handle
-      # UTXO selection, fees, and change.
+      # the recipient via BRC-42, and calls create_action — which uses
+      # Engine::FundingStrategy to handle UTXO selection, fees, and change
+      # via the funding loop.
       #
       # @param recipient [String] 66-char compressed public key hex (02/03 prefix)
       # @param satoshis [Integer] amount to send
@@ -1049,28 +1051,6 @@ module BSV
         if no_send then :none
         elsif accept_delayed_broadcast then :delayed
         else :inline
-        end
-      end
-
-      # Input-selection primitive (#208).
-      #
-      # Pure pool selection: no fee estimation, no headroom margin, no
-      # locking. The funding loop in create_action composes this with
-      # generate_change to converge on a fully funded transaction.
-      #
-      # @param target_satoshis [Integer] minimum total value to select
-      # @param exclude [Array<Integer>] output IDs already locked in this
-      #   action — skipped so a top-up call doesn't re-select them
-      # @return [Array<Hash>] input specs ({ output_id:, vin: }) suitable
-      #   for Store#lock_inputs / Store#create_action's inputs argument
-      # @raise [BSV::Wallet::PoolDepletedError] when the pool cannot meet
-      #   the target after applying exclude:
-      def select_inputs(target_satoshis:, exclude: [])
-        return [] if target_satoshis.zero?
-
-        candidates = @utxo_pool.select(satoshis: target_satoshis, exclude: exclude)
-        candidates.each_with_index.map do |c, idx|
-          { output_id: c[:id], vin: idx }
         end
       end
 
