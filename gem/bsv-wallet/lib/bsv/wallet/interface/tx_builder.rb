@@ -62,9 +62,10 @@ module BSV
       # ## Not the builder's concern
       #
       # BEEF assembly / egress (+build_atomic_beef+, +wire_ancestor+,
-      # +validate_for_handoff!+) is hydration over the ProofStore +
-      # chain_tracker — a separate concern that stays on +Action+ and
-      # is the claim of a later Hydrator / BeefImporter extraction.
+      # +validate_for_handoff!+) is hydration over the ProofStore — a
+      # separate concern owned by +Interface::Hydrator+
+      # (+Engine::Hydrator+). The Hydrator is store-reading, in deliberate
+      # contrast with this builder's store-free shape.
       module TxBuilder
         # Assemble (and optionally sign) a transaction over the given
         # resolved input set. The no-change build — used by the deferred
