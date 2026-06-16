@@ -77,6 +77,12 @@ module BSV
                          lock_time:, version:, randomize:, change_count:)
           raise ArgumentError, "change_count must be >= 1, got #{change_count}" if change_count < 1
 
+          # Change derivation (step B) needs the deriver unconditionally —
+          # build_inputs only guards when an input requires a signing key,
+          # so a caller-script-only input set would otherwise reach
+          # derive_public_key with a nil deriver. Guard up front.
+          require_key_deriver!
+
           # A. Build inputs over the resolved set + caller overrides.
           tx_inputs, signing_keys = build_inputs(resolved_inputs, caller_inputs)
 

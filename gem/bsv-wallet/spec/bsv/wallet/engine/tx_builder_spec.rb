@@ -195,6 +195,18 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
       end.to raise_error(ArgumentError, /change_count must be >= 1/)
     end
 
+    it 'raises when no key deriver is configured (change derivation needs one)' do
+      deriverless = described_class.new(key_deriver: nil, fee_model: fee_model)
+      # Empty input set so build_inputs does not guard first — proves the
+      # build_change guard itself fires before any change derivation.
+      expect do
+        deriverless.build_change(
+          resolved_inputs: [], caller_outputs: [{ satoshis: 1_000, locking_script: op_true }],
+          caller_inputs: nil, lock_time: 0, version: 1, randomize: false, change_count: 1
+        )
+      end.to raise_error(BSV::Wallet::Error, /no key deriver configured/)
+    end
+
     it 'exposes the live Transaction::Tx so FundingStrategy can read total_input_satoshis' do
       resolved = [resolved_p2pkh_input(vin: 0, satoshis: 100_000)]
       result = builder.build_change(
