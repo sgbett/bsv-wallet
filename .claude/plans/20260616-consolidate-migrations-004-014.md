@@ -40,6 +40,18 @@ This is a pure reorganisation. The same tables, columns, enums, constraints, tri
 names, and semantics — reached in 3 steps instead of 14. Correctness = schema-dump
 equivalence (see Verification).
 
+## Execution order
+
+1. **Capture baselines first — on current HEAD, before touching any migration.** Migrate
+   a fresh Postgres DB and save `pg_dump --schema-only --no-owner --no-privileges`; migrate
+   a fresh `sqlite::memory:` and save its `.schema`. These are the equivalence targets
+   (see Verification).
+2. Rewrite **001** (structure) → **002** (cascade FKs) → **003** (validation).
+3. Delete `004_*`–`014_*`.
+4. Update `migration_spec.rb` and the stale comments; run the grep sweep.
+5. Verify: re-migrate fresh databases, diff the dumps against the step-1 baselines (must be
+   identical), then run the unit (Postgres + SQLite) and integration suites, and RuboCop.
+
 ## 001 — rewrite (structure, final shape)
 
 Fold in, relative to current 001:
