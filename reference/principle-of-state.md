@@ -149,7 +149,7 @@ A "no" to any of these is the principle leaking. Sometimes the leak is deliberat
 ## Related
 
 - [`reference/state-boundaries.md`](state-boundaries.md) — companion load-bearing principle. Where the principle of state defines *what* the wallet maintains (a DB always in a valid state), state-boundaries defines *where* that maintenance lives by the stateless/stateful axis (SDK / wallet).
-- [`reference/state-representations.md`](state-representations.md) — the living conformance register: a per-element classification of every state representation in the schema against this principle, with the conscious exceptions named. (Note: this document's "A note on scale" and derived-status table predate #012 and need reconciling — tracked in the audit HLR.)
+- [`reference/state-representations.md`](state-representations.md) — the living conformance register: a per-element classification of every state representation in the schema against this principle, with the conscious exceptions named.
 - `reference/schema.md` — the schema design that operationalises this principle. Principle #11 ("the database is the last line of defense") is the schema-side restatement.
 - `reference/schema-intent.md` — why the schema chose Postgres-native primitives rather than portable subsets.
 - `docs/design.md` §6 (Cross-Cutting Concerns) — high-level summary that defers to this document for detail.

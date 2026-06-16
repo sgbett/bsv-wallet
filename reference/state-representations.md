@@ -4,7 +4,7 @@ A living register of **every place the schema represents state**, classified aga
 
 This document is **not** the principle (that is `principle-of-state.md`) nor a decision (those are the ADRs). It is the **conformance register**: the per-element inventory those documents' "tests for compliance" operate against. It is *living* — it changes whenever the schema changes — and answers one standing question: **are we actually compliant, and where are the conscious exceptions?**
 
-Verified against migrations `001`–`012` and `lib/` on 2026-06-13 (post `012_promotions.rb` / #307).
+Verified against migrations `001`–`014` and `lib/` on 2026-06-16 (post `014_drop_actions_nlocktime_version.rb` / #351).
 
 ## The taxonomy
 

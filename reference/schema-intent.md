@@ -297,22 +297,20 @@ rows enter `outputs`.
   `broadcast_intent != 'none'` (the wallet authors broadcastable actions),
   not from a stored column or anything on the output itself.
 
-**State and transitions:** Rows are append-only with one deliberate
-exception — the `promoted` flag flips false → true exactly once on the
-send path at Phase 4 (structurally analogous to `actions.tx_proof_id`
-flipping). Cleanup paths (`abort`, `fail_broadcast_action`, reaper)
-do delete output rows, but they only ever reach rows that never made
-it into the canonical UTXO set (`promoted = false`). At scale, lifecycle
-exit is partition drop, not per-row DELETE.
+**State and transitions:** Rows are append-only, with one deliberate
+exception — cleanup paths (`abort`, `fail_broadcast_action`, reaper)
+delete output rows, but only ones that never made it into the canonical
+UTXO set (no `promotions` row). At scale, lifecycle exit is partition
+drop, not per-row DELETE. Promotion itself is structural, not a column
+mutation: an output is canonical when a per-action `promotions` row
+exists (#012, ADR-023), so `outputs` carries no `promoted` flag to flip.
 
-- **Send path** writes outputs at Phase 2 with `promoted = false`.
-  They become canonical UTXO set members at Phase 4 when broadcast
-  acceptance flips the flag and inserts the spendable rows.
-- **Internal path** (`broadcast = 'none'`) writes outputs with
-  `promoted = true` and inserts spendable rows in the same Phase 1+2+4
-  atomic transaction. The column default of `true` is calibrated for
-  the internal path; any backfill of pre-existing rows lands in the
-  post-promotion state.
+- **Send path** writes outputs at Phase 2. They become canonical UTXO
+  set members at Phase 4 when broadcast acceptance inserts the action's
+  `promotions` row and the spendable rows.
+- **Internal path** (`broadcast = 'none'`) writes outputs and inserts the
+  `promotions` row plus spendable rows in the same Phase 1+2+4 atomic
+  transaction.
 
 **Integrity:**
 - `(action_id, vout)` UNIQUE — an output is uniquely identified by its
