@@ -454,9 +454,14 @@ module BSV
         # Slot may have been locked by a concurrent caller — retry with a different slot
         return generate_receive_address unless locking_action
 
-        wtxid, raw_tx, = Action.new(engine: self, row: { id: locking_action[:id] }).send(
-          :build_transaction, locking_action[:id], [{ output_id: slot[:id] }], [], nil, nil, false
+        resolved = @store.resolve_inputs_for_signing(action_id: locking_action[:id])
+        build_result = @tx_builder.build(
+          resolved_inputs: resolved, caller_outputs: [],
+          caller_inputs: [{ output_id: slot[:id] }],
+          lock_time: nil, version: nil, randomize: false, sign: true
         )
+        wtxid = build_result[:wtxid]
+        raw_tx = build_result[:raw_tx]
         @store.sign_action(action_id: locking_action[:id], wtxid: wtxid, raw_tx: raw_tx)
         @store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
         attach_labels(locking_action[:id], ['wbikd'])
@@ -1038,7 +1043,7 @@ module BSV
         outputs.each_with_index do |out, idx|
           next unless out[:output_type] == 'root'
 
-          script = Action.resolve_locking_script(out[:locking_script])
+          script = TxBuilder.resolve_locking_script(out[:locking_script])
           unless script.p2pkh?
             raise BSV::Wallet::InvalidParameterError.new(
               "outputs[#{idx}].output_type",
