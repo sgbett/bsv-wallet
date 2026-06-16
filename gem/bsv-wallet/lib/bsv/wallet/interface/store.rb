@@ -21,7 +21,7 @@ module BSV
         # competing for the same outputs are resolved by the database.
         #
         # @param action [Hash] :description, :broadcast (:delayed/:inline/:none),
-        #   :nlocktime, :version, :input_beef
+        #   :input_beef
         # @param inputs [Array<Hash>] each: :output_id, :vin, :nsequence, :description
         # @return [Hash] the created action with :id, :reference
         # @raise [InsufficientFundsError] if not enough inputs could be locked

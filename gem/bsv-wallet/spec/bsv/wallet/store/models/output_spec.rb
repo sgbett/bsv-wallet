@@ -5,7 +5,7 @@ require_relative '../shared_context'
 RSpec.describe BSV::Wallet::Store::Models::Output, :store do
   # broadcast_intent: 'none' so the funded-fixture promotions row (intent='none',
   # no authorising status) satisfies promo_path (#307).
-  let(:action) { BSV::Wallet::Store::Models::Action.create(description: 'test action', broadcast_intent: 'none', nlocktime: 0, wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
+  let(:action) { BSV::Wallet::Store::Models::Action.create(description: 'test action', broadcast_intent: 'none', wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)) }
 
   def create_spendable_output(action_id: action.id, satoshis: 1000, vout: 0, **attrs)
     attrs[:locking_script] ||= SecureRandom.random_bytes(25)
@@ -63,7 +63,7 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
 
     it 'has one input (when claimed)' do
       output = create_spendable_output
-      lock_action = BSV::Wallet::Store::Models::Action.create(description: 'test action', nlocktime: 0)
+      lock_action = BSV::Wallet::Store::Models::Action.create(description: 'test action')
       BSV::Wallet::Store::Models::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
       expect(output.reload.input).to be_a(BSV::Wallet::Store::Models::Input)
     end
@@ -84,7 +84,7 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
 
     it 'returns false when claimed by an input' do
       output = create_spendable_output
-      lock_action = BSV::Wallet::Store::Models::Action.create(description: 'test action', nlocktime: 0)
+      lock_action = BSV::Wallet::Store::Models::Action.create(description: 'test action')
       BSV::Wallet::Store::Models::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
       expect(output.reload.spendable?).to be false
     end
@@ -108,7 +108,7 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
       output = create_spendable_output(vout: 0)
       create_spendable_output(vout: 1)
 
-      lock_action = BSV::Wallet::Store::Models::Action.create(description: 'test action', nlocktime: 0)
+      lock_action = BSV::Wallet::Store::Models::Action.create(description: 'test action')
       BSV::Wallet::Store::Models::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
       expect(described_class.spendable.count).to eq(1)

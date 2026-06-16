@@ -82,7 +82,6 @@ module BSV
           action_result = engine.store.create_action(
             action: {
               description: description, broadcast_intent: broadcast,
-              nlocktime: lock_time || 0, version: version,
               input_beef: input_beef
             },
             inputs: []

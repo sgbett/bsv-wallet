@@ -10,7 +10,6 @@ RSpec.describe BSV::Wallet::Store::EventApplicator, :store do
   let(:action) do
     BSV::Wallet::Store::Models::Action.create(
       description: 'test action 12345',
-      nlocktime: 0,
       wtxid: SecureRandom.random_bytes(32),
       raw_tx: SecureRandom.random_bytes(100)
     )

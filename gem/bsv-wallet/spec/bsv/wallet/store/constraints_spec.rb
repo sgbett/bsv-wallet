@@ -114,7 +114,7 @@ RSpec.describe 'Schema constraints', :postgres, :store do
     it 'rejects NULL description' do
       expect do
         db.transaction(savepoint: true) do
-          db[:actions].insert(description: nil, nlocktime: 0, reference: SecureRandom.uuid)
+          db[:actions].insert(description: nil, reference: SecureRandom.uuid)
         end
       end.to raise_error(Sequel::NotNullConstraintViolation)
     end
@@ -122,7 +122,7 @@ RSpec.describe 'Schema constraints', :postgres, :store do
     it 'rejects description shorter than 5 characters' do
       expect do
         db.transaction(savepoint: true) do
-          db[:actions].insert(description: 'tiny', nlocktime: 0, reference: SecureRandom.uuid)
+          db[:actions].insert(description: 'tiny', reference: SecureRandom.uuid)
         end
       end.to raise_error(Sequel::CheckConstraintViolation)
     end
@@ -130,7 +130,7 @@ RSpec.describe 'Schema constraints', :postgres, :store do
     it 'rejects description longer than 50 characters' do
       expect do
         db.transaction(savepoint: true) do
-          db[:actions].insert(description: 'x' * 51, nlocktime: 0, reference: SecureRandom.uuid)
+          db[:actions].insert(description: 'x' * 51, reference: SecureRandom.uuid)
         end
       end.to raise_error(Sequel::CheckConstraintViolation)
     end
@@ -139,8 +139,7 @@ RSpec.describe 'Schema constraints', :postgres, :store do
       expect do
         db.transaction(savepoint: true) do
           db[:actions].insert(
-            description: 'test action 12345', nlocktime: 0,
-            reference: SecureRandom.uuid,
+            description: 'test action 12345', reference: SecureRandom.uuid,
             wtxid: Sequel.blob("\x00" * 31), raw_tx: Sequel.blob(valid_raw_tx)
           )
         end
@@ -151,8 +150,7 @@ RSpec.describe 'Schema constraints', :postgres, :store do
       expect do
         db.transaction(savepoint: true) do
           db[:actions].insert(
-            description: 'test action 12345', nlocktime: 0,
-            reference: SecureRandom.uuid,
+            description: 'test action 12345', reference: SecureRandom.uuid,
             wtxid: Sequel.blob(valid_wtxid), raw_tx: nil
           )
         end
@@ -163,8 +161,7 @@ RSpec.describe 'Schema constraints', :postgres, :store do
       expect do
         db.transaction(savepoint: true) do
           db[:actions].insert(
-            description: 'test action 12345', nlocktime: 0,
-            reference: SecureRandom.uuid,
+            description: 'test action 12345', reference: SecureRandom.uuid,
             wtxid: nil, raw_tx: Sequel.blob(valid_raw_tx)
           )
         end
@@ -174,8 +171,7 @@ RSpec.describe 'Schema constraints', :postgres, :store do
     it 'allows both wtxid and raw_tx NULL (unsigned action)' do
       expect do
         db[:actions].insert(
-          description: 'test action 12345', nlocktime: 0,
-          reference: SecureRandom.uuid, wtxid: nil, raw_tx: nil
+          description: 'test action 12345', reference: SecureRandom.uuid, wtxid: nil, raw_tx: nil
         )
       end.not_to raise_error
     end

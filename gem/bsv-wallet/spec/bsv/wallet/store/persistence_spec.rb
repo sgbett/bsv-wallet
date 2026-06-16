@@ -35,7 +35,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#create_action' do
     it 'creates an action with no inputs' do
-      result = store.create_action(action: { description: 'test action', nlocktime: 0 })
+      result = store.create_action(action: { description: 'test action' })
       expect(result).to include(:id, :reference, :status)
       expect(result[:status]).to eq(:unsigned)
       expect(result[:broadcast_intent]).to eq('delayed')
@@ -45,7 +45,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       output = create_funded_output(satoshis: 1000)
 
       result = store.create_action(
-        action: { description: 'spending', nlocktime: 0 },
+        action: { description: 'spending' },
         inputs: [{ output_id: output.id, vin: 0 }]
       )
 
@@ -58,26 +58,26 @@ RSpec.describe BSV::Wallet::Store, :store do
 
       # First caller locks it
       store.create_action(
-        action: { description: 'first', nlocktime: 0 },
+        action: { description: 'first' },
         inputs: [{ output_id: output.id, vin: 0 }]
       )
 
       # Second caller tries the same output — rollback
       result = store.create_action(
-        action: { description: 'second', nlocktime: 0 },
+        action: { description: 'second' },
         inputs: [{ output_id: output.id, vin: 0 }]
       )
       expect(result).to be_nil
     end
 
     it 'sets broadcast intent' do
-      result = store.create_action(action: { description: 'nosend', nlocktime: 0, broadcast_intent: :none })
+      result = store.create_action(action: { description: 'nosend', broadcast_intent: :none })
       expect(result[:broadcast_intent]).to eq('none')
     end
 
     it 'preserves binary input_beef' do
       beef = SecureRandom.random_bytes(100)
-      result = store.create_action(action: { description: 'with beef', nlocktime: 0, input_beef: beef })
+      result = store.create_action(action: { description: 'with beef', input_beef: beef })
       action = BSV::Wallet::Store::Models::Action[result[:id]]
       expect(action.input_beef.encoding).to eq(Encoding::BINARY)
       expect(action.input_beef).to eq(beef)
@@ -86,7 +86,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#lock_inputs' do
     it 'locks multiple inputs against an existing action' do
-      action = store.create_action(action: { description: 'parent', nlocktime: 0 })
+      action = store.create_action(action: { description: 'parent' })
       o1 = create_funded_output(satoshis: 1000)
       o2 = create_funded_output(satoshis: 2000, vout: 1)
 
@@ -106,7 +106,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'returns 0 and locks nothing for empty inputs' do
-      action = store.create_action(action: { description: 'no top-up', nlocktime: 0 })
+      action = store.create_action(action: { description: 'no top-up' })
 
       count = store.lock_inputs(action_id: action[:id], inputs: [])
 
@@ -117,10 +117,10 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'returns 0 when a single requested output is already locked by another action' do
       output = create_funded_output(satoshis: 1000)
       store.create_action(
-        action: { description: 'first owner', nlocktime: 0 },
+        action: { description: 'first owner' },
         inputs: [{ output_id: output.id, vin: 0 }]
       )
-      action = store.create_action(action: { description: 'second', nlocktime: 0 })
+      action = store.create_action(action: { description: 'second' })
 
       count = store.lock_inputs(
         action_id: action[:id],
@@ -135,10 +135,10 @@ RSpec.describe BSV::Wallet::Store, :store do
       contested = create_funded_output(satoshis: 1000)
       fresh = create_funded_output(satoshis: 2000, vout: 1)
       store.create_action(
-        action: { description: 'first owner', nlocktime: 0 },
+        action: { description: 'first owner' },
         inputs: [{ output_id: contested.id, vin: 0 }]
       )
-      action = store.create_action(action: { description: 'second', nlocktime: 0 })
+      action = store.create_action(action: { description: 'second' })
 
       count = store.lock_inputs(
         action_id: action[:id],
@@ -152,7 +152,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(BSV::Wallet::Store::Models::Input.where(action_id: action[:id]).count).to eq(0)
       # The fresh output is still free for another action to claim.
       another = store.create_action(
-        action: { description: 'reclaim', nlocktime: 0 },
+        action: { description: 'reclaim' },
         inputs: [{ output_id: fresh.id, vin: 0 }]
       )
       expect(another).not_to be_nil
@@ -171,7 +171,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'defaults nsequence to 0xFFFFFFFF when nil is passed' do
-      action = store.create_action(action: { description: 'default seq', nlocktime: 0 })
+      action = store.create_action(action: { description: 'default seq' })
       output = create_funded_output(satoshis: 1000)
 
       store.lock_inputs(
@@ -186,7 +186,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#sign_action' do
     it 'attaches wtxid and raw_tx' do
-      result = store.create_action(action: { description: 'to sign', nlocktime: 0 })
+      result = store.create_action(action: { description: 'to sign' })
       wtxid = SecureRandom.random_bytes(32)
       raw_tx = SecureRandom.random_bytes(200)
 
@@ -198,7 +198,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'atomically creates a broadcasts row when broadcast intent is delayed' do
-      result = store.create_action(action: { description: 'delayed', nlocktime: 0, broadcast_intent: :delayed })
+      result = store.create_action(action: { description: 'delayed', broadcast_intent: :delayed })
 
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
@@ -210,7 +210,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'atomically creates a broadcasts row when broadcast intent is inline' do
-      result = store.create_action(action: { description: 'inline', nlocktime: 0, broadcast_intent: :inline })
+      result = store.create_action(action: { description: 'inline', broadcast_intent: :inline })
 
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
@@ -221,7 +221,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'does NOT create a broadcasts row when broadcast intent is none' do
-      result = store.create_action(action: { description: 'nosend', nlocktime: 0, broadcast_intent: :none })
+      result = store.create_action(action: { description: 'nosend', broadcast_intent: :none })
 
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
@@ -230,7 +230,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'rolls back the action update if the broadcasts insert fails' do
-      result = store.create_action(action: { description: 'atomic', nlocktime: 0, broadcast_intent: :delayed })
+      result = store.create_action(action: { description: 'atomic', broadcast_intent: :delayed })
 
       # Force a failure on the broadcasts dataset access (the idempotent insert
       # path goes via Models::Broadcast.dataset.insert_conflict(...).insert(...)).
@@ -247,7 +247,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'is idempotent on the broadcasts row insert (second call does not raise)' do
-      result = store.create_action(action: { description: 'idempotent', nlocktime: 0, broadcast_intent: :delayed })
+      result = store.create_action(action: { description: 'idempotent', broadcast_intent: :delayed })
       wtxid = SecureRandom.random_bytes(32)
       raw_tx = SecureRandom.random_bytes(100)
 
@@ -258,7 +258,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'writes send-path outputs with no promotions row and no spendable row' do
-      result = store.create_action(action: { description: 'send path', broadcast_intent: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'send path', broadcast_intent: :delayed })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
@@ -279,7 +279,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'writes change outputs with no promotions row on the send path' do
-      result = store.create_action(action: { description: 'change path', broadcast_intent: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'change path', broadcast_intent: :delayed })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         change_outputs: [
@@ -295,7 +295,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     # via promote_change_to_spendable. So sign_action alone leaves no promotions
     # row even on the internal path.
     it 'writes change outputs with no promotions row on the internal path until promote_change_to_spendable' do
-      result = store.create_action(action: { description: 'internal change', broadcast_intent: :none, nlocktime: 0 })
+      result = store.create_action(action: { description: 'internal change', broadcast_intent: :none })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         change_outputs: [
@@ -314,7 +314,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#stage_action' do
     it 'attaches wtxid and raw_tx' do
-      result = store.create_action(action: { description: 'to stage', nlocktime: 0 })
+      result = store.create_action(action: { description: 'to stage' })
       wtxid = SecureRandom.random_bytes(32)
       raw_tx = SecureRandom.random_bytes(200)
 
@@ -326,7 +326,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'does NOT create a broadcasts row even when broadcast intent is delayed' do
-      result = store.create_action(action: { description: 'staged delayed', nlocktime: 0, broadcast_intent: :delayed })
+      result = store.create_action(action: { description: 'staged delayed', broadcast_intent: :delayed })
 
       store.stage_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                          raw_tx: SecureRandom.random_bytes(100))
@@ -335,7 +335,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'rejects display-order hex as wtxid' do
-      result = store.create_action(action: { description: 'validation', nlocktime: 0 })
+      result = store.create_action(action: { description: 'validation' })
       hex_dtxid = 'a' * 64
       expect do
         store.stage_action(action_id: result[:id], wtxid: hex_dtxid, raw_tx: SecureRandom.random_bytes(100))
@@ -343,7 +343,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'persists outputs with no promotions row and their metadata' do
-      result = store.create_action(action: { description: 'staged outputs', broadcast_intent: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'staged outputs', broadcast_intent: :delayed })
       store.stage_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
@@ -365,7 +365,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#promote_action' do
     it 'writes outputs, spendable, baskets, details, and tags atomically' do
-      result = store.create_action(action: { description: 'to promote', broadcast_intent: :none, nlocktime: 0 })
+      result = store.create_action(action: { description: 'to promote', broadcast_intent: :none })
 
       store.promote_action(action_id: result[:id], outputs: [
                              {
@@ -402,7 +402,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'does not create spendable rows for outbound outputs' do
-      result = store.create_action(action: { description: 'with outbound', broadcast_intent: :none, nlocktime: 0 })
+      result = store.create_action(action: { description: 'with outbound', broadcast_intent: :none })
 
       store.promote_action(action_id: result[:id], outputs: [
                              {
@@ -430,7 +430,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'records a promotions row for the action (internal-path lifecycle)' do
-      result = store.create_action(action: { description: 'internal promote', broadcast_intent: :none, nlocktime: 0 })
+      result = store.create_action(action: { description: 'internal promote', broadcast_intent: :none })
       store.promote_action(action_id: result[:id], outputs: [
                              {
                                satoshis: 500, vout: 0,
@@ -454,7 +454,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     # These tests set the broadcasts row to QUEUED, then promote with the
     # matching authorising_status.
     it 'records a promotions row and inserts spendable rows for wallet-owned outputs' do
-      result = store.create_action(action: { description: 'send path action', broadcast_intent: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'send path action', broadcast_intent: :delayed })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
@@ -477,7 +477,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'is idempotent — second call is a no-op' do
-      result = store.create_action(action: { description: 'idempotent test', broadcast_intent: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'idempotent test', broadcast_intent: :delayed })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
@@ -498,7 +498,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'skips spendable creation for outbound (non-wallet-owned) outputs' do
-      result = store.create_action(action: { description: 'outbound payment', broadcast_intent: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'outbound payment', broadcast_intent: :delayed })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
@@ -515,7 +515,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'promotes change outputs and creates their spendable rows' do
-      result = store.create_action(action: { description: 'with change', broadcast_intent: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'with change', broadcast_intent: :delayed })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         change_outputs: [
@@ -537,7 +537,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#link_proof' do
     it 'marks an action as completed' do
-      result = store.create_action(action: { description: 'to prove', nlocktime: 0 })
+      result = store.create_action(action: { description: 'to prove' })
       wtxid = SecureRandom.random_bytes(32)
       store.sign_action(action_id: result[:id], wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
 
@@ -553,7 +553,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'deletes the action and releases locked inputs via CASCADE' do
       output = create_funded_output(satoshis: 1000)
       result = store.create_action(
-        action: { description: 'to abort', nlocktime: 0 },
+        action: { description: 'to abort' },
         inputs: [{ output_id: output.id, vin: 0 }]
       )
 
@@ -567,7 +567,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     it 'refuses to abort a broadcast action' do
       # sign_action atomically creates the broadcasts row when intent != 'none'
-      result = store.create_action(action: { description: 'broadcast', nlocktime: 0 })
+      result = store.create_action(action: { description: 'broadcast' })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
 
@@ -578,7 +578,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'allows aborting a staged action (deferred signing, no broadcast row yet)' do
-      result = store.create_action(action: { description: 'deferred', nlocktime: 0 })
+      result = store.create_action(action: { description: 'deferred' })
       store.stage_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                          raw_tx: SecureRandom.random_bytes(100))
 
@@ -593,7 +593,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'deletes the broadcast row and the action, releasing locked inputs via CASCADE' do
       output = create_funded_output(satoshis: 1000)
       result = store.create_action(
-        action: { description: 'to fail', nlocktime: 0 },
+        action: { description: 'to fail' },
         inputs: [{ output_id: output.id, vin: 0 }]
       )
       # sign_action atomically creates the broadcasts row (broadcast_intent != 'none').
@@ -613,7 +613,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'deletes unpromoted outputs and their associations before the action' do
       input_output = create_funded_output(satoshis: 1000)
       result = store.create_action(
-        action: { description: 'to fail with outputs', nlocktime: 0 },
+        action: { description: 'to fail with outputs' },
         inputs: [{ output_id: input_output.id, vin: 0 }]
       )
       pending_outputs = [{
@@ -660,7 +660,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       # blocked unwind; reject_action explicitly supports this path.
       input_output = create_funded_output(satoshis: 1000)
       result = store.create_action(
-        action: { description: 'inline speculative', nlocktime: 0 },
+        action: { description: 'inline speculative' },
         inputs: [{ output_id: input_output.id, vin: 0 }]
       )
       pending_outputs = [{
@@ -693,7 +693,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       # its own), Z consumes Y's output. Rejecting X must cascade forward.
       input_output = create_funded_output(satoshis: 1000)
 
-      x = store.create_action(action: { description: 'X tx node', nlocktime: 0 },
+      x = store.create_action(action: { description: 'X tx node' },
                               inputs: [{ output_id: input_output.id, vin: 0 }])
       store.sign_action(
         action_id: x[:id], wtxid: SecureRandom.random_bytes(32),
@@ -705,7 +705,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.record_broadcast_result(action_id: x[:id], tx_status: 'QUEUED')
       x_output_id = BSV::Wallet::Store::Models::Output.where(action_id: x[:id]).select_map(:id).first
 
-      y = store.create_action(action: { description: 'Y tx node', nlocktime: 0 },
+      y = store.create_action(action: { description: 'Y tx node' },
                               inputs: [{ output_id: x_output_id, vin: 0 }])
       store.sign_action(
         action_id: y[:id], wtxid: SecureRandom.random_bytes(32),
@@ -717,7 +717,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.record_broadcast_result(action_id: y[:id], tx_status: 'QUEUED')
       y_output_id = BSV::Wallet::Store::Models::Output.where(action_id: y[:id]).select_map(:id).first
 
-      z = store.create_action(action: { description: 'Z tx node', nlocktime: 0 },
+      z = store.create_action(action: { description: 'Z tx node' },
                               inputs: [{ output_id: y_output_id, vin: 0 }])
       store.sign_action(action_id: z[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
@@ -737,7 +737,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       # not a cycle. Regression for the diamond false-positive.
       input_output = create_funded_output(satoshis: 2000)
 
-      a = store.create_action(action: { description: 'A diamond root', nlocktime: 0 },
+      a = store.create_action(action: { description: 'A diamond root' },
                               inputs: [{ output_id: input_output.id, vin: 0 }])
       store.sign_action(
         action_id: a[:id], wtxid: SecureRandom.random_bytes(32),
@@ -752,7 +752,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.record_broadcast_result(action_id: a[:id], tx_status: 'QUEUED')
       a_outputs = BSV::Wallet::Store::Models::Output.where(action_id: a[:id]).order(:vout).select_map(:id)
 
-      b = store.create_action(action: { description: 'B diamond left', nlocktime: 0 },
+      b = store.create_action(action: { description: 'B diamond left' },
                               inputs: [{ output_id: a_outputs[0], vin: 0 }])
       store.sign_action(
         action_id: b[:id], wtxid: SecureRandom.random_bytes(32),
@@ -763,7 +763,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.record_broadcast_result(action_id: b[:id], tx_status: 'QUEUED')
       b_output_id = BSV::Wallet::Store::Models::Output.where(action_id: b[:id]).select_map(:id).first
 
-      c = store.create_action(action: { description: 'C diamond right', nlocktime: 0 },
+      c = store.create_action(action: { description: 'C diamond right' },
                               inputs: [{ output_id: a_outputs[1], vin: 0 }])
       store.sign_action(
         action_id: c[:id], wtxid: SecureRandom.random_bytes(32),
@@ -774,7 +774,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.record_broadcast_result(action_id: c[:id], tx_status: 'QUEUED')
       c_output_id = BSV::Wallet::Store::Models::Output.where(action_id: c[:id]).select_map(:id).first
 
-      d = store.create_action(action: { description: 'D diamond sink', nlocktime: 0 },
+      d = store.create_action(action: { description: 'D diamond sink' },
                               inputs: [{ output_id: b_output_id, vin: 0 }, { output_id: c_output_id, vin: 1 }])
       store.sign_action(action_id: d[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
@@ -790,7 +790,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'raises CannotRejectInternalActionError on a no_send target and rolls back the cascade' do
       input_output = create_funded_output(satoshis: 1000)
       result = store.create_action(
-        action: { description: 'internal', broadcast_intent: :none, nlocktime: 0 },
+        action: { description: 'internal', broadcast_intent: :none },
         inputs: [{ output_id: input_output.id, vin: 0 }]
       )
       expect do
@@ -806,7 +806,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       # Parent (inline) -> child (no_send). Rejecting the parent walks
       # into the no_send child and must raise; the parent must remain.
       input_output = create_funded_output(satoshis: 1000)
-      parent = store.create_action(action: { description: 'parent', nlocktime: 0 },
+      parent = store.create_action(action: { description: 'parent' },
                                    inputs: [{ output_id: input_output.id, vin: 0 }])
       store.sign_action(
         action_id: parent[:id], wtxid: SecureRandom.random_bytes(32),
@@ -818,7 +818,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.record_broadcast_result(action_id: parent[:id], tx_status: 'QUEUED')
       parent_output_id = BSV::Wallet::Store::Models::Output.where(action_id: parent[:id]).select_map(:id).first
 
-      child = store.create_action(action: { description: 'child', broadcast_intent: :none, nlocktime: 0 },
+      child = store.create_action(action: { description: 'child', broadcast_intent: :none },
                                   inputs: [{ output_id: parent_output_id, vin: 0 }])
 
       expect do
@@ -832,7 +832,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'raises CannotRejectAcceptedActionError when target tx_status is in ArcStatus::ACCEPTED' do
-      result = store.create_action(action: { description: 'mined target', nlocktime: 0 })
+      result = store.create_action(action: { description: 'mined target' })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
       BSV::Wallet::Store::Models::Broadcast.where(action_id: result[:id]).update(tx_status: 'MINED')
@@ -847,7 +847,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     it 'raises CannotRejectAcceptedActionError when a descendant has accepted tx_status' do
       input_output = create_funded_output(satoshis: 1000)
-      parent = store.create_action(action: { description: 'rejected parent', nlocktime: 0 },
+      parent = store.create_action(action: { description: 'rejected parent' },
                                    inputs: [{ output_id: input_output.id, vin: 0 }])
       store.sign_action(
         action_id: parent[:id], wtxid: SecureRandom.random_bytes(32),
@@ -859,7 +859,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.record_broadcast_result(action_id: parent[:id], tx_status: 'QUEUED')
       parent_output_id = BSV::Wallet::Store::Models::Output.where(action_id: parent[:id]).select_map(:id).first
 
-      child = store.create_action(action: { description: 'accepted child', nlocktime: 0 },
+      child = store.create_action(action: { description: 'accepted child' },
                                   inputs: [{ output_id: parent_output_id, vin: 0 }])
       store.sign_action(action_id: child[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
@@ -878,7 +878,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#child_actions_of' do
     it 'returns action_ids whose inputs consume the given action\'s outputs' do
       input_output = create_funded_output(satoshis: 1000)
-      parent = store.create_action(action: { description: 'parent', nlocktime: 0 },
+      parent = store.create_action(action: { description: 'parent' },
                                    inputs: [{ output_id: input_output.id, vin: 0 }])
       store.sign_action(
         action_id: parent[:id], wtxid: SecureRandom.random_bytes(32),
@@ -890,7 +890,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.record_broadcast_result(action_id: parent[:id], tx_status: 'QUEUED')
       parent_output_id = BSV::Wallet::Store::Models::Output.where(action_id: parent[:id]).select_map(:id).first
 
-      child = store.create_action(action: { description: 'child', nlocktime: 0 },
+      child = store.create_action(action: { description: 'child' },
                                   inputs: [{ output_id: parent_output_id, vin: 0 }])
 
       expect(store.child_actions_of(action_id: parent[:id])).to contain_exactly(child[:id])
@@ -900,7 +900,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#increment_broadcast_retry' do
     it 'increments the retry_count column for an action\'s broadcast row' do
-      result = store.create_action(action: { description: 'retry test', nlocktime: 0 })
+      result = store.create_action(action: { description: 'retry test' })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
 
@@ -917,7 +917,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       # — not the prevent_internal_action_delete trigger — is the blocker under
       # test. Promote via the broadcast path so a promotions/spendable row
       # exists alongside the output.
-      result = store.create_action(action: { description: 'with outputs', broadcast_intent: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'with outputs', broadcast_intent: :delayed })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100),
@@ -960,14 +960,14 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#find_action' do
     it 'finds by id' do
-      result = store.create_action(action: { description: 'find me', nlocktime: 0 })
+      result = store.create_action(action: { description: 'find me' })
       found = store.find_action(id: result[:id])
       expect(found[:id]).to eq(result[:id])
       expect(found[:status]).to eq(:unsigned)
     end
 
     it 'finds by wtxid' do
-      result = store.create_action(action: { description: 'find by wtxid', nlocktime: 0 })
+      result = store.create_action(action: { description: 'find by wtxid' })
       wtxid = SecureRandom.random_bytes(32)
       store.sign_action(action_id: result[:id], wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
 
@@ -976,7 +976,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'finds by reference' do
-      result = store.create_action(action: { description: 'find by ref', nlocktime: 0 })
+      result = store.create_action(action: { description: 'find by ref' })
       found = store.find_action(reference: result[:reference])
       expect(found[:id]).to eq(result[:id])
     end
@@ -988,7 +988,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#find_output' do
     it 'returns output hash with action_id, vout, and satoshis' do
-      action = store.create_action(action: { description: 'output source', broadcast_intent: :none, nlocktime: 0 })
+      action = store.create_action(action: { description: 'output source', broadcast_intent: :none })
       wtxid = SecureRandom.random_bytes(32)
       store.sign_action(action_id: action[:id], wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
       output_ids = store.promote_action(
@@ -1014,9 +1014,9 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#query_actions' do
     before do
       # Create 3 actions with different label combos
-      a1 = store.create_action(action: { description: 'action one', nlocktime: 0 })
-      a2 = store.create_action(action: { description: 'action two', nlocktime: 0 })
-      a3 = store.create_action(action: { description: 'action three', nlocktime: 0 })
+      a1 = store.create_action(action: { description: 'action one' })
+      a2 = store.create_action(action: { description: 'action two' })
+      a3 = store.create_action(action: { description: 'action three' })
 
       labels = store.find_or_create_labels(names: %w[payment transfer])
       store.label_action(action_id: a1[:id], label_ids: [labels[0]])           # payment only
@@ -1055,7 +1055,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#query_outputs' do
     before do
-      action = store.create_action(action: { description: 'source', broadcast_intent: :none, nlocktime: 0 })
+      action = store.create_action(action: { description: 'source', broadcast_intent: :none })
       store.promote_action(action_id: action[:id], outputs: [
                              { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[payment],
                                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
@@ -1092,7 +1092,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#relinquish_output' do
     it 'removes from spendable and basket but keeps the output row' do
-      action = store.create_action(action: { description: 'source', broadcast_intent: :none, nlocktime: 0 })
+      action = store.create_action(action: { description: 'source', broadcast_intent: :none })
       store.promote_action(action_id: action[:id], outputs: [
                              { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet',
                                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
@@ -1402,7 +1402,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       )
 
       action = store.create_action(
-        action: { description: 'spending', nlocktime: 0 },
+        action: { description: 'spending' },
         inputs: [
           { output_id: output1.id, vin: 0 },
           { output_id: output2.id, vin: 1, nsequence: 0xFFFFFFFE }
@@ -1443,7 +1443,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       output2 = create_source_output(wtxid: second_source_wtxid, satoshis: 300, vout: 1)
 
       action = store.create_action(
-        action: { description: 'ordering test', nlocktime: 0 },
+        action: { description: 'ordering test' },
         inputs: [
           { output_id: output2.id, vin: 5 },
           { output_id: output1.id, vin: 2 }
@@ -1459,7 +1459,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
       # Create a spending action — this action's wtxid is NOT what we want
       spending_action = store.create_action(
-        action: { description: 'spender', nlocktime: 0 },
+        action: { description: 'spender' },
         inputs: [{ output_id: output.id, vin: 0 }]
       )
       store.sign_action(
@@ -1474,7 +1474,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'returns empty array for action with no inputs' do
-      action = store.create_action(action: { description: 'no inputs', nlocktime: 0 })
+      action = store.create_action(action: { description: 'no inputs' })
 
       resolved = store.resolve_inputs_for_signing(action_id: action[:id])
       expect(resolved).to eq([])
@@ -1493,7 +1493,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: source_action.id)
 
       action = store.create_action(
-        action: { description: 'nil wtxid source', nlocktime: 0 },
+        action: { description: 'nil wtxid source' },
         inputs: [{ output_id: output.id, vin: 0 }]
       )
 
@@ -1555,7 +1555,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     it 'excludes outputs locked by inputs' do
       output = create_funded_output(satoshis: 9999, vout: 0)
-      lock_action = BSV::Wallet::Store::Models::Action.create(description: 'test action', nlocktime: 0)
+      lock_action = BSV::Wallet::Store::Models::Action.create(description: 'test action')
       BSV::Wallet::Store::Models::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
       candidates = store.find_spendable(satoshis: 9999, basket: 'default')
@@ -1643,8 +1643,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#record_broadcast_result' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        description: 'test action', nlocktime: 0,
-        wtxid: SecureRandom.random_bytes(32),
+        description: 'test action', wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
     end
@@ -1754,8 +1753,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#broadcast_status' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        description: 'test action', nlocktime: 0,
-        wtxid: SecureRandom.random_bytes(32),
+        description: 'test action', wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
     end
@@ -1776,8 +1774,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#pending_resolutions' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        description: 'test action', nlocktime: 0,
-        wtxid: SecureRandom.random_bytes(32),
+        description: 'test action', wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
     end
@@ -1857,8 +1854,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#pending_submissions' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        description: 'test action', nlocktime: 0,
-        wtxid: SecureRandom.random_bytes(32),
+        description: 'test action', wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
     end
@@ -1894,8 +1890,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'respects the limit' do
       3.times do |i|
         a = BSV::Wallet::Store::Models::Action.create(
-          description: "test action #{i}", nlocktime: 0,
-          wtxid: SecureRandom.random_bytes(32),
+          description: "test action #{i}", wtxid: SecureRandom.random_bytes(32),
           raw_tx: SecureRandom.random_bytes(100)
         )
         BSV::Wallet::Store::Models::Broadcast.create(action_id: a.id, intent: 'delayed')
@@ -1912,8 +1907,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#mark_broadcast_attempted' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        description: 'test action', nlocktime: 0,
-        wtxid: SecureRandom.random_bytes(32),
+        description: 'test action', wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
     end
@@ -1970,8 +1964,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#clear_broadcast_attempted' do
     let(:action) do
       BSV::Wallet::Store::Models::Action.create(
-        description: 'test action', nlocktime: 0,
-        wtxid: SecureRandom.random_bytes(32),
+        description: 'test action', wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
     end
@@ -2090,8 +2083,7 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#pending_proofs' do
     def create_signed_action(broadcast_intent: 'delayed', tx_proof_id: nil)
       action = BSV::Wallet::Store::Models::Action.create(
-        description: 'test action', nlocktime: 0,
-        broadcast_intent: broadcast_intent,
+        description: 'test action', broadcast_intent: broadcast_intent,
         wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100)
       )
@@ -2126,7 +2118,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     it 'excludes unsigned actions (no wtxid)' do
       BSV::Wallet::Store::Models::Action.create(
-        description: 'unsigned', nlocktime: 0, broadcast_intent: 'delayed'
+        description: 'unsigned', broadcast_intent: 'delayed'
       )
       expect(store.pending_proofs).to be_empty
     end
@@ -2146,7 +2138,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#reap_stale_actions' do
     it 'deletes stale signed actions with no outputs' do
-      result = store.create_action(action: { description: 'stale', nlocktime: 0 })
+      result = store.create_action(action: { description: 'stale' })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
 
@@ -2159,7 +2151,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'does not reap nosend actions' do
-      result = store.create_action(action: { description: 'nosend', nlocktime: 0, broadcast_intent: :none })
+      result = store.create_action(action: { description: 'nosend', broadcast_intent: :none })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
       BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 600)
@@ -2172,7 +2164,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       # A send action (intent != 'none') that has been broadcast-accepted and
       # so carries a promotions row. The reaper protects promoted actions; only
       # unpromoted, stale, broadcast-intent send actions are eligible.
-      result = store.create_action(action: { description: 'promoted', broadcast_intent: :delayed, nlocktime: 0 })
+      result = store.create_action(action: { description: 'promoted', broadcast_intent: :delayed })
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100),

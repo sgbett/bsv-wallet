@@ -454,7 +454,7 @@ module BSV
         # Uses @store.create_action directly — this is an internal operation
         # that should not enforce limp mode.
         locking_action = @store.create_action(
-          action: { description: 'wbikd address lock', broadcast_intent: :none, nlocktime: 0 },
+          action: { description: 'wbikd address lock', broadcast_intent: :none },
           inputs: [{ output_id: slot[:id], vin: 0 }]
         )
         # Slot may have been locked by a concurrent caller — retry with a different slot

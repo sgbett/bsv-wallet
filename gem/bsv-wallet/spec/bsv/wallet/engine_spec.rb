@@ -949,8 +949,7 @@ RSpec.describe BSV::Wallet::Engine do
       # pins intent='none' so it can't be flipped to 'inline' after the fact;
       # build the inline action directly instead.
       action = store.send(:models)::Action.create(
-        description: 'speculative inline', nlocktime: 0,
-        broadcast_intent: 'inline',
+        description: 'speculative inline', broadcast_intent: 'inline',
         wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100)
       )
       action_id = action.id

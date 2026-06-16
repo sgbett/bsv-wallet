@@ -166,7 +166,7 @@ RSpec.describe BSV::Wallet::Engine::Hydrator do
       # Subject action: lock the source output as input. Outgoing rows
       # must carry nlocktime per the schema's CHECK constraint.
       subject_action = store.create_action(
-        action: { description: 'subject', broadcast_intent: :none, nlocktime: 0 }
+        action: { description: 'subject', broadcast_intent: :none }
       )
       store.lock_inputs(
         action_id: subject_action[:id],

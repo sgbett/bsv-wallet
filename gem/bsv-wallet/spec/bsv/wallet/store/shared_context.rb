@@ -84,7 +84,7 @@ RSpec.shared_context 'store setup' do
   end
 
   def insert_action(description: 'test action 12345', **overrides)
-    defaults = { description: description, nlocktime: 0, reference: SecureRandom.uuid }
+    defaults = { description: description, reference: SecureRandom.uuid }
     db[:actions].insert(defaults.merge(overrides))
   end
 end
