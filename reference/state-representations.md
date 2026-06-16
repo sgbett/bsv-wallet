@@ -67,14 +67,11 @@ No class-F representation remains in the live schema, and the open candidates ar
 ## Open candidates (probes)
 None outstanding. The two prior probes are resolved: `actions.outgoing` (#349) and `actions.nlocktime`/`version` (#351) were both dropped — see class F above. New candidates are added here as the audit (or future schema changes) surface them.
 
-## Known documentation drift (finding)
-[`principle-of-state.md`](principle-of-state.md) predates #012 and is stale in two places:
-- its *"A note on scale"* still lists "a one-shot `promoted` flip" as one of two live `outputs` deviations — but #012 removed the column; promotion is now a `promotions` row, leaving only the failure-bounded delete as a deviation;
-- its derived-status table gates `unproven` on "≥1 promoted output" — the code now gates on the existence of a `promotions` row (`Action#derived_status`).
-Reconciling it (and adding a reciprocal link to this catalogue) is tracked as a probe in the audit HLR.
+## Known documentation drift — RESOLVED
+[`principle-of-state.md`](principle-of-state.md) predated #012 in two places, now reconciled: its *"A note on scale"* described the removed one-shot `promoted` flip (now noted as superseded by the `promotions` row, ADR-023), and its derived-status table gated `unproven`/`sending` on "promoted outputs" (now on the existence of a `promotions` row, matching `Action#derived_status`). A reciprocal link to this catalogue is in place.
 
 ## Conformance summary
-The schema is substantially compliant: the lifecycle is carried by structural and temporal facts (A/B), the only literal `status` column was deleted, and every prior denormalisation is resolved — the `promoted` flag (→ a `promotions` fact), the `actions.satoshis` aggregate (dropped), the `actions.outgoing` direction flag (dropped, #349), and `actions.nlocktime`/`version` (dropped, derived from `raw_tx`, #351). No open candidates remain. The standing residue is two principled value-column exceptions, named and kept by design (`broadcasts.tx_status`, `sse_cursors.last_event_id`/`retry_count`), and one stale companion document to reconcile (`principle-of-state.md`, tracked under #348).
+The schema is substantially compliant: the lifecycle is carried by structural and temporal facts (A/B), the only literal `status` column was deleted, and every prior denormalisation is resolved — the `promoted` flag (→ a `promotions` fact), the `actions.satoshis` aggregate (dropped), the `actions.outgoing` direction flag (dropped, #349), and `actions.nlocktime`/`version` (dropped, derived from `raw_tx`, #351). No open candidates remain, and the `principle-of-state.md` drift is reconciled. The only standing residue is two principled value-column exceptions, named and kept by design (`broadcasts.tx_status`, `sse_cursors.last_event_id`/`retry_count`) — each justified in their entries above. The audit (#348) is complete.
 
 ## Related
 - [`principle-of-state.md`](principle-of-state.md) — the principle this register tests against.
