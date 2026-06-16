@@ -25,11 +25,13 @@ module BSV
       #
       # The dependency direction is strict: +FundingStrategy+ calls the
       # builder; the builder never reaches down to fetch or lock inputs.
-      # The builder reports *done-or-shortfall by value*, and the strategy
-      # decides whether to acquire more input and retry. This keeps the
-      # loop *temporal* rather than a structural cycle and is what lets
-      # the later +TxBuilder+ extraction lift the build body without
-      # re-cutting the seam.
+      # The strategy resolves the locked input set after each lock and
+      # passes it across the seam by value as +build.call(resolved_inputs)+.
+      # The builder reports *done-or-shortfall by value*, and the
+      # strategy decides whether to acquire more input and retry. This
+      # keeps the loop *temporal* rather than a structural cycle and is
+      # what let the +TxBuilder+ extraction (#336) lift the build body
+      # without re-cutting the seam.
       #
       # A build attempt returns one of:
       #
@@ -109,7 +111,10 @@ module BSV
         #   +unlocking_script+ / +sequence_number+ overrides). +nil+ when
         #   the wallet selects inputs itself.
         # @param build [#call] the build collaborator. Called as
-        #   +build.call+ on every fixpoint iteration. Must return either
+        #   +build.call(resolved_inputs)+ on every fixpoint iteration —
+        #   the strategy resolves the locked input set against
+        #   +action_id+ after each lock and hands it across by value.
+        #   Must return either
         #   +{ wtxid:, raw_tx:, tx:, vout_mapping:, change_outputs: }+ on
         #   success or +{ shortfall: N }+ on deficit. The builder must
         #   *never* reach down to fetch or lock inputs — the seam is
