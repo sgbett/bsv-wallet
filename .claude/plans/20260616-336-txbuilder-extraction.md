@@ -28,9 +28,12 @@ All on `Engine::Action`, reaching `@engine` for `store` + `key_deriver`:
 
 - `build(resolved_inputs:, caller_outputs:, caller_inputs:, lock_time:, version:, randomize:, sign:)` — the no-change build (today's `build_transaction`).
 - `build_change(resolved_inputs:, caller_outputs:, caller_inputs:, lock_time:, version:, randomize:, change_count:)` — the change/fee-fixpoint build (today's `generate_change`); returns the success hash or `{shortfall: N}`.
-- `build_inputs`/`build_outputs` + the helpers move in as privates.
+- `apply_spends(tx:, resolved_inputs:, spends:)` — the deferred-signing **finaliser** (today's `Action#apply_spends` core): re-attach source data, apply caller unlocking scripts, derive keys for unspent P2PKH inputs, sign → `[wtxid, raw_tx, tx]`. Store-free. *The transaction builder signs.*
+- `build_inputs`/`build_outputs` + the helpers (`resolve_unlocking_script`, `derive_signing_key`, …) move in as privates.
 
 ChangeGenerator stays folded in (`build_change` is the fee fixpoint body). `key_deriver` is injected; `require_key_deriver!`-style guarding becomes a TxBuilder concern over its own injected deriver.
+
+**`apply_spends` cross-cut (decision (a), found in analysis — not in the original plan).** `Action#apply_spends` (`action.rb:507`, the signAction finaliser) directly used three helpers being moved (`resolve_unlocking_script`, `derive_signing_key`, `@engine.send(:require_key_deriver!)`). A wholesale move would break it, and `apply_spends` is itself *construction* (it finalises and signs). Resolution: its finalise-and-sign core moves into `TxBuilder#apply_spends` (store-free); `Action#apply_spends` becomes thin orchestration — load the unsigned tx, `resolve_inputs_for_signing`, validate the spend vins, delegate to `tx_builder.apply_spends`, return. This removes the **last** `require_key_deriver!` reach on the deferred path.
 
 ## The seam change (touches the just-merged FundingStrategy)
 
@@ -54,6 +57,7 @@ This is the expected payoff/cost of #323's seam: we now adjust *what flows acros
 - [ ] **Store-free**: takes `resolved_inputs` by value; no `store` dep, no `resolve_inputs_for_signing` inside; resolve relocated to FundingStrategy + the deferred/`skip_change` paths; `≤1 resolve per build attempt` preserved.
 - [ ] One-way seam preserved: returns done-or-shortfall by value; never reaches for inputs.
 - [ ] `build_transaction`/`generate_change`/`build_inputs`/`build_outputs` + helpers moved; FundingStrategy `build:` + deferred/`skip_change` repointed.
+- [ ] `Action#apply_spends` finalise-and-sign core moves to `TxBuilder#apply_spends` (store-free); `Action#apply_spends` becomes thin (resolve, validate vins, delegate); last deferred-path `require_key_deriver!` reach removed.
 - [ ] BEEF/egress methods remain on `Action` (out of scope).
 - [ ] Fee model + `sweep`/`consolidate` `estimate_sweep_fee` coupling preserved byte-for-byte.
 - [ ] Behaviour-preserving: engine + integration specs green; TxBuilder unit-tested in isolation.
@@ -76,9 +80,9 @@ This is the expected payoff/cost of #323's seam: we now adjust *what flows acros
 ## Implementation steps (ordered)
 
 1. `Interface::TxBuilder` — contract: `build` + `build_change`, the by-value `resolved_inputs` input, the done-or-shortfall return, store-free + DI `key_deriver`/fee model.
-2. `Engine::TxBuilder` — move `build_transaction`→`build`, `generate_change`→`build_change`, `build_inputs`/`build_outputs` + helpers; take `resolved_inputs` by value; inject `key_deriver` + fee model. Wire `@tx_builder` on `Engine` + `attr_reader`.
+2. `Engine::TxBuilder` — move `build_transaction`→`build`, `generate_change`→`build_change`, the `apply_spends` finalise core→`apply_spends`, `build_inputs`/`build_outputs` + helpers; take `resolved_inputs` by value; inject `key_deriver` + fee model. Wire `@tx_builder` on `Engine` + `attr_reader`.
 3. Relocate resolve: FundingStrategy#acquire resolves after each lock and calls `build.call(resolved)`; update the `build:` seam signature.
-4. Repoint `do_create_action`: funding lambda → `tx_builder.build_change`; deferred/`skip_change` → resolve inline + `tx_builder.build`. Delete the moved methods from `Action`.
+4. Repoint `do_create_action`: funding lambda → `tx_builder.build_change`; deferred/`skip_change` → resolve inline + `tx_builder.build`. Rewire `Action#apply_spends` to resolve + validate + delegate to `tx_builder.apply_spends`. Delete the moved methods/helpers from `Action`.
 5. Specs + dead-code sweep.
 
 ## Specs
