@@ -13,7 +13,7 @@
 # - Inline path: call +Engine#inline_broadcast+ with a signed
 #   +Transaction::Tx+, assert +broadcasts.provider+ is populated.
 #
-# Postgres-only — exercises a real DB column added in migration 009.
+# Postgres-only — exercises the real +broadcasts.provider+ column (#259).
 
 require 'spec_helper'
 require 'securerandom'
