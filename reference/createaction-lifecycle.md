@@ -18,11 +18,22 @@ Source of truth verified against:
 `self.create`, lines 22–204), `gem/bsv-wallet/lib/bsv/wallet/store.rb`, and
 `gem/bsv-wallet/lib/bsv/wallet/engine/broadcast.rb`.
 
+> **Baseline note.** This audit was performed against the **pre-#323**
+> lifecycle, where `Store#create_action` locked the initial inputs
+> atomically with the action row. #323 (the option-(a) seam) has since
+> moved initial acquisition out of `create_action` — it is now always
+> called with `inputs: []` — into `Store#lock_inputs` via
+> `Engine::FundingStrategy`, which owns both the initial lock and the
+> top-up loop. The pre-sign leak states (G1/I1/D1) are **unchanged in
+> kind**: the inputs are simply locked one step later, by `lock_inputs`
+> rather than inside `create_action`. Read "`create_action`'s initial
+> lock" below as "`lock_inputs` via FundingStrategy" under #323.
+
 ## The atomic Store units
 
 | Unit | Source | Writes (one transaction) |
 |------|--------|--------------------------|
-| `create_action` | `store.rb:82` | action row + initial `lock_inputs_atomic?` |
+| `create_action` | `store.rb:82` | action row + initial `lock_inputs_atomic?` (pre-#323; see baseline note — under #323 this is `inputs: []`, row only) |
 | `lock_inputs` (top-up) | `store.rb:99` | additional input rows (all-or-nothing) |
 | `sign_action` | `store.rb:109` | wtxid + raw_tx on action, TxProof upsert, broadcasts row (if intent ≠ none), pending + change output rows |
 | `stage_action` | `store.rb:135` | wtxid + raw_tx, TxProof upsert, pending output rows (deferred path) |
