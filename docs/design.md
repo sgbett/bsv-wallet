@@ -260,7 +260,7 @@ Accepts an incoming transaction (in Atomic BEEF format). Born completed — no l
 
 1. **Validate** the BEEF data using SPV rules (BRC-67)
 2. **Save proof** — `ProofStore#save_proof` (the proof is in the BEEF)
-3. **Atomic persist** — `Store#create_action` with `broadcast: :none`, `outgoing: false`, then immediately `Store#promote_action` with the outputs. All in one transaction.
+3. **Atomic persist** — `Store#create_action` with `broadcast: :none`, then immediately `Store#promote_action` with the outputs. All in one transaction.
 4. **Process outputs** by protocol:
    - `:wallet_payment` — derive the private key using BRC-29 (derivation prefix/suffix + sender identity key), verify the locking script matches, credit to wallet balance
    - `:basket_insertion` — place the output in the specified basket with optional tags and custom instructions

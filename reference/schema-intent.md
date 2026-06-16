@@ -157,11 +157,10 @@ isn't called `transactions`.
 
 **Directly stores:** A nullable `wtxid` (set when the transaction is
 signed), a `reference` UUID (lookup key during deferred signing — should
-be UUIDv7 for B-tree friendliness; tracked in #198), an `outgoing`
-boolean, a `description` (5–50 chars per BRC-100's
-`DescriptionString5to50Characters`), the optional `version` and
-`nlocktime`, the `broadcast_intent` enum, the `raw_tx`, an optional
-`input_beef`, and the FK `tx_proof_id`.
+be UUIDv7 for B-tree friendliness; tracked in #198), a `description`
+(5–50 chars per BRC-100's `DescriptionString5to50Characters`), the
+optional `version` and `nlocktime`, the `broadcast_intent` enum, the
+`raw_tx`, an optional `input_beef`, and the FK `tx_proof_id`.
 
 **Can be derived:** The action's *status* in BRC-100 terms (unsigned,
 unprocessed, sending, unproven, completed, internal, failed) is computed
@@ -204,8 +203,6 @@ locked UTXOs. The reaper handles the same shapes for stale TTL.
 - `wtxid` length must be exactly 32 bytes when present.
 - `(wtxid IS NULL) = (raw_tx IS NULL)` — wtxid and raw_tx are written
   together at signing; one without the other is nonsensical.
-- `nlocktime` NOT NULL with `>= 0` when `outgoing` (we author the tx; we
-  set the nLockTime); for incoming actions we can't know.
 - `broadcast` enum constrained to `delayed | inline | none` (Postgres
   ENUM type; CHECK constraint on SQLite).
 - `reference` is `uuid` not `text` — "16 bytes fixed storage instead of
@@ -294,8 +291,9 @@ rows enter `outputs`.
   row.
 - Whether an output is the wallet's: `output_type IS DISTINCT FROM
   'outbound'`.
-- Whether the action is incoming or outgoing: from `actions.outgoing`,
-  not from anything on the output itself.
+- Whether the action is incoming or outgoing: derived as
+  `broadcast_intent != 'none'` (the wallet authors broadcastable actions),
+  not from a stored column or anything on the output itself.
 
 **State and transitions:** Rows are append-only with one deliberate
 exception — the `promoted` flag flips false → true exactly once on the
