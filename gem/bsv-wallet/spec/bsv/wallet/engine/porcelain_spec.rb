@@ -305,7 +305,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         # Caller_script is a stub that wouldn't satisfy P2PKH — strict
         # validate_for_handoff! (#296 Phase B) is stubbed because the
         # assertion is about script forwarding, not BEEF validity.
-        allow_any_instance_of(BSV::Wallet::Engine::Action).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
+        allow_any_instance_of(BSV::Wallet::Engine::Hydrator).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet_for_auto(satoshis: 100_000, count: 2)
 
         listed = engine_with_keys.list_outputs(basket: 'default')
