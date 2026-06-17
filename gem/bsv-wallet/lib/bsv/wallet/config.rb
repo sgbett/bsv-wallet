@@ -6,7 +6,7 @@ module BSV
     #
     # Centralises every end-user-facing knob the wallet exposes —
     # database URL, WIF, limp mode threshold, daemon pool size, EF
-    # cache size, hint socket. Dev/test fixtures (named-wallet WIFs,
+    # cache size, hint socket, fee model. Dev/test fixtures (named-wallet WIFs,
     # +BSV_WALLET_POSTGRES+ base, +DATABASE_URL_<NAME>+ overrides)
     # are out of scope here; see #292.
     #
@@ -51,6 +51,13 @@ module BSV
       # Optional cross-process EF hint socket path. +nil+ = feature off.
       attr_accessor :hints_socket
 
+      # Fee model the wallet charges and estimates against. The single
+      # source the TxBuilder (build_change) and estimate_sweep_fee both
+      # read, so the two can never drift (#342). Default 100 sats/kb;
+      # rate overridable via +BSV_WALLET_FEE_RATE_SATS_PER_KB+, or set a
+      # whole model in +~/.bsv-wallet/config.rb+ (+c.fee_model = ...+).
+      attr_accessor :fee_model
+
       def initialize
         @database_url     = ENV.fetch('DATABASE_URL', nil)
         @wif              = ENV.fetch('WIF', nil)
@@ -59,6 +66,9 @@ module BSV
         @daemon_pool_size = Integer(ENV.fetch('BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS', '16'))
         @tx_cache_size    = Integer(ENV.fetch('BSV_WALLET_TX_CACHE_SIZE', '1000'))
         @hints_socket     = blank_to_nil(ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil))
+        @fee_model        = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(
+          value: Integer(ENV.fetch('BSV_WALLET_FEE_RATE_SATS_PER_KB', '100'))
+        )
       end
 
       # Normalise a network string to a Symbol. Blank, whitespace-only,
