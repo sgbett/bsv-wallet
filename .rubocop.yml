@@ -45,6 +45,7 @@ Lint/UnusedMethodArgument:
     - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/engine/action.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/engine/beef_importer.rb'
+    - 'gem/bsv-wallet/lib/bsv/wallet/engine/brc100.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/store/**/*'
 
 # Wallet orchestration and store operations are inherently complex;
@@ -100,6 +101,7 @@ Naming/PredicateMethod:
     - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/engine/action.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/engine/beef_importer.rb'
+    - 'gem/bsv-wallet/lib/bsv/wallet/engine/brc100.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/store/**/*'
 
 Style/SafeNavigationChainLength:
