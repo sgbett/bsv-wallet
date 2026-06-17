@@ -269,8 +269,10 @@ module BSV
             spec[:derivation_prefix]   = rem[:derivation_prefix]
             spec[:derivation_suffix]   = rem[:derivation_suffix]
             spec[:sender_identity_key] = rem[:sender_identity_key]
-            # Basket insertion protocol: no derivation fields means root-key ownership.
-            # This is a protocol-level decision, not inference from field absence.
+            # Basket insertion protocol: no derivation fields means root-key
+            # ownership — a protocol-level semantic, not a guess from a missing
+            # column. The 'root' output_type shim is retained verbatim here
+            # pending #60 (which replaces the inference with explicit typing).
             spec[:output_type] = 'root' unless rem[:derivation_prefix]
           end
 
