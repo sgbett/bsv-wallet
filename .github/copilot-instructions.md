@@ -149,6 +149,7 @@ Postgres is the production target; SQLite is a convenience for fast logic-only s
 - **Derived status (no status column)**: `Action#derived_status` computes state from structure (`wtxid`, `tx_proof_id`, `broadcast_intent`, `outputs.promoted`, presence of `broadcasts` row). There is no stored `status` field — by design (see `reference/schema-intent.md` §1).
 - **`Gemfile.lock` not committed**: standard practice for gems.
 - **Engine namespace nesting**: `Engine::Broadcast`, `Engine::TxProof`, `Engine::OmqSupport` are logical models in the Engine namespace. They are intentionally not Store-level.
+- **Missing `require 'set'` (and other autoloaded core stdlib)**: do NOT flag `Set` usage for a missing `require 'set'`. The gem floors at `required_ruby_version >= 3.3`, and `Set` has been an **autoloaded core constant since Ruby 3.2** — it resolves with no explicit require on every supported version. There is deliberately no `require 'set'` anywhere in `lib/`, yet `Set` is used across several files; this is the established convention, not a hidden dependency. (Same applies to other stdlib that Ruby ≥3.2 autoloads.)
 
 ## Style
 
