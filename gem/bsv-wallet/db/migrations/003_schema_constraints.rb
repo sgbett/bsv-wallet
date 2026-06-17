@@ -251,6 +251,7 @@ Sequel.migration do
       drop_constraint :satoshis_range
       drop_constraint :vout_range
       drop_constraint :locking_script_min
+      drop_constraint :output_type_values if !postgres
       set_column_allow_null :locking_script
     end
 

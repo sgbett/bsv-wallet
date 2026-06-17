@@ -5,8 +5,11 @@
 # and the SEEN_MULTIPLE_NODES tx_status value (#011 folded inline).
 #
 # Pre-release "amend in place" policy (#353): migrations express the canonical
-# structure rather than its change history. CHECKs, NOT NULLs, and triggers
-# remain in 003; the denormalised action_id cascade FKs remain in 002.
+# structure rather than its change history. Validation (CHECKs, NOT NULLs,
+# triggers) lives in 003, except table-integrity CHECKs declared inline with
+# their CREATE TABLE — broadcasts.intent_not_none and the promotions gating
+# CHECKs (promo_path, auth_not_rejected). The denormalised action_id cascade
+# FKs remain in 002.
 #
 # Guard convention:
 #   postgres = database_type == :postgres
@@ -325,8 +328,8 @@ Sequel.migration do
     #     exactly as broadcasts.intent does (ADR-019).
     #   - authorising_status names the broadcast tx_status that authorised a
     #     send-path promotion; NULL on the internal path.
-    #   - promo_path CHECK (003): internal => no status; send => a status.
-    #   - auth_not_rejected CHECK (003): a present status is in the optimistic set
+    #   - promo_path CHECK (inline): internal => no status; send => a status.
+    #   - auth_not_rejected CHECK (inline): a present status is in the optimistic set
     #     (anything except REJECTED / DOUBLE_SPEND_ATTEMPTED).
     #   - composite FK (action_id, authorising_status) → broadcasts(action_id, tx_status)
     #     ON UPDATE CASCADE: a send promotion can exist only while its broadcast is
