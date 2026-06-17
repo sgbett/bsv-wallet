@@ -28,8 +28,8 @@ RSpec.describe BSV::Wallet::Engine::Action do
     )
   end
 
-  # #369 — Action commits to one canonical row: shape (a Store#action_to_hash
-  # hash) and fails fast at construction on anything else.
+  # #369 — Action commits to one canonical shape for its `row:` argument (a
+  # Store#action_to_hash hash) and fails fast at construction on anything else.
   describe '#initialize row: guard' do
     it 'accepts the canonical action_to_hash hash' do
       expect { described_class.new(engine: engine, row: { id: 1 }) }.not_to raise_error
