@@ -210,9 +210,9 @@ module BSV
           # Internal-path (no_send): synchronous Phase 4 — promote caller
           # outputs, promote change to spendable, return change outpoints.
           if no_send
-            action.send(:promote_with_outputs, action_result[:id], outputs, vout_mapping)
+            action.promote_with_outputs(outputs, vout_mapping)
             engine.store.promote_change_to_spendable(action_id: action_result[:id]) if change_outputs.any?
-            change = action.send(:query_change_outpoints, action_result[:id])
+            change = action.query_change_outpoints
             return { txid: wtxid, tx: atomic_beef, no_send_change: change }
           end
 
@@ -254,9 +254,9 @@ module BSV
           row && new(engine: engine, row: row)
         end
 
-        # Internal lookup by wallet-local action id. Same shape as +.find+ —
-        # operator-facing porcelain (e.g. +bin/reject_action+) targets rows
-        # by id, not by reference.
+        # Lookup by wallet-local action id (the integer primary key, not a
+        # BRC-100 reference). Same shape as +.find+ — a public factory for
+        # callers that hold an id rather than a reference.
         def self.find_by_id(engine:, id:)
           row = engine.store.find_action(id: id)
           row && new(engine: engine, row: row)
@@ -340,7 +340,20 @@ module BSV
 
         attr_reader :engine, :id, :row
 
+        # The one canonical +row:+ shape is a +Store#action_to_hash+ hash —
+        # a plain Hash keyed by +:id+, +:wtxid+, +:reference+, +:status+, … .
+        # Every construction site already hands one over: +.create+ via
+        # +store.create_action+, +.find+/+.find_by_id+ via +store.find_action+.
+        # (The former Sequel-row and +{ id: nil }+-stub shapes are gone — the
+        # stub hack went with the BeefImporter extraction in #357.) The guard
+        # fails fast at construction rather than at the first +@row[:x]+ read.
         def initialize(engine:, row:)
+          unless row.is_a?(Hash) && row[:id]
+            detail = row.is_a?(Hash) ? "Hash with keys #{row.keys.inspect}" : row.class.to_s
+            raise ArgumentError,
+                  "Action row must be a Store#action_to_hash hash with a non-nil :id (got #{detail})"
+          end
+
           @engine = engine
           @row    = row
           @id     = row[:id]
@@ -401,6 +414,33 @@ module BSV
           { aborted: true }
         end
 
+        # Internal-path Phase 4: synchronously promote this action's outputs
+        # and create spendable rows in one shot. Used for incoming actions
+        # (broadcast intent 'none'): internalize_action, import_utxo
+        # self-payment, wbikd. Public because the +.create+ class-method
+        # orchestrator invokes it on the freshly-built instance; operates on
+        # the instance's own +@id+.
+        def promote_with_outputs(outputs, vout_mapping = nil)
+          return unless outputs&.any?
+
+          @engine.store.promote_action(
+            action_id: @id,
+            outputs: self.class.build_output_specs(outputs, vout_mapping)
+          )
+        end
+
+        # Outpoints (+dtxid.vout+) of this action's change outputs. Public for
+        # the same reason as +#promote_with_outputs+ — driven by +.create+;
+        # operates on the instance's own +@id+.
+        def query_change_outpoints
+          action = @engine.store.find_action(id: @id)
+          return [] unless action&.dig(:wtxid)
+
+          dtxid = action[:wtxid].reverse.unpack1('H*')
+          vouts = @engine.store.query_change_output_vouts(action_id: @id)
+          vouts.map { |vout| "#{dtxid}.#{vout}" }
+        end
+
         private
 
         # Apply caller-provided unlocking scripts and sign remaining inputs.
@@ -435,27 +475,6 @@ module BSV
           end
 
           @engine.tx_builder.apply_spends(tx: tx, resolved_inputs: resolved_inputs, spends: spends)
-        end
-
-        # Internal-path Phase 4: synchronously promote outputs and create
-        # spendable rows in one shot. Used for incoming actions (broadcast
-        # intent 'none'): internalize_action, import_utxo self-payment, wbikd.
-        def promote_with_outputs(action_id, outputs, vout_mapping = nil)
-          return unless outputs&.any?
-
-          @engine.store.promote_action(
-            action_id: action_id,
-            outputs: self.class.build_output_specs(outputs, vout_mapping)
-          )
-        end
-
-        def query_change_outpoints(action_id)
-          action = @engine.store.find_action(id: action_id)
-          return [] unless action&.dig(:wtxid)
-
-          dtxid = action[:wtxid].reverse.unpack1('H*')
-          vouts = @engine.store.query_change_output_vouts(action_id: action_id)
-          vouts.map { |vout| "#{dtxid}.#{vout}" }
         end
       end
     end

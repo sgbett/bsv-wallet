@@ -125,7 +125,7 @@ module BSV
       # tools target specific stuck rows (action_id is a wallet-local
       # integer, not a BRC-100 reference — this isn't a spec method).
       def reject_action(action_id:)
-        raise BSV::Wallet::InvalidParameterError, "action_id=#{action_id} not found" unless Action.find_by_id(engine: self, id: action_id)
+        raise BSV::Wallet::InvalidParameterError, "action_id=#{action_id} not found" unless @store.find_action(id: action_id)
 
         @store.reject_action(action_id: action_id)
         { rejected: true, action_id: action_id }

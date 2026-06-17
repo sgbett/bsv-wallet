@@ -28,6 +28,29 @@ RSpec.describe BSV::Wallet::Engine::Action do
     )
   end
 
+  # #369 — Action commits to one canonical shape for its `row:` argument (a
+  # Store#action_to_hash hash) and fails fast at construction on anything else.
+  describe '#initialize row: guard' do
+    it 'accepts the canonical action_to_hash hash' do
+      expect { described_class.new(engine: engine, row: { id: 1 }) }.not_to raise_error
+    end
+
+    it 'rejects a non-Hash row' do
+      expect { described_class.new(engine: engine, row: Object.new) }
+        .to raise_error(ArgumentError, /action_to_hash hash with a non-nil :id/)
+    end
+
+    it 'rejects a Hash missing :id' do
+      expect { described_class.new(engine: engine, row: { wtxid: nil }) }
+        .to raise_error(ArgumentError, /non-nil :id/)
+    end
+
+    it 'rejects a Hash with a nil :id (the removed { id: nil } stub shape)' do
+      expect { described_class.new(engine: engine, row: { id: nil }) }
+        .to raise_error(ArgumentError, /non-nil :id/)
+    end
+  end
+
   describe '.create' do
     it 'returns the BRC-100 hash shape with txid + tx for a normal action' do
       fund_wallet(satoshis: 100_000, basket: 'default', suffix: 'a')
