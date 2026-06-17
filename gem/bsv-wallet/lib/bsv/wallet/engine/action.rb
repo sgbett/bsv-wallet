@@ -254,9 +254,9 @@ module BSV
           row && new(engine: engine, row: row)
         end
 
-        # Internal lookup by wallet-local action id. Same shape as +.find+ —
-        # operator-facing porcelain (e.g. +bin/reject_action+) targets rows
-        # by id, not by reference.
+        # Lookup by wallet-local action id (the integer primary key, not a
+        # BRC-100 reference). Same shape as +.find+ — a public factory for
+        # callers that hold an id rather than a reference.
         def self.find_by_id(engine:, id:)
           row = engine.store.find_action(id: id)
           row && new(engine: engine, row: row)
