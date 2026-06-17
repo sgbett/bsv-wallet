@@ -7,6 +7,7 @@ module BSV
     # BRC100 is defined in bsv-sdk and available via the gem dependency.
     # This file reopens Interface to add the wallet's internal contracts.
     module Interface
+      autoload :BeefImporter,    'bsv/wallet/interface/beef_importer'
       autoload :FundingStrategy, 'bsv/wallet/interface/funding_strategy'
       autoload :Hydrator,        'bsv/wallet/interface/hydrator'
       autoload :Store,           'bsv/wallet/interface/store'
