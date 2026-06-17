@@ -82,10 +82,25 @@ Sequel.migration do
         drop_column :action_id
       end
     else
-      alter_table(:spendable) { drop_foreign_key [:action_id], name: :spendable_promotion_fkey }
-      alter_table(:spendable) { drop_column :action_id }
-      alter_table(:output_baskets) { drop_column :action_id }
-      alter_table(:output_details) { drop_column :action_id }
+      # SQLite: bundle drop_foreign_key with drop_column in one alter_table so
+      # Sequel takes its table-recreation path. A bare drop_column relies on
+      # native ALTER TABLE DROP COLUMN, which older libsqlite rejects while a
+      # foreign key still references the column ("unknown column ... in foreign
+      # key definition"). Recreation rebuilds the table without the column and
+      # its FKs in a single, version-independent step.
+      alter_table(:spendable) do
+        drop_foreign_key [:action_id], name: :spendable_promotion_fkey
+        drop_foreign_key [:action_id]
+        drop_column :action_id
+      end
+      alter_table(:output_baskets) do
+        drop_foreign_key [:action_id]
+        drop_column :action_id
+      end
+      alter_table(:output_details) do
+        drop_foreign_key [:action_id]
+        drop_column :action_id
+      end
     end
   end
 end
