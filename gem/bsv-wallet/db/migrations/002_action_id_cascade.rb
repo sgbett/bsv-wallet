@@ -1,14 +1,22 @@
 # frozen_string_literal: true
 
+# Denormalised action_id columns + cascade FKs on the per-output relationship
+# tables, plus the spendable→promotions cascade FK.
+#
+# action_id is derivable via output_id → outputs.action_id but lifted here as a
+# direct FK so action deletion is a single statement: the action goes, every
+# spendable, basket-membership, output-details row dependent on it goes with it.
+# Set once at row creation and never mutated. Without this, the reaper would
+# need a multi-statement join-driven cleanup.
+#
+# spendable.action_id additionally references promotions(action_id) so that
+# UTXO-set membership cannot exist without authorisation, and reject/reorg
+# teardown collapses to a single DELETE FROM promotions that cascades through.
+
 Sequel.migration do
   up do
     postgres = database_type == :postgres
 
-    # Add action_id with ON DELETE CASCADE to relationship tables.
-    # Denormalized (derivable via output_id -> outputs.action_id) but
-    # justified: set once at creation, never changes, enables cascade
-    # cleanup — deleting an action automatically removes its spendable
-    # entries, basket memberships, and output details.
     if postgres
       add_column :spendable, :action_id, :bigint
       run <<~SQL
@@ -31,13 +39,10 @@ Sequel.migration do
           FOREIGN KEY (action_id) REFERENCES actions (id) ON DELETE CASCADE
       SQL
 
-      # Change outputs.action_id FK to ON DELETE SET NULL and make nullable.
       run <<~SQL
-        ALTER TABLE outputs
-          DROP CONSTRAINT IF EXISTS outputs_action_id_fkey,
-          ALTER COLUMN action_id DROP NOT NULL,
-          ADD CONSTRAINT outputs_action_id_fkey
-            FOREIGN KEY (action_id) REFERENCES actions (id) ON DELETE SET NULL
+        ALTER TABLE spendable
+          ADD CONSTRAINT spendable_promotion_fkey
+          FOREIGN KEY (action_id) REFERENCES promotions (action_id) ON DELETE CASCADE
       SQL
     else
       # SQLite: Sequel recreates tables internally for alter_table operations.
@@ -53,10 +58,8 @@ Sequel.migration do
         add_foreign_key :action_id, :actions, type: :bigint, on_delete: :cascade
       end
 
-      alter_table(:outputs) do
-        set_column_allow_null :action_id
-        drop_foreign_key [:action_id]
-        add_foreign_key [:action_id], :actions, on_delete: :set_null
+      alter_table(:spendable) do
+        add_foreign_key [:action_id], :promotions, key: [:action_id], on_delete: :cascade
       end
     end
   end
@@ -65,13 +68,7 @@ Sequel.migration do
     postgres = database_type == :postgres
 
     if postgres
-      run <<~SQL
-        ALTER TABLE outputs
-          DROP CONSTRAINT IF EXISTS outputs_action_id_fkey,
-          ALTER COLUMN action_id SET NOT NULL,
-          ADD CONSTRAINT outputs_action_id_fkey
-            FOREIGN KEY (action_id) REFERENCES actions (id)
-      SQL
+      run 'ALTER TABLE spendable DROP CONSTRAINT IF EXISTS spendable_promotion_fkey'
       alter_table(:spendable) do
         drop_constraint :spendable_action_id_fkey
         drop_column :action_id
@@ -85,14 +82,25 @@ Sequel.migration do
         drop_column :action_id
       end
     else
-      alter_table(:outputs) do
-        set_column_not_null :action_id
+      # SQLite: bundle drop_foreign_key with drop_column in one alter_table so
+      # Sequel takes its table-recreation path. A bare drop_column relies on
+      # native ALTER TABLE DROP COLUMN, which older libsqlite rejects while a
+      # foreign key still references the column ("unknown column ... in foreign
+      # key definition"). Recreation rebuilds the table without the column and
+      # its FKs in a single, version-independent step.
+      alter_table(:spendable) do
+        drop_foreign_key [:action_id], name: :spendable_promotion_fkey
         drop_foreign_key [:action_id]
-        add_foreign_key [:action_id], :actions
+        drop_column :action_id
       end
-      alter_table(:spendable) { drop_column :action_id }
-      alter_table(:output_baskets) { drop_column :action_id }
-      alter_table(:output_details) { drop_column :action_id }
+      alter_table(:output_baskets) do
+        drop_foreign_key [:action_id]
+        drop_column :action_id
+      end
+      alter_table(:output_details) do
+        drop_foreign_key [:action_id]
+        drop_column :action_id
+      end
     end
   end
 end

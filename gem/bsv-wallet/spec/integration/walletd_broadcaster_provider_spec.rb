@@ -13,7 +13,9 @@
 # - Inline path: call +Engine#inline_broadcast+ with a signed
 #   +Transaction::Tx+, assert +broadcasts.provider+ is populated.
 #
-# Postgres-only — exercises a real DB column added in migration 009.
+# Postgres-only because it is an integration spec (real store + live broadcast
+# path), not because the column is backend-specific — +broadcasts.provider+
+# (#259) exists on both backends.
 
 require 'spec_helper'
 require 'securerandom'

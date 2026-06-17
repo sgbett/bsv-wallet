@@ -700,12 +700,12 @@ should never have a broadcasts row.
 > *Tracked — #198 item 5.* Made load-bearing by #197's send/internal
 > path split (HLR #183).
 
-**8. `outputs.action_id` was made nullable + ON DELETE SET NULL in
-migration 002.** The "outputs are immutable" intent would require
-NOT NULL with no SET NULL behaviour.
+**8. `outputs.action_id` was made nullable + ON DELETE SET NULL.** The
+"outputs are immutable" intent would require NOT NULL with no SET NULL
+behaviour.
 
-> *Resolved — #197 (commit `7f6004e`, closes #189).* Column flipped to
-> NOT NULL with ON DELETE RESTRICT. "Outputs are immutable" is
+> *Resolved — #197 (commit `7f6004e`, closes #189).* Column is NOT NULL
+> with ON DELETE RESTRICT in the live schema. "Outputs are immutable" is
 > structurally true; no orphan rows possible.
 
 **9. No CHECK enforcing the `(wtxid IS NULL) = (raw_tx IS NULL)` parity
@@ -714,13 +714,13 @@ on `tx_proofs`.**
 > *Moot.* Both columns are NOT NULL on `tx_proofs`; the parity rule has
 > no nullable side to enforce against.
 
-**10. `tx_reqs.status` enum is enforced by CHECK in the live schema but
-the table itself was dropped in migration 004.**
+**10. `tx_reqs.status` enum is enforced by CHECK in the historical
+transcript but the table itself is not in the live schema.**
 
-> *Resolved — superseded by #90.* The harvester queue is replaced by
-> entity-driven structural queries (`Pushable` / `Fetchable` mixins).
-> `Action` adopts `Fetchable`; no work-queue table required. The
-> transcript's `tx_reqs` design was superseded.
+> *Resolved — #142 (superseded by #90).* The harvester queue is replaced
+> by entity-driven structural queries (`Pushable` / `Fetchable` mixins).
+> `Action` adopts `Fetchable`; no work-queue table required. `tx_reqs`
+> is absent by design in the live schema — never created.
 
 **11. No length constraint on `actions.raw_tx`.** `tx_proofs.raw_tx`
 has a 20-byte minimum; `actions.raw_tx` has none beyond NOT NULL via

@@ -8,11 +8,12 @@ RSpec.describe 'Schema migration', :store do
       blocks tx_proofs actions broadcasts baskets outputs spendable
       output_details output_baskets inputs labels action_labels
       tags output_tags certificates certificate_fields settings
+      promotions sse_cursors
     ]
   end
 
   describe 'tables' do
-    it 'creates all 17 tables' do
+    it 'creates all 19 tables' do
       expected_tables.each do |table|
         expect(db.table_exists?(table)).to be(true), "expected table #{table} to exist"
       end
@@ -69,9 +70,11 @@ RSpec.describe 'Schema migration', :store do
     # ARC's metamorph Status enum + IMMUTABLE (wallet's ArcStatus::TERMINAL).
     # See #198/#220 — the canonical source is ARC's metamorph_api.proto.
     it 'tx_status has the correct values' do
-      # ORDER BY enumsortorder so ALTER TYPE ADD VALUE ... AFTER positions
-      # (e.g. SEEN_MULTIPLE_NODES inserted after SEEN_ON_NETWORK via #011)
-      # show up in their declared lifecycle order, not insertion order.
+      # ORDER BY enumsortorder so the declared enum lifecycle order
+      # (e.g. SEEN_MULTIPLE_NODES sits between SEEN_ON_NETWORK and
+      # DOUBLE_SPEND_ATTEMPTED) is preserved regardless of how the value
+      # was added — matters for live Postgres databases where the value
+      # arrived later via ALTER TYPE ADD VALUE ... AFTER (#272).
       values = db.from(
         Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'tx_status' ORDER BY e.enumsortorder")
       ).select_map(:enumlabel)
@@ -200,7 +203,7 @@ RSpec.describe 'Schema migration', :store do
     end
   end
 
-  describe 'broadcasts.provider (migration 009)' do
+  describe 'broadcasts.provider' do
     it 'exists as a nullable text column with no default' do
       schema = db.schema(:broadcasts).to_h
       column = schema[:provider]
@@ -209,8 +212,8 @@ RSpec.describe 'Schema migration', :store do
       expect(column[:ruby_default]).to be_nil
     end
 
-    # Sequel auto-reverses add_column. Round-trip via the migrator to prove
-    # the column genuinely drops and re-creates on both backends.
+    # Full down/up round-trip via the migrator to prove every migration's
+    # down block reverses cleanly on both backends.
     it 'round-trips up/down/up via the migrator' do
       Sequel.extension :migration
       migrations_path = File.expand_path('../../../../db/migrations', __dir__)
@@ -229,8 +232,12 @@ RSpec.describe 'Schema migration', :store do
         rt = db
       end
 
-      Sequel::Migrator.run(rt, migrations_path, target: 8)
-      expect(rt.schema(:broadcasts).to_h).not_to have_key(:provider)
+      expect(rt.schema(:broadcasts).to_h).to have_key(:provider)
+
+      Sequel::Migrator.run(rt, migrations_path, target: 0)
+      expected_tables.each do |table|
+        expect(rt.table_exists?(table)).to be(false), "expected table #{table} to be gone after target: 0"
+      end
 
       Sequel::Migrator.run(rt, migrations_path)
       expect(rt.schema(:broadcasts).to_h).to have_key(:provider)
