@@ -61,8 +61,7 @@ module BSV
                      services: nil, key_deriver: nil, chain_tracker: nil,
                      network_provider: nil,
                      network: :mainnet, limp_threshold: LIMP_THRESHOLD,
-                     callback_token: nil,
-                     fee_model: BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100))
+                     callback_token: nil)
         raise ArgumentError, "limp_threshold must be >= #{LIMP_THRESHOLD_MIN}" if limp_threshold < LIMP_THRESHOLD_MIN
 
         @store = store
@@ -78,12 +77,13 @@ module BSV
         # SSE listener (subscribed to the same token at daemon boot) receives
         # status frames for inline submissions. See #266.
         @callback_token = callback_token
-        # Single fee-model instance for the whole wallet — injected into
-        # TxBuilder (which charges it in build_change) and reused by
-        # estimate_sweep_fee, so sweep/consolidate estimates can never drift
-        # from what is actually charged. Config-overridable via fee_model:;
-        # defaults to 100 sats/kb (#342).
-        @fee_model = fee_model
+        # Single fee-model instance for the whole wallet — read from the
+        # end-user Config (BSV::Wallet.config.fee_model, default 100 sats/kb,
+        # overridable in ~/.bsv-wallet/config.rb). Injected into TxBuilder
+        # (which charges it in build_change) and reused by estimate_sweep_fee,
+        # so sweep/consolidate estimates can never drift from what is actually
+        # charged (#342).
+        @fee_model = BSV::Wallet.config.fee_model
         # Inline-broadcast worker — same Engine::Broadcast the daemon's PULL
         # loop uses. Eliminates the parallel +inline_broadcast+ codepath
         # that pre-#271 duplicated submit's 202 / 400 / 503 dispatch and

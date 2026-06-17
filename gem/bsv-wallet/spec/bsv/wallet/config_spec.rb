@@ -96,6 +96,17 @@ RSpec.describe BSV::Wallet::Config do
       end
     end
 
+    it 'BSV_WALLET_FEE_RATE_SATS_PER_KB → fee_model (SatoshisPerKilobyte), default 100' do
+      with_env('BSV_WALLET_FEE_RATE_SATS_PER_KB' => nil) do
+        model = described_class.new.fee_model
+        expect(model).to be_a(BSV::Transaction::FeeModels::SatoshisPerKilobyte)
+        expect(model.value).to eq(100)
+      end
+      with_env('BSV_WALLET_FEE_RATE_SATS_PER_KB' => '250') do
+        expect(described_class.new.fee_model.value).to eq(250)
+      end
+    end
+
     it 'BSV_WALLET_HINTS_SOCKET unset → hints_socket nil' do
       with_env('BSV_WALLET_HINTS_SOCKET' => nil) do
         expect(described_class.new.hints_socket).to be_nil
