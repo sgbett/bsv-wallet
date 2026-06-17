@@ -30,6 +30,7 @@ module BSV
       include BSV::Wallet::Interface::BRC100
 
       autoload :Action,                'bsv/wallet/engine/action'
+      autoload :BeefImporter,          'bsv/wallet/engine/beef_importer'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
       autoload :Hydrator,              'bsv/wallet/engine/hydrator'
@@ -46,7 +47,7 @@ module BSV
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
       attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker,
-                  :funding_strategy, :tx_builder, :hydrator
+                  :funding_strategy, :tx_builder, :hydrator, :beef_importer
 
       # Engine collaborator surface exposed for Engine::Action use.
       # Not public API — these are internal handles for in-process logical models.
@@ -94,6 +95,14 @@ module BSV
         # (build_atomic_beef) + egress SPV honesty contract
         # (validate_for_handoff!). See ADR-024 / #343.
         @hydrator = Hydrator.new(store: @store)
+        # BeefImporter — ingress counterpart to Hydrator. Owns the whole
+        # incoming-BEEF flow (parse, SPV verify, persist ancestor
+        # proofs, promote outputs). Consumes Hydrator#wire_ancestor for
+        # trustSelf hydration; one-way (ingress → Hydrator). See
+        # ADR-024 / #357.
+        @beef_importer = BeefImporter.new(
+          store: @store, chain_tracker: @chain_tracker, hydrator: @hydrator
+        )
       end
 
       # Is the wallet in limp mode? When true, all outbound operations
