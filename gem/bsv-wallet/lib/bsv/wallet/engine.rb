@@ -210,8 +210,7 @@ module BSV
         # known_txids is the BRC-100 spec param name; values are wire-order wtxids
         known_txids&.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'known_txids entry') }
 
-        Action.internalize(
-          engine: self,
+        @beef_importer.import(
           tx: tx, outputs: outputs, description: description,
           labels: labels, trust_self: trust_self, known_txids: known_txids,
           seek_permission: seek_permission, originator: originator

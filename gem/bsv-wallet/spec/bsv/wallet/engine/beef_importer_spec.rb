@@ -116,16 +116,44 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         .to raise_error(BSV::Wallet::InvalidBeefError, /chain_tracker required/)
     end
 
-    it 'wraps SDK VerificationError as InvalidBeefError carrying the message and code' do
-      built = build_verifiable_beef
-      err = BSV::Transaction::VerificationError.new(:invalid_merkle_proof, 'bad proof')
-      allow(built[:subject_tx]).to receive(:verify).and_raise(err)
+    it 'wraps VerificationError(:invalid_merkle_proof) as InvalidBeefError' do
+      subject_tx = instance_double(BSV::Transaction::Tx)
+      allow(subject_tx).to receive(:verify).and_raise(
+        BSV::Transaction::VerificationError.new(:invalid_merkle_proof, 'bad proof')
+      )
+      expect { beef_importer.send(:verify_incoming_transaction!, subject_tx) }
+        .to raise_error(BSV::Wallet::InvalidBeefError,
+                        /SPV verification failed.*bad proof.*invalid_merkle_proof/)
+    end
 
-      expect { beef_importer.send(:verify_incoming_transaction!, built[:subject_tx]) }
-        .to raise_error(BSV::Wallet::InvalidBeefError) do |e|
-          expect(e.message).to include('SPV verification failed')
-          expect(e.message).to include('invalid_merkle_proof')
-        end
+    it 'wraps VerificationError(:script_failure) as InvalidBeefError' do
+      subject_tx = instance_double(BSV::Transaction::Tx)
+      allow(subject_tx).to receive(:verify).and_raise(
+        BSV::Transaction::VerificationError.new(:script_failure, 'script failed')
+      )
+      expect { beef_importer.send(:verify_incoming_transaction!, subject_tx) }
+        .to raise_error(BSV::Wallet::InvalidBeefError,
+                        /SPV verification failed.*script failed.*script_failure/)
+    end
+
+    it 'wraps VerificationError(:output_overflow) as InvalidBeefError' do
+      subject_tx = instance_double(BSV::Transaction::Tx)
+      allow(subject_tx).to receive(:verify).and_raise(
+        BSV::Transaction::VerificationError.new(:output_overflow, 'outputs exceed inputs')
+      )
+      expect { beef_importer.send(:verify_incoming_transaction!, subject_tx) }
+        .to raise_error(BSV::Wallet::InvalidBeefError,
+                        /SPV verification failed.*outputs exceed inputs.*output_overflow/)
+    end
+
+    it 'wraps VerificationError(:missing_source) as InvalidBeefError' do
+      subject_tx = instance_double(BSV::Transaction::Tx)
+      allow(subject_tx).to receive(:verify).and_raise(
+        BSV::Transaction::VerificationError.new(:missing_source, 'no source data')
+      )
+      expect { beef_importer.send(:verify_incoming_transaction!, subject_tx) }
+        .to raise_error(BSV::Wallet::InvalidBeefError,
+                        /SPV verification failed.*no source data.*missing_source/)
     end
   end
 
@@ -431,6 +459,68 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
 
       expect(store).to have_received(:proof_exists?).with(wtxid: ancestor_wtxid)
       expect(proof_existed_at_trim_check).to be(true)
+    end
+  end
+
+  # --- TXID-only + verify integration ---------------------------------
+
+  describe 'TXID-only + verify integration' do
+    # The highest-risk assumption in the chain tracker pivot:
+    # +make_txid_only+ mutates the BEEF's @transactions list but does
+    # NOT invalidate the in-memory +source_transaction+ pointers wired
+    # by +Beef.from_binary+. +Transaction::Tx#verify+ walks via
+    # +input.source_transaction+, not the BEEF list, so verification
+    # must succeed after TXID-only conversion. This used to live on
+    # +action_spec.rb+; migrated here with the ingress helpers.
+    it 'verify succeeds after replace_known_ancestors! converts ancestors to TXID-only' do
+      ancestor = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+      ancestor.add_output(BSV::Transaction::TransactionOutput.new(
+                            satoshis: 1000,
+                            locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                          ))
+      ancestor.merkle_path = build_merkle_path(ancestor)
+
+      subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+      subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                             prev_wtxid: ancestor.wtxid,
+                             prev_tx_out_index: 0,
+                             sequence: 0xFFFFFFFF,
+                             unlocking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                           ))
+      subject_tx.inputs[0].source_transaction = ancestor
+      subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                              satoshis: 900,
+                              locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                            ))
+
+      beef = BSV::Transaction::Beef.new
+      beef.merge_transaction(ancestor)
+      beef.merge_transaction(subject_tx)
+      beef_data = beef.to_atomic_binary(subject_tx.wtxid)
+
+      # Step 1: parse BEEF — wires source_transaction pointers
+      parsed_beef, parsed_subject = beef_importer.send(:parse_beef, beef_data)
+      expect(parsed_subject.inputs[0].source_transaction).not_to be_nil
+      expect(parsed_subject.inputs[0].source_transaction.merkle_path).not_to be_nil
+
+      # Step 2: pre-populate ProofStore so the ancestor is "known",
+      # then trim
+      store.save_proof(
+        wtxid: ancestor.wtxid,
+        proof: { raw_tx: ancestor.to_binary, merkle_path: ancestor.merkle_path.to_binary, height: 800_000 }
+      )
+      beef_importer.send(:replace_known_ancestors!, parsed_beef, parsed_subject.wtxid, nil)
+
+      replaced = parsed_beef.transactions.find { |bt| bt.wtxid == ancestor.wtxid }
+      expect(replaced).to be_a(BSV::Transaction::Beef::TxidOnlyEntry)
+
+      # The in-memory source_transaction pointer survives the BEEF
+      # list mutation — the load-bearing invariant.
+      expect(parsed_subject.inputs[0].source_transaction).not_to be_nil
+      expect(parsed_subject.inputs[0].source_transaction.merkle_path).not_to be_nil
+
+      # Step 3: verify still succeeds.
+      expect(parsed_subject.verify(chain_tracker: chain_tracker)).to be true
     end
   end
 end
