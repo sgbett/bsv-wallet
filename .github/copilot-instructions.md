@@ -4,11 +4,18 @@
 
 bsv-wallet is a Ruby BRC-100 wallet implementation — the layer that manages UTXO lifecycle, transaction construction, broadcasting, and proof management for BSV applications. It delegates all cryptographic operations (signing, key derivation, ECDSA, script interpretation) to the `bsv-ruby-sdk` gem. The wallet itself handles **state transitions** and **data integrity**: which outputs are spendable, which inputs are locked, which transactions are proven, and which proofs are valid.
 
+**Canonical references (defer to these; this file is review guidance, not the source of truth — do not contradict them):** `reference/principle-of-state.md` (state is *read*, not stored — no status columns), `reference/state-representations.md` (the per-element A–F conformance register — e.g. promotion is a `promotions` *row*, not an `outputs.promoted` flag), `reference/state-boundaries.md` (stateless SDK / stateful wallet), `reference/createaction-lifecycle.md` (the action state machine: states-as-predicates + the per-transition validation matrix).
+
 ### Layers
 
 The wallet is laid out as four collaborating layers. Engine-level "logical models" (`Engine::Broadcast`, `Engine::TxProof`) hold behavior; Store-level Sequel models hold data. The split is intentional — see `reference/schema-intent.md`.
 
-- **`BSV::Wallet::Engine`** — Layer 3 orchestrator for the 28 BRC-100 methods. Pure logic, no SQL, no network I/O. Composes the funding primitives (`select_inputs`, `generate_change`), drives the 4-phase action lifecycle, and dispatches to `Engine::Broadcast` / `Engine::TxProof` for OMQ-shaped background work.
+- **`BSV::Wallet::Engine`** — Layer 3 orchestrator for the 28 BRC-100 methods. Pure logic, no SQL, no network I/O. Drives the 4-phase action lifecycle and dispatches to the domain collaborators below plus `Engine::Broadcast` / `Engine::TxProof` for OMQ-shaped background work. (The funding / construction / BEEF logic that once lived inline on `Engine::Action` was extracted into the collaborators below per #290/#291 — ADR-024.)
+- **`Engine::FundingStrategy` · `Engine::TxBuilder` · `Engine::Hydrator` · `Engine::BeefImporter`** — Layer 3 domain collaborators extracted from `Engine::Action` (#291), each DI'd with an `Interface::` contract:
+  - **`FundingStrategy`** — input acquisition: selection + the bounded retried `Store#lock_inputs` (initial + top-up), and the fee-fixpoint loop. Owns the lock lifecycle (#323, absorbs #213).
+  - **`TxBuilder`** — **store-free** transaction construction: `build` / `build_change` (change derivation + fee fixpoint) / `apply_spends` (deferred-sign finalise). Takes a *resolved* input set by value; signs. "The transaction builder signs." (#336)
+  - **`Hydrator`** — store-reading egress: `wire_ancestor` (recursive ProofStore→Tx ancestor wiring), `build_atomic_beef`, `validate_for_handoff!` (SPV self-verify before shipping). (#343)
+  - **`BeefImporter`** — store-reading ingress: `import` (parse → trustSelf hydrate → **SPV verify** → persist → promote) of incoming *untrusted* BEEF; consumes `Hydrator#wire_ancestor` one-way. (#357)
 - **`BSV::Wallet::Engine::Broadcast`** — logical model wrapping a `broadcasts` row. Lifecycle: `submit` (inline POST to ARC) and `poll_status` (delayed-broadcast catch-up). The OMQ entry points (`pull!`, `reply!`) are how the daemon's scheduler dispatches work. Outcome categorization (`categorize_outcome`, `categorize_reason`) lives here.
 - **`BSV::Wallet::Engine::TxProof`** — logical model wrapping a `tx_proofs` row. Lifecycle: `pull!` ingests proofs from ARC/network, normalizes merkle paths (binary / hex / TSC), and links proofs back to actions.
 - **`BSV::Wallet::Store`** — Layer 2a persistence. Owns multi-table atomicity (`@db.transaction do ... end`); never exposed to the Engine as Sequel models. **Postgres is the primary backend** (`bytea`, native `uuid`, ENUM types, CHECK constraints, RESTRICT FK semantics); SQLite is a convenience for local iteration and CI-without-services runs. Selected via `DATABASE_URL`.
@@ -28,16 +35,16 @@ Every outgoing transaction goes through four phases, split across two database t
 
 | Phase | What | Atomicity |
 |------|------|-----------|
-| **1 — Lock** | `Store#create_action` inserts the `actions` row + locks inputs via `INSERT ON CONFLICT (output_id) DO NOTHING`. The lock IS the structural double-spend guard. | One DB transaction |
-| **2 — Sign** | Engine resolves inputs, runs `generate_change` (funding loop), signs, persists `wtxid` + `raw_tx`. For send-path actions, also writes the `broadcasts` row and any caller / change output rows with `promoted: false`. | One DB transaction (`Store#sign_action`) |
+| **1 — Lock** | `Store#create_action` inserts the `actions` row (post-#323 "option (a)": with **no** inputs); `Engine::FundingStrategy` then locks inputs via `Store#lock_inputs` (`INSERT ON CONFLICT (output_id) DO NOTHING`). The lock IS the structural double-spend guard. | row create + each lock its own DB transaction |
+| **2 — Sign** | `Engine::TxBuilder` builds the tx + runs the change/fee fixpoint (driven by `FundingStrategy`'s loop) + signs; Engine persists `wtxid` + `raw_tx`. Send-path also writes the `broadcasts` row + caller / change output rows (as **pending** — no flag; see Phase 4). | One DB transaction (`Store#sign_action`) |
 | **3 — Broadcast** | `Engine::Broadcast#submit` posts to ARC. Inline (`accept_delayed_broadcast: false`) blocks here; delayed lets the daemon pick the row up via push-discovery. Network call — **no DB transaction held**. | None |
-| **4 — Promote** | On ARC acceptance, flip `outputs.promoted = false → true` and insert `spendable` rows. This is the moment outputs join the canonical UTXO set. | One DB transaction (`Store#promote_action_outputs`) |
+| **4 — Promote** | On ARC acceptance, insert a **`promotions` row** (#307/ADR-023 — promotion is a *row*, **not** an `outputs.promoted` flag; the flag was removed) + `spendable` rows. This is the moment outputs join the canonical UTXO set. | One DB transaction (`Store#promote_action_outputs`) |
 
-**Internal path** (`actions.broadcast_intent = 'none'` — used by `internalize_action`, `import_utxo`, `send_payment`, wbikd): Phases 1 + 2 + 4 commit in a single atomic transaction inside `create_action` via `Store#promote_action`. No Phase 3. No `broadcasts` row.
+**Internal path** (`actions.broadcast_intent = 'none'` — used by `internalize_action`, `import_utxo`, wbikd): the action is created, signed, and promoted with no broadcast. Promotion goes through `Store#promote_action`, which inserts the `promotions` row (`intent='none'`, no authorising status) + outputs + spendable. No Phase 3, no `broadcasts` row. `internalizeAction` (incoming-BEEF) runs through `Engine::BeefImporter#import`.
 
 **Send path** (`broadcast_intent IN ('delayed', 'inline')`): four distinct phases as above.
 
-Review rule: any change that touches `actions.broadcast_intent`, `outputs.promoted`, or the `broadcasts` table must explain which path(s) it affects and which phase boundaries it crosses.
+Review rule: any change that touches `actions.broadcast_intent`, the `promotions` table, or the `broadcasts` table must explain which path(s) it affects and which phase boundaries it crosses.
 
 ## Critical Convention: Transaction ID Byte Order
 
@@ -63,17 +70,19 @@ This codebase enforces strict binary/string type discipline for transaction IDs.
 
 ### UTXO Lifecycle (Critical — funds at risk)
 
-- **Input locking atomicity**: `Store#create_action` locks inputs via `INSERT ON CONFLICT (output_id) DO NOTHING` inside one DB transaction. Two concurrent transactions can't both claim the same UTXO. Verify any change to input locking preserves the single-transaction guarantee.
+- **Input locking atomicity**: `Engine::FundingStrategy` locks inputs via `Store#lock_inputs` (`INSERT ON CONFLICT (output_id) DO NOTHING`) — post-#323 the initial lock is no longer folded into `create_action` (option (a): the row is created with `inputs: []`, then FundingStrategy locks). Two concurrent transactions can't both claim the same UTXO. Verify any change preserves the all-or-nothing per-lock guarantee.
 - **Top-up locking**: `Store#lock_inputs` appends inputs to an existing action with all-or-nothing semantics (rolls back on any conflict, returns 0). Used by the funding loop to top up. Verify the caller checks the return value — appending output IDs to the locked set when the lock rolled back desynchronises subsequent `base_vin` calculations.
-- **Promote timing**: outputs become spendable only at Phase 4. Send-path: `Store#promote_action_outputs` after ARC acceptance. Internal-path: `Store#promote_action` synchronously inside `create_action`. Premature promotion creates UTXOs against transactions miners may reject. Verify Phase 4 only runs on ARC-accepted broadcasts or on `broadcast_intent = 'none'`.
+- **Promote timing**: outputs become spendable only at Phase 4, and promotion is a **`promotions` row** (#307/ADR-023), not an `outputs.promoted` flag (the flag was removed). Send-path: `Store#promote_action_outputs` after ARC acceptance — the row's composite FK to `broadcasts(action_id, tx_status)` (+ `auth_not_rejected` CHECK) gates it to a non-rejected status. Internal-path: `Store#promote_action` (`intent='none'`, no status). The `spendable.action_id → promotions` FK means a UTXO row cannot exist without an authorising promotion. Premature promotion creates UTXOs against transactions miners may reject. Verify Phase 4 only runs on ARC-accepted broadcasts or on `broadcast_intent = 'none'`.
 - **Reaper safety**: `Store#reap_stale_actions` deletes stale Phase 1/2 actions via CASCADE. The guard is `Sequel.~(broadcast_intent: 'none')` AND `wtxid IS NOT NULL` — i.e. only actions that took the send path AND signed but never broadcast-accepted are reaped. Verify any change preserves both clauses; reaping a `broadcast_intent = 'none'` (internal-path) action would delete confirmed UTXOs.
 - **Spendable integrity**: the `spendable` table IS the wallet's UTXO set. A row's presence = available. Verify spent outputs are removed atomically with input creation, and that `BEFORE INSERT` trigger `prevent_outbound_spendable` is not bypassed.
 
-### Funding Loop (Critical — funds at risk, post-#199)
+### Funding Loop (Critical — funds at risk)
 
-- **Caller-inputs shortfall**: `generate_change` returns `{ shortfall: N }` when input sats don't cover outputs + fee. The funding loop top-up only fires for wallet-selected inputs (`caller_supplied_inputs: false`). Caller-supplied input shortfalls raise `InsufficientFundsError` immediately — the wallet does not extend a caller-supplied input set. Verify any change keeps this asymmetry; auto-extending caller inputs is a silent fund-routing change.
-- **Fee detection**: `generate_change` computes `required_fee` via `FeeModels::SatoshisPerKilobyte#compute_fee(tx)` against the templated tx, not via `Transaction#fee` (which silently drops change rather than raising on insufficient inputs). Verify the comparison `surplus = total_input_satoshis - sum(caller_outputs)` against `required_fee` is preserved.
-- **Order of operations** in `generate_change`: build → attach templates → fee check → distribute_change → shuffle → sign. Sighashes commit to final output positions, so the shuffle must happen before signing. Distribute must happen after fee check (Benford remainder targets the change set). Verify reorderings.
+The funding loop lives in `Engine::FundingStrategy` (#323); the per-attempt build + fee fixpoint is `Engine::TxBuilder#build_change` (#336, store-free, takes a resolved input set by value). The mechanics below are unchanged from the former `Action#generate_change` / `run_funding_loop`, only relocated.
+
+- **Caller-inputs shortfall**: `TxBuilder#build_change` returns `{ shortfall: N }` when input sats don't cover outputs + fee. `FundingStrategy`'s top-up loop only fires for wallet-selected inputs (`caller_supplied_inputs: false`). Caller-supplied input shortfalls raise `InsufficientFundsError` immediately — the wallet does not extend a caller-supplied input set. Verify any change keeps this asymmetry; auto-extending caller inputs is a silent fund-routing change.
+- **Fee detection**: `TxBuilder#build_change` computes `required_fee` via `FeeModels::SatoshisPerKilobyte#compute_fee(tx)` against the templated tx, not via `Transaction#fee` (which silently drops change rather than raising on insufficient inputs). Verify the comparison `surplus = total_input_satoshis - sum(caller_outputs)` against `required_fee` is preserved.
+- **Order of operations** in `TxBuilder#build_change`: build → attach templates → fee check → distribute_change → shuffle → sign. Sighashes commit to final output positions, so the shuffle must happen before signing. Distribute must happen after fee check (Benford remainder targets the change set). Verify reorderings.
 - **`change_count: 1` semantics**: consolidation and sweep both pass `change_count: 1` to constrain the funding loop to a single change output. The pool's default (`@utxo_pool.change_output_count`) creates ~8 change for grooming. Verify any consolidation-shaped flow uses the override.
 
 ### Input Resolution (Critical — funds at risk)
@@ -84,8 +93,8 @@ This codebase enforces strict binary/string type discipline for transaction IDs.
 
 ### BEEF / SPV Validation (High — counterfeit transaction risk)
 
-- **`verify_incoming_transaction!`** is the single entry point. It delegates to SDK's `Transaction#verify(chain_tracker:)`, which performs SPV (scripts + merkle proofs + fee adequacy) in one pass. The wallet wraps SDK's `VerificationError` as `InvalidBeefError`. Skipping this call means accepting counterfeit transactions.
-- **trustSelf semantics**: `replace_known_ancestors!` runs only after BEEF proofs are saved and only when `trust_self == 'known'`. It replaces known ancestors with TXID-only entries — never the subject transaction. Replacing the subject would bypass SPV.
+- **`Engine::BeefImporter#verify_incoming_transaction!`** is the single ingress SPV gate (#357 — was `Action.internalize`). It delegates to SDK's `Transaction#verify(chain_tracker:)` with the **real** chain_tracker (not the egress `TrustedSelfChainTracker`), performing SPV (scripts + merkle proofs + fee adequacy) in one pass, and wraps `VerificationError` as `InvalidBeefError`. Skipping this call means accepting counterfeit transactions.
+- **trustSelf semantics**: `BeefImporter#replace_known_ancestors!` runs only *after* `save_beef_proofs` (so trimming never discards an unpersisted proof) and only when `trust_self == 'known'`. It replaces known ancestors with TXID-only entries — never the subject transaction. Replacing the subject would bypass SPV. `hydrate_known_sources!` runs *before* verify, so it cannot smuggle unverified ancestors past the gate.
 
 ### Broadcast Lifecycle (High — transaction loss)
 
@@ -114,11 +123,11 @@ Any code touching `wtxid`, `dtxid`, merkle roots, or block hashes:
 ### Database Atomicity
 
 Multi-table operations live inside `@db.transaction do ... end`:
-- `Store#create_action`: action + inputs in one transaction
+- `Store#create_action`: the `actions` row (post-#323 the initial input lock is no longer folded in — `FundingStrategy` locks via `Store#lock_inputs` separately)
 - `Store#sign_action`: action update + tx_proofs upsert + broadcasts row (send-path) + outputs + change_outputs in one transaction
 - `Store#stage_action`: deferred-signing equivalent; same shape minus the broadcasts row
-- `Store#promote_action`: outputs + spendable + baskets + details + tags (internal-path) in one transaction
-- `Store#promote_action_outputs`: flip `promoted` + insert `spendable` (send-path) in one transaction
+- `Store#promote_action`: the `promotions` row (`intent='none'`) + outputs + spendable + baskets + details + tags (internal-path) in one transaction
+- `Store#promote_action_outputs`: insert the `promotions` row + `spendable` (send-path) in one transaction — no `outputs.promoted` flag (#307)
 - `Store#lock_inputs`: append inputs to existing action, all-or-nothing
 
 Breaking atomicity yields partial state subsequent operations cannot recover from.
@@ -146,7 +155,7 @@ Postgres is the production target; SQLite is a convenience for fast logic-only s
 - **`action.dtxid` for ARC calls**: display-order hex is what ARC expects.
 - **No ActiveRecord**: this project uses Sequel deliberately. Don't suggest AR patterns.
 - **American English**: `internalize`, `randomize`, etc. — matches BRC-100 spec method names. (Overrides the global British convention.)
-- **Derived status (no status column)**: `Action#derived_status` computes state from structure (`wtxid`, `tx_proof_id`, `broadcast_intent`, `outputs.promoted`, presence of `broadcasts` row). There is no stored `status` field — by design (see `reference/schema-intent.md` §1).
+- **Derived status (no status column)**: `Action#derived_status` computes state from structure (`wtxid`, `tx_proof_id`, `broadcast_intent`, existence of a `promotions` row, presence of a `broadcasts` row). There is no stored `status` field and no `outputs.promoted` flag — by design (see `reference/principle-of-state.md`, `reference/state-representations.md`).
 - **`Gemfile.lock` not committed**: standard practice for gems.
 - **Engine namespace nesting**: `Engine::Broadcast`, `Engine::TxProof`, `Engine::OmqSupport` are logical models in the Engine namespace. They are intentionally not Store-level.
 - **Missing `require 'set'` (and other autoloaded core stdlib)**: do NOT flag `Set` usage for a missing `require 'set'`. The gem floors at `required_ruby_version >= 3.3`, and `Set` has been an **autoloaded core constant since Ruby 3.2** — it resolves with no explicit require on every supported version. There is deliberately no `require 'set'` anywhere in `lib/`, yet `Set` is used across several files; this is the established convention, not a hidden dependency. (Same applies to other stdlib that Ruby ≥3.2 autoloads.)
