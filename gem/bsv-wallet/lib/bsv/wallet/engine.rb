@@ -61,7 +61,8 @@ module BSV
                      services: nil, key_deriver: nil, chain_tracker: nil,
                      network_provider: nil,
                      network: :mainnet, limp_threshold: LIMP_THRESHOLD,
-                     callback_token: nil)
+                     callback_token: nil,
+                     fee_model: BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100))
         raise ArgumentError, "limp_threshold must be >= #{LIMP_THRESHOLD_MIN}" if limp_threshold < LIMP_THRESHOLD_MIN
 
         @store = store
@@ -77,6 +78,12 @@ module BSV
         # SSE listener (subscribed to the same token at daemon boot) receives
         # status frames for inline submissions. See #266.
         @callback_token = callback_token
+        # Single fee-model instance for the whole wallet — injected into
+        # TxBuilder (which charges it in build_change) and reused by
+        # estimate_sweep_fee, so sweep/consolidate estimates can never drift
+        # from what is actually charged. Config-overridable via fee_model:;
+        # defaults to 100 sats/kb (#342).
+        @fee_model = fee_model
         # Inline-broadcast worker — same Engine::Broadcast the daemon's PULL
         # loop uses. Eliminates the parallel +inline_broadcast+ codepath
         # that pre-#271 duplicated submit's 202 / 400 / 503 dispatch and
@@ -87,13 +94,10 @@ module BSV
         # the build collaborator's fixpoint loop. See ADR-024 / #323.
         @funding_strategy = FundingStrategy.new(store: @store, utxo_pool: @utxo_pool)
         # Transaction builder — store-free scribe that constructs, fee-
-        # balances, and signs transactions over a resolved input set. The
-        # fee model value matches +estimate_sweep_fee+'s inline rate
-        # (#336): a sweep-size-parity coupling preserved byte-for-byte.
-        @tx_builder = TxBuilder.new(
-          key_deriver: @key_deriver,
-          fee_model: BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
-        )
+        # balances, and signs transactions over a resolved input set. Shares
+        # the wallet's single @fee_model with estimate_sweep_fee (#342), so
+        # the sweep-size-parity coupling is structural, not hand-mirrored.
+        @tx_builder = TxBuilder.new(key_deriver: @key_deriver, fee_model: @fee_model)
         # Hydrator — store-reading ProofStore→Tx wiring service. Owns
         # the deep hydration (wire_ancestor) + egress BEEF assembly
         # (build_atomic_beef) + egress SPV honesty contract
@@ -681,7 +685,6 @@ module BSV
       # stand-ins — only the unlocking-script template size matters for
       # fee estimation; +source_satoshis+ does not enter the size formula.
       def estimate_sweep_fee(input_count:, recipient_script:)
-        fee_model = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: 100)
         skeleton = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
 
         signing_key = @key_deriver.root_private_key
@@ -705,7 +708,7 @@ module BSV
           )
         )
 
-        fee_model.compute_fee(skeleton)
+        @fee_model.compute_fee(skeleton)
       end
 
       private
