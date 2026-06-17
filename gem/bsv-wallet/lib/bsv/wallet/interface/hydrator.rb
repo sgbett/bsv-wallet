@@ -30,12 +30,11 @@ module BSV
       #
       # ## One-way seam (+wire_ancestor+ is public)
       #
-      # +wire_ancestor+ is exposed as the public primitive the later
-      # BeefImporter (ingress) extraction will consume — incoming-BEEF
-      # trustSelf hydration depends on this method to fill TXID-only
-      # entries from the local ProofStore before verification. The
-      # dependency is one-way: ingress depends on Hydrator, never the
-      # reverse.
+      # +wire_ancestor+ is exposed as the public primitive +BeefImporter+
+      # (ingress) consumes — incoming-BEEF trustSelf hydration depends on
+      # this method to fill TXID-only entries from the local ProofStore
+      # before verification. The dependency is one-way: ingress depends
+      # on Hydrator, never the reverse.
       #
       # ## Not the Hydrator's concern
       #
@@ -57,9 +56,9 @@ module BSV
         # circular references (genuine Bitcoin transactions cannot form
         # cycles, but ProofStore entries can).
         #
-        # Public surface: the later BeefImporter / ingress extraction
-        # consumes this directly for trustSelf hydration of incoming
-        # BEEFs whose TXID-only entries we already hold proofs for.
+        # Public surface: +BeefImporter+ (ingress) consumes this directly
+        # for trustSelf hydration of incoming BEEFs whose TXID-only
+        # entries we already hold proofs for.
         #
         # @param wtxid [String] 32-byte wire-order wtxid
         # @param visited [Set] cycle-guard accumulator

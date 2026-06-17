@@ -215,8 +215,11 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
   end
 
-  describe '.internalize' do
-    # Action.internalize requires a chain_tracker for SPV verification.
+  describe 'internalize (via Engine#internalize_action)' do
+    # +Action.internalize+ is gone — incoming-BEEF ingestion now lives
+    # on +Engine::BeefImporter+ (HLR #357). This smoke covers the
+    # public Engine surface that delegates to it; isolation specs
+    # exist in +beef_importer_spec.rb+.
     let(:chain_tracker_mock) do
       tracker = double('ChainTracker')
       allow(tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
@@ -267,8 +270,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     it 'returns BRC-100 { accepted: true } and persists the incoming action' do
       beef_data, subject_tx = build_internalize_beef(satoshis: 500)
 
-      result = described_class.internalize(
-        engine: engine_with_tracker,
+      result = engine_with_tracker.internalize_action(
         tx: beef_data,
         description: 'action internalize smoke',
         labels: ['incoming'],
@@ -296,7 +298,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       expect(action[:outgoing]).to be(false)
     end
 
-    it 'is the entry point Engine#internalize_action delegates to' do
+    it 'delegates to Engine::BeefImporter (the ingress collaborator)' do
       beef_data, = build_internalize_beef(satoshis: 700)
 
       result = engine_with_tracker.internalize_action(
@@ -314,6 +316,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       )
 
       expect(result).to eq({ accepted: true })
+      expect(engine_with_tracker.beef_importer).to be_a(BSV::Wallet::Engine::BeefImporter)
     end
   end
 
@@ -386,179 +389,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
   end
 
   # wire_ancestor specs migrated to engine/hydrator_spec.rb in #345 along
-  # with the method itself.
-
-  # --- verify_incoming_transaction!: SPV verification wrapper (#286) ---
-
-  describe '#verify_incoming_transaction! (private)' do
-    let(:chain_tracker_mock) do
-      tracker = double('ChainTracker')
-      allow(tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
-      tracker
-    end
-
-    let(:engine_with_tracker) do
-      BSV::Wallet::Engine.new(
-        store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
-        chain_tracker: chain_tracker_mock, network: :mainnet
-      )
-    end
-
-    def verify_incoming(engine_arg, subject_tx)
-      described_class.new(engine: engine_arg, row: { id: nil }).send(
-        :verify_incoming_transaction!, subject_tx
-      )
-    end
-
-    it 'raises InvalidBeefError when chain_tracker is nil' do
-      subject_tx = instance_double(BSV::Transaction::Tx)
-      expect do
-        verify_incoming(engine, subject_tx)
-      end.to raise_error(BSV::Wallet::InvalidBeefError, /chain_tracker required/)
-    end
-
-    it 'delegates to Transaction::Tx#verify on success' do
-      subject_tx = instance_double(BSV::Transaction::Tx)
-      allow(subject_tx).to receive(:verify).with(chain_tracker: chain_tracker_mock).and_return(true)
-
-      expect(verify_incoming(engine_with_tracker, subject_tx)).to be true
-      expect(subject_tx).to have_received(:verify).with(chain_tracker: chain_tracker_mock)
-    end
-
-    it 'wraps VerificationError(:invalid_merkle_proof) into InvalidBeefError' do
-      subject_tx = instance_double(BSV::Transaction::Tx)
-      allow(subject_tx).to receive(:verify).and_raise(
-        BSV::Transaction::VerificationError.new(:invalid_merkle_proof, 'bad proof')
-      )
-
-      expect do
-        verify_incoming(engine_with_tracker, subject_tx)
-      end.to raise_error(BSV::Wallet::InvalidBeefError, /SPV verification failed.*bad proof.*invalid_merkle_proof/)
-    end
-
-    it 'wraps VerificationError(:script_failure) into InvalidBeefError' do
-      subject_tx = instance_double(BSV::Transaction::Tx)
-      allow(subject_tx).to receive(:verify).and_raise(
-        BSV::Transaction::VerificationError.new(:script_failure, 'script failed')
-      )
-
-      expect do
-        verify_incoming(engine_with_tracker, subject_tx)
-      end.to raise_error(BSV::Wallet::InvalidBeefError, /SPV verification failed.*script failed.*script_failure/)
-    end
-
-    it 'wraps VerificationError(:output_overflow) into InvalidBeefError' do
-      subject_tx = instance_double(BSV::Transaction::Tx)
-      allow(subject_tx).to receive(:verify).and_raise(
-        BSV::Transaction::VerificationError.new(:output_overflow, 'outputs exceed inputs')
-      )
-
-      expect do
-        verify_incoming(engine_with_tracker, subject_tx)
-      end.to raise_error(BSV::Wallet::InvalidBeefError, /SPV verification failed.*outputs exceed inputs.*output_overflow/)
-    end
-
-    it 'wraps VerificationError(:missing_source) into InvalidBeefError' do
-      subject_tx = instance_double(BSV::Transaction::Tx)
-      allow(subject_tx).to receive(:verify).and_raise(
-        BSV::Transaction::VerificationError.new(:missing_source, 'no source data')
-      )
-
-      expect do
-        verify_incoming(engine_with_tracker, subject_tx)
-      end.to raise_error(BSV::Wallet::InvalidBeefError, /SPV verification failed.*no source data.*missing_source/)
-    end
-  end
-
-  # --- TXID-only + verify integration (parse_beef + replace_known_ancestors!) ---
-
-  describe 'TXID-only + verify integration' do
-    # This validates the highest-risk assumption in the chain tracker pivot:
-    # that make_txid_only (which mutates the BEEF's @transactions list)
-    # does NOT invalidate in-memory source_transaction pointers wired by
-    # Beef.from_binary. Transaction::Tx#verify walks via input.source_transaction,
-    # not the BEEF list, so verification must succeed after TXID-only conversion.
-
-    let(:chain_tracker_mock) do
-      tracker = double('ChainTracker')
-      allow(tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
-      tracker
-    end
-
-    let(:engine_with_tracker) do
-      BSV::Wallet::Engine.new(
-        store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
-        chain_tracker: chain_tracker_mock, network: :mainnet
-      )
-    end
-
-    def build_merkle_path(tx, block_height)
-      sibling_hash = SecureRandom.random_bytes(32)
-      # Offset 2 (not 0) to avoid the coinbase maturity check —
-      # offset 0 is the coinbase position and requires 100-block depth.
-      BSV::Transaction::MerklePath.new(
-        block_height: block_height,
-        path: [[
-          BSV::Transaction::MerklePath::PathElement.new(offset: 2, hash: tx.wtxid, txid: true),
-          BSV::Transaction::MerklePath::PathElement.new(offset: 3, hash: sibling_hash)
-        ]]
-      )
-    end
-
-    it 'verify succeeds after replace_known_ancestors! converts ancestors to TXID-only' do
-      # Build a BEEF with a proven ancestor that the subject spends
-      ancestor = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
-      ancestor.add_output(BSV::Transaction::TransactionOutput.new(
-                            satoshis: 1000,
-                            locking_script: BSV::Script::Script.from_binary(OP_TRUE)
-                          ))
-      ancestor.merkle_path = build_merkle_path(ancestor, 800_000)
-
-      subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
-      subject_tx.add_input(BSV::Transaction::TransactionInput.new(
-                             prev_wtxid: ancestor.wtxid,
-                             prev_tx_out_index: 0,
-                             sequence: 0xFFFFFFFF,
-                             unlocking_script: BSV::Script::Script.from_binary(OP_TRUE)
-                           ))
-      subject_tx.inputs[0].source_transaction = ancestor
-      subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
-                              satoshis: 900,
-                              locking_script: BSV::Script::Script.from_binary(OP_TRUE)
-                            ))
-
-      beef = BSV::Transaction::Beef.new
-      beef.merge_transaction(ancestor)
-      beef.merge_transaction(subject_tx)
-      beef_data = beef.to_atomic_binary(subject_tx.wtxid)
-
-      helper = described_class.new(engine: engine_with_tracker, row: { id: nil })
-
-      # Step 1: Parse BEEF (wires source_transaction pointers)
-      parsed_beef, parsed_subject = helper.send(:parse_beef, beef_data)
-
-      # Verify the source_transaction pointer is wired
-      expect(parsed_subject.inputs[0].source_transaction).not_to be_nil
-      expect(parsed_subject.inputs[0].source_transaction.merkle_path).not_to be_nil
-
-      # Step 2: Replace known ancestors with TXID-only
-      # Pre-populate ProofStore so the ancestor is "known"
-      proof_store.save_proof(
-        wtxid: ancestor.wtxid,
-        proof: { raw_tx: ancestor.to_binary, merkle_path: ancestor.merkle_path.to_binary, height: 800_000 }
-      )
-      helper.send(:replace_known_ancestors!, parsed_beef, parsed_subject.wtxid, nil)
-
-      # Verify the BEEF entry was replaced with TXID-only
-      replaced = parsed_beef.transactions.find { |bt| bt.wtxid == ancestor.wtxid }
-      expect(replaced).to be_a(BSV::Transaction::Beef::TxidOnlyEntry)
-
-      # Verify the in-memory source_transaction pointer SURVIVES the BEEF list mutation
-      expect(parsed_subject.inputs[0].source_transaction).not_to be_nil
-      expect(parsed_subject.inputs[0].source_transaction.merkle_path).not_to be_nil
-
-      # Step 3: verify SUCCEEDS — the critical assertion
-      expect(parsed_subject.verify(chain_tracker: chain_tracker_mock)).to be true
-    end
-  end
+  # with the method itself. The +verify_incoming_transaction!+ /
+  # TXID-only-survival blocks that used to live here moved to
+  # +beef_importer_spec.rb+ in #357 along with the ingress helpers.
 end
