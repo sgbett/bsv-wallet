@@ -348,10 +348,10 @@ module BSV
         # stub hack went with the BeefImporter extraction in #357.) The guard
         # fails fast at construction rather than at the first +@row[:x]+ read.
         def initialize(engine:, row:)
-          unless row.is_a?(Hash) && row.key?(:id)
+          unless row.is_a?(Hash) && row[:id]
             detail = row.is_a?(Hash) ? "Hash with keys #{row.keys.inspect}" : row.class.to_s
             raise ArgumentError,
-                  "Action row must be a Store#action_to_hash hash with an :id (got #{detail})"
+                  "Action row must be a Store#action_to_hash hash with a non-nil :id (got #{detail})"
           end
 
           @engine = engine

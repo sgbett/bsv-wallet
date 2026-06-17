@@ -37,12 +37,17 @@ RSpec.describe BSV::Wallet::Engine::Action do
 
     it 'rejects a non-Hash row' do
       expect { described_class.new(engine: engine, row: Object.new) }
-        .to raise_error(ArgumentError, /action_to_hash hash with an :id/)
+        .to raise_error(ArgumentError, /action_to_hash hash with a non-nil :id/)
     end
 
     it 'rejects a Hash missing :id' do
       expect { described_class.new(engine: engine, row: { wtxid: nil }) }
-        .to raise_error(ArgumentError, /:id/)
+        .to raise_error(ArgumentError, /non-nil :id/)
+    end
+
+    it 'rejects a Hash with a nil :id (the removed { id: nil } stub shape)' do
+      expect { described_class.new(engine: engine, row: { id: nil }) }
+        .to raise_error(ArgumentError, /non-nil :id/)
     end
   end
 
