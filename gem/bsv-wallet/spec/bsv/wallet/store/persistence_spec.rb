@@ -2165,8 +2165,8 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#stale_action_ids' do
     it 'includes a stale pre-sign action — inputs locked, never signed (#326)' do
-      # The dominant leak: crash after lock_inputs, before sign_action, so
-      # wtxid is NULL. The old predicate's wtxid IS NOT NULL guard skipped this.
+      # The dominant leak: crash after lock_inputs, before sign_action. No
+      # wtxid, and (crucially) no broadcasts row — never entered the pipeline.
       output = create_funded_output(satoshis: 1000)
       result = store.create_action(action: { description: 'pre-sign' },
                                    inputs: [{ output_id: output.id, vin: 0 }])
@@ -2175,13 +2175,25 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.stale_action_ids(threshold: 3600, limit: 50)).to include(result[:id])
     end
 
-    it 'includes a stale signed-but-unpromoted action' do
+    it 'excludes a signed action — sign_action creates the broadcasts row (broadcast loops own it)' do
       result = store.create_action(action: { description: 'stale signed' })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
       BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
 
-      expect(store.stale_action_ids(threshold: 3600, limit: 50)).to include(result[:id])
+      expect(store.stale_action_ids(threshold: 3600, limit: 50)).not_to include(result[:id])
+    end
+
+    it 'excludes an action with an attempted broadcast — tx may be on-network (#379)' do
+      # Crash mid-submit: broadcast_at stamped, no status/promotion. Reaping
+      # would release inputs of a possibly-on-chain tx — a double-spend.
+      result = store.create_action(action: { description: 'in flight' })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      store.mark_broadcast_attempted(action_id: result[:id])
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
+
+      expect(store.stale_action_ids(threshold: 3600, limit: 50)).not_to include(result[:id])
     end
 
     it 'excludes within-threshold actions' do
@@ -2215,14 +2227,23 @@ RSpec.describe BSV::Wallet::Store, :store do
   end
 
   describe '#reap_action' do
-    it 'deletes a stale action and returns true' do
+    it 'deletes a stale pre-sign action and returns true' do
+      # Pre-sign: no broadcasts row, so the reaper owns it.
       result = store.create_action(action: { description: 'stale' })
-      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
-                        raw_tx: SecureRandom.random_bytes(100))
       BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
 
       expect(store.reap_action(action_id: result[:id])).to be(true)
       expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
+    end
+
+    it 'returns false and does not delete a signed action (broadcast loops own it, #379)' do
+      result = store.create_action(action: { description: 'signed' })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
+
+      expect(store.reap_action(action_id: result[:id])).to be(false)
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
     end
 
     it 'releases input locks back to the spendable set (#326)' do

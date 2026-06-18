@@ -811,17 +811,23 @@ module BSV
 
       # Discovery side of the reaper (#325). Returns up to +limit+ IDs of
       # abandoned actions ready to reclaim, for the Scheduler loop to push to
-      # Engine::Reaper. An action is reapable when it is past the staleness
-      # threshold, is not internal (+broadcast_intent != 'none'+ — the internal
-      # path is #327's concern), and has no promotions row (promoted actions
-      # are protected).
+      # Engine::Reaper.
       #
-      # The +wtxid IS NOT NULL+ guard the old bulk reaper carried is
-      # deliberately gone (#326): a crash after +lock_inputs+ but before
-      # +sign_action+ leaves +wtxid NULL+, and that pre-sign window is exactly
-      # where input locks leak. The staleness threshold (caller-supplied, keyed
-      # to the delayed_broadcast lifecycle) is what keeps live in-flight actions
-      # out — not the presence of a signing artifact.
+      # The reaper reclaims *invalid* actions — locked inputs that never
+      # entered the broadcast pipeline. An action is reapable when it is past
+      # the staleness threshold, is not internal (+broadcast_intent != 'none'+
+      # — #327's concern), has no promotions row (promoted is protected), and
+      # has **no broadcasts row**.
+      #
+      # The no-broadcasts-row clause is the ownership boundary (raised on
+      # PR #379): +sign_action+ creates the broadcasts row, so any signed
+      # broadcastable action is owned by the broadcast loops — success promotes
+      # it, terminal failure unwinds it via +reject_action+. Reaping one would
+      # release inputs of a tx that may already be on the network (a crash
+      # mid-submit leaves +broadcast_at+ stamped but no status) — a
+      # double-spend. So the reaper only touches what never reached the
+      # pipeline: the #326 pre-sign window (inputs locked, +sign_action+ never
+      # ran, hence no broadcasts row).
       #
       # @param threshold [Integer] age in seconds
       # @param limit [Integer] max IDs per discovery pass
@@ -831,11 +837,15 @@ module BSV
         promotion_exists = models::Promotion
                            .where(Sequel[:promotions][:action_id] => Sequel[:actions][:id])
                            .select(1)
+        broadcast_exists = models::Broadcast
+                           .where(Sequel[:broadcasts][:action_id] => Sequel[:actions][:id])
+                           .select(1)
 
         models::Action
           .where { created_at < cutoff }
           .where(Sequel.~(broadcast_intent: 'none'))
           .exclude(promotion_exists.exists)
+          .exclude(broadcast_exists.exists)
           .limit(limit)
           .select_map(:id)
       end
@@ -845,10 +855,12 @@ module BSV
       # UTXOs return to the spendable set.
       #
       # Re-validates inside the transaction: the action may have advanced past
-      # reapability (broadcast-accepted → promoted) between discovery and here.
-      # A +FOR UPDATE+ row lock closes the check-then-delete race so a
-      # concurrent promotion cannot slip in. Returns +false+ (no delete) when
-      # the action is no longer reapable — the caller emits +task.skipped+.
+      # reapability between discovery and here — promoted, or signed (which
+      # creates a broadcasts row and hands it to the broadcast loops). A
+      # +FOR UPDATE+ row lock closes the check-then-delete race: +sign_action+
+      # updates the action row, so it serialises against this lock. Returns
+      # +false+ (no delete) when the action is no longer reapable — the caller
+      # emits +task.skipped+.
       #
       # @param action_id [Integer]
       # @return [Boolean] true if reclaimed, false if no longer reapable
@@ -856,12 +868,16 @@ module BSV
         promotion_exists = models::Promotion
                            .where(Sequel[:promotions][:action_id] => action_id)
                            .select(1)
+        broadcast_exists = models::Broadcast
+                           .where(action_id: action_id)
+                           .select(1)
 
         @db.transaction do
           reapable = models::Action
                      .where(id: action_id)
                      .where(Sequel.~(broadcast_intent: 'none'))
                      .exclude(promotion_exists.exists)
+                     .exclude(broadcast_exists.exists)
                      .for_update
                      .first
           next false unless reapable
