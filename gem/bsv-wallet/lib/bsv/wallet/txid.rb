@@ -21,7 +21,8 @@ module BSV
     # See the wtxid/dtxid convention in CLAUDE.md.
     module Txid
       refine String do
-        # @return [String] 64-char display-order hex transaction ID (dtxid)
+        # @return [String] display-order hex (dtxid) — 64 chars for a
+        #   32-byte wtxid; 2×bytesize for any other length (no validation)
         def to_dtxid
           reverse.unpack1('H*')
         end

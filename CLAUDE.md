@@ -37,7 +37,7 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 
 ### Source
 
-`Transaction::Tx#wtxid` returns wire order (SDK v0.17.0+). `Transaction::Tx#txid` returns display order — a convenience method, never used in the data path. The `DisplayTxid` module provides `dtxid` on Sequel models.
+`Transaction::Tx#wtxid` returns wire order (SDK v0.17.0+). `Transaction::Tx#txid` returns display order — a convenience method, never used in the data path. The `BSV::Wallet::Txid` refinement provides `String#to_dtxid` (wtxid binary → dtxid hex) — the wallet's single home for the conversion; activate it per file with `using BSV::Wallet::Txid`.
 
 ## Transaction Class Convention: `Transaction::Tx` in prose
 
