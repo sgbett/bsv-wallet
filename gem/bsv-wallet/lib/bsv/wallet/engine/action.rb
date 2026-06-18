@@ -181,21 +181,41 @@ module BSV
           end
 
           pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
-          engine.store.sign_action(
-            action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
-            outputs: pending_outputs, change_outputs: change_outputs
-          )
-          engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+          if no_send
+            # Internal path: sign + proof + Phase-4 promotion happen as one
+            # atomic transition so a crash can't strand a signed-but-unpromoted
+            # action (#327) or promoted-but-unspendable change (#328). No
+            # broadcast to wait for, so the whole completion can commit at once.
+            promote_outputs = outputs&.any? ? build_output_specs(outputs, vout_mapping) : []
+            engine.store.complete_internal_action(
+              action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
+              sign_outputs: pending_outputs, change_outputs: change_outputs,
+              promote_outputs: promote_outputs
+            )
+          else
+            engine.store.sign_action(
+              action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
+              outputs: pending_outputs, change_outputs: change_outputs
+            )
+            engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+          end
           BSV.logger&.debug do
             "[Engine] create_action: dtxid=#{wtxid.to_dtxid} " \
               "outputs=#{outputs&.length || 0} change=#{change_outputs.length}"
           end
 
+          # Read-only, post-commit: the BEEF we hand back + its SPV honesty
+          # check. Under strict create_action (#296 Phase B), returning from
+          # create_action implies a valid BEEF in hand.
           atomic_beef = engine.hydrator.build_atomic_beef(raw_tx, action_result[:id])
-          # SPV honesty contract: refuse to return a BEEF a peer wouldn't
-          # accept. Under strict create_action (#296 Phase B), returning
-          # from create_action implies a valid BEEF in hand.
           engine.hydrator.validate_for_handoff!(atomic_beef, wtxid)
+
+          # Internal-path return: change outpoints for the no_send_change array.
+          if no_send
+            change = action.query_change_outpoints
+            return { txid: wtxid, tx: atomic_beef, no_send_change: change }
+          end
+
           # Push the just-built BEEF as a cache hint so the daemon's
           # broadcast skips both Store#find_action and the input source-data
           # JOIN. BEEF is a strict superset of EF for the subject tx (parent
@@ -207,16 +227,7 @@ module BSV
           # BSV_WALLET_HINTS_SOCKET; no-op otherwise. #269.
           # publish_beef_hint stays private on Engine; reach via +send+ rather
           # than making it part of the public surface for one caller.
-          engine.send(:publish_beef_hint, action_result[:id], atomic_beef) unless no_send
-
-          # Internal-path (no_send): synchronous Phase 4 — promote caller
-          # outputs, promote change to spendable, return change outpoints.
-          if no_send
-            action.promote_with_outputs(outputs, vout_mapping)
-            engine.store.promote_change_to_spendable(action_id: action_result[:id]) if change_outputs.any?
-            change = action.query_change_outpoints
-            return { txid: wtxid, tx: atomic_beef, no_send_change: change }
-          end
+          engine.send(:publish_beef_hint, action_result[:id], atomic_beef)
 
           # Phase 3 + 4: Broadcast inline. The broadcast worker (same one the
           # daemon's PULL loop uses) handles the 202 / 400 / 503 dispatch
@@ -299,7 +310,7 @@ module BSV
         end
 
         # Translate caller outputs into Store output specs. Used by both the
-        # synchronous internal path ({#promote_with_outputs}) and the
+        # synchronous internal path ({Store#complete_internal_action}) and the
         # send-path sign-time persistence ({Store#sign_action}).
         def self.build_output_specs(outputs, vout_mapping = nil)
           outputs.each_with_index.map do |out, idx|
@@ -416,24 +427,9 @@ module BSV
           { aborted: true }
         end
 
-        # Internal-path Phase 4: synchronously promote this action's outputs
-        # and create spendable rows in one shot. Used for incoming actions
-        # (broadcast intent 'none'): internalize_action, import_utxo
-        # self-payment, wbikd. Public because the +.create+ class-method
-        # orchestrator invokes it on the freshly-built instance; operates on
-        # the instance's own +@id+.
-        def promote_with_outputs(outputs, vout_mapping = nil)
-          return unless outputs&.any?
-
-          @engine.store.promote_action(
-            action_id: @id,
-            outputs: self.class.build_output_specs(outputs, vout_mapping)
-          )
-        end
-
-        # Outpoints (+dtxid.vout+) of this action's change outputs. Public for
-        # the same reason as +#promote_with_outputs+ — driven by +.create+;
-        # operates on the instance's own +@id+.
+        # Outpoints (+dtxid.vout+) of this action's change outputs. Public
+        # because the +.create+ class-method orchestrator invokes it on the
+        # freshly-built instance; operates on the instance's own +@id+.
         def query_change_outpoints
           action = @engine.store.find_action(id: @id)
           return [] unless action&.dig(:wtxid)
