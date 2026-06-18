@@ -820,12 +820,18 @@ RSpec.describe BSV::Wallet::Engine do
         unsigned.sign(0, signing_key)
         valid_unlock = unsigned.inputs[0].unlocking_script.to_binary
 
-        # No stub on validate_for_handoff! — strict egress validation must accept.
+        # No stub on validate_for_handoff! — and assert it actually ran by
+        # spying on the Beef.from_binary deserialise it performs (the only
+        # such call in the sign flow), letting it execute for real.
+        allow(BSV::Transaction::Beef).to receive(:from_binary).and_call_original
+
         result = engine_with_keys.sign_action(
           spends: { 0 => { unlocking_script: valid_unlock } },
           reference: create_result[:signable_transaction][:reference]
         )
 
+        # Strict validate_for_handoff! ran (it deserialises the egress BEEF).
+        expect(BSV::Transaction::Beef).to have_received(:from_binary).at_least(:once)
         expect(result[:txid].bytesize).to eq(32)
         parsed = parse_beef_tx(result[:tx])
         expect(parsed.inputs[0].unlocking_script.to_binary).to eq(valid_unlock)
