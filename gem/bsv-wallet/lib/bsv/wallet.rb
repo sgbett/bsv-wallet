@@ -48,6 +48,10 @@ module BSV
     # agree on the same token for status events to correlate.
     require_relative 'wallet/callback_token'
 
+    # Canonical wtxid → dtxid conversion (refinement: String#to_dtxid).
+    # Required eagerly so files can `using BSV::Wallet::Txid` at load time.
+    require_relative 'wallet/txid'
+
     # Key derivation (BRC-42/43)
     autoload :KeyDeriver, 'bsv/wallet/key_deriver'
 

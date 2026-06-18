@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+using BSV::Wallet::Txid
+
 module BSV
   module Wallet
     class Store
@@ -100,7 +102,7 @@ module BSV
 
         def log_unknown(wtxid, tx_status)
           BSV.logger&.warn do
-            dtxid = wtxid ? wtxid.reverse.unpack1('H*') : '(missing)'
+            dtxid = wtxid ? wtxid.to_dtxid : '(missing)'
             "[EventApplicator] unknown wtxid dtxid=#{dtxid} tx_status=#{tx_status}; skipping"
           end
           nil

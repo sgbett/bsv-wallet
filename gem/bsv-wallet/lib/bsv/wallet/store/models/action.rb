@@ -7,8 +7,6 @@ module BSV
     class Store
       module Models
         class Action < Sequel::Model
-          include DisplayTxid
-
           plugin :timestamps, update_on_create: true
 
           many_to_one  :tx_proof, class: 'BSV::Wallet::Store::Models::TxProof'

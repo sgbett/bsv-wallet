@@ -2,6 +2,8 @@
 
 require 'omq'
 
+using BSV::Wallet::Txid
+
 module BSV
   module Wallet
     class Engine
@@ -59,7 +61,7 @@ module BSV
             return
           end
 
-          dtxid = action[:wtxid].reverse.unpack1('H*')
+          dtxid = action[:wtxid].to_dtxid
           response = @broadcaster.get_tx_status(wtxid: action[:wtxid], dtxid: dtxid)
           latency_ms = ((Time.now - started_at) * 1000).round
 

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+using BSV::Wallet::Txid
+
 module BSV
   module Wallet
     class Engine
@@ -185,7 +187,7 @@ module BSV
           )
           engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
           BSV.logger&.debug do
-            "[Engine] create_action: dtxid=#{wtxid.reverse.unpack1('H*')} " \
+            "[Engine] create_action: dtxid=#{wtxid.to_dtxid} " \
               "outputs=#{outputs&.length || 0} change=#{change_outputs.length}"
           end
 
@@ -436,7 +438,7 @@ module BSV
           action = @engine.store.find_action(id: @id)
           return [] unless action&.dig(:wtxid)
 
-          dtxid = action[:wtxid].reverse.unpack1('H*')
+          dtxid = action[:wtxid].to_dtxid
           vouts = @engine.store.query_change_output_vouts(action_id: @id)
           vouts.map { |vout| "#{dtxid}.#{vout}" }
         end

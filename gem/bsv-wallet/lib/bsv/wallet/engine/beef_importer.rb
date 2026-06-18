@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+using BSV::Wallet::Txid
+
 module BSV
   module Wallet
     class Engine
@@ -237,7 +239,7 @@ module BSV
 
             next unless known_set.include?(wtxid) || @store.proof_exists?(wtxid: wtxid)
 
-            BSV.logger&.debug { "[Engine::BeefImporter] replace_known_ancestors!: replacing dtxid=#{wtxid.reverse.unpack1('H*')}" }
+            BSV.logger&.debug { "[Engine::BeefImporter] replace_known_ancestors!: replacing dtxid=#{wtxid.to_dtxid}" }
             beef.make_txid_only(wtxid)
             replaced_count += 1
           end
