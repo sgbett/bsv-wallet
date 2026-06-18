@@ -5,7 +5,7 @@
 1. **Outputs are the primary entity.** The outputs table is the wallet's ledger — the source of truth for "what does this wallet own?" Actions are the events that create and consume outputs.
 2. **State is derived, not stored.** An output's spendability is structural: no `spendable` boolean, no `state` enum. Spendable = has a row in `spendable` AND no input row claims it. Spent = an input row exists. Relinquished = no `spendable` row and no input row. Action status is derived from structural state + the `broadcast_intent` flag — no status column.
 3. **The inputs table is the lock mechanism.** Claiming an output for a transaction = INSERT into inputs. Releasing it = DELETE (via cascade). The UNIQUE constraint on `output_id` enforces single-spend atomically.
-4. **Outputs are write-once during their canonical lifetime.** The `outputs` table is the log — a permanent record of every output the wallet has ever participated in, including derivation data, locking script, and output type. Once an output joins the canonical UTXO set (signalled by a `promotions` row gating its `spendable` membership), it is never UPDATE'd or DELETE'd. Cleanup paths (`abort_action`, `fail_broadcast_action`, `reject_action`, reaper) only ever delete *never-promoted* rows, and only as part of an atomic action tear-down. All mutable state lives in relationship tables: basket membership in `output_baskets`, spending claims in `inputs`, tags in `output_tags`. The `spendable` table is the wallet — a minimal set of output_ids representing the current UTXO set. Outputs is the log; spendable is the wallet.
+4. **Outputs are write-once during their canonical lifetime.** The `outputs` table is the log — a permanent record of every output the wallet has ever participated in, including derivation data, locking script, and output type. Once an output joins the canonical UTXO set (signalled by a `promotions` row gating its `spendable` membership), it is never UPDATE'd or DELETE'd. Cleanup paths (`abort_action`, `reject_action`, reaper) only ever delete rows whose parent action is being torn down in the same atomic transaction — typically rows that never crossed the promotions gate. All mutable state lives in relationship tables: basket membership in `output_baskets`, spending claims in `inputs`, tags in `output_tags`. The `spendable` table is the wallet — a minimal set of output_ids representing the current UTXO set. Outputs is the log; spendable is the wallet.
 5. **The spendable table is the UTXO set.** A row in `spendable` means "this output can be spent." Pure set membership: `{id, output_id, action_id}` — no data columns. The presence of a row IS the spendable state. DELETE = spent or relinquished. The hot-path query scans this tiny table, then PK-joins to outputs for data.
 6. **Display metadata is vertically partitioned.** Application metadata lives in `output_details` (including the cosmetic `change` flag). Basket membership lives in `output_baskets`.
 7. **BRC-100 drives the vocabulary.** Transactions are called "actions" (BRC-100 term). The 28 wallet methods define what the storage must serve.
@@ -295,14 +295,14 @@ Engine::Broadcast#submit(action_id:)
 1. Stamps `broadcast_at = now()` and commits (`Store#mark_broadcast_attempted`) — the row leaves the push-discovery set and joins the poll set. **State flag:** `broadcast_at` is a state marker — NULL means the row is queued for submission; non-NULL means it has been submitted and is awaiting outcome. The `where(broadcast_at: nil)` predicate in `Store#mark_broadcast_attempted` prevents racing re-stamps within a single in-flight attempt; `Store#clear_broadcast_attempted` reverts the stamp on a 503 response so the row re-enters the queued state for clean retry. After a 503 + retry, `broadcast_at` reflects the retry timestamp rather than the first attempt.
 2. POSTs to ARC (network call — outside any DB transaction)
 3. On accepted ARC response: persists the status fields and triggers Phase 4 (`Store#promote_action_outputs`)
-4. On terminal rejection: `Store#fail_broadcast_action` deletes the action, its broadcasts row, and its output rows in one transaction (no promotions row exists at this point — Phase 4 only fires on a non-rejected ACK)
+4. On terminal rejection: `Engine::Broadcast#handle_submit_terminal` invokes `Store#reject_action`, which cascade-unwinds the action and (if a speculative promotion fired) any descendants that consumed its outputs (see **reject_action** below)
 5. On 503 backpressure: `Store#clear_broadcast_attempted` reverts `broadcast_at` to NULL (guarded against the concurrent-SSE-event race by a `tx_status IS NULL` predicate); the daemon's `pending_submissions` discovery picks the row back up next cycle
 
 If the process crashes between steps 1 and 2: the row sits with `broadcast_at IS NOT NULL AND tx_status IS NULL`. The daemon's poll loop finds it via `Store#pending_polls` and calls `Engine::Broadcast#poll_status` (`GET /tx/{txid}`) to resolve the outcome.
 
-If the process crashes between steps 2 and 3: same recovery — the poll loop converges the row to its terminal state and triggers Phase 4 or `fail_broadcast_action` accordingly.
+If the process crashes between steps 2 and 3: same recovery — the poll loop converges the row to its terminal state and triggers Phase 4 or `reject_action` accordingly.
 
-`Engine::Broadcast#poll_status` shares the Phase 4 trigger and the terminal-rejection trigger with `submit` — both call sites invoke `Store#promote_action_outputs` (idempotent via the `promotions` row — a second invocation finds the row present and returns immediately) or `Store#fail_broadcast_action`. The post-broadcast lifecycle is symmetric across the two entry points.
+`Engine::Broadcast#poll_status` shares the Phase 4 trigger and the terminal-rejection trigger with `submit` — both call sites invoke `Store#promote_action_outputs` (idempotent via the `promotions` row — a second invocation finds the row present and returns immediately) or `Store#reject_action`. The post-broadcast lifecycle is symmetric across the two entry points.
 
 #### Phase 4: Promote (atomic, milliseconds — triggered by broadcast acceptance on the send path, synchronous on the internal path)
 
@@ -354,30 +354,16 @@ The new wallet-owned outputs are live in the UTXO set. They're immediately avail
 
 #### Broadcast Failure
 
-If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Store#fail_broadcast_action` tears the action down in a single transaction. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see `docs/wallet-events.md`).
+If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Engine::Broadcast#handle_submit_terminal` calls `Store#reject_action` — the unified unwind path. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see `docs/wallet-events.md`).
 
-```
-BEGIN
-  -- No promotions row was ever recorded for this action (Phase 4 only
-  -- fires on a non-rejected ACK), so spendable is empty by construction.
-  -- Outputs exist from Phase 2 but are not in the UTXO set — the
-  -- spendable.action_id → promotions(action_id) FK structurally
-  -- prevented any insert.
-  DELETE FROM output_baskets WHERE action_id = ?
-  DELETE FROM output_details WHERE action_id = ?
-  DELETE FROM output_tags    WHERE output_id IN (
-    SELECT id FROM outputs WHERE action_id = ?
-  )
-  DELETE FROM outputs        WHERE action_id = ?
-  DELETE FROM broadcasts     WHERE action_id = ?
-  DELETE FROM actions        WHERE id = ?
-    -- ON DELETE CASCADE removes inputs, freeing the locked UTXOs
-COMMIT
-```
+`reject_action` covers both regimes in one function:
 
-Under #189 the FK on `outputs.action_id` is RESTRICT, so the explicit deletes above are required — there is no automatic CASCADE on outputs. The deletes are safe because outputs reachable by `fail_broadcast_action` are by construction never-promoted (no promotions row was recorded), so the spendable membership gate (§7) ensures they were never in the UTXO set.
+- **Phase 4 never fired** (rejection on the first ACK) — no promotions row exists, no spendable row exists (the FK gate structurally prevented it), no descendant could have consumed an output. Teardown clears the dependents, the broadcasts row, and the action; CASCADE on `inputs.action_id` releases the locked UTXOs.
+- **Phase 4 already fired speculatively** (optimistic promotion on an interim non-rejected status, e.g. `SEEN_ON_NETWORK`, that subsequently flipped to `REJECTED`) — a promotions row exists, spendable rows exist, and descendants may have consumed outputs. `reject_action` walks descendants forward first, then unwinds this action's promotion (cascading its spendable rows out), then completes the teardown.
 
-The companion path for an action that *was* promoted optimistically but later flipped to REJECTED — the speculative-promote rollback — is `Store#reject_action` (see **reject_action** below). `fail_broadcast_action` and `reject_action` cover disjoint pre- and post-promotion regimes.
+The single function discriminates internally on whether a promotions row is present — see **reject_action** below for the SQL sequence, the FK ordering, and the two refusal guards (`CannotRejectInternalActionError`, `CannotRejectAcceptedActionError`).
+
+Under #189 the FK on `outputs.action_id` is RESTRICT, so the explicit deletes are required regardless of regime — there is no automatic CASCADE on outputs.
 
 #### Reaper: TTL Cleanup
 
@@ -472,11 +458,18 @@ BEGIN
 COMMIT
 ```
 
-After a broadcasts row exists, `abortAction` is a no-op — the network may have the transaction. The terminal-rejection path (`Store#fail_broadcast_action`) handles cleanup when ARC definitively rejects, and `Store#reject_action` (see below) handles the speculative-promote rollback when an optimistically-promoted action later flips to REJECTED.
+After a broadcasts row exists, `abortAction` is a no-op — the network may have the transaction. `Store#reject_action` (see below) handles cleanup when ARC definitively rejects, whether or not Phase 4 has already fired speculatively.
 
-#### reject_action — speculative-promote rollback
+#### reject_action — terminal-rejection teardown
 
-`Store#reject_action` unwinds an action whose Phase 4 already fired on an optimistic ARC ACK (any non-rejected status admits the promotion under `auth_not_rejected`) but whose `tx_status` subsequently flipped to a terminal-rejected value. The promotion is gone, but children may have spent its outputs in the meantime — the rollback walks the action graph forward and tears every descendant down first.
+`Store#reject_action` is the unified entry point for tearing an action down on terminal rejection from ARC. It is called from `Engine::Broadcast#handle_submit_terminal` (the submit path) and from the resolution loop (the poll path) — both surfaces route into the same Store function.
+
+It handles two regimes through one implementation:
+
+- **Phase 4 never fired.** No promotions row, no spendable row (the `spendable → promotions` FK structurally prevented one), no descendant could have consumed an output. The forward-walk finds no children; the dependent sweep clears `output_baskets` / `output_details` / `output_tags` / `outputs` (RESTRICT requires explicit deletes); the broadcasts row goes; the action goes (CASCADE on `inputs.action_id` releases the locked UTXOs).
+- **Phase 4 already fired speculatively.** Promotion fired on an optimistic non-rejected ARC ACK (any status admitted by `auth_not_rejected`, e.g. `SEEN_ON_NETWORK`) and `tx_status` later flipped to a terminal-rejected value. Children may have spent the action's outputs in the meantime, so the rollback walks the action graph forward and tears every descendant down first.
+
+The pseudocode below is the recursive inner method (`do_reject`); `reject_action` wraps it in an outer transaction with an empty visited set.
 
 ```ruby
 do_reject(action_id, visited: Set)
@@ -596,7 +589,7 @@ COMMIT
 
 The reaper handles the same shape for actions abandoned past their TTL (see **Reaper: TTL Cleanup** above). Either way, no spendable rows existed so nothing has to be removed from the UTXO set — the cleanup is purely about the immutable log and the locked inputs.
 
-**Broadcast failure on the send path:** if ARC returns a terminal rejection after `signAction`, `Store#fail_broadcast_action` runs the same shape of cleanup as `abortAction` plus the broadcasts row. Under the restored 4-phase design, descendants of a failed transaction cannot exist — outputs only join the UTXO set after broadcast acceptance, so no child action could have consumed them. The batch-aware cascade for the future chained-send subsystem is covered by #192.
+**Broadcast failure on the send path:** if ARC returns a terminal rejection after `signAction`, `Store#reject_action` runs the unified teardown described above (see **reject_action** and **Broadcast Failure**). If Phase 4 never fired the action has no descendants (its outputs were never in the UTXO set) and the call collapses to a single-action sweep; if Phase 4 fired speculatively, the recursive forward-walk handles any descendants that consumed its outputs. The batch-aware cascade for the future chained-send subsystem is covered by #192.
 
 #### internalizeAction (incoming) — internal path
 
@@ -641,14 +634,14 @@ The output row stays in the log. The wallet forgets about it — no spendable en
 | Table | INSERT | UPDATE | DELETE | Character |
 |-------|--------|--------|--------|-----------|
 | **blocks** | proof arrival / internalize / chain tracker | never | never | Append-only — known block headers |
-| **actions** | createAction | wtxid (sign), tx_proof_id (proof) | abort, fail_broadcast, reject, reaper | Mutable — the lifecycle entity |
+| **actions** | createAction | wtxid (sign), tx_proof_id (proof) | abort, reject, reaper | Mutable — the lifecycle entity |
 | **inputs** | Phase 1 (lock) | never | CASCADE from action delete | Born and dies with its action |
-| **broadcasts** | Phase 2 (send path: alongside sign) | `broadcast_at`, ARC response updates | abort never reaches here; fail_broadcast / reject / CASCADE from action | Broadcast lifecycle |
-| **outputs** | Phase 2 (send path) / Phase 4 (internal path, alongside promotions row) | never | abort / fail_broadcast / reject / reaper (cleanup paths only — never during normal lifecycle) | Append-only log; row-existence in `promotions` gates UTXO membership |
+| **broadcasts** | Phase 2 (send path: alongside sign) | `broadcast_at`, ARC response updates | abort never reaches here; reject / CASCADE from action | Broadcast lifecycle |
+| **outputs** | Phase 2 (send path) / Phase 4 (internal path, alongside promotions row) | never | abort / reject / reaper (cleanup paths only — never during normal lifecycle) | Append-only log; row-existence in `promotions` gates UTXO membership |
 | **promotions** | Phase 4 (send path: on broadcast acceptance / internal path: in the create_action transaction) | `authorising_status` via ON UPDATE CASCADE from `broadcasts.tx_status` | reject (delete-before-broadcasts-delete ordering) / CASCADE from action | Existence-as-state authorisation gate |
-| **spendable** | Phase 4 (both paths) | never | spend / relinquish / reaper / fail_broadcast / CASCADE from promotions delete | The wallet — INSERT/DELETE only |
-| **output_baskets** | Phase 2 (send path) / Phase 4 (internal path) | basket move | relinquish / reaper / abort / fail_broadcast / reject | Mutable membership |
-| **output_details** | Phase 2 (send path) / Phase 4 (internal path) | never | reaper / abort / fail_broadcast / reject | Immutable metadata (until reaped) |
+| **spendable** | Phase 4 (both paths) | never | spend / relinquish / reaper / CASCADE from promotions delete | The wallet — INSERT/DELETE only |
+| **output_baskets** | Phase 2 (send path) / Phase 4 (internal path) | basket move | relinquish / reaper / abort / reject | Mutable membership |
+| **output_details** | Phase 2 (send path) / Phase 4 (internal path) | never | reaper / abort / reject | Immutable metadata (until reaped) |
 | **tx_proofs** | proof arrival / internalize | upsert on re-proof | never | Append-mostly |
 
 ---
@@ -686,7 +679,7 @@ end
 
 The append-only log. A permanent record of every output the wallet has ever participated in — both wallet-owned outputs (with derivation data) and outbound payments (with `output_type = 'outbound'`).
 
-**Write-once during canonical lifetime.** No per-row UPDATE happens, ever — the table has no mutable columns. Per-row DELETE happens *only* in cleanup paths (`abort_action`, `fail_broadcast_action`, `reject_action`, reaper) and *only* on rows whose parent action is being torn down in the same atomic transaction. Whether such a delete can reach a row is gated structurally: an output's parent action either has a `promotions` row (§7) — in which case it owns canonical UTXO membership and the cleanup paths refuse to touch it — or it doesn't, in which case the row never crossed the authorisation gate and tear-down is safe. Lifecycle exit at scale is partition drop, not per-row DELETE.
+**Write-once during canonical lifetime.** No per-row UPDATE happens, ever — the table has no mutable columns. Per-row DELETE happens *only* in cleanup paths (`abort_action`, `reject_action`, reaper) and *only* on rows whose parent action is being torn down in the same atomic transaction. Whether such a delete can reach a row is gated structurally: an output's parent action either has a `promotions` row (§7) — in which case it owns canonical UTXO membership and the cleanup paths refuse to touch it — or it doesn't, in which case the row never crossed the authorisation gate and tear-down is safe. Lifecycle exit at scale is partition drop, not per-row DELETE.
 
 Derivation data (spending authority) lives here because it's a fact about the output, recorded when the key is derived. This is separate from spendability — an output can have derivation data without being in the UTXO set.
 
@@ -723,7 +716,7 @@ At scale, partition by id range. Old partitions where all outputs have been spen
 
 **Canonical-state marker:** there isn't a column for it. An output is "in the canonical UTXO set" iff its parent action has a row in `promotions` (§7) and the output has a row in `spendable` (§8). The promotions row's existence IS the canonical-state fact (#307 / ADR-023). This replaces the earlier `outputs.promoted` boolean — which was a per-row UPDATE deviation from append-only — with row-existence in a separate table, gating UTXO membership declaratively.
 
-**Cascade:** `action_id ON DELETE RESTRICT` (under #189). Outputs cannot be orphaned by an action delete — the delete is rejected unless the dependent output rows are removed first. The cleanup paths (`abort_action`, `fail_broadcast_action`, `reject_action`, reaper) handle this explicitly. The combination of RESTRICT + the spendable→promotions gate makes the safety property mechanical: any output reached by a delete is by construction one whose action had no promotions row (or has just had it deleted as part of an in-flight `reject_action` cascade).
+**Cascade:** `action_id ON DELETE RESTRICT` (under #189). Outputs cannot be orphaned by an action delete — the delete is rejected unless the dependent output rows are removed first. The cleanup paths (`abort_action`, `reject_action`, reaper) handle this explicitly. The combination of RESTRICT + the spendable→promotions gate makes the safety property mechanical: any output reached by a delete is by construction one whose action had no promotions row (or has just had it deleted as part of an in-flight `reject_action` cascade).
 
 **Note:** No `updated_at` — outputs have no UPDATE path at all. No `basket_id` — basket membership is in `output_baskets`. No `wtxid` — derived via `output.action.wtxid` (always resolvable under the RESTRICT FK, since the parent action cannot be deleted while output rows remain). Column order optimized for alignment: 8-byte columns first, then variable-width, with 4-byte `vout` tucked after `locking_script` to reduce padding.
 
@@ -782,7 +775,7 @@ end
 
 Promote-authorisation as a row. The existence of a `promotions` row for an action IS the canonical-state fact: "this action's outputs are in the UTXO set." This replaces the earlier `outputs.promoted` boolean (#307 / ADR-023), which was a per-row UPDATE deviation from append-only outputs; with promotion modelled as row-existence, `outputs` returns to pure INSERT-only.
 
-A single row per action — promotion was always a per-action fact, and the PK is `action_id` (a non-auto PK that is also an FK to `actions`). The gate is declarative: two CHECKs on the row itself, plus two composite FKs that tie it to its parent action's intent and (for the send path) to a non-rejected broadcast status. There is no trigger anywhere — the hot send path (Phase 4) carries only the INSERT + the FK lookups (#221, ADR-019).
+A single row per action — promotion was always a per-action fact, and the PK is `action_id` (a non-auto PK that is also an FK to `actions`). The gate is declarative: two CHECKs on the row itself, plus two composite FKs that tie it to its parent action's intent and (for the send path) to a non-rejected broadcast status. **No trigger on the Phase 4 hot path** — the hot send path carries only the INSERT + the FK lookups (#221, ADR-019). A separate trigger does exist on the cold `actions` DELETE path — see *Defence-in-depth* below — but it never fires under normal traffic.
 
 | col | type | attributes |
 | --- | --- | --- |
