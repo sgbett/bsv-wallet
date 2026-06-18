@@ -809,36 +809,75 @@ module BSV
                          .insert(token: token, last_event_id: last_event_id, updated_at: Time.now)
       end
 
-      def reap_stale_actions(threshold:)
+      # Discovery side of the reaper (#325). Returns up to +limit+ IDs of
+      # abandoned actions ready to reclaim, for the Scheduler loop to push to
+      # Engine::Reaper. An action is reapable when it is past the staleness
+      # threshold, is not internal (+broadcast_intent != 'none'+ — the internal
+      # path is #327's concern), and has no promotions row (promoted actions
+      # are protected).
+      #
+      # The +wtxid IS NOT NULL+ guard the old bulk reaper carried is
+      # deliberately gone (#326): a crash after +lock_inputs+ but before
+      # +sign_action+ leaves +wtxid NULL+, and that pre-sign window is exactly
+      # where input locks leak. The staleness threshold (caller-supplied, keyed
+      # to the delayed_broadcast lifecycle) is what keeps live in-flight actions
+      # out — not the presence of a signing artifact.
+      #
+      # @param threshold [Integer] age in seconds
+      # @param limit [Integer] max IDs per discovery pass
+      # @return [Array<Integer>] stale action IDs
+      def stale_action_ids(threshold:, limit:)
         cutoff = Time.now - threshold
-        # Only PROMOTED actions are protected from the reaper. An unpromoted
-        # action (staged by deferred-sign, never broadcast-accepted, so no
-        # promotions row) is the kind of leak the reaper exists to clean up.
-        # Under the old predicate any output row blocked the reaper, so
-        # abandoned deferred actions kept their inputs locked indefinitely.
         promotion_exists = models::Promotion
                            .where(Sequel[:promotions][:action_id] => Sequel[:actions][:id])
                            .select(1)
 
-        @db.transaction do
-          stale = models::Action
-                  .where { created_at < cutoff }
-                  .where(Sequel.~(broadcast_intent: 'none'))
-                  .where(Sequel.lit('wtxid IS NOT NULL'))
-                  .exclude(promotion_exists.exists)
+        models::Action
+          .where { created_at < cutoff }
+          .where(Sequel.~(broadcast_intent: 'none'))
+          .exclude(promotion_exists.exists)
+          .limit(limit)
+          .select_map(:id)
+      end
 
-          stale_ids = stale.select(:id)
-          # outputs.action_id is RESTRICT (#189), so unpromoted output rows
-          # and their dependents must be cleared before the action delete.
-          output_ids_in_stale = models::Output.where(action_id: stale_ids).select(:id)
-          models::OutputBasket.where(action_id: stale_ids).delete
-          models::OutputDetail.where(action_id: stale_ids).delete
-          models::OutputTag.where(output_id: output_ids_in_stale).delete
-          models::Output.where(action_id: stale_ids).delete
+      # Reclaim a single abandoned action (#325). Tears the action down in one
+      # transaction and deletes it, cascading its +inputs+ rows so the locked
+      # UTXOs return to the spendable set.
+      #
+      # Re-validates inside the transaction: the action may have advanced past
+      # reapability (broadcast-accepted → promoted) between discovery and here.
+      # A +FOR UPDATE+ row lock closes the check-then-delete race so a
+      # concurrent promotion cannot slip in. Returns +false+ (no delete) when
+      # the action is no longer reapable — the caller emits +task.skipped+.
+      #
+      # @param action_id [Integer]
+      # @return [Boolean] true if reclaimed, false if no longer reapable
+      def reap_action(action_id:)
+        promotion_exists = models::Promotion
+                           .where(Sequel[:promotions][:action_id] => action_id)
+                           .select(1)
+
+        @db.transaction do
+          reapable = models::Action
+                     .where(id: action_id)
+                     .where(Sequel.~(broadcast_intent: 'none'))
+                     .exclude(promotion_exists.exists)
+                     .for_update
+                     .first
+          next false unless reapable
+
+          # outputs.action_id is RESTRICT (#189), so unpromoted output rows and
+          # their dependents must be cleared before the action delete.
+          output_ids = models::Output.where(action_id: action_id).select(:id)
+          models::OutputBasket.where(action_id: action_id).delete
+          models::OutputDetail.where(action_id: action_id).delete
+          models::OutputTag.where(output_id: output_ids).delete
+          models::Output.where(action_id: action_id).delete
           # broadcasts.action_id has no CASCADE FK today (tracked in #189),
           # so clear the broadcasts row before the action.
-          models::Broadcast.where(action_id: stale_ids).delete
-          stale.delete
+          models::Broadcast.where(action_id: action_id).delete
+          models::Action.where(id: action_id).delete # cascades inputs, releasing locks
+          true
         end
       end
 

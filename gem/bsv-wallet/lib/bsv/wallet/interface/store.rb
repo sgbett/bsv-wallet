@@ -594,12 +594,23 @@ module BSV
 
         # --- Reaper ---
 
-        # Delete stale unsigned or unbroadcast actions older than the threshold.
-        # CASCADE deletes inputs, releasing locked UTXOs.
+        # Discovery: IDs of abandoned actions ready to reclaim (past threshold,
+        # not internal, not promoted). Pushed to Engine::Reaper by the Scheduler.
         #
         # @param threshold [Integer] age in seconds
-        # @return [Integer] number of actions reaped
-        def reap_stale_actions(threshold:)
+        # @param limit [Integer] max IDs per discovery pass
+        # @return [Array<Integer>] stale action IDs
+        def stale_action_ids(threshold:, limit:)
+          raise NotImplementedError
+        end
+
+        # Reclaim one abandoned action: tear it down and delete it in a single
+        # transaction, cascading inputs to release locked UTXOs. Re-validates
+        # reapability under a row lock; returns false if no longer reapable.
+        #
+        # @param action_id [Integer]
+        # @return [Boolean] true if reclaimed, false if no longer reapable
+        def reap_action(action_id:)
           raise NotImplementedError
         end
       end

@@ -51,6 +51,12 @@ module BSV
       # Optional cross-process EF hint socket path. +nil+ = feature off.
       attr_accessor :hints_socket
 
+      # Reaper staleness threshold (seconds). An action with locked inputs
+      # but no terminal state older than this is reclaimed by the daemon's
+      # reaper loop (#325/#326). Must exceed the delayed_broadcast lifecycle
+      # window so live in-flight actions are never reaped. Default 1 hour.
+      attr_accessor :reap_threshold
+
       # Fee model the wallet charges and estimates against. The single
       # source the TxBuilder (build_change) and estimate_sweep_fee both
       # read, so the two can never drift (#342). Default 100 sats/kb;
@@ -66,6 +72,7 @@ module BSV
         @daemon_pool_size = Integer(ENV.fetch('BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS', '16'))
         @tx_cache_size    = Integer(ENV.fetch('BSV_WALLET_TX_CACHE_SIZE', '1000'))
         @hints_socket     = blank_to_nil(ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil))
+        @reap_threshold   = Integer(ENV.fetch('BSV_WALLET_REAP_THRESHOLD_S', '3600'))
         @fee_model        = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(
           value: Integer(ENV.fetch('BSV_WALLET_FEE_RATE_SATS_PER_KB', '100'))
         )

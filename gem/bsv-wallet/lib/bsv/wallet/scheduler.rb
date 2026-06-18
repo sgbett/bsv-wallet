@@ -22,6 +22,13 @@ module BSV
       DEFAULT_SHUTDOWN_TIMEOUT_S = 30.0
       SHUTDOWN_POLL_INTERVAL_S = 0.1
 
+      # Reaper cadence. Cleanup is not latency-sensitive — run it slowly, well
+      # off the broadcast hot path. The staleness threshold lives in Config
+      # (the load-bearing knob, keyed to the delayed_broadcast lifecycle); the
+      # limit bounds reclaim per pass so a backlog drains in batches.
+      REAP_INTERVAL_S = 60
+      REAP_LIMIT = 50
+
       def initialize(store:)
         @store = store
         @stopping = false
@@ -54,6 +61,14 @@ module BSV
         # Proof acquisition — every 30 seconds
         schedule(task: task, name: 'proof_acquisition', endpoint: 'inproc://proofs.pull', interval: 30) do
           Engine::TxProof.pending(@store, limit: 10)
+        end
+
+        # Reaper — reclaim abandoned actions (inputs locked, never carried to a
+        # terminal state). Slow cadence; cleanup is not latency-sensitive. The
+        # threshold (Config#reap_threshold) keeps live in-flight actions out.
+        # See #325 / #326.
+        schedule(task: task, name: 'reaper', endpoint: Engine::Reaper::ENDPOINT, interval: REAP_INTERVAL_S) do
+          Engine::Reaper.pending(@store, limit: REAP_LIMIT, threshold: BSV::Wallet.config.reap_threshold)
         end
       end
 
