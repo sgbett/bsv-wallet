@@ -89,6 +89,13 @@ module BSV
         # almost always an upstream proof-closure gap that should have
         # been caught at import or +save_beef_proofs+ time.
         def validate_for_handoff!(atomic_beef, subject_wtxid)
+          # Deliberate: re-parse the serialised bytes rather than verifying
+          # the in-memory tx build_atomic_beef already wired. This checks
+          # exactly what a peer receives over the wire — the SPV-honesty
+          # contract — not just our in-memory graph. The duplicate parse +
+          # walk stays below broadcast latency, so the correctness assurance
+          # is well worth the cost; do NOT rewrite this to verify the
+          # in-memory object without re-opening that trade-off (#299).
           beef = BSV::Transaction::Beef.from_binary(atomic_beef)
           subject_entry = beef.transactions.find { |e| e.wtxid == subject_wtxid }
           unless subject_entry&.transaction
