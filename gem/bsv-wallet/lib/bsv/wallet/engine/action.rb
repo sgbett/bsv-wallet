@@ -80,7 +80,7 @@ module BSV
           # through FundingStrategy against this row's +action_id+; an
           # input-less action row is already routine (the deferred path
           # and the no-output path both produce one). See option (a) in
-          # `reference/createaction-lifecycle.md`.
+          # `reference/action-lifecycle.md`.
           action_result = engine.store.create_action(
             action: {
               description: description, broadcast_intent: broadcast,
