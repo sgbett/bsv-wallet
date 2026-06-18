@@ -5,7 +5,7 @@
 1. **Outputs are the primary entity.** The outputs table is the wallet's ledger — the source of truth for "what does this wallet own?" Actions are the events that create and consume outputs.
 2. **State is derived, not stored.** An output's spendability is structural: no `spendable` boolean, no `state` enum. Spendable = has a row in `spendable` AND no input row claims it. Spent = an input row exists. Relinquished = no `spendable` row and no input row. Action status is derived from structural state + the `broadcast_intent` flag — no status column.
 3. **The inputs table is the lock mechanism.** Claiming an output for a transaction = INSERT into inputs. Releasing it = DELETE (via cascade). The UNIQUE constraint on `output_id` enforces single-spend atomically.
-4. **Outputs are immutable (append-only).** The `outputs` table is the log — a permanent record of every output the wallet has ever participated in, including derivation data, locking script, and output type. It is never UPDATE'd or DELETE'd. All mutable state lives in relationship tables: basket membership in `output_baskets`, spending claims in `inputs`, tags in `output_tags`. The `spendable` table is the wallet — a minimal set of output_ids representing the current UTXO set. Outputs is the log; spendable is the wallet.
+4. **Outputs are write-once during their canonical lifetime.** The `outputs` table is the log — a permanent record of every output the wallet has ever participated in, including derivation data, locking script, and output type. Once an output joins the canonical UTXO set (signalled by a `promotions` row gating its `spendable` membership), it is never UPDATE'd or DELETE'd. Cleanup paths (`abort_action`, `fail_broadcast_action`, `reject_action`, reaper) only ever delete *never-promoted* rows, and only as part of an atomic action tear-down. All mutable state lives in relationship tables: basket membership in `output_baskets`, spending claims in `inputs`, tags in `output_tags`. The `spendable` table is the wallet — a minimal set of output_ids representing the current UTXO set. Outputs is the log; spendable is the wallet.
 5. **The spendable table is the UTXO set.** A row in `spendable` means "this output can be spent." Pure set membership: `{id, output_id, action_id}` — no data columns. The presence of a row IS the spendable state. DELETE = spent or relinquished. The hot-path query scans this tiny table, then PK-joins to outputs for data.
 6. **Display metadata is vertically partitioned.** Application metadata lives in `output_details` (including the cosmetic `change` flag). Basket membership lives in `output_baskets`.
 7. **BRC-100 drives the vocabulary.** Transactions are called "actions" (BRC-100 term). The 28 wallet methods define what the storage must serve.
@@ -135,16 +135,16 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 - `idx_actions_broadcast_intent` on `(broadcast_intent)` — worker queries scan for actions pending broadcast
 - `UNIQUE (id, broadcast_intent)` — composite FK target for `broadcasts.intent` (atomically ties broadcast rows to their action's intent; see **Broadcasts** below)
 
-**No status column.** Status is derived from structural state. The send path (`broadcast_intent IN ('delayed', 'inline')`) and the internal path (`broadcast_intent = 'none'`) share the table, and the derivation distinguishes them via the `promoted` flag on outputs (see **Outputs** below):
+**No status column.** Status is derived from structural state. The send path (`broadcast_intent IN ('delayed', 'inline')`) and the internal path (`broadcast_intent = 'none'`) share the table, and the derivation distinguishes them via the existence of a `promotions` row for the action (see **Promotions** below):
 
 | Structural state | Derived status |
 |---|---|
 | `wtxid IS NULL` | unsigned — waiting for signAction |
 | `wtxid IS NOT NULL`, `tx_proof_id IS NOT NULL` | completed |
 | `wtxid IS NOT NULL`, `broadcast_intent = 'none'`, no `tx_proof_id` | internal — non-network action (incoming, wbikd, import, send_payment) |
-| `wtxid IS NOT NULL`, send path, at least one output with `promoted = true`, no `tx_proof_id` | unproven — waiting for proof |
+| `wtxid IS NOT NULL`, send path, `EXISTS (promotions WHERE action_id = id)`, no `tx_proof_id` | unproven — waiting for proof |
 | `wtxid IS NOT NULL`, send path, broadcast row has `tx_status = 'REJECTED'` | failed — network rejected |
-| `wtxid IS NOT NULL`, send path, broadcast row exists, no promoted outputs | sending — broadcast in progress |
+| `wtxid IS NOT NULL`, send path, broadcast row exists, no promotions row | sending — broadcast in progress |
 | `wtxid IS NOT NULL`, send path, no broadcast row | unprocessed — broadcast pending |
 
 ```ruby
@@ -159,10 +159,9 @@ class Wallet::Action < Sequel::Model
     return :unsigned   if wtxid.nil?
     return :completed  if tx_proof_id
     return :internal   if values[:broadcast_intent] == 'none'
-    # Send-path outputs are persisted at sign time with promoted: false.
-    # A row flips to promoted: true only when broadcast was accepted —
-    # the :unproven gate.
-    return :unproven   if outputs_dataset.where(promoted: true).any?
+    # A promotions row is recorded only at Phase 4, when the broadcast
+    # was accepted (#307 / ADR-023) — its existence is the :unproven gate.
+    return :unproven   if Wallet::Promotion.where(action_id: id).any?
     return :failed     if broadcast_entry&.tx_status == 'REJECTED'
     return :sending    if broadcast_entry
     :unprocessed
@@ -197,6 +196,7 @@ When ARC reports MINED with a `merklePath`, the broadcast handler creates a `tx_
 
 **Constraints:**
 - `UNIQUE (action_id)` — one broadcast record per action
+- `UNIQUE (action_id, tx_status)` — composite UNIQUE serving as the FK target for `promotions(action_id, authorising_status)`. Trivially satisfied (`action_id` is already unique), but the pair must be declared as a key for the dependent FK to resolve.
 - `FOREIGN KEY (action_id, intent) REFERENCES actions (id, broadcast_intent) ON UPDATE RESTRICT` — composite FK ties the broadcast row to its parent action's intent atomically; `ON UPDATE RESTRICT` makes the immutability of `actions.broadcast_intent` an enforced schema invariant rather than a code-only convention
 - `CHECK intent != 'none'` — actions with `broadcast_intent = 'none'` are internal-path and cannot have a broadcast row
 - `CHECK block_hash IS NULL OR length(block_hash) = 32`
@@ -207,6 +207,8 @@ When ARC reports MINED with a `merklePath`, the broadcast handler creates a `tx_
 **`callback_token`:** Wallet-generated opaque string sent to ARC in the `X-CallbackToken` header at submission time. ARC's `/events` SSE endpoint echoes the token on each status event — the listener uses it to look up the originating broadcast row without round-tripping a txid lookup. Nullable: rows broadcast before the SSE listener landed have none.
 
 **`tx_status`:** ARC's transaction lifecycle status. Postgres uses the `tx_status` ENUM (`CREATE TYPE` above) — the canonical vocabulary lives in ARC's `metamorph_api.proto`. SQLite gets an equivalent CHECK constraint with the same set. `IMMUTABLE` is appended for the wallet's terminal-status set (anticipates an ARC addition; referenced by `Broadcast::TERMINAL_STATUSES`). Column positioned after `arc_status` for efficient row padding in Postgres.
+
+**Mutable-target consequence for promotions:** `promotions(action_id, authorising_status)` references `broadcasts(action_id, tx_status) ON UPDATE CASCADE`. As `tx_status` advances through the lifecycle (RECEIVED → SEEN_ON_NETWORK → MINED), the cascade keeps `promotions.authorising_status` synced — `broadcasts.tx_status` stays the single source of truth, with no duplicated "accepted" latch. A flip to `REJECTED` while a promotions row exists would cascade into `auth_not_rejected` and fail the CHECK; `Store#reject_action` therefore deletes the promotions row before the broadcasts row is removed (see **reject_action** below). See **Promotions** (§7) for the full FK gate.
 
 **ARC tx_status lifecycle:**
 ```
@@ -256,10 +258,12 @@ If `signAndProcess: false`, this phase is deferred — see **Deferred Signing �
 -- signing happens in memory (key derivation, ECDSA, script templates)
 BEGIN
   UPDATE actions SET wtxid = ?, raw_tx = ? WHERE id = ?
-  -- send path also writes the output rows with promoted = false here
+  -- send path writes the output rows here. No "promoted" flag — the row's
+  -- canonical-UTXO membership is gated by the absence of a promotions row,
+  -- not by a column on outputs.
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,
                        output_type, derivation_prefix, derivation_suffix,
-                       sender_identity_key, promoted = false)
+                       sender_identity_key)
   -- broadcasts row appears here too (intent != 'none'), pre-stamped for
   -- the daemon push-discovery loop
   INSERT INTO broadcasts (action_id)
@@ -268,11 +272,11 @@ COMMIT
 
 **Database state after Phase 2 (send path):**
 - `actions`: `wtxid` set, `raw_tx` set — the action is signed and ready for broadcast
-- `outputs`: rows for every output with `promoted = false` — the immutable record exists but the outputs are **not** in the canonical UTXO set yet
-- `spendable`: untouched — no UTXO claims until Phase 4
+- `outputs`: rows for every output — the immutable record exists, but no `promotions` row exists yet so the outputs are **not** in the canonical UTXO set
+- `spendable`: untouched — the `spendable.action_id → promotions(action_id)` FK structurally prevents any spendable row from existing without authorisation (Phase 4)
 - `broadcasts`: one row, `broadcast_at IS NULL` (the daemon will stamp it before POSTing to ARC)
 
-**Internal path (`broadcast_intent = 'none'`)** does not produce a Phase 3. Phases 1, 2, and 4 commit synchronously inside `create_action` (see **internalizeAction** and the equivalent porcelain paths below). Internal outputs are written with `promoted = true` and `spendable` rows inserted in the same transaction. No broadcasts row is ever created.
+**Internal path (`broadcast_intent = 'none'`)** does not produce a Phase 3. Phases 1, 2, and 4 commit synchronously inside `create_action` (see **internalizeAction** and the equivalent porcelain paths below). Internal outputs are written, a `promotions` row is inserted with `intent = 'none'` and `authorising_status = NULL` (the `promo_path` CHECK admits this combination), and `spendable` rows are inserted in the same transaction. No broadcasts row is ever created.
 
 #### Phase 3: Broadcast (managed by Engine::Broadcast)
 
@@ -291,25 +295,32 @@ Engine::Broadcast#submit(action_id:)
 1. Stamps `broadcast_at = now()` and commits (`Store#mark_broadcast_attempted`) — the row leaves the push-discovery set and joins the poll set. **State flag:** `broadcast_at` is a state marker — NULL means the row is queued for submission; non-NULL means it has been submitted and is awaiting outcome. The `where(broadcast_at: nil)` predicate in `Store#mark_broadcast_attempted` prevents racing re-stamps within a single in-flight attempt; `Store#clear_broadcast_attempted` reverts the stamp on a 503 response so the row re-enters the queued state for clean retry. After a 503 + retry, `broadcast_at` reflects the retry timestamp rather than the first attempt.
 2. POSTs to ARC (network call — outside any DB transaction)
 3. On accepted ARC response: persists the status fields and triggers Phase 4 (`Store#promote_action_outputs`)
-4. On terminal rejection: `Store#fail_broadcast_action` deletes the action, its broadcasts row, and its (unpromoted) output rows in one transaction
+4. On terminal rejection: `Store#fail_broadcast_action` deletes the action, its broadcasts row, and its output rows in one transaction (no promotions row exists at this point — Phase 4 only fires on a non-rejected ACK)
 5. On 503 backpressure: `Store#clear_broadcast_attempted` reverts `broadcast_at` to NULL (guarded against the concurrent-SSE-event race by a `tx_status IS NULL` predicate); the daemon's `pending_submissions` discovery picks the row back up next cycle
 
 If the process crashes between steps 1 and 2: the row sits with `broadcast_at IS NOT NULL AND tx_status IS NULL`. The daemon's poll loop finds it via `Store#pending_polls` and calls `Engine::Broadcast#poll_status` (`GET /tx/{txid}`) to resolve the outcome.
 
 If the process crashes between steps 2 and 3: same recovery — the poll loop converges the row to its terminal state and triggers Phase 4 or `fail_broadcast_action` accordingly.
 
-`Engine::Broadcast#poll_status` shares the Phase 4 trigger and the terminal-rejection trigger with `submit` — both call sites invoke `Store#promote_action_outputs` (idempotent via the `promoted` flag) or `Store#fail_broadcast_action`. The post-broadcast lifecycle is symmetric across the two entry points.
+`Engine::Broadcast#poll_status` shares the Phase 4 trigger and the terminal-rejection trigger with `submit` — both call sites invoke `Store#promote_action_outputs` (idempotent via the `promotions` row — a second invocation finds the row present and returns immediately) or `Store#fail_broadcast_action`. The post-broadcast lifecycle is symmetric across the two entry points.
 
 #### Phase 4: Promote (atomic, milliseconds — triggered by broadcast acceptance on the send path, synchronous on the internal path)
 
-On the **send path**, Phase 4 fires from `Engine::Broadcast#submit` or `#poll_status` when ARC returns an accepted status (`SEEN_ON_NETWORK`, `ACCEPTED_BY_NETWORK`, `MINED`, `IMMUTABLE`). The output rows already exist from Phase 2 — the work is to flip them into the canonical UTXO set:
+On the **send path**, Phase 4 fires from `Engine::Broadcast#submit` or `#poll_status` when ARC returns an accepted status (`SEEN_ON_NETWORK`, `ACCEPTED_BY_NETWORK`, `MINED`, `IMMUTABLE`). The output rows already exist from Phase 2 — the work is to record the authorisation and bring the wallet-owned outputs into the canonical UTXO set:
 
 ```
 BEGIN
-  -- Flip the membership marker on every output of this action.
-  -- Idempotent: a second invocation finds no promoted = false rows.
-  UPDATE outputs SET promoted = true WHERE action_id = ? AND promoted = false
-  -- Wallet-owned outputs join the UTXO set.
+  -- Record promote-authorisation as a row. The composite FK
+  -- (action_id, authorising_status) → broadcasts (action_id, tx_status)
+  -- requires that pair to currently exist in broadcasts; the auth_not_rejected
+  -- CHECK forbids REJECTED / DOUBLE_SPEND_ATTEMPTED.
+  INSERT INTO promotions (action_id, intent, authorising_status)
+    VALUES (?, ?, ?)        -- intent = the action's broadcast_intent,
+                            -- authorising_status = the current tx_status
+    ON CONFLICT (action_id) DO NOTHING
+  -- Wallet-owned outputs join the UTXO set. The spendable.action_id FK
+  -- to promotions(action_id) means this insert only succeeds because the
+  -- promotions row was just written.
   INSERT INTO spendable (output_id, action_id)
     SELECT id, action_id FROM outputs
      WHERE action_id = ?
@@ -324,16 +335,18 @@ BEGIN
 COMMIT
 ```
 
-On the **internal path** (`broadcast_intent = 'none'`), Phase 4 is committed inside the same transaction as Phase 1+2 by `Store#promote_action`. Output rows are written directly with `promoted = true` and spendable rows are inserted alongside them. No broadcast acceptance trigger is involved.
+On the **internal path** (`broadcast_intent = 'none'`), Phase 4 is committed inside the same transaction as Phase 1+2 by `Store#promote_action`. The promotions row is inserted with `intent = 'none'` and `authorising_status = NULL` (the `promo_path` CHECK admits the internal disjunction; the composite FK to `broadcasts` skips on NULL via MATCH SIMPLE). Spendable rows are inserted alongside. No broadcast acceptance trigger is involved.
 
 **Database state after Phase 4 (send path):**
-- `outputs`: rows already existed from Phase 2; `promoted` flipped `false → true`.
-- `spendable`: new rows for wallet-owned outputs. Outbound outputs never get a spendable row (trigger enforced).
+- `outputs`: unchanged from Phase 2 — same rows, untouched.
+- `promotions`: one new row, `authorising_status = ` the broadcast's current tx_status. The row's existence IS the canonical-state fact (#307 / ADR-023).
+- `spendable`: new rows for wallet-owned outputs. Outbound outputs never get a spendable row (`prevent_outbound_spendable` trigger).
 - `tx_proofs`: proof created if ARC returned MINED (proof arrives for free).
 - `actions`: `tx_proof_id` set if proof arrived with broadcast response.
 
 **Database state after Phase 4 (internal path):**
-- `outputs`: new rows for all transaction outputs, written with `promoted = true`.
+- `outputs`: new rows for all transaction outputs.
+- `promotions`: one new row, `intent = 'none'`, `authorising_status = NULL`.
 - `spendable`: new rows for wallet-owned outputs.
 - No broadcasts row, no proof from this path (incoming actions carry their proof; wbikd / send_payment have no on-chain proof requirement at this stage).
 
@@ -341,12 +354,15 @@ The new wallet-owned outputs are live in the UTXO set. They're immediately avail
 
 #### Broadcast Failure
 
-If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Store#fail_broadcast_action` deletes the action, its broadcasts row, and its unpromoted output rows in a single transaction. CASCADE on inputs frees the locked UTXOs. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see `docs/wallet-events.md`).
+If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Store#fail_broadcast_action` tears the action down in a single transaction. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see `docs/wallet-events.md`).
 
 ```
 BEGIN
-  -- Send-path outputs are promoted = false at this point, so they
-  -- have no spendable rows. Clear the dependents, then the rows.
+  -- No promotions row was ever recorded for this action (Phase 4 only
+  -- fires on a non-rejected ACK), so spendable is empty by construction.
+  -- Outputs exist from Phase 2 but are not in the UTXO set — the
+  -- spendable.action_id → promotions(action_id) FK structurally
+  -- prevented any insert.
   DELETE FROM output_baskets WHERE action_id = ?
   DELETE FROM output_details WHERE action_id = ?
   DELETE FROM output_tags    WHERE output_id IN (
@@ -359,7 +375,9 @@ BEGIN
 COMMIT
 ```
 
-Under #189 the FK on `outputs.action_id` is RESTRICT, so the explicit deletes above are required — there is no automatic CASCADE on outputs. The deletes are safe because send-path outputs reachable by `fail_broadcast_action` are by construction `promoted = false`, never claimed by another input.
+Under #189 the FK on `outputs.action_id` is RESTRICT, so the explicit deletes above are required — there is no automatic CASCADE on outputs. The deletes are safe because outputs reachable by `fail_broadcast_action` are by construction never-promoted (no promotions row was recorded), so the spendable membership gate (§7) ensures they were never in the UTXO set.
+
+The companion path for an action that *was* promoted optimistically but later flipped to REJECTED — the speculative-promote rollback — is `Store#reject_action` (see **reject_action** below). `fail_broadcast_action` and `reject_action` cover disjoint pre- and post-promotion regimes.
 
 #### Reaper: TTL Cleanup
 
@@ -377,10 +395,12 @@ WHERE a.wtxid IS NULL
 
 **Never sent** (`wtxid IS NOT NULL`, send path, no broadcasts row):
 ```sql
--- Action was signed and outputs were persisted (promoted = false)
--- but a broadcasts row was never created — sign_action committed
--- but the broadcast intent never reached Phase 3. RESTRICT FK on
--- outputs.action_id means the dependents must go first.
+-- Action was signed and outputs were persisted but a broadcasts row
+-- was never created — sign_action committed but the broadcast intent
+-- never reached Phase 3. No promotions row exists (Phase 4 requires
+-- a broadcasts row to satisfy the composite FK target), so spendable
+-- is empty by construction. RESTRICT FK on outputs.action_id means
+-- the output dependents must be cleared explicitly before the action.
 DELETE FROM output_baskets WHERE action_id IN (...stale ids...);
 DELETE FROM output_details WHERE action_id IN (...stale ids...);
 DELETE FROM output_tags    WHERE output_id IN (
@@ -394,13 +414,13 @@ WHERE a.wtxid IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM broadcasts b WHERE b.action_id = a.id);
 ```
 
-**Sent but unresolved** (broadcast row exists, outputs not yet promoted — needs ARC poll):
+**Sent but unresolved** (broadcast row exists, no promotions row — needs ARC poll):
 ```sql
 SELECT a.id, a.wtxid, b.tx_status, b.broadcast_at
 FROM actions a
 JOIN broadcasts b ON b.action_id = a.id
 WHERE NOT EXISTS (
-  SELECT 1 FROM outputs o WHERE o.action_id = a.id AND o.promoted = true
+  SELECT 1 FROM promotions p WHERE p.action_id = a.id
 )
   AND b.broadcast_at < (now() - interval '?');
 -- The daemon's poll-discovery loop already handles this via
@@ -408,7 +428,7 @@ WHERE NOT EXISTS (
 -- entry point for rows that have lingered beyond the poll TTL.
 ```
 
-Internal-path actions (`broadcast_intent = 'none'`) are not visible to the reaper — they commit atomically with their outputs and never enter a "stuck between phases" state.
+Internal-path actions (`broadcast_intent = 'none'`) are not visible to the reaper — they commit atomically with their outputs and a promotions row in one transaction, and never enter a "stuck between phases" state. The `prevent_internal_action_delete` BEFORE DELETE trigger on `actions` makes this a schema-level fact: any DELETE against an action with `broadcast_intent = 'none'` AND an existing `promotions` row is refused (`check_violation` ERRCODE → `Sequel::CheckConstraintViolation`). Defence-in-depth mirroring `Store#reject_action`'s `CannotRejectInternalActionError`.
 
 #### Proof Arrival (async, via ARC callback or polling)
 
@@ -434,9 +454,13 @@ The action's derived status transitions to `completed` (tx_proof_id is now set).
 ```
 BEGIN
   -- Abort applies to actions that have not yet been broadcast.
-  -- It is rejected if a broadcasts row exists.
+  -- It is a no-op if a broadcasts row exists.
+  -- It is refused (raises CannotAbortPromotedActionError) if a
+  -- promotions row exists — internal-path actions have no broadcasts
+  -- row but ARE promoted at create_action time and may already own
+  -- canonical UTXO history that downstream actions have spent.
   -- Under #189 the outputs.action_id FK is RESTRICT, so any deferred
-  -- output rows (promoted = false) must be cleared before the action.
+  -- output rows must be cleared before the action.
   DELETE FROM output_baskets WHERE action_id = ?
   DELETE FROM output_details WHERE action_id = ?
   DELETE FROM output_tags    WHERE output_id IN (
@@ -448,7 +472,49 @@ BEGIN
 COMMIT
 ```
 
-After a broadcasts row exists, `abortAction` is a no-op — the network may have the transaction. The terminal-rejection path (`Store#fail_broadcast_action`) handles cleanup when ARC definitively rejects.
+After a broadcasts row exists, `abortAction` is a no-op — the network may have the transaction. The terminal-rejection path (`Store#fail_broadcast_action`) handles cleanup when ARC definitively rejects, and `Store#reject_action` (see below) handles the speculative-promote rollback when an optimistically-promoted action later flips to REJECTED.
+
+#### reject_action — speculative-promote rollback
+
+`Store#reject_action` unwinds an action whose Phase 4 already fired on an optimistic ARC ACK (any non-rejected status admits the promotion under `auth_not_rejected`) but whose `tx_status` subsequently flipped to a terminal-rejected value. The promotion is gone, but children may have spent its outputs in the meantime — the rollback walks the action graph forward and tears every descendant down first.
+
+```ruby
+do_reject(action_id, visited: Set)
+  # idempotency guard: visited set protects against diamond DAGs
+  # (a child spending two outputs of a common ancestor) — second visit
+  # no-ops rather than raising
+  return if visited.include?(action_id)
+
+  # internal-path actions own canonical received UTXO history; rolling
+  # them back would compound chain divergence rather than reflect it.
+  raise CannotRejectInternalActionError if broadcast_intent == 'none'
+
+  # ARC told us this tx is accepted (SEEN_ON_NETWORK / MINED / etc.);
+  # deletion would compound a wallet-vs-chain divergence. Operator
+  # investigation is the right response, not unwind.
+  raise CannotRejectAcceptedActionError if broadcast.tx_status ∈ ACCEPTED
+
+  # forward-walk: tear children down first so outputs.action_id RESTRICT
+  # doesn't block this action's output deletes
+  child_actions_of(action_id).each { |c| do_reject(c, visited) }
+
+  # tear-down sequence: order matters
+  DELETE spendable, output_tags, output_baskets, output_details, outputs
+  DELETE action_labels
+  DELETE promotions   -- BEFORE broadcasts: the composite FK
+                      -- (action_id, authorising_status) → broadcasts blocks
+                      -- the broadcasts delete otherwise
+  DELETE broadcasts
+  DELETE actions      -- CASCADE inputs, freeing locked UTXOs
+```
+
+The cascade structure earns its keep here: deleting `promotions` cascades any remaining `spendable` rows out automatically via the structural FK (§7). The explicit `DELETE FROM spendable` above is belt-and-braces, kept for clarity and to guarantee zero leftover rows in the same transaction.
+
+Three reasons this is correct-by-construction:
+
+1. **Idempotent re-entry.** Action graphs are DAGs (an input can only spend an existing output — true cycles are impossible), but diamonds occur naturally (a consolidation combining two outputs of a common ancestor). The visited set ensures the second arrival no-ops rather than raising and rolling back the whole cascade.
+2. **Composite FK ordering.** The `promotions(action_id, authorising_status) → broadcasts(action_id, tx_status)` FK means the broadcasts row cannot be deleted while a promotions row references it. Delete the promotion first, then the broadcast.
+3. **CASCADE + CHECK interaction.** Because the broadcasts FK is `ON UPDATE CASCADE`, an external `UPDATE broadcasts SET tx_status = 'REJECTED'` while a promotions row exists would cascade `authorising_status` to REJECTED and fail the `auth_not_rejected` CHECK. The call sequence — delete promotions first, then update or delete broadcasts — keeps this from firing in practice. If it ever did, the wallet would see a constraint violation rather than silent corruption.
 
 #### Deferred Signing — signAction
 
@@ -456,7 +522,7 @@ After a broadcasts row exists, `abortAction` is a no-op — the network may have
 
 **What's deferred:** Only signing and broadcasting. The deferral is about **inputs**, not outputs. The outputs are fully known at `createAction` time — they don't change between `createAction` and `signAction`.
 
-The output rows are written to the immutable log at `createAction` time so the caller can see them via `list_outputs(include_*)`, but they are written with `promoted = false`. They do **not** join the canonical UTXO set until the eventual `signAction` is followed by an accepted broadcast (Phase 4 on the send path). No `spendable` rows exist for a deferred action until that point.
+The output rows are written to the immutable log at `createAction` time so the caller can see them via `list_outputs(include_*)`. They do **not** join the canonical UTXO set until the eventual `signAction` is followed by an accepted broadcast (Phase 4 on the send path) — no `promotions` row exists yet, and the `spendable.action_id → promotions(action_id)` FK structurally prevents any `spendable` row from existing until then.
 
 **Deferred createAction** runs Phase 1 and a partial Phase 2 (`stage_action`):
 
@@ -470,13 +536,13 @@ BEGIN
 
   -- Build the unsigned transaction in memory.
   -- Stage Phase 2 (no signing yet): persist the unsigned raw_tx, its
-  -- hash as the placeholder wtxid, and the output rows with
-  -- promoted = false. No broadcasts row — the broadcast intent only
-  -- materialises at signAction time.
+  -- hash as the placeholder wtxid, and the output rows. No promotions
+  -- row, no broadcasts row — both materialise at signAction time (or
+  -- on the eventual broadcast ACK in Phase 4 for promotions).
   UPDATE actions SET wtxid = ?, raw_tx = unsigned_tx WHERE id = ?
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,
                        output_type, derivation_prefix, derivation_suffix,
-                       sender_identity_key, promoted = false)
+                       sender_identity_key)
   INSERT INTO output_baskets (output_id, basket_id, action_id)
   INSERT INTO output_details (output_id, action_id, change, description, ...)
 COMMIT
@@ -487,8 +553,9 @@ Returns `{ signable_transaction: { tx: unsigned_raw_tx, reference: action.refere
 **Database state after deferred createAction:**
 - `actions`: `wtxid` set (placeholder hash of unsigned bytes), `raw_tx` set
 - `inputs`: locked, same as synchronous Phase 1
-- `outputs`: rows exist with `promoted = false` — the immutable record is in place but the outputs are **not** in the canonical UTXO set
-- `spendable`: **untouched** — UTXO claims wait until broadcast acceptance (Phase 4)
+- `outputs`: rows exist — the immutable record is in place but the outputs are **not** in the canonical UTXO set
+- `promotions`: **untouched** — no authorisation has been recorded
+- `spendable`: **untouched** — the `spendable.action_id → promotions` FK gates UTXO membership; no row can exist until the promotions row exists at Phase 4
 - `broadcasts`: **untouched** — the broadcast row only exists from `signAction` onwards
 
 **signAction** completes the deferred transaction:
@@ -504,16 +571,17 @@ COMMIT
 -- the synchronous send path.
 ```
 
-`signAction` only touches the action row and creates the broadcasts row. The output rows persisted by `stage_action` are not rewritten; their `promoted` flag remains `false` until Phase 4 flips it after the broadcast is accepted.
+`signAction` only touches the action row and creates the broadcasts row. The output rows persisted by `stage_action` are not rewritten; the promotion happens at Phase 4 by inserting a `promotions` row after the broadcast is accepted.
 
 **Cleanup for abandoned deferred actions:**
 
-If `signAction` is never called, the action sits with locked inputs and unpromoted output rows for a transaction that will never reach the network. `abortAction` is the supported cleanup path — under #189 the outputs.action_id FK is RESTRICT, so abort must clear the output rows before the action row:
+If `signAction` is never called, the action sits with locked inputs and output rows for a transaction that will never reach the network. No `promotions` row exists (Phase 4 never fired). `abortAction` is the supported cleanup path — under #189 the outputs.action_id FK is RESTRICT, so abort must clear the output rows before the action row:
 
 ```sql
 BEGIN
-  -- No spendable rows to clear (promoted = false means none were
-  -- created). Just the output rows and their lightweight dependents.
+  -- No spendable rows to clear: the spendable.action_id → promotions
+  -- FK structurally prevented any insert (no promotions row exists).
+  -- Just the output rows and their lightweight dependents.
   DELETE FROM output_baskets WHERE action_id = ?
   DELETE FROM output_details WHERE action_id = ?
   DELETE FROM output_tags    WHERE output_id IN (
@@ -538,11 +606,15 @@ BEGIN
     VALUES (?, ?, ?) ON CONFLICT (height) DO NOTHING
   INSERT INTO tx_proofs (wtxid, block_id, ...) ON CONFLICT DO UPDATE ...
   INSERT INTO actions (tx_proof_id, wtxid, broadcast_intent: 'none', ...)
-  -- Internal path: outputs written directly with promoted = true,
-  -- spendable rows inserted in the same transaction. No Phase 3.
+  -- Internal path: outputs written, a promotions row inserted with
+  -- intent='none' and authorising_status=NULL (the promo_path CHECK
+  -- admits the internal disjunction), and spendable rows inserted in
+  -- the same transaction. No Phase 3, no broadcasts row.
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,
                        output_type, derivation_prefix, derivation_suffix,
-                       sender_identity_key, promoted = true)
+                       sender_identity_key)
+  INSERT INTO promotions (action_id, intent, authorising_status)
+    VALUES (?, 'none', NULL)
   INSERT INTO spendable (output_id, action_id)
   INSERT INTO output_baskets (output_id, basket_id, action_id)
   INSERT INTO output_details (output_id, action_id, ...)
@@ -569,13 +641,14 @@ The output row stays in the log. The wallet forgets about it — no spendable en
 | Table | INSERT | UPDATE | DELETE | Character |
 |-------|--------|--------|--------|-----------|
 | **blocks** | proof arrival / internalize / chain tracker | never | never | Append-only — known block headers |
-| **actions** | createAction | wtxid (sign), tx_proof_id (proof) | abort, fail_broadcast, reaper | Mutable — the lifecycle entity |
+| **actions** | createAction | wtxid (sign), tx_proof_id (proof) | abort, fail_broadcast, reject, reaper | Mutable — the lifecycle entity |
 | **inputs** | Phase 1 (lock) | never | CASCADE from action delete | Born and dies with its action |
-| **broadcasts** | Phase 2 (send path: alongside sign) | `broadcast_at`, ARC response updates | abort never reaches here; fail_broadcast / CASCADE from action | Broadcast lifecycle |
-| **outputs** | Phase 2 (send path, `promoted = false`) / Phase 4 internalize (`promoted = true`) | `promoted` flag (single-shot false → true at send-path Phase 4) | abort / fail_broadcast / reaper (cleanup paths only — never during normal lifecycle) | Append-only log with one carve-out: the `promoted` membership flag |
-| **spendable** | Phase 4 (both paths) | never | spend / relinquish / reaper / fail_broadcast | The wallet — INSERT/DELETE only |
-| **output_baskets** | Phase 2 (send path) / Phase 4 (internal path) | basket move | relinquish / reaper / abort / fail_broadcast | Mutable membership |
-| **output_details** | Phase 2 (send path) / Phase 4 (internal path) | never | reaper / abort / fail_broadcast | Immutable metadata (until reaped) |
+| **broadcasts** | Phase 2 (send path: alongside sign) | `broadcast_at`, ARC response updates | abort never reaches here; fail_broadcast / reject / CASCADE from action | Broadcast lifecycle |
+| **outputs** | Phase 2 (send path) / Phase 4 (internal path, alongside promotions row) | never | abort / fail_broadcast / reject / reaper (cleanup paths only — never during normal lifecycle) | Append-only log; row-existence in `promotions` gates UTXO membership |
+| **promotions** | Phase 4 (send path: on broadcast acceptance / internal path: in the create_action transaction) | `authorising_status` via ON UPDATE CASCADE from `broadcasts.tx_status` | reject (delete-before-broadcasts-delete ordering) / CASCADE from action | Existence-as-state authorisation gate |
+| **spendable** | Phase 4 (both paths) | never | spend / relinquish / reaper / fail_broadcast / CASCADE from promotions delete | The wallet — INSERT/DELETE only |
+| **output_baskets** | Phase 2 (send path) / Phase 4 (internal path) | basket move | relinquish / reaper / abort / fail_broadcast / reject | Mutable membership |
+| **output_details** | Phase 2 (send path) / Phase 4 (internal path) | never | reaper / abort / fail_broadcast / reject | Immutable metadata (until reaped) |
 | **tx_proofs** | proof arrival / internalize | upsert on re-proof | never | Append-mostly |
 
 ---
@@ -613,7 +686,7 @@ end
 
 The append-only log. A permanent record of every output the wallet has ever participated in — both wallet-owned outputs (with derivation data) and outbound payments (with `output_type = 'outbound'`).
 
-The table is immutable in every sense the schema cares about: **no per-row DELETE or UPDATE happens during normal lifecycle**. The only mutation allowed on an existing row is the single-shot `promoted` flag flip (false → true) at send-path Phase 4 — structurally analogous to `actions.tx_proof_id` flipping from NULL to set on proof arrival. Cleanup paths (`abortAction`, `fail_broadcast_action`, reaper) do delete output rows, but they only ever reach rows that never made it into the canonical UTXO set (`promoted = false`). Once an output has been promoted, it stays in the log; lifecycle exit at scale is partition drop, not per-row DELETE.
+**Write-once during canonical lifetime.** No per-row UPDATE happens, ever — the table has no mutable columns. Per-row DELETE happens *only* in cleanup paths (`abort_action`, `fail_broadcast_action`, `reject_action`, reaper) and *only* on rows whose parent action is being torn down in the same atomic transaction. Whether such a delete can reach a row is gated structurally: an output's parent action either has a `promotions` row (§7) — in which case it owns canonical UTXO membership and the cleanup paths refuse to touch it — or it doesn't, in which case the row never crossed the authorisation gate and tear-down is safe. Lifecycle exit at scale is partition drop, not per-row DELETE.
 
 Derivation data (spending authority) lives here because it's a fact about the output, recorded when the key is derived. This is separate from spendability — an output can have derivation data without being in the UTXO set.
 
@@ -633,7 +706,6 @@ At scale, partition by id range. Old partitions where all outputs have been spen
 | derivation_prefix | text | |
 | derivation_suffix | text | |
 | sender_identity_key | text | |
-| promoted | bool | NOT NULL DEFAULT true |
 
 **Constraints:**
 - `UNIQUE (action_id, vout)` — an output is uniquely identified by its position in the action that created it
@@ -649,11 +721,11 @@ At scale, partition by id range. Old partitions where all outputs have been spen
   - `CHECK output_type IS NOT NULL OR derivation_suffix IS NOT NULL`
   - `CHECK output_type IS NOT NULL OR sender_identity_key IS NOT NULL`
 
-**`promoted` column:** Membership marker for the canonical UTXO set. Written `false` at sign time on the send path; flipped to `true` exactly once at Phase 4 when broadcast acceptance fires. Internal-path inserts (`broadcast_intent = 'none'`) write `promoted = true` directly. The column defaults `true` so any backfill of pre-existing rows lands in the post-promotion state. The send-path Phase 4 update is idempotent — a re-poll of an already-promoted broadcast finds no `promoted = false` rows and is a no-op.
+**Canonical-state marker:** there isn't a column for it. An output is "in the canonical UTXO set" iff its parent action has a row in `promotions` (§7) and the output has a row in `spendable` (§8). The promotions row's existence IS the canonical-state fact (#307 / ADR-023). This replaces the earlier `outputs.promoted` boolean — which was a per-row UPDATE deviation from append-only — with row-existence in a separate table, gating UTXO membership declaratively.
 
-**Cascade:** `action_id ON DELETE RESTRICT` (under #189). Outputs cannot be orphaned by an action delete — the delete is rejected unless the dependent output rows are removed first. The cleanup paths (`abort_action`, `fail_broadcast_action`, reaper) handle this explicitly. Under the restored 4-phase design these paths only ever encounter `promoted = false` rows (the send path never DELETEs a row that has joined the UTXO set), so the delete is safe.
+**Cascade:** `action_id ON DELETE RESTRICT` (under #189). Outputs cannot be orphaned by an action delete — the delete is rejected unless the dependent output rows are removed first. The cleanup paths (`abort_action`, `fail_broadcast_action`, `reject_action`, reaper) handle this explicitly. The combination of RESTRICT + the spendable→promotions gate makes the safety property mechanical: any output reached by a delete is by construction one whose action had no promotions row (or has just had it deleted as part of an in-flight `reject_action` cascade).
 
-**Note:** No `updated_at` — the row is immutable apart from the `promoted` flip. No `basket_id` — basket membership is in `output_baskets`. No `wtxid` — derived via `output.action.wtxid` (always resolvable under the RESTRICT FK, since the parent action cannot be deleted while output rows remain). Column order optimized for alignment: 8-byte columns first, then variable-width, with 4-byte `vout` tucked after `locking_script` to reduce padding.
+**Note:** No `updated_at` — outputs have no UPDATE path at all. No `basket_id` — basket membership is in `output_baskets`. No `wtxid` — derived via `output.action.wtxid` (always resolvable under the RESTRICT FK, since the parent action cannot be deleted while output rows remain). Column order optimized for alignment: 8-byte columns first, then variable-width, with 4-byte `vout` tucked after `locking_script` to reduce padding.
 
 ```ruby
 class Wallet::Output < Sequel::Model
@@ -706,7 +778,46 @@ end
 
 ---
 
-## 7. Spendable
+## 7. Promotions
+
+Promote-authorisation as a row. The existence of a `promotions` row for an action IS the canonical-state fact: "this action's outputs are in the UTXO set." This replaces the earlier `outputs.promoted` boolean (#307 / ADR-023), which was a per-row UPDATE deviation from append-only outputs; with promotion modelled as row-existence, `outputs` returns to pure INSERT-only.
+
+A single row per action — promotion was always a per-action fact, and the PK is `action_id` (a non-auto PK that is also an FK to `actions`). The gate is declarative: two CHECKs on the row itself, plus two composite FKs that tie it to its parent action's intent and (for the send path) to a non-rejected broadcast status. There is no trigger anywhere — the hot send path (Phase 4) carries only the INSERT + the FK lookups (#221, ADR-019).
+
+| col | type | attributes |
+| --- | --- | --- |
+| action_id | bigint | PRIMARY KEY REFERENCES actions (id) ON DELETE CASCADE |
+| intent | broadcast_intent | NOT NULL |
+| authorising_status | tx_status | NULL |
+
+**CHECKs:**
+- `promo_path` — `(intent = 'none' AND authorising_status IS NULL) OR (intent <> 'none' AND authorising_status IS NOT NULL)`. Internal-path actions authorise themselves by being internal; send-path actions must name the broadcast status that authorised them. The disjunction is exhaustive.
+- `auth_not_rejected` — `authorising_status IS NULL OR authorising_status NOT IN ('REJECTED', 'DOUBLE_SPEND_ATTEMPTED')`. The optimistic-promotion set: any non-rejected status, including interim states (`RECEIVED`, `SEEN_ON_NETWORK`). Promote on the first non-rejected ACK; `Store#reject_action` compensates on a later flip.
+
+**Composite FKs:**
+- `FOREIGN KEY (action_id, intent) REFERENCES actions (id, broadcast_intent)` — `intent` tracks the parent action's intent atomically (the same composite-FK pattern `broadcasts.intent` uses, ADR-019). Combined with the unique `(id, broadcast_intent)` index on `actions`, this enforces that the recorded `intent` matches what the action declared.
+- `FOREIGN KEY (action_id, authorising_status) REFERENCES broadcasts (action_id, tx_status) ON UPDATE CASCADE` — a send-path promotion can only exist while a `broadcasts` row holds the status named in `authorising_status`. NULL on the internal path skips the FK match under MATCH SIMPLE — the broadcasts row doesn't exist for internal actions, and the NULL `authorising_status` makes this consistent.
+
+**ON UPDATE CASCADE — single source of truth.** `broadcasts.tx_status` keeps advancing (`RECEIVED` → `SEEN_ON_NETWORK` → `MINED` → `IMMUTABLE`). Rather than duplicate "the status that authorised the promotion" as a frozen value on `promotions`, the FK references the live `broadcasts.tx_status` and CASCADEs updates. `tx_status` stays the canonical fact; `promotions.authorising_status` is a live projection of it. The consequence: a flip to `REJECTED` while a promotions row exists would cascade `authorising_status` to REJECTED and fail the `auth_not_rejected` CHECK. `Store#reject_action` therefore deletes the promotions row *before* the broadcasts row is deleted or updated to REJECTED. Correct-by-construction: violations fail loudly with a CHECK error rather than drifting.
+
+**Cascade in:** `action_id ON DELETE CASCADE` from `actions`. Deleting an action removes its promotions row.
+
+**Cascade out:** `spendable.action_id REFERENCES promotions(action_id) ON DELETE CASCADE` (§8) — the structural gate on UTXO membership. Deleting the promotions row cascades every `spendable` row for the action out in one statement.
+
+**Defence-in-depth: `prevent_internal_action_delete` trigger.** A BEFORE DELETE trigger on `actions` refuses any DELETE whose target has `broadcast_intent = 'none'` AND an existing `promotions` row. This is canonical received UTXO history (incoming BEEF, imports, `wbikd`, `send_payment`) — code that would unwind it has gone wrong, and the schema must refuse the operation even if `Store#reject_action`'s `CannotRejectInternalActionError` is bypassed. Postgres raises with `check_violation` ERRCODE → `Sequel::CheckConstraintViolation`.
+
+```ruby
+class Wallet::Promotion < Sequel::Model
+  unrestrict_primary_key  # action_id is set explicitly, not generated
+  many_to_one :action
+end
+```
+
+References: ADR-022 (state as a FK row — the general principle this realises), ADR-023 (promotion as a row — the specific application), #307 (the defect this closes), #221 (the composite-FK precedent), ADR-002 (why a hot-path trigger was the wrong backstop), ADR-003 (schema as canonical state — the principle the old app-only enforcement breached).
+
+---
+
+## 8. Spendable
 
 The wallet. Pure set membership — each row says "this output is available to spend." The presence of a row IS the spendable state. No data columns beyond the keys. DELETE = spent or relinquished. ~28 bytes per row. At a typical UTXO pool the entire table fits in PostgreSQL's buffer cache permanently.
 
@@ -716,12 +827,17 @@ The hot-path UTXO selection query scans this table (in memory), then PK-joins to
 | --- | --- | --- |
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
 | output_id | bigint | NOT NULL REFERENCES outputs (id) UNIQUE |
-| action_id | bigint | NOT NULL REFERENCES actions (id) ON DELETE CASCADE |
+| action_id | bigint | NOT NULL — two FKs (see Cascades below) |
 
 **Indexes:**
 - The UNIQUE on `output_id` serves as the index (and enforces one spendable entry per output)
 
-**Cascade:** `action_id ON DELETE CASCADE` — deleting an action automatically removes its spendable entries. Denormalized (derivable via `output_id -> outputs.action_id`) but justified: 8 bytes per row, set once at creation, enables single-statement reaper cleanup.
+**Cascades — two FKs on `action_id`:**
+
+1. `action_id REFERENCES actions (id) ON DELETE CASCADE` — the denormalised-cascade pattern (#189-era). Deleting an action removes its spendable entries directly. Denormalised (derivable via `output_id → outputs.action_id`) but justified: 8 bytes per row, set once at creation, enables single-statement reaper cleanup.
+2. `action_id REFERENCES promotions (action_id) ON DELETE CASCADE` — the structural authorisation gate (ADR-023). A `spendable` row cannot exist without a `promotions` row for the same `action_id`. UTXO-set membership is therefore structurally gated on authorisation: writing `spendable` requires the promotion to already exist, and dropping the promotion cascades the spendable rows out in one statement.
+
+The two FKs are belt-and-braces. `Store#reject_action` exploits the second one — it deletes the promotions row first and the spendable rows fall out via cascade before the action delete fires. The first FK then handles any teardown path that goes straight at the action without touching promotions (e.g. abort, reaper).
 
 **Trigger:** `prevent_outbound_spendable` — BEFORE INSERT trigger rejects any row referencing an output with `output_type = 'outbound'`. The database itself prevents invalid state — outbound outputs (payments to others) can never appear in the UTXO set.
 
@@ -736,7 +852,7 @@ end
 
 ---
 
-## 8. Output Details
+## 9. Output Details
 
 Display and application metadata. Never queried in the UTXO selection hot path. One-to-one with outputs.
 
@@ -769,7 +885,7 @@ end
 
 ---
 
-## 9. Output Baskets
+## 10. Output Baskets
 
 Basket membership for outputs. An output belongs to at most one basket at a time. Moving an output between baskets = UPDATE `basket_id`. Relinquishing = DELETE the row. The outputs table is never touched.
 
@@ -800,7 +916,7 @@ end
 
 ---
 
-## 10. Inputs
+## 11. Inputs
 
 The consumption relationship. The lock mechanism. Each row says "this output is being used as input N of this action." The UNIQUE constraint on `output_id` enforces single-spend. `ON DELETE CASCADE` from actions means aborting an action automatically releases all its claimed outputs.
 
@@ -833,7 +949,7 @@ end
 
 ---
 
-## 11. Labels
+## 12. Labels
 
 Label definitions for categorizing actions. Normalized — the label string is stored once, then referenced via a join table.
 
@@ -856,7 +972,7 @@ end
 
 ---
 
-## 12. Action Labels
+## 13. Action Labels
 
 Join table: actions to labels (many-to-many).
 
@@ -883,7 +999,7 @@ end
 
 ---
 
-## 13. Tags
+## 14. Tags
 
 Tag definitions for categorizing outputs. Same normalization pattern as labels.
 
@@ -906,7 +1022,7 @@ end
 
 ---
 
-## 14. Output Tags
+## 15. Output Tags
 
 Join table: outputs to tags (many-to-many).
 
@@ -933,7 +1049,7 @@ end
 
 ---
 
-## 15. Certificates
+## 16. Certificates
 
 Identity certificate headers (BRC-52). Per-field encryption keys live in the fields table.
 
@@ -965,7 +1081,7 @@ end
 
 ---
 
-## 16. Certificate Fields
+## 17. Certificate Fields
 
 Per-field storage for certificates. Each field has its own `master_key` for field-level encryption, enabling selective revelation (BRC-52).
 
@@ -990,7 +1106,7 @@ end
 
 ---
 
-## 17. Settings
+## 18. Settings
 
 Key-value wallet configuration.
 
@@ -1018,7 +1134,7 @@ end
 
 ---
 
-## 18. SSE Cursors
+## 19. SSE Cursors
 
 Arcade SSE listener resume points. One row per Arcade callbackToken; the row records the high-water `Last-Event-ID` the wallet has successfully pushed onto the in-proc status bus. On reconnect, the listener loads the cursor for its token and reconnects with the `Last-Event-ID` header so Arcade replays events strictly after the cursor — the wallet doesn't redeliver events it has already handed off.
 
@@ -1077,7 +1193,7 @@ DELETE FROM actions WHERE id = ?;
 ```sql
 -- RESTRICT FK on outputs.action_id means dependents must be cleared
 -- before the action delete. The send-path rows reachable here have
--- promoted = false (Phase 4 never fired).
+-- no promotions row (Phase 4 never fired) and so cannot be in spendable.
 DELETE FROM actions a
 WHERE a.wtxid IS NOT NULL
   AND a.broadcast_intent != 'none'
@@ -1123,9 +1239,9 @@ LIMIT ? OFFSET ?;
 - **Derivation data placement:** On `outputs`, not `spendable`. Derivation data is a fact about the output (recorded when the key is derived), not a statement of spendability. This preserves the state transition model: output rows record spending authority, spendable rows declare availability. Two facts, two moments in time.
 - **`actions.satoshis`:** Dropped. Derivable from `SUM(outputs.satoshis)`. No BRC-100 method returns it at the action level.
 - **`actions.reference`:** UUID type (was text). NOT NULL with `gen_random_uuid()` default.
-- **Two lifecycles, one schema:** The `broadcast_intent` enum encodes which path an action follows. `delayed`/`inline` run the 4-phase send path with post-broadcast promotion; `none` runs Phases 1, 2, and 4 synchronously inside `create_action`. Both end with output rows present and (for wallet-owned outputs) spendable rows inserted — the routing fact is when Phase 4 commits, and the structural marker is the `promoted` flag on outputs.
-- **`outputs.promoted` carve-out:** The outputs table is append-only with one deliberate exception: the `promoted` flag flips from `false` to `true` exactly once on the send path at Phase 4. Structurally analogous to `actions.tx_proof_id` flipping from NULL to set on proof arrival.
-- **`outputs.action_id` is NOT NULL RESTRICT:** Under #189. Output rows cannot be orphaned. Cleanup paths must clear output rows before the action delete; this is safe because cleanup only ever encounters `promoted = false` rows that never joined the UTXO set.
+- **Two lifecycles, one schema:** The `broadcast_intent` enum encodes which path an action follows. `delayed`/`inline` run the 4-phase send path with post-broadcast promotion; `none` runs Phases 1, 2, and 4 synchronously inside `create_action`. Both end with output rows present and (for wallet-owned outputs) spendable rows inserted — the routing fact is when Phase 4 commits, and the structural marker is the existence of a `promotions` row for the action (§7).
+- **Promotion as a row (#307 / ADR-023):** Promote-authorisation lives in the `promotions` table — row existence IS the canonical-state fact. Replaces the earlier `outputs.promoted` boolean. Two upsides: `outputs` returns to pure INSERT-only (no HOT-tuple churn, no vacuum debt), and the authorisation invariant — *promoted ⟹ internal OR broadcast-accepted* — gets a declarative schema backstop via composite FKs and CHECKs, with **no trigger on the hot send path** (ADR-002, #221).
+- **`outputs.action_id` is NOT NULL RESTRICT:** Under #189. Output rows cannot be orphaned. Cleanup paths must clear output rows before the action delete; this is safe because the `spendable → promotions` FK gate (§8) ensures cleanup only ever reaches rows whose action lacked a promotions row (or whose promotions row is being deleted in the same transaction).
 
 ---
 
@@ -1133,11 +1249,11 @@ LIMIT ? OFFSET ?;
 
 **Creation:** `createAction` creates an Action (a Bitcoin transaction + metadata). Requires at least one input or output. Inputs require `inputBEEF` for SPV context. Outputs without `basket` are untracked. Can return a `signableTransaction` reference for deferred signing.
 
-**Signing:** `signAction` completes a deferred transaction. The caller provides unlocking scripts for inputs they control; the wallet signs remaining P2PKH inputs with derived keys. Output rows were already written during `createAction` (`promoted = false`); `signAction` updates the action row (wtxid, signed raw_tx) and creates the broadcasts row. Phase 4 fires later on broadcast acceptance. See **Deferred Signing — signAction** in the lifecycle section.
+**Signing:** `signAction` completes a deferred transaction. The caller provides unlocking scripts for inputs they control; the wallet signs remaining P2PKH inputs with derived keys. Output rows were already written during `createAction` (no `promotions` row yet — the spendable→promotions FK keeps them out of the UTXO set); `signAction` updates the action row (wtxid, signed raw_tx) and creates the broadcasts row. Phase 4 fires later on broadcast acceptance, inserting the promotions row and the spendable rows. See **Deferred Signing — signAction** in the lifecycle section.
 
 **Aborting:** `abortAction` cancels an in-progress action that has not yet been broadcast. Clears dependent rows under the RESTRICT FK, then deletes the action; CASCADE on inputs frees the locked UTXOs.
 
-**Internalization:** `internalizeAction` accepts incoming BEEF, verifies proofs, creates output rows (`promoted = true`) and spendable rows for outputs the wallet controls — all in one transaction. This is an internal-path action (`broadcast_intent = 'none'`).
+**Internalization:** `internalizeAction` accepts incoming BEEF, verifies proofs, creates output rows, inserts a `promotions` row (`intent='none'`, `authorising_status=NULL`), and inserts spendable rows for outputs the wallet controls — all in one transaction. This is an internal-path action (`broadcast_intent = 'none'`); the `prevent_internal_action_delete` trigger then protects the canonical UTXO history from later deletion (§7).
 
 **Listing:** `listActions` queries by labels (the response includes a `:status` symbol drawn from the derived-status table above; `:internal` replaces the previous `:nosend` label). `listOutputs` queries by basket/tags. Both are read-only with pagination.
 

@@ -131,7 +131,7 @@ Full statement and worked examples: `reference/state-boundaries.md`.
 
 This is a **Postgres-based** wallet. SQLite exists as a convenience for fast logic-only specs that don't depend on DB invariants — it is not the production target.
 
-The schema chooses Postgres-native features deliberately: `bytea` for everything hash-shaped, native `uuid` for `actions.reference`, ENUM types (`broadcast_intent`), CHECK constraints, RESTRICT FK semantics. See `reference/schema-intent.md`.
+The schema chooses Postgres-native features deliberately: `bytea` for everything hash-shaped, native `uuid` for `actions.reference`, ENUM types (`broadcast_intent`), CHECK constraints, RESTRICT FK semantics. See `reference/schema.md` for the table-by-table reference, and `.architecture/decisions/adrs/20260505_ADR-009-postgres-native-primitives.md` for the per-primitive rationale.
 
 ### Configuration model — no mystery
 

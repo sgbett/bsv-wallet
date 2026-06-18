@@ -95,7 +95,7 @@ The partition (a) is justified by the hot path (ADR-002): at small scale a wide 
 * ADR-010 — derivation on `outputs`; keeping data off `spendable`.
 * ADR-011 — outputs as the immutable log this partition produces.
 * `reference/principle-of-state.md` — the living statement of derived state and set-membership spendability.
-* `reference/schema-intent.md` — per-primitive schema rationale.
+* `reference/schema.md` — the table-by-table reference for `outputs`, `spendable`, and `promotions`.
 * `gem/bsv-wallet/db/migrations/001_create_schema.rb` — the `outputs`, `spendable`, and `inputs` tables.
 
 ## Unverified claims
