@@ -77,7 +77,7 @@ RSpec.describe BSV::Wallet do
     end
 
     it 'defines UTXO selection and reaper methods' do
-      %i[find_spendable reap_stale_actions relinquish_output].each do |method|
+      %i[find_spendable stale_action_ids reap_action relinquish_output].each do |method|
         expect(subject).to respond_to(method),
                            "expected store to respond to ##{method}"
       end

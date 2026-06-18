@@ -10,6 +10,7 @@ require 'omq'
 require_relative 'engine'
 require_relative 'engine/broadcast'
 require_relative 'engine/tx_proof'
+require_relative 'engine/reaper'
 require_relative 'scheduler'
 require 'bsv/network/sse_listener'
 
@@ -88,6 +89,11 @@ module BSV
 
           tx_proof = Engine::TxProof.new(store: @store, broadcaster: @broadcaster)
           tx_proof.pull!(task: task)
+
+          # Reaper — reclaims abandoned actions and releases their input locks.
+          # Discovery loop lives in the Scheduler (below); this is the consumer.
+          reaper = Engine::Reaper.new(store: @store)
+          reaper.pull!(task: task)
 
           start_sse_listener(task: task) if @callback_token
 

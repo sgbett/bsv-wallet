@@ -106,6 +106,8 @@ RSpec.describe 'walletd events end-to-end' do # rubocop:disable RSpec/DescribeCl
     # path. A dedicated resolution-path smoke is a separate concern.
     allow(store).to receive_messages(
       pending_resolutions: [],
+      # Reaper discovery loop runs alongside broadcast/proof; keep it dormant.
+      stale_action_ids: [],
       record_broadcast_result: nil,
       broadcast_status: nil,
       mark_broadcast_attempted: nil,

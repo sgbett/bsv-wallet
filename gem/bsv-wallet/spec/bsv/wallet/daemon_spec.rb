@@ -19,6 +19,7 @@ RSpec.describe BSV::Wallet::Daemon do
 
   let(:broadcast) { instance_double(BSV::Wallet::Engine::Broadcast) }
   let(:tx_proof) { instance_double(BSV::Wallet::Engine::TxProof) }
+  let(:reaper) { instance_double(BSV::Wallet::Engine::Reaper) }
   let(:scheduler) { instance_double(BSV::Wallet::Scheduler) }
 
   let(:log_output) { StringIO.new }
@@ -54,12 +55,15 @@ RSpec.describe BSV::Wallet::Daemon do
         .with(store: store, broadcaster: broadcaster, callback_token: nil).and_return(broadcast)
       allow(BSV::Wallet::Engine::TxProof).to receive(:new)
         .with(store: store, broadcaster: broadcaster).and_return(tx_proof)
+      allow(BSV::Wallet::Engine::Reaper).to receive(:new)
+        .with(store: store).and_return(reaper)
       allow(BSV::Wallet::Scheduler).to receive(:new)
         .with(store: store).and_return(scheduler)
 
       allow(broadcast).to receive_messages(pull!: broadcast, reply!: broadcast,
                                            statuses_pull!: broadcast, hints_pull!: broadcast)
       allow(tx_proof).to receive(:pull!).and_return(tx_proof)
+      allow(reaper).to receive(:pull!).and_return(reaper)
       allow(scheduler).to receive(:run!)
     end
 
@@ -252,6 +256,16 @@ RSpec.describe BSV::Wallet::Daemon do
       expect(tx_proof).to have_received(:pull!)
     end
 
+    it 'creates Engine::Reaper with the store and calls pull!' do
+      Async do |task|
+        daemon.run!
+        task.stop
+      end
+
+      expect(BSV::Wallet::Engine::Reaper).to have_received(:new).with(store: store)
+      expect(reaper).to have_received(:pull!)
+    end
+
     it 'creates and runs the Scheduler' do
       Async do |task|
         daemon.run!
@@ -348,12 +362,15 @@ RSpec.describe BSV::Wallet::Daemon do
         .with(store: store, broadcaster: broadcaster, callback_token: nil).and_return(broadcast)
       allow(BSV::Wallet::Engine::TxProof).to receive(:new)
         .with(store: store, broadcaster: broadcaster).and_return(tx_proof)
+      allow(BSV::Wallet::Engine::Reaper).to receive(:new)
+        .with(store: store).and_return(reaper)
       allow(BSV::Wallet::Scheduler).to receive(:new)
         .with(store: store).and_return(scheduler)
 
       allow(broadcast).to receive_messages(pull!: broadcast, reply!: broadcast,
                                            statuses_pull!: broadcast, hints_pull!: broadcast)
       allow(tx_proof).to receive(:pull!).and_return(tx_proof)
+      allow(reaper).to receive(:pull!).and_return(reaper)
       allow(scheduler).to receive(:run!)
       allow(scheduler).to receive(:shutdown).and_return(true)
 

@@ -40,6 +40,7 @@ module BSV
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
       autoload :Hydrator,              'bsv/wallet/engine/hydrator'
+      autoload :Reaper,                'bsv/wallet/engine/reaper'
       autoload :TxBuilder,             'bsv/wallet/engine/tx_builder'
       autoload :TxProof,               'bsv/wallet/engine/tx_proof'
       autoload :OmqSupport,            'bsv/wallet/engine/omq_support'

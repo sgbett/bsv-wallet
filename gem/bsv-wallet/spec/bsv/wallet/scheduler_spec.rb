@@ -6,6 +6,7 @@ require 'stringio'
 require 'bsv/wallet/scheduler'
 require 'bsv/wallet/engine/broadcast'
 require 'bsv/wallet/engine/tx_proof'
+require 'bsv/wallet/engine/reaper'
 
 RSpec.describe BSV::Wallet::Scheduler do
   let(:store) { double('Store') }
@@ -21,6 +22,10 @@ RSpec.describe BSV::Wallet::Scheduler do
     BSV.logger = original_logger
   end
 
+  # The reaper loop runs alongside the others; keep it quiet unless a test
+  # exercises it. Individual tests override with a non-empty return.
+  before { allow(BSV::Wallet::Engine::Reaper).to receive(:pending).and_return([]) }
+
   describe '#run!' do
     before do
       allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_submissions).with(store, limit: 10).and_return([])
@@ -33,6 +38,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         broadcast_pull = OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
 
         scheduler.run!(task: task)
 
@@ -54,6 +60,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         broadcast_pull = OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
 
         scheduler.run!(task: task)
 
@@ -74,6 +81,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         broadcast_pull = OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
 
         scheduler.run!(task: task)
         2.times { broadcast_pull.receive }
@@ -103,6 +111,27 @@ RSpec.describe BSV::Wallet::Scheduler do
       end
     end
 
+    it 'pushes pending reaper IDs to the reaper endpoint' do
+      allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::TxProof).to receive(:pending).with(store, limit: 10).and_return([])
+      allow(BSV::Wallet::Engine::Reaper).to receive(:pending).and_return([99, 100])
+
+      Async do |task|
+        OMQ::PULL.bind('inproc://broadcasts.pull')
+        OMQ::PULL.bind('inproc://proofs.pull')
+        reaper_pull = OMQ::PULL.bind('inproc://reaper.pull')
+
+        scheduler.run!(task: task)
+
+        messages = []
+        2.times { messages << reaper_pull.receive.first }
+
+        expect(messages).to eq(%w[99 100])
+      ensure
+        task.stop
+      end
+    end
+
     it 'continues when a discovery query raises' do
       call_count = 0
       allow(BSV::Wallet::Engine::Broadcast).to receive(:pending_resolutions) do
@@ -116,6 +145,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         broadcast_pull = OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
 
         scheduler.run!(task: task)
 
@@ -135,6 +165,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
 
         scheduler.run!(task: task)
 
@@ -155,6 +186,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         broadcast_pull = OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
 
         scheduler.run!(task: task)
 
@@ -174,6 +206,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         broadcast_pull = OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
 
         scheduler.run!(task: task)
 
@@ -194,6 +227,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
 
         scheduler.run!(task: task)
 
@@ -220,6 +254,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         broadcast_pull = OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
 
         scheduler.run!(task: task)
 
@@ -242,6 +277,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
         allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
@@ -261,6 +297,7 @@ RSpec.describe BSV::Wallet::Scheduler do
         Async do |task|
           OMQ::PULL.bind('inproc://broadcasts.pull')
           OMQ::PULL.bind('inproc://proofs.pull')
+          OMQ::PULL.bind('inproc://reaper.pull')
           allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
           allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
@@ -278,6 +315,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
         allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
@@ -297,6 +335,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
         allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
@@ -316,6 +355,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
         allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
@@ -340,6 +380,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
         allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
@@ -358,6 +399,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
         allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 
@@ -374,6 +416,7 @@ RSpec.describe BSV::Wallet::Scheduler do
       Async do |task|
         OMQ::PULL.bind('inproc://broadcasts.pull')
         OMQ::PULL.bind('inproc://proofs.pull')
+        OMQ::PULL.bind('inproc://reaper.pull')
         allow(BSV::Wallet::Engine::Broadcast).to receive_messages(pending_submissions: [], pending_resolutions: [])
         allow(BSV::Wallet::Engine::TxProof).to receive(:pending).and_return([])
 

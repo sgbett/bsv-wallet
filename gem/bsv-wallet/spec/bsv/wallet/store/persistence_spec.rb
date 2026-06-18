@@ -2158,49 +2158,123 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   # --- Reaper ---
 
-  describe '#reap_stale_actions' do
-    it 'deletes stale signed actions with no outputs' do
-      result = store.create_action(action: { description: 'stale' })
+  def stale_signed_outputs
+    [{ satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
+       derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }]
+  end
+
+  describe '#stale_action_ids' do
+    it 'includes a stale pre-sign action — inputs locked, never signed (#326)' do
+      # The dominant leak: crash after lock_inputs, before sign_action. No
+      # wtxid, and (crucially) no broadcasts row — never entered the pipeline.
+      output = create_funded_output(satoshis: 1000)
+      result = store.create_action(action: { description: 'pre-sign' },
+                                   inputs: [{ output_id: output.id, vin: 0 }])
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
+
+      expect(store.stale_action_ids(threshold: 3600, limit: 50)).to include(result[:id])
+    end
+
+    it 'excludes a signed action — sign_action creates the broadcasts row (broadcast loops own it)' do
+      result = store.create_action(action: { description: 'stale signed' })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
 
-      # Backdate the action
-      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 600)
+      expect(store.stale_action_ids(threshold: 3600, limit: 50)).not_to include(result[:id])
+    end
 
-      count = store.reap_stale_actions(threshold: 300)
-      expect(count).to eq(1)
+    it 'excludes an action with an attempted broadcast — tx may be on-network (#379)' do
+      # Crash mid-submit: broadcast_at stamped, no status/promotion. Reaping
+      # would release inputs of a possibly-on-chain tx — a double-spend.
+      result = store.create_action(action: { description: 'in flight' })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      store.mark_broadcast_attempted(action_id: result[:id])
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
+
+      expect(store.stale_action_ids(threshold: 3600, limit: 50)).not_to include(result[:id])
+    end
+
+    it 'excludes within-threshold actions' do
+      result = store.create_action(action: { description: 'fresh' })
+      expect(store.stale_action_ids(threshold: 3600, limit: 50)).not_to include(result[:id])
+    end
+
+    it 'excludes internal no_send actions (left to #327)' do
+      result = store.create_action(action: { description: 'nosend', broadcast_intent: :none })
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
+      expect(store.stale_action_ids(threshold: 3600, limit: 50)).not_to include(result[:id])
+    end
+
+    it 'excludes promoted actions' do
+      result = store.create_action(action: { description: 'promoted', broadcast_intent: :delayed })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100), outputs: stale_signed_outputs)
+      store.record_broadcast_result(action_id: result[:id], tx_status: 'QUEUED')
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
+
+      expect(store.stale_action_ids(threshold: 3600, limit: 50)).not_to include(result[:id])
+    end
+
+    it 'respects the limit' do
+      3.times do |i|
+        r = store.create_action(action: { description: "stale #{i}" })
+        BSV::Wallet::Store::Models::Action.where(id: r[:id]).update(created_at: Time.now - 7200)
+      end
+      expect(store.stale_action_ids(threshold: 3600, limit: 2).size).to eq(2)
+    end
+  end
+
+  describe '#reap_action' do
+    it 'deletes a stale pre-sign action and returns true' do
+      # Pre-sign: no broadcasts row, so the reaper owns it.
+      result = store.create_action(action: { description: 'stale' })
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
+
+      expect(store.reap_action(action_id: result[:id])).to be(true)
       expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
     end
 
-    it 'does not reap nosend actions' do
-      result = store.create_action(action: { description: 'nosend', broadcast_intent: :none })
+    it 'returns false and does not delete a signed action (broadcast loops own it, #379)' do
+      result = store.create_action(action: { description: 'signed' })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))
-      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 600)
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
 
-      store.reap_stale_actions(threshold: 300)
+      expect(store.reap_action(action_id: result[:id])).to be(false)
       expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
     end
 
-    it 'does not reap a promoted send action' do
-      # A send action (intent != 'none') that has been broadcast-accepted and
-      # so carries a promotions row. The reaper protects promoted actions; only
-      # unpromoted, stale, broadcast-intent send actions are eligible.
-      result = store.create_action(action: { description: 'promoted', broadcast_intent: :delayed })
-      store.sign_action(
-        action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
-        raw_tx: SecureRandom.random_bytes(100),
-        outputs: [
-          { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
-            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
-        ]
-      )
-      store.record_broadcast_result(action_id: result[:id], tx_status: 'QUEUED')
-      expect(BSV::Wallet::Store::Models::Promotion.where(action_id: result[:id]).any?).to be(true)
-      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 600)
+    it 'releases input locks back to the spendable set (#326)' do
+      output = create_funded_output(satoshis: 1000)
+      result = store.create_action(action: { description: 'pre-sign abandoned' },
+                                   inputs: [{ output_id: output.id, vin: 0 }])
 
-      store.reap_stale_actions(threshold: 300)
+      # Locked: not selectable while the inputs row exists.
+      locked = store.find_spendable(satoshis: 99_999, basket: 'default').map { |o| o[:id] }
+      expect(locked).not_to include(output.id)
+
+      expect(store.reap_action(action_id: result[:id])).to be(true)
+
+      # Reclaimed: the inputs CASCADE released the lock; the source is selectable again.
+      freed = store.find_spendable(satoshis: 99_999, basket: 'default').map { |o| o[:id] }
+      expect(freed).to include(output.id)
+      expect(BSV::Wallet::Store::Models::Input.where(action_id: result[:id]).count).to eq(0)
+    end
+
+    it 'returns false and does not delete a promoted action (race re-validation)' do
+      result = store.create_action(action: { description: 'promoted', broadcast_intent: :delayed })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100), outputs: stale_signed_outputs)
+      store.record_broadcast_result(action_id: result[:id], tx_status: 'QUEUED')
+
+      expect(store.reap_action(action_id: result[:id])).to be(false)
       expect(BSV::Wallet::Store::Models::Action[result[:id]]).not_to be_nil
+    end
+
+    it 'returns false for a non-existent action' do
+      expect(store.reap_action(action_id: 999_999)).to be(false)
     end
   end
 end
