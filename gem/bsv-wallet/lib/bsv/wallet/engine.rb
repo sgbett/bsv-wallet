@@ -50,6 +50,10 @@ module BSV
       LIMP_THRESHOLD     = 50_000  # default: 50K sats
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
+      # Import-path retry budget — see +import_network_call+.
+      RETRYABLE_IMPORT_ATTEMPTS = 3
+      RETRYABLE_IMPORT_BACKOFF_BASE_S = 1.0
+
       attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker,
                   :funding_strategy, :tx_builder, :hydrator, :beef_importer
 
@@ -173,7 +177,7 @@ module BSV
 
         # Fetch transaction from network
         BSV.logger&.debug { "[Engine] import_utxo: fetching #{dtxid} from network" }
-        result = @network_provider.call(:get_tx, txid: dtxid)
+        result = import_network_call(:get_tx, txid: dtxid)
         raise BSV::Wallet::Error, "failed to fetch tx #{dtxid}" unless result.http_success?
 
         raw_tx = [result.data.strip].pack('H*')
@@ -991,6 +995,43 @@ module BSV
         abort_action(reference: action_reference)
       end
 
+      # Import-path network reads, with retry on retryable responses
+      # (HTTP 429 / 5xx) and exponential backoff.
+      #
+      # The import path calls +@network_provider+ directly rather than
+      # routing through +BSV::Network::Services+ — that routing layer's
+      # gem home is unsettled (#310) and was deliberately bypassed for the
+      # direct-lookup paths, so import owns this minimal backoff itself
+      # rather than re-coupling to it. A transient provider rate-limit must
+      # not turn a strict import into a hard failure: a 429 was flaking CI
+      # by failing unrelated PRs (#375).
+      #
+      # @param command [Symbol] SDK command name
+      # @return [BSV::Network::ProtocolResponse] the success response, or the
+      #   final response after retries are exhausted (terminal or still-retryable)
+      def import_network_call(command, **kwargs)
+        result = nil
+        RETRYABLE_IMPORT_ATTEMPTS.times do |attempt|
+          result = @network_provider.call(command, **kwargs)
+          return result if result.http_success? || !result.retryable?
+          break if attempt == RETRYABLE_IMPORT_ATTEMPTS - 1
+
+          sleep_for = RETRYABLE_IMPORT_BACKOFF_BASE_S * (2**attempt)
+          BSV.logger&.debug do
+            "[Engine] import_network_call cmd=#{command} retryable response; " \
+              "backing off #{sleep_for}s (attempt #{attempt + 1}/#{RETRYABLE_IMPORT_ATTEMPTS})"
+          end
+          backoff_sleep(sleep_for)
+        end
+        result
+      end
+
+      # Indirection so specs can stub backoff to zero without monkey-patching
+      # +Kernel#sleep+ globally.
+      def backoff_sleep(seconds)
+        sleep(seconds)
+      end
+
       # Strict acquisition of a confirmed UTXO's merkle proof (#296 Phase B).
       #
       # Returns +[block_height, merkle_path_binary]+ for the named tx, or
@@ -1004,10 +1045,10 @@ module BSV
       # @raise [BSV::Wallet::Error] when get_tx_details / get_merkle_path
       #   does not yield usable proof material
       def fetch_proof_for_imported_utxo!(dtxid)
-        details_result = @network_provider.call(:get_tx_details, txid: dtxid)
+        details_result = import_network_call(:get_tx_details, txid: dtxid)
         unless details_result.http_success?
           raise BSV::Wallet::Error,
-                "cannot import #{dtxid}: get_tx_details failed (HTTP #{details_result.status_code})"
+                "cannot import #{dtxid}: get_tx_details failed (HTTP #{details_result.code})"
         end
         unless details_result.data['blockheight']
           raise BSV::Wallet::Error,
@@ -1018,7 +1059,7 @@ module BSV
 
         block_height = details_result.data['blockheight']
 
-        proof_result = @network_provider.call(:get_merkle_path, txid: dtxid)
+        proof_result = import_network_call(:get_merkle_path, txid: dtxid)
         unless proof_result.http_success? && proof_result.data.is_a?(Array) && proof_result.data.any?
           raise BSV::Wallet::Error,
                 "cannot import #{dtxid}: merkle_path not available from chain (height=#{block_height}). " \
