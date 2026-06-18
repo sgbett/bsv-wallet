@@ -839,11 +839,13 @@ module BSV
       end
 
       # Discovery side of the reaper (#325). Returns up to +limit+ IDs of
-      # abandoned actions ready to reclaim, for the Scheduler loop to push to
+      # orphaned actions ready to reclaim, for the Scheduler loop to push to
       # Engine::Reaper.
       #
-      # The reaper reclaims *invalid* actions — abandoned locked inputs with no
-      # recovery owner. An action is reapable when it is past the staleness
+      # The reaper reclaims *orphaned* actions — structurally valid states (the
+      # schema forbids invalid ones) that hold locked inputs but have no
+      # recovery owner and can no longer progress. An action is reapable when it
+      # is past the staleness
       # threshold, has no promotions row (promoted is protected), has no
       # broadcasts row, and is either broadcastable (+broadcast_intent !=
       # 'none'+) or pre-sign (+wtxid IS NULL+).
@@ -860,7 +862,7 @@ module BSV
       #   complete synchronously via +complete_internal_action+, which signs and
       #   promotes atomically — so a *signed* internal action is either promoted
       #   (excluded above) or a deliberately-parked/OP_RETURN completion (kept).
-      #   Only a *pre-sign* internal action (+wtxid IS NULL+) is an abandoned
+      #   Only a *pre-sign* internal action (+wtxid IS NULL+) is an orphaned
       #   mid-funding lock with no owner. Reaping those, but never a signed
       #   internal action, closes the internal pre-sign leak (#329) without
       #   touching completed internal state.
@@ -886,7 +888,7 @@ module BSV
           .select_map(:id)
       end
 
-      # Reclaim a single abandoned action (#325). Tears the action down in one
+      # Reclaim a single orphaned action (#325). Tears the action down in one
       # transaction and deletes it, cascading its +inputs+ rows so the locked
       # UTXOs return to the spendable set.
       #

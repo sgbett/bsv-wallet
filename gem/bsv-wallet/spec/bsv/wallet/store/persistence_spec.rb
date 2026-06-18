@@ -2202,8 +2202,8 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'includes an internal (none) pre-sign action — locked inputs, never signed (#329)' do
-      # Internal no_send abandoned mid-funding: intent none, inputs locked,
-      # wtxid NULL, unpromoted, no broadcasts row. No other owner — reaper
+      # Internal no_send orphaned mid-funding: intent none, inputs locked,
+      # wtxid NULL, unpromoted, no broadcasts row. No recovery owner — reaper
       # reclaims it via the pre-sign (wtxid IS NULL) arm of the predicate.
       output = create_funded_output(satoshis: 1000)
       result = store.create_action(action: { description: 'internal pre-sign', broadcast_intent: :none },
@@ -2216,7 +2216,7 @@ RSpec.describe BSV::Wallet::Store, :store do
     it 'excludes a signed internal action — parked/complete, never reaped (#329)' do
       # sign_action on a 'none' action sets wtxid with no broadcasts row and no
       # promotion. This is a deliberately-parked / completion state, not an
-      # abandoned lock — the reaper must not touch it.
+      # orphaned lock — the reaper must not touch it.
       result = store.create_action(action: { description: 'internal signed', broadcast_intent: :none })
       store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
                         raw_tx: SecureRandom.random_bytes(100))

@@ -75,7 +75,7 @@ handle. Promotion happens later via `signAction`.
 | Gap | Valid intermediate state | Owner |
 |-----|--------------------------|-------|
 | before `stage_action` | inputs locked, `wtxid IS NULL`, no broadcasts row | **Reaper** (pre-sign arm). |
-| staged, awaiting `signAction` | wtxid (placeholder) set, intent delayed, **no broadcasts row**, unpromoted | **Reaper** after threshold. Correct for an abandoned action; see **Known limitations** (#383) for the slow-signer caveat. |
+| staged, awaiting `signAction` | wtxid (placeholder) set, intent delayed, **no broadcasts row**, unpromoted | **Reaper** after threshold — correct once the signer never returns; see **Known limitations** (#383) for the slow-signer caveat. |
 
 ### Internal `no_send` (`broadcast_intent = 'none'`)
 
@@ -160,8 +160,9 @@ Both are single atomic transitions — no intermediate gap.
 
 - **Deferred-signer staleness ambiguity (#383).** A staged action awaiting
   `signAction` (intent delayed, no broadcasts row, unpromoted) is reaper-eligible
-  after the staleness threshold. That is correct for an *abandoned* one, but is
-  structurally indistinguishable from a legitimately slow external signer. The
-  threshold is the only lever today; the fix is a "parked" marker that exempts
-  intentionally-deferred rows (the same discriminator #192's batching needs).
+  after the staleness threshold. That is correct once the signer never returns,
+  but is structurally indistinguishable from a legitimately slow external
+  signer. The threshold is the only lever today; the fix is a "parked" marker
+  that exempts deferred rows the caller is still working on (the same
+  discriminator #192's batching needs).
   The staged state *is* owned — this is a precision gap, not an unowned state.
