@@ -85,6 +85,24 @@ module BSV
           raise NotImplementedError
         end
 
+        # Phases 2–4 (internal/no_send) in one atomic transition: sign, save
+        # proof, promote outputs, and make change spendable. Closes the
+        # crash-windows a separate-call sequence leaves (#327 sign→promote,
+        # #328 promote→change). Used by the synchronous internal completion
+        # paths (no broadcast to wait for).
+        #
+        # @param action_id [Integer]
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
+        # @param raw_tx [String] signed raw transaction binary
+        # @param sign_outputs [Array<Hash>] outputs for the sign step (empty on
+        #   the internal path — real outputs are promoted, not staged)
+        # @param change_outputs [Array<Hash>] change outputs for the sign step
+        # @param promote_outputs [Array<Hash>] output specs to promote
+        def complete_internal_action(action_id:, wtxid:, raw_tx:,
+                                     sign_outputs:, change_outputs:, promote_outputs:)
+          raise NotImplementedError
+        end
+
         # Phase 2 (deferred): Attach placeholder signing artifacts and the
         # caller's declared outputs to an action.
         #

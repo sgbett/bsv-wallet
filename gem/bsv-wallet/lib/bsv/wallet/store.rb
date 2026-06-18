@@ -131,6 +131,35 @@ module BSV
         end
       end
 
+      # Atomically complete an internal (+no_send+) action in one transition:
+      # sign, save its proof, promote its outputs, and make change spendable —
+      # so a crash can never strand a signed-but-unpromoted internal action
+      # (#327) or a promoted action with unspendable change (#328).
+      #
+      # Composes the existing per-step methods inside a single +db.transaction+;
+      # their own +@db.transaction+ blocks flatten into this one (Sequel reuses
+      # the open transaction), so it is all commit-or-rollback together. This is
+      # the same proven pattern +Engine#import_utxo+ Phase 1 uses inline — lifted
+      # into Store so atomicity lives here, not in the Engine.
+      #
+      # @param action_id [Integer]
+      # @param wtxid [String] 32-byte wire-order wtxid
+      # @param raw_tx [String] signed raw transaction binary
+      # @param sign_outputs [Array<Hash>] outputs for +sign_action+ (empty on the
+      #   internal path — real outputs are promoted, not staged)
+      # @param change_outputs [Array<Hash>] change outputs for +sign_action+
+      # @param promote_outputs [Array<Hash>] output specs to promote
+      def complete_internal_action(action_id:, wtxid:, raw_tx:,
+                                   sign_outputs:, change_outputs:, promote_outputs:)
+        @db.transaction do
+          sign_action(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx,
+                      outputs: sign_outputs, change_outputs: change_outputs)
+          save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+          promote_action(action_id: action_id, outputs: promote_outputs) if promote_outputs.any?
+          promote_change_to_spendable(action_id: action_id) if change_outputs.any?
+        end
+      end
+
       def stage_action(action_id:, wtxid:, raw_tx:, outputs: [])
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'stage_action wtxid')
         BSV.logger&.debug { "[Store] stage_action: action_id=#{action_id} dtxid=#{wtxid.to_dtxid}" }

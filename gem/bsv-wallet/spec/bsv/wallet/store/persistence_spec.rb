@@ -2277,4 +2277,38 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.reap_action(action_id: 999_999)).to be(false)
     end
   end
+
+  describe '#complete_internal_action' do
+    let(:internal_action) { store.create_action(action: { description: 'internal', broadcast_intent: :none }) }
+    let(:promote_spec) do
+      [{ satoshis: 600, vout: 0, locking_script: SecureRandom.random_bytes(25),
+         derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }]
+    end
+
+    it 'signs, proves, and promotes in one commit' do
+      store.complete_internal_action(
+        action_id: internal_action[:id], wtxid: SecureRandom.random_bytes(32),
+        raw_tx: SecureRandom.random_bytes(80),
+        sign_outputs: [], change_outputs: [], promote_outputs: promote_spec
+      )
+
+      expect(BSV::Wallet::Store::Models::Action[internal_action[:id]].wtxid).not_to be_nil
+      expect(BSV::Wallet::Store::Models::Promotion.where(action_id: internal_action[:id]).any?).to be(true)
+    end
+
+    it 'rolls back the sign when a later step fails — no stranded signed action (#327/#328)' do
+      allow(store).to receive(:promote_action).and_raise(StandardError, 'promote boom')
+
+      expect do
+        store.complete_internal_action(
+          action_id: internal_action[:id], wtxid: SecureRandom.random_bytes(32),
+          raw_tx: SecureRandom.random_bytes(80),
+          sign_outputs: [], change_outputs: [], promote_outputs: promote_spec
+        )
+      end.to raise_error(/promote boom/)
+
+      # The whole transition rolled back: the action was never signed.
+      expect(BSV::Wallet::Store::Models::Action[internal_action[:id]].wtxid).to be_nil
+    end
+  end
 end

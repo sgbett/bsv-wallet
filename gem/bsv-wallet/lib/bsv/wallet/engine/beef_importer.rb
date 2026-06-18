@@ -56,56 +56,45 @@ module BSV
           # validate_fee_adequacy! two-step.
           verify_incoming_transaction!(subject_tx)
 
-          # Create action (incoming, no broadcast, already completed)
-          action_result = @store.create_action(
-            action: { description: description, broadcast_intent: :none }
-          )
+          # Resolve + validate the caller's outputs against the parsed subject
+          # tx BEFORE any persistence (#362). A malformed request — non-Array
+          # outputs, a vout the subject lacks, a declared-satoshis mismatch —
+          # fails with InvalidParameterError without leaving a created+signed
+          # action that was never promoted.
+          output_specs = resolve_output_specs(subject_tx, outputs)
 
-          # Store wtxid and raw_tx on the action
-          @store.sign_action(
-            action_id: action_result[:id],
-            wtxid: subject_tx.wtxid,
-            raw_tx: subject_tx.to_binary
-          )
-          @store.save_proof(wtxid: subject_tx.wtxid, proof: { raw_tx: subject_tx.to_binary })
-          BSV.logger&.debug { "[Engine::BeefImporter] import: subject=#{subject_tx.dtxid}" }
+          # Single transaction: a failure anywhere in the ingress (proof save,
+          # promotion) rolls the whole thing back — no dangling internal action
+          # (#327 / #362). There is no broadcast to wait for, so the entire
+          # incoming-BEEF ingress commits atomically.
+          @store.db.transaction do
+            action_result = @store.create_action(
+              action: { description: description, broadcast_intent: :none }
+            )
+            @store.sign_action(
+              action_id: action_result[:id], wtxid: subject_tx.wtxid, raw_tx: subject_tx.to_binary
+            )
+            @store.save_proof(wtxid: subject_tx.wtxid, proof: { raw_tx: subject_tx.to_binary })
+            BSV.logger&.debug { "[Engine::BeefImporter] import: subject=#{subject_tx.dtxid}" }
 
-          attach_labels(action_result[:id], labels)
+            attach_labels(action_result[:id], labels)
 
-          # Save ancestor proofs BEFORE replacing known ancestors with TXID-only.
-          # save_beef_proofs iterates beef.transactions and skips TxidOnlyEntry —
-          # if we replaced first, ancestors listed in known_txids but not yet in
-          # ProofStore would be converted to TXID-only and their proofs lost.
-          save_beef_proofs(beef, subject_tx.wtxid, action_result[:id])
+            # Save ancestor proofs BEFORE replacing known ancestors with TXID-only.
+            # save_beef_proofs iterates beef.transactions and skips TxidOnlyEntry —
+            # if we replaced first, ancestors listed in known_txids but not yet in
+            # ProofStore would be converted to TXID-only and their proofs lost.
+            save_beef_proofs(beef, subject_tx.wtxid, action_result[:id])
 
-          # trustSelf: replace known ancestors with TXID-only entries.
-          # This runs AFTER save_beef_proofs so no proof data is lost, and
-          # AFTER verify so the full graph was already validated.
-          # make_txid_only replaces entries in the BEEF's @transactions list but
-          # does NOT invalidate in-memory source_transaction pointers wired by
-          # from_binary — verify already walked those pointers successfully above.
-          replace_known_ancestors!(beef, subject_tx.wtxid, known_txids) if trust_self == 'known'
+            # trustSelf: replace known ancestors with TXID-only entries.
+            # This runs AFTER save_beef_proofs so no proof data is lost, and
+            # AFTER verify so the full graph was already validated.
+            # make_txid_only replaces entries in the BEEF's @transactions list but
+            # does NOT invalidate in-memory source_transaction pointers wired by
+            # from_binary — verify already walked those pointers successfully above.
+            replace_known_ancestors!(beef, subject_tx.wtxid, known_txids) if trust_self == 'known'
 
-          output_specs = outputs.map do |out|
-            spec = resolve_internalize_output(out)
-            tx_out = subject_tx.outputs[spec[:vout]]
-            unless tx_out
-              raise BSV::Wallet::InvalidParameterError.new(
-                'output_index',
-                "vout #{spec[:vout]} does not exist in subject transaction (#{subject_tx.outputs.length} outputs)"
-              )
-            end
-            spec[:locking_script] = tx_out.locking_script.to_binary
-            if spec[:satoshis]&.positive? && spec[:satoshis] != tx_out.satoshis
-              raise BSV::Wallet::InvalidParameterError.new(
-                'satoshis',
-                "declared satoshis #{spec[:satoshis]} != transaction output #{tx_out.satoshis} at vout #{spec[:vout]}"
-              )
-            end
-            spec[:satoshis] = tx_out.satoshis
-            spec
+            @store.promote_action(action_id: action_result[:id], outputs: output_specs)
           end
-          @store.promote_action(action_id: action_result[:id], outputs: output_specs)
 
           { accepted: true }
         end
@@ -279,6 +268,33 @@ module BSV
           end
 
           spec
+        end
+
+        # Resolve every caller output into a promotable Store spec, validating
+        # against the parsed subject tx. Pure (no persistence) so it runs before
+        # the ingress transaction opens — a bad request fails clean (#362).
+        def resolve_output_specs(subject_tx, outputs)
+          raise BSV::Wallet::InvalidParameterError.new('outputs', "expected an array, got #{outputs.class}") unless outputs.is_a?(Array)
+
+          outputs.map do |out|
+            spec = resolve_internalize_output(out)
+            tx_out = subject_tx.outputs[spec[:vout]]
+            unless tx_out
+              raise BSV::Wallet::InvalidParameterError.new(
+                'output_index',
+                "vout #{spec[:vout]} does not exist in subject transaction (#{subject_tx.outputs.length} outputs)"
+              )
+            end
+            spec[:locking_script] = tx_out.locking_script.to_binary
+            if spec[:satoshis]&.positive? && spec[:satoshis] != tx_out.satoshis
+              raise BSV::Wallet::InvalidParameterError.new(
+                'satoshis',
+                "declared satoshis #{spec[:satoshis]} != transaction output #{tx_out.satoshis} at vout #{spec[:vout]}"
+              )
+            end
+            spec[:satoshis] = tx_out.satoshis
+            spec
+          end
         end
       end
     end

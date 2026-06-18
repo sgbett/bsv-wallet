@@ -412,6 +412,47 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       end.to raise_error(BSV::Wallet::InvalidParameterError, /output_index/)
     end
 
+    it 'raises InvalidParameterError for non-Array outputs (#362 shape guard)' do
+      built = build_verifiable_beef
+      expect do
+        beef_importer.import(tx: built[:beef_binary], description: 'bad outputs', outputs: nil)
+      end.to raise_error(BSV::Wallet::InvalidParameterError, /outputs/)
+    end
+
+    it 'persists nothing when output resolution fails — no dangling internal action (#362)' do
+      built = build_verifiable_beef(satoshis: 500)
+      expect do
+        beef_importer.import(
+          tx: built[:beef_binary], description: 'dangling guard',
+          outputs: [{ output_index: 99, protocol: :basket_insertion, satoshis: 500 }]
+        )
+      end.to raise_error(BSV::Wallet::InvalidParameterError)
+
+      # Validation runs before any write, so the action was never created.
+      expect(store.find_action(wtxid: built[:subject_tx].wtxid)).to be_nil
+      expect(store.find_proof(wtxid: built[:subject_tx].wtxid)).to be_nil
+    end
+
+    it 'rolls back the created+signed action if promotion fails mid-ingress (#362 atomicity)' do
+      built = build_verifiable_beef(satoshis: 500)
+      allow(store).to receive(:promote_action).and_raise(StandardError, 'promote boom')
+
+      expect do
+        beef_importer.import(
+          tx: built[:beef_binary], description: 'rollback',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'x' }
+          }]
+        )
+      end.to raise_error(/promote boom/)
+
+      # Without the enclosing transaction this would be a signed, unpromoted,
+      # never-cleaned-up dangling action. The wrapper rolls it all back.
+      expect(store.find_action(wtxid: built[:subject_tx].wtxid)).to be_nil
+      expect(store.find_proof(wtxid: built[:subject_tx].wtxid)).to be_nil
+    end
+
     it 'raises InvalidParameterError when declared satoshis mismatch the transaction output' do
       built = build_verifiable_beef(satoshis: 500)
       expect do
