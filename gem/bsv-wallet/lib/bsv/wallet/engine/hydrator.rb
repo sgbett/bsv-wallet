@@ -75,6 +75,21 @@ module BSV
 
           beef = BSV::Transaction::Beef.new
           beef.merge_transaction(tx)
+
+          # Count parity: the assembled BEEF must hold exactly the
+          # transactions reachable through the in-memory source_transaction
+          # graph we just wired — nothing silently dropped during merge.
+          # (Proof closure — every leaf terminating at a merkle_path — is a
+          # separate concern, enforced by validate_for_handoff!.)
+          walked = count_wired_transactions(tx)
+          if beef.transactions.length != walked
+            raise BSV::Wallet::EgressBeefInvalidError,
+                  'egress assembly count parity: wired ancestry holds ' \
+                  "#{walked} transaction(s) but the BEEF holds " \
+                  "#{beef.transactions.length} " \
+                  "(subject dtxid=#{tx.wtxid.reverse.unpack1('H*')})"
+          end
+
           beef.to_atomic_binary(tx.wtxid)
         end
 
@@ -89,6 +104,13 @@ module BSV
         # almost always an upstream proof-closure gap that should have
         # been caught at import or +save_beef_proofs+ time.
         def validate_for_handoff!(atomic_beef, subject_wtxid)
+          # Deliberate: re-parse the serialised bytes rather than verifying
+          # the in-memory tx build_atomic_beef already wired. This checks
+          # exactly what a peer receives over the wire — the SPV-honesty
+          # contract — not just our in-memory graph. The duplicate parse +
+          # walk stays below broadcast latency, so the correctness assurance
+          # is well worth the cost; do NOT rewrite this to verify the
+          # in-memory object without re-opening that trade-off (#299).
           beef = BSV::Transaction::Beef.from_binary(atomic_beef)
           subject_entry = beef.transactions.find { |e| e.wtxid == subject_wtxid }
           unless subject_entry&.transaction
@@ -104,6 +126,21 @@ module BSV
                 "#{e.code} — #{e.message}. Upstream proof closure is incomplete " \
                 '(likely an ancestor missing merkle_path); investigate import / ' \
                 'save_beef_proofs path.'
+        end
+
+        private
+
+        # Distinct transactions reachable through the in-memory
+        # +source_transaction+ graph rooted at +tx+ (the subject counted).
+        # Deduplicated by wtxid so a diamond ancestry counts once, matching
+        # how +Beef#merge_transaction+ deduplicates its entries.
+        def count_wired_transactions(tx, seen = Set.new)
+          return 0 if seen.include?(tx.wtxid)
+
+          seen.add(tx.wtxid)
+          1 + tx.inputs.sum do |input|
+            input.source_transaction ? count_wired_transactions(input.source_transaction, seen) : 0
+          end
         end
       end
     end

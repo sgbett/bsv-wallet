@@ -788,6 +788,56 @@ RSpec.describe BSV::Wallet::Engine do
       end
     end
 
+    context 'caller-supplied unlock that is genuinely valid (#298)' do
+      it 'passes strict validate_for_handoff! through the apply_spends path' do
+        # The verbatim-mechanism tests above use a recognisable stub and
+        # bypass validation (the stub is deliberately not a real script).
+        # This one drives a *valid* caller unlock through apply_spends and
+        # lets strict validate_for_handoff! run for real — unit-level cover
+        # for the egress-validity contract on the caller-supplied path.
+        fund_wallet_with_keys(satoshis: 1000)
+
+        listed = engine_with_keys.list_outputs(basket: 'default')
+        output_id = listed[:outputs].first[:id]
+
+        create_result = engine_with_keys.create_action(
+          description: 'deferred valid caller',
+          sign_and_process: false,
+          inputs: [{ output_id: output_id }],
+          outputs: [{ satoshis: 900, locking_script: OP_TRUE }]
+        )
+
+        # Produce a genuinely-valid P2PKH unlock by signing the wallet's own
+        # unsigned signable tx with the source's derived key (the same
+        # derivation fund_wallet_with_keys locked the source to). apply_spends
+        # rebuilds from the identical staged raw_tx, so this unlock is valid
+        # for the final transaction.
+        unsigned = parse_beef_tx(create_result[:signable_transaction][:tx])
+        signing_key = key_deriver.derive_private_key(
+          protocol_id: [2, 'wallet payment'], key_id: 'suffix1', counterparty: 'self'
+        )
+        unsigned.inputs[0].unlocking_script_template = BSV::Transaction::P2PKH.new(signing_key)
+        unsigned.sign(0, signing_key)
+        valid_unlock = unsigned.inputs[0].unlocking_script.to_binary
+
+        # No stub on validate_for_handoff! — and assert it actually ran by
+        # spying on the Beef.from_binary deserialise it performs (the only
+        # such call in the sign flow), letting it execute for real.
+        allow(BSV::Transaction::Beef).to receive(:from_binary).and_call_original
+
+        result = engine_with_keys.sign_action(
+          spends: { 0 => { unlocking_script: valid_unlock } },
+          reference: create_result[:signable_transaction][:reference]
+        )
+
+        # Strict validate_for_handoff! ran (it deserialises the egress BEEF).
+        expect(BSV::Transaction::Beef).to have_received(:from_binary).at_least(:once)
+        expect(result[:txid].bytesize).to eq(32)
+        parsed = parse_beef_tx(result[:tx])
+        expect(parsed.inputs[0].unlocking_script.to_binary).to eq(valid_unlock)
+      end
+    end
+
     context 'invalid input reference' do
       it 'raises for non-existent vin in spends' do
         create_result = engine.create_action(
