@@ -18,7 +18,7 @@ Measure each PR against the project's own stated truth, in this order:
    - [`state-representations.md`](../reference/state-representations.md) — the per-element A–F conformance register (e.g. promotion is a `promotions` *row*, not an `outputs.promoted` flag).
    - [`state-boundaries.md`](../reference/state-boundaries.md) — stateless SDK / stateful wallet.
    - [`createaction-lifecycle.md`](../reference/createaction-lifecycle.md) — the action state machine: the 4-phase send path, the internal path, and the per-transition validation matrix.
-   - [`schema-intent.md`](../reference/schema-intent.md) — why the schema is shaped the way it is (table split, Postgres-native types, the consolidated migration set).
+   - [`schema.md`](../reference/schema.md) — the table-by-table reference: columns, constraints, FKs, lifecycle SQL, and the load-bearing design questions. Per-decision rationale lives in the ADR raft (`.architecture/decisions/adrs/`).
    - [`raw-tx.md`](../reference/raw-tx.md), [`send_or_nosend.md`](../reference/send_or_nosend.md), [`transactions.md`](../reference/transactions.md) — wire format, no-send/batching, transaction handling.
 3. **Conventions live in [`CLAUDE.md`](../CLAUDE.md)** — language (American identifiers / author's-voice prose), the `wtxid`/`dtxid` binary-vs-display byte-order discipline, `Transaction::Tx`-in-prose, and the identity-hex / derived-binary public-key rule. Flag violations against CLAUDE.md; don't restate its rules here.
 

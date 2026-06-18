@@ -66,6 +66,6 @@ If the answer is "yes but only a little" (caching, affinity, retry counters), it
 ## Related
 
 - [`principle-of-state.md`](principle-of-state.md) — *what* the wallet maintains (the database is canon).
-- [`schema-intent.md`](schema-intent.md) — how the schema encodes the wallet's stateful invariants.
+- [`schema.md`](schema.md) — table-by-table reference for the schema that encodes the wallet's stateful invariants.
 - #250 — `BSV::Network::Broadcaster` + persisted broadcast affinity (worked example: stateful broadcast orchestration in the wallet).
 - #251 — Arcade SSE push resolution (worked example: stateful push consumer in the wallet, with the resolution-physics rationale).

@@ -51,4 +51,4 @@ Designing to a portable subset to keep a notional door open would forfeit the st
 * ADR-001 — design from first principles, not translation.
 * ADR-006 — one relational store (this is which features that store uses).
 * ADR-012 — store abstraction (default backend selection; SQLite translates these features).
-* `reference/schema-intent.md` — the per-primitive rationale (being absorbed into the ADRs).
+* `reference/schema.md` — the table-by-table reference that uses these primitives.

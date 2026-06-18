@@ -627,9 +627,10 @@ module BSV
         # The output spec omits +derivation_prefix+ / +sender_identity_key+:
         # those would make the wallet treat the sweep target as its own
         # BRC-42 owned output (output_type NULL + derivation = ownership
-        # marker per schema-intent §3). For an outbound payment we want
-        # +output_type = 'outbound'+ so the wallet doesn't insert a
-        # +spendable+ row for it. send_payment follows the same convention.
+        # marker per reference/schema.md §6 Outputs). For an outbound
+        # payment we want +output_type = 'outbound'+ so the wallet doesn't
+        # insert a +spendable+ row for it. send_payment follows the same
+        # convention.
         @bypass_limp_mode = true
         begin
           create_action(
