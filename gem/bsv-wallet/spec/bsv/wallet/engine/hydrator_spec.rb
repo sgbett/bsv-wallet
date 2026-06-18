@@ -191,6 +191,21 @@ RSpec.describe BSV::Wallet::Engine::Hydrator do
       expect(wired_source).to be_a(BSV::Transaction::Tx)
       expect(wired_source.merkle_path).to be_a(BSV::Transaction::MerklePath)
     end
+
+    it 'raises EgressBeefInvalidError on a count-parity mismatch' do
+      # A subject with no wired ancestry assembles to a 1-tx BEEF. Force the
+      # walked-ancestry count to diverge to prove the guard fires — the
+      # mismatch is otherwise a true invariant that cannot occur in practice.
+      action = store.create_action(action: { description: 'parity', broadcast_intent: :none })
+      subject_tx = make_fake_tx(satoshis: 1000)
+      # Separate instance (not the subject) so the stub does not trip
+      # RSpec/SubjectStub.
+      tested = described_class.new(store: store)
+      allow(tested).to receive(:count_wired_transactions).and_return(99)
+
+      expect { tested.build_atomic_beef(subject_tx.to_binary, action[:id]) }
+        .to raise_error(BSV::Wallet::EgressBeefInvalidError, /count parity/)
+    end
   end
 
   describe '#validate_for_handoff!' do
