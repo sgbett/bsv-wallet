@@ -4,6 +4,8 @@ require_relative 'shared_context'
 
 require 'rack/test'
 
+using BSV::Wallet::Txid
+
 RSpec.describe BSV::Wallet::Store::BroadcastCallback, :store do
   include Rack::Test::Methods
 
@@ -17,7 +19,7 @@ RSpec.describe BSV::Wallet::Store::BroadcastCallback, :store do
     )
   end
 
-  let(:txid_hex) { action.dtxid }
+  let(:txid_hex) { action.wtxid.to_dtxid }
 
   describe 'POST /' do
     it 'parses ARC TransactionStatus JSON and delegates to handle_event' do

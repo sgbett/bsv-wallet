@@ -21,6 +21,8 @@ require 'json'
 # prevents (concurrent fibers on a shared connection corrupt PG
 # result state -- "undefined method 'nfields' for nil").
 
+using BSV::Wallet::Txid
+
 module BSV
   module Wallet
     # SQL-backed persistence for the wallet.
@@ -105,7 +107,7 @@ module BSV
 
       def sign_action(action_id:, wtxid:, raw_tx:, outputs: [], change_outputs: [])
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'sign_action wtxid')
-        BSV.logger&.debug { "[Store] sign_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
+        BSV.logger&.debug { "[Store] sign_action: action_id=#{action_id} dtxid=#{wtxid.to_dtxid}" }
         @db.transaction do
           write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
 
@@ -131,7 +133,7 @@ module BSV
 
       def stage_action(action_id:, wtxid:, raw_tx:, outputs: [])
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'stage_action wtxid')
-        BSV.logger&.debug { "[Store] stage_action: action_id=#{action_id} dtxid=#{wtxid.reverse.unpack1('H*')}" }
+        BSV.logger&.debug { "[Store] stage_action: action_id=#{action_id} dtxid=#{wtxid.to_dtxid}" }
         @db.transaction do
           write_signing_artifacts(action_id: action_id, wtxid: wtxid, raw_tx: raw_tx)
           # Deferred-path outputs persisted as plain INSERTs (no promotions row). The BRC-100
@@ -472,7 +474,7 @@ module BSV
 
       def save_proof(wtxid:, proof:)
         BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'save_proof wtxid')
-        BSV.logger&.debug { "[Store] save_proof: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{proof[:height]}" }
+        BSV.logger&.debug { "[Store] save_proof: dtxid=#{wtxid.to_dtxid} height=#{proof[:height]}" }
 
         @db.transaction do
           block_id = find_or_create_block(proof) if proof[:height]
@@ -579,7 +581,7 @@ module BSV
         end
 
         BSV.logger&.debug do
-          dtxids = result.first(5).map { |r| r[:source_wtxid].reverse.unpack1('H*') }
+          dtxids = result.first(5).map { |r| r[:source_wtxid].to_dtxid }
           suffix = result.size > 5 ? " (+#{result.size - 5} more)" : ''
           "[Store] resolve_inputs_for_signing: action_id=#{action_id} inputs=#{result.size} sources=#{dtxids.join(',')}#{suffix}"
         end

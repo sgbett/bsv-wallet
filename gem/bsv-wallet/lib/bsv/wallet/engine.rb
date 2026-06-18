@@ -6,6 +6,8 @@ require 'securerandom'
 # class-definition time via +include+, so autoload won't fire in time.
 require_relative 'engine/brc100'
 
+using BSV::Wallet::Txid
+
 module BSV
   module Wallet
     # Layer 3 — BRC-100 business process orchestration.
@@ -420,7 +422,7 @@ module BSV
           source_action = @store.find_action(id: slot_output[:action_id])
           next unless source_action&.dig(:wtxid)
 
-          derivation_prefix = source_action[:wtxid].reverse.unpack1('H*')
+          derivation_prefix = source_action[:wtxid].to_dtxid
           derivation_suffix = slot_output[:vout].to_s
 
           derived_pub = @key_deriver.derive_public_key(
@@ -876,7 +878,7 @@ module BSV
         if result[:total].positive?
           slot = result[:outputs].first
           source_action = @store.find_action(id: slot[:action_id])
-          dtxid = source_action[:wtxid].reverse.unpack1('H*')
+          dtxid = source_action[:wtxid].to_dtxid
           return { slot: slot, dtxid: dtxid, vout: slot[:vout] }
         end
 
@@ -908,7 +910,7 @@ module BSV
         )
 
         # txid from create_action is wire-order wtxid
-        dtxid = create_result[:txid].reverse.unpack1('H*')
+        dtxid = create_result[:txid].to_dtxid
 
         # Re-query for the newly created slot
         result = @store.query_outputs(basket: 'p wbikd', limit: 1)

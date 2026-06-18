@@ -16,9 +16,6 @@ module BSV
         # datasets to the live database.
         Sequel::Model.require_valid_table = false
 
-        # Shared model concern (eager — no DB dependency)
-        require_relative 'models/display_txid'
-
         autoload :Block,            'bsv/wallet/store/models/block'
         autoload :TxProof,          'bsv/wallet/store/models/tx_proof'
         autoload :Action,           'bsv/wallet/store/models/action'

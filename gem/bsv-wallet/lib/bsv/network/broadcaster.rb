@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+using BSV::Wallet::Txid
+
 module BSV
   module Network
     # Wallet-side broadcast orchestration above SDK providers.
@@ -76,7 +78,7 @@ module BSV
         rescue StandardError => e
           BSV.logger&.warn do
             '[Broadcaster] affinity write failed (broadcast succeeded, hint lost) ' \
-              "dtxid=#{wtxid.reverse.unpack1('H*')} provider=#{provider.name}: #{e.message}"
+              "dtxid=#{wtxid.to_dtxid} provider=#{provider.name}: #{e.message}"
           end
         end
       end

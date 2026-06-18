@@ -2,6 +2,8 @@
 
 require 'omq'
 
+using BSV::Wallet::Txid
+
 module BSV
   module Wallet
     class Engine
@@ -370,7 +372,7 @@ module BSV
           )
           @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
           BSV.logger&.debug do
-            "[Engine::Broadcast] proof linked from broadcast response: dtxid=#{wtxid.reverse.unpack1('H*')} height=#{data[:block_height]}"
+            "[Engine::Broadcast] proof linked from broadcast response: dtxid=#{wtxid.to_dtxid} height=#{data[:block_height]}"
           end
         end
 
@@ -436,7 +438,7 @@ module BSV
             return status
           end
 
-          dtxid = action[:wtxid].reverse.unpack1('H*')
+          dtxid = action[:wtxid].to_dtxid
           response = @broadcaster.get_tx_status(wtxid: action[:wtxid], dtxid: dtxid)
           latency_ms = ((Time.now - started_at) * 1000).round
 

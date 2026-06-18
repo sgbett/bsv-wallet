@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+using BSV::Wallet::Txid
+
 module BSV
   module Wallet
     class Engine
@@ -25,7 +27,7 @@ module BSV
 
         def normalize_tsc(tsc, wtxid)
           BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'normalize_tsc wtxid')
-          dtxid = wtxid.reverse.unpack1('H*')
+          dtxid = wtxid.to_dtxid
           BSV::Transaction::MerklePath.from_tsc(
             dtxid_hex: tsc[:txOrId] || tsc[:tx_or_id] || dtxid,
             index: tsc[:index],

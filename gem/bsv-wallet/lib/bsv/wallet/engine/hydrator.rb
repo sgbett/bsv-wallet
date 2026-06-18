@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+using BSV::Wallet::Txid
+
 module BSV
   module Wallet
     class Engine
@@ -87,7 +89,7 @@ module BSV
                   'egress assembly count parity: wired ancestry holds ' \
                   "#{walked} transaction(s) but the BEEF holds " \
                   "#{beef.transactions.length} " \
-                  "(subject dtxid=#{tx.wtxid.reverse.unpack1('H*')})"
+                  "(subject dtxid=#{tx.wtxid.to_dtxid})"
           end
 
           beef.to_atomic_binary(tx.wtxid)
@@ -115,7 +117,7 @@ module BSV
           subject_entry = beef.transactions.find { |e| e.wtxid == subject_wtxid }
           unless subject_entry&.transaction
             raise BSV::Wallet::EgressBeefInvalidError,
-                  "egress validation: subject dtxid=#{subject_wtxid.reverse.unpack1('H*')} " \
+                  "egress validation: subject dtxid=#{subject_wtxid.to_dtxid} " \
                   'missing from constructed BEEF (internal inconsistency)'
           end
 
