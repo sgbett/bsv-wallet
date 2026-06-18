@@ -2201,9 +2201,27 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.stale_action_ids(threshold: 3600, limit: 50)).not_to include(result[:id])
     end
 
-    it 'excludes internal no_send actions (left to #327)' do
-      result = store.create_action(action: { description: 'nosend', broadcast_intent: :none })
+    it 'includes an internal (none) pre-sign action — locked inputs, never signed (#329)' do
+      # Internal no_send abandoned mid-funding: intent none, inputs locked,
+      # wtxid NULL, unpromoted, no broadcasts row. No other owner — reaper
+      # reclaims it via the pre-sign (wtxid IS NULL) arm of the predicate.
+      output = create_funded_output(satoshis: 1000)
+      result = store.create_action(action: { description: 'internal pre-sign', broadcast_intent: :none },
+                                   inputs: [{ output_id: output.id, vin: 0 }])
       BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
+
+      expect(store.stale_action_ids(threshold: 3600, limit: 50)).to include(result[:id])
+    end
+
+    it 'excludes a signed internal action — parked/complete, never reaped (#329)' do
+      # sign_action on a 'none' action sets wtxid with no broadcasts row and no
+      # promotion. This is a deliberately-parked / completion state, not an
+      # abandoned lock — the reaper must not touch it.
+      result = store.create_action(action: { description: 'internal signed', broadcast_intent: :none })
+      store.sign_action(action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
+                        raw_tx: SecureRandom.random_bytes(100))
+      BSV::Wallet::Store::Models::Action.where(id: result[:id]).update(created_at: Time.now - 7200)
+
       expect(store.stale_action_ids(threshold: 3600, limit: 50)).not_to include(result[:id])
     end
 
@@ -2261,6 +2279,18 @@ RSpec.describe BSV::Wallet::Store, :store do
       freed = store.find_spendable(satoshis: 99_999, basket: 'default').map { |o| o[:id] }
       expect(freed).to include(output.id)
       expect(BSV::Wallet::Store::Models::Input.where(action_id: result[:id]).count).to eq(0)
+    end
+
+    it 'reclaims an internal (none) pre-sign action and releases its lock (#329)' do
+      output = create_funded_output(satoshis: 1000)
+      result = store.create_action(action: { description: 'internal pre-sign', broadcast_intent: :none },
+                                   inputs: [{ output_id: output.id, vin: 0 }])
+
+      expect(store.reap_action(action_id: result[:id])).to be(true)
+      expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
+
+      freed = store.find_spendable(satoshis: 99_999, basket: 'default').map { |o| o[:id] }
+      expect(freed).to include(output.id)
     end
 
     it 'returns false and does not delete a promoted action (race re-validation)' do
