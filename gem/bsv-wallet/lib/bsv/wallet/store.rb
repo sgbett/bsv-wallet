@@ -839,24 +839,33 @@ module BSV
       end
 
       # Discovery side of the reaper (#325). Returns up to +limit+ IDs of
-      # abandoned actions ready to reclaim, for the Scheduler loop to push to
+      # orphaned actions ready to reclaim, for the Scheduler loop to push to
       # Engine::Reaper.
       #
-      # The reaper reclaims *invalid* actions — locked inputs that never
-      # entered the broadcast pipeline. An action is reapable when it is past
-      # the staleness threshold, is not internal (+broadcast_intent != 'none'+
-      # — #327's concern), has no promotions row (promoted is protected), and
-      # has **no broadcasts row**.
+      # The reaper reclaims *orphaned* actions — structurally valid states (the
+      # schema forbids invalid ones) that hold locked inputs but have no
+      # recovery owner and can no longer progress. An action is reapable when it
+      # is past the staleness
+      # threshold, has no promotions row (promoted is protected), has no
+      # broadcasts row, and is either broadcastable (+broadcast_intent !=
+      # 'none'+) or pre-sign (+wtxid IS NULL+).
       #
-      # The no-broadcasts-row clause is the ownership boundary (raised on
-      # PR #379): +sign_action+ creates the broadcasts row, so any signed
-      # broadcastable action is owned by the broadcast loops — success promotes
-      # it, terminal failure unwinds it via +reject_action+. Reaping one would
-      # release inputs of a tx that may already be on the network (a crash
-      # mid-submit leaves +broadcast_at+ stamped but no status) — a
-      # double-spend. So the reaper only touches what never reached the
-      # pipeline: the #326 pre-sign window (inputs locked, +sign_action+ never
-      # ran, hence no broadcasts row).
+      # Two ownership boundaries:
+      #
+      # - **No broadcasts row** (PR #379): +sign_action+ creates the broadcasts
+      #   row, so any signed broadcastable action is owned by the broadcast
+      #   loops — success promotes it, terminal failure unwinds it via
+      #   +reject_action+. Reaping one would release inputs of a tx that may
+      #   already be on the network (a crash mid-submit leaves +broadcast_at+
+      #   stamped but no status) — a double-spend.
+      # - **Broadcastable OR pre-sign**: internal (+intent 'none'+) actions
+      #   complete synchronously via +complete_internal_action+, which signs and
+      #   promotes atomically — so a *signed* internal action is either promoted
+      #   (excluded above) or a deliberately-parked/OP_RETURN completion (kept).
+      #   Only a *pre-sign* internal action (+wtxid IS NULL+) is an orphaned
+      #   mid-funding lock with no owner. Reaping those, but never a signed
+      #   internal action, closes the internal pre-sign leak (#329) without
+      #   touching completed internal state.
       #
       # @param threshold [Integer] age in seconds
       # @param limit [Integer] max IDs per discovery pass
@@ -872,14 +881,14 @@ module BSV
 
         models::Action
           .where { created_at < cutoff }
-          .where(Sequel.~(broadcast_intent: 'none'))
+          .where(Sequel.|(Sequel.~(broadcast_intent: 'none'), Sequel.expr(wtxid: nil)))
           .exclude(promotion_exists.exists)
           .exclude(broadcast_exists.exists)
           .limit(limit)
           .select_map(:id)
       end
 
-      # Reclaim a single abandoned action (#325). Tears the action down in one
+      # Reclaim a single orphaned action (#325). Tears the action down in one
       # transaction and deletes it, cascading its +inputs+ rows so the locked
       # UTXOs return to the spendable set.
       #
@@ -904,7 +913,7 @@ module BSV
         @db.transaction do
           reapable = models::Action
                      .where(id: action_id)
-                     .where(Sequel.~(broadcast_intent: 'none'))
+                     .where(Sequel.|(Sequel.~(broadcast_intent: 'none'), Sequel.expr(wtxid: nil)))
                      .exclude(promotion_exists.exists)
                      .exclude(broadcast_exists.exists)
                      .for_update
