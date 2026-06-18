@@ -206,7 +206,11 @@ module BSV
 
           # Read-only, post-commit: the BEEF we hand back + its SPV honesty
           # check. Under strict create_action (#296 Phase B), returning from
-          # create_action implies a valid BEEF in hand.
+          # create_action implies a valid BEEF in hand. Note this runs AFTER the
+          # internal completion commits, so for no_send it is a post-hoc check,
+          # not a promotion gate — a raise here leaves an already-promoted action
+          # (its outputs are the wallet's own, genuinely spendable). Near-
+          # unreachable for a self-built BEEF; the trade-off is no stranding.
           atomic_beef = engine.hydrator.build_atomic_beef(raw_tx, action_result[:id])
           engine.hydrator.validate_for_handoff!(atomic_beef, wtxid)
 

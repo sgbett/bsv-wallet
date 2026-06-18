@@ -243,33 +243,6 @@ module BSV
         # under +:payment_remittance+; +:basket_insertion+ under
         # +:insertion_remittance+ (with the basket-insertion "no derivation
         # means root-key ownership" convention).
-        # Resolve every caller output into a promotable Store spec, validating
-        # against the parsed subject tx. Pure (no persistence) so it runs before
-        # the ingress transaction opens — a bad request fails clean (#362).
-        def resolve_output_specs(subject_tx, outputs)
-          raise BSV::Wallet::InvalidParameterError.new('outputs', "expected an array, got #{outputs.class}") unless outputs.is_a?(Array)
-
-          outputs.map do |out|
-            spec = resolve_internalize_output(out)
-            tx_out = subject_tx.outputs[spec[:vout]]
-            unless tx_out
-              raise BSV::Wallet::InvalidParameterError.new(
-                'output_index',
-                "vout #{spec[:vout]} does not exist in subject transaction (#{subject_tx.outputs.length} outputs)"
-              )
-            end
-            spec[:locking_script] = tx_out.locking_script.to_binary
-            if spec[:satoshis]&.positive? && spec[:satoshis] != tx_out.satoshis
-              raise BSV::Wallet::InvalidParameterError.new(
-                'satoshis',
-                "declared satoshis #{spec[:satoshis]} != transaction output #{tx_out.satoshis} at vout #{spec[:vout]}"
-              )
-            end
-            spec[:satoshis] = tx_out.satoshis
-            spec
-          end
-        end
-
         def resolve_internalize_output(out)
           spec = { satoshis: out[:satoshis] || 0, vout: out[:output_index] || 0 }
 
@@ -295,6 +268,33 @@ module BSV
           end
 
           spec
+        end
+
+        # Resolve every caller output into a promotable Store spec, validating
+        # against the parsed subject tx. Pure (no persistence) so it runs before
+        # the ingress transaction opens — a bad request fails clean (#362).
+        def resolve_output_specs(subject_tx, outputs)
+          raise BSV::Wallet::InvalidParameterError.new('outputs', "expected an array, got #{outputs.class}") unless outputs.is_a?(Array)
+
+          outputs.map do |out|
+            spec = resolve_internalize_output(out)
+            tx_out = subject_tx.outputs[spec[:vout]]
+            unless tx_out
+              raise BSV::Wallet::InvalidParameterError.new(
+                'output_index',
+                "vout #{spec[:vout]} does not exist in subject transaction (#{subject_tx.outputs.length} outputs)"
+              )
+            end
+            spec[:locking_script] = tx_out.locking_script.to_binary
+            if spec[:satoshis]&.positive? && spec[:satoshis] != tx_out.satoshis
+              raise BSV::Wallet::InvalidParameterError.new(
+                'satoshis',
+                "declared satoshis #{spec[:satoshis]} != transaction output #{tx_out.satoshis} at vout #{spec[:vout]}"
+              )
+            end
+            spec[:satoshis] = tx_out.satoshis
+            spec
+          end
         end
       end
     end
