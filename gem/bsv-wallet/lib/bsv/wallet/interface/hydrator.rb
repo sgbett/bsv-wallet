@@ -36,15 +36,18 @@ module BSV
       # before verification. The dependency is one-way: ingress depends
       # on Hydrator, never the reverse.
       #
-      # ## Not the Hydrator's concern
+      # ## The shared hydration cache (#296 Phase D)
       #
-      # Shallow broadcast EF hydration (+Broadcast#hydrated_transaction_for+
-      # plus +HydratedTxCache+) stays on +Broadcast+ — its cache
-      # invalidation is driven by the broadcast lifecycle (evict on
-      # reject / terminal). Pulling it into a pure ProofStore→Tx service
-      # would drag lifecycle coupling into machinery that has none.
-      # +InputSource+ likewise remains a standalone shared module
-      # (TxBuilder + +apply_spends+ + Broadcast all depend on it).
+      # The Hydrator owns the +HydratedTxCache+ — a wtxid-keyed,
+      # immutable-bytes, LRU-only substrate (no broadcast-lifecycle
+      # eviction; superseded the action_id-keyed #269 cache). +wire_ancestor+
+      # reads through it (a cached merkle terminal stops the walk) and
+      # +proof_arrived+ enriches it monotonically when a proof lands. The
+      # same instance is injected into +Engine::Broadcast+, whose shallow EF
+      # path (+hydrated_transaction_for+) attaches per-input source data from
+      # cached parent bytes — so one substrate serves both egress shapes.
+      # +InputSource+ remains a standalone shared module (TxBuilder +
+      # +apply_spends+ + Broadcast all depend on it).
       module Hydrator
         # Recursive ProofStore→Tx wiring primitive.
         #
@@ -84,6 +87,31 @@ module BSV
         # @param action_id [Integer] the action whose inputs to resolve
         # @return [String] Atomic BEEF binary
         def build_atomic_beef(raw_tx, action_id)
+          raise NotImplementedError
+        end
+
+        # Monotonic substrate-enrichment hook (#296 Phase D).
+        #
+        # Called whenever the wallet learns durable information about a
+        # +wtxid+: at minimum the +raw_tx+ bytes; additionally a
+        # +merkle_path+ when (and only when) a proof has landed. Sites that
+        # call this include +Engine::TxProof+ (daemon proof acquisition),
+        # +Engine::Broadcast+ (eager broadcast-response proof),
+        # +Engine::BeefImporter+ (every BEEF entry, merkle-bearing or not),
+        # and +Engine#import_utxo+ (root UTXO import). The shared cache
+        # then short-circuits future +wire_ancestor+ walks: through the
+        # +wtxid+ as a proven terminal when +merkle_path+ is present, or
+        # at minimum serving the +raw_tx+ on cache hit.
+        #
+        # Enrichment is monotonic — never invalidates. A +merkle_path+
+        # already present is never cleared; +nil+ in this call is a
+        # no-op for the merkle slot of an existing entry.
+        #
+        # @param wtxid [String] 32-byte wire-order wtxid
+        # @param raw_tx [String] transaction bytes (wire format)
+        # @param merkle_path [String, nil] serialized merkle path, or +nil+
+        #   when the call is enriching only the +raw_tx+
+        def proof_arrived(wtxid:, raw_tx:, merkle_path:)
           raise NotImplementedError
         end
 

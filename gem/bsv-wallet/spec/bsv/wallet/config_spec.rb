@@ -87,9 +87,9 @@ RSpec.describe BSV::Wallet::Config do
       end
     end
 
-    it 'BSV_WALLET_TX_CACHE_SIZE → tx_cache_size (Integer), default 1000' do
+    it 'BSV_WALLET_TX_CACHE_SIZE → tx_cache_size (Integer), default 20000' do
       with_env('BSV_WALLET_TX_CACHE_SIZE' => nil) do
-        expect(described_class.new.tx_cache_size).to eq(1000)
+        expect(described_class.new.tx_cache_size).to eq(20_000)
       end
       with_env('BSV_WALLET_TX_CACHE_SIZE' => '500') do
         expect(described_class.new.tx_cache_size).to eq(500)

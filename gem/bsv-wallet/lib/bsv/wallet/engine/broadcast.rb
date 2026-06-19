@@ -120,19 +120,16 @@ module BSV
                 hint = Marshal.load(msg.first) # rubocop:disable Security/MarshalLoad
                 # Shape guard: anyone with write access to the socket
                 # inode (the documented trust boundary, see issue #280)
-                # could push arbitrary Marshalled data; without this
-                # check a malformed +action_id+ would still take an
-                # LRU slot in the cache and evict real entries (the
-                # lookup keys on Integer +action[:id]+, so a non-Integer
-                # would never hit). Drop garbage early.
+                # could push arbitrary Marshalled data; without this check
+                # a malformed envelope would feed garbage into
+                # Beef.from_binary. Drop it early. (The cache now keys on
+                # wtxid derived from the BEEF, not on +action_id+, but the
+                # envelope still carries +action_id+ so the guard stays.)
                 next unless hint.is_a?(Hash) &&
                             hint[:action_id].is_a?(Integer) &&
                             hint[:beef].is_a?(String)
 
-                beef = BSV::Transaction::Beef.from_binary(hint[:beef])
-                subject_wtxid = beef.subject_wtxid
-                subject_tx = subject_wtxid ? beef.find_atomic_transaction(subject_wtxid) : beef.transactions.last&.transaction
-                @hydrated_tx_cache.put(hint[:action_id], subject_tx) if subject_tx
+                cache_beef_transactions(BSV::Transaction::Beef.from_binary(hint[:beef]))
               rescue StandardError => e
                 BSV.logger&.error { "[Engine::Broadcast] hints_pull error: #{e.message}" }
               end
@@ -228,13 +225,16 @@ module BSV
         #   the parsed transaction's input count (a contract violation
         #   upstream; should never fire under the normal create_action flow).
         def hydrated_transaction_for(action)
-          # Cache hit: producer already supplied the hydrated Transaction::Tx
-          # (intra-process create_action or out-of-process via the OMQ
-          # hint receiver). Skip the parse + resolve_inputs JOIN. #269.
-          cached = @hydrated_tx_cache.get(action[:id])
-          return cached if cached
-
           tx = BSV::Transaction::Tx.from_binary(action[:raw_tx])
+
+          # Fast path: every input's source output is in the shared cache
+          # (a parent we have proofs/hints for) — attach satoshis + script
+          # from the cached parent bytes, no JOIN. #296 Phase D (was an
+          # action_id-keyed ready-Tx cache in #269).
+          return tx if hydrate_sources_from_cache(tx)
+
+          # Floor: the +inputs+ table carries source data for every action
+          # we built, independent of proofs. #252.
           sources = @store.resolve_inputs_for_signing(action_id: action[:id])
           if tx.inputs.length != sources.length
             raise BSV::Wallet::Error,
@@ -243,6 +243,61 @@ module BSV
           end
 
           tx.inputs.each_with_index { |input, idx| InputSource.attach!(input, sources[idx]) }
+          tx
+        end
+
+        # Prime the shared cache from a hint's BEEF: every non-TXID-only
+        # transaction lands keyed by its own wtxid, carrying its merkle_path
+        # when the BEEF proved it. wtxid-keyed (not action_id) so the entries
+        # serve both the EF broadcast path here and any deep wire_ancestor
+        # walk through the same substrate. #296 Phase D.
+        def cache_beef_transactions(beef)
+          beef.transactions.each do |beef_tx|
+            next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
+
+            t = beef_tx.transaction
+            next unless t
+
+            # Merkle can be wired directly onto the transaction OR referenced
+            # indirectly via the entry's BUMP index — funnel through
+            # +BeefImporter.merkle_path_for+ so the cache and the ingress
+            # proof store always agree on which entries are merkle-bearing.
+            # Without this, a BUMP-indexed proof would land as
+            # +merkle_path: nil+ in the cache and force +wire_ancestor+ past
+            # what is in fact a proven terminal.
+            mp = BeefImporter.merkle_path_for(beef, beef_tx)
+            @hydrated_tx_cache.put(t.wtxid, raw_tx: t.to_binary, merkle_path: mp&.to_binary)
+          end
+        end
+
+        # Attach every input's source satoshis + locking script from the
+        # shared cache (parent raw_tx → +outputs[vout]+). All-or-nothing:
+        # returns +nil+ on the first miss WITHOUT partial attachment (so the
+        # resolve_inputs JOIN can then attach the full set cleanly), or the
+        # fully-attached +tx+ on success.
+        def hydrate_sources_from_cache(tx)
+          # Memoize parsed parents by wtxid — multiple inputs frequently
+          # spend distinct vouts of the same parent (fan-in / consolidation
+          # patterns); without memoization that would re-parse the same
+          # binary per input.
+          parents = {}
+          pairs = tx.inputs.map do |input|
+            unless parents.key?(input.prev_wtxid)
+              cached = @hydrated_tx_cache.get(input.prev_wtxid)
+              return nil unless cached
+
+              parents[input.prev_wtxid] = BSV::Transaction::Tx.from_binary(cached[:raw_tx])
+            end
+            out = parents[input.prev_wtxid].outputs[input.prev_tx_out_index]
+            return nil unless out
+
+            [input, out]
+          end
+
+          pairs.each do |input, out|
+            input.source_satoshis = out.satoshis
+            input.source_locking_script = out.locking_script
+          end
           tx
         end
 
@@ -333,10 +388,6 @@ module BSV
           # needed here; closes the crash-recovery gap where a process
           # could die between recording and promotion.
           link_proof_if_present(action_id, data)
-          # Terminal-success eviction: the action is in mempool or on
-          # chain; the hydrated Transaction::Tx is dead weight from here. LRU
-          # is the safety net if eviction is skipped for any reason. #269.
-          @hydrated_tx_cache.evict(action_id)
           BSV::Wallet.emit('task.succeeded',
                            task: 'broadcast_submission', id: action_id,
                            latency_ms: latency_ms,
@@ -371,6 +422,11 @@ module BSV
             }
           )
           @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
+          # Monotonic cache enrichment: the eager proof makes this wtxid a
+          # proven terminal for any future wire_ancestor walk. Equivalent to
+          # Hydrator#proof_arrived (both are monotonic puts on the shared
+          # cache); done direct here since Broadcast holds the cache. #296 Phase D.
+          @hydrated_tx_cache.put(wtxid, raw_tx: action[:raw_tx], merkle_path: merkle_path)
           BSV.logger&.debug do
             "[Engine::Broadcast] proof linked from broadcast response: dtxid=#{wtxid.to_dtxid} height=#{data[:block_height]}"
           end
@@ -384,9 +440,6 @@ module BSV
         # next resolution-loop pass, and emit a failure event.
         def handle_submit_terminal(action_id, response)
           @store.reject_action(action_id: action_id)
-          # Terminal-rejection eviction: the cascade just deleted the
-          # action; a cached Transaction::Tx would dangle. #269.
-          @hydrated_tx_cache.evict(action_id)
           # arc_status carries the status-poll shape's txStatus when present
           # (Arcade's {txStatus, extraInfo} body); arc_reason carries the
           # broadcast-rejection shape's reason string ({error, reason} body).

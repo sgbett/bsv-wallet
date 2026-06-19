@@ -71,6 +71,14 @@ RSpec.describe BSV::Wallet::Engine::TxProof do
         expect(store).to have_received(:link_proof).with(action_id: action_id, tx_proof_id: 99)
       end
 
+      it 'notifies the injected hydrator of the new proof (#296 Phase D)' do
+        hydrator = instance_double(BSV::Wallet::Engine::Hydrator, proof_arrived: nil)
+        described_class.new(store: store, broadcaster: broadcaster, hydrator: hydrator).process(action_id)
+        expect(hydrator).to have_received(:proof_arrived).with(
+          wtxid: wtxid, raw_tx: raw_tx, merkle_path: merkle_path_binary
+        )
+      end
+
       it 'emits task.dispatched then task.succeeded with outcome=acquired and integer latency_ms' do
         tx_proof.process(action_id)
 

@@ -30,9 +30,18 @@ module BSV
         # no +chain_tracker+ injection. The hydrator reads the store via
         # +find_proof+ (during +wire_ancestor+) and
         # +resolve_inputs_for_signing+ (during +build_atomic_beef+).
-        def initialize(store:)
+        #
+        # +cache+ is the shared +HydratedTxCache+ (#296 Phase D) the deep
+        # walk reads through and proof-arrival enriches. Defaults to a
+        # private cache so a bare +Hydrator.new(store:)+ still memoises;
+        # the daemon/engine inject a single shared instance so the same
+        # substrate serves +Broadcast+ (EF) and proof acquisition.
+        def initialize(store:, cache: nil)
           @store = store
+          @cache = cache || HydratedTxCache.from_config
         end
+
+        attr_reader :cache
 
         # See +Interface::Hydrator#wire_ancestor+.
         def wire_ancestor(wtxid, visited: Set.new)
@@ -40,13 +49,13 @@ module BSV
 
           visited.add(wtxid)
 
-          proof = @store.find_proof(wtxid: wtxid)
-          return unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
+          raw_tx, merkle_path_bytes = load_tx_bytes(wtxid)
+          return unless raw_tx && raw_tx.bytesize >= 10
 
-          tx = BSV::Transaction::Tx.from_binary(proof[:raw_tx])
+          tx = BSV::Transaction::Tx.from_binary(raw_tx)
 
-          if proof[:merkle_path]
-            tx.merkle_path = BSV::Transaction::MerklePath.from_binary(proof[:merkle_path]).first
+          if merkle_path_bytes
+            tx.merkle_path = BSV::Transaction::MerklePath.from_binary(merkle_path_bytes).first
             return tx # Proven terminal — no need to recurse
           end
 
@@ -57,6 +66,11 @@ module BSV
           end
 
           tx
+        end
+
+        # See +Interface::Hydrator#proof_arrived+.
+        def proof_arrived(wtxid:, raw_tx:, merkle_path:)
+          @cache.put(wtxid, raw_tx: raw_tx, merkle_path: merkle_path)
         end
 
         # See +Interface::Hydrator#build_atomic_beef+.
@@ -131,6 +145,22 @@ module BSV
         end
 
         private
+
+        # Resolve +[raw_tx, merkle_path_bytes]+ for +wtxid+, preferring the
+        # shared cache and falling through to the proof store on a miss —
+        # populating the cache on the way so a later walk through the same
+        # wtxid short-circuits. Returns +[nil, nil]+ when no usable proof
+        # exists (no row, or raw_tx too short to deserialise).
+        def load_tx_bytes(wtxid)
+          cached = @cache.get(wtxid)
+          return [cached[:raw_tx], cached[:merkle_path]] if cached
+
+          proof = @store.find_proof(wtxid: wtxid)
+          return [nil, nil] unless proof && proof[:raw_tx] && proof[:raw_tx].bytesize >= 10
+
+          @cache.put(wtxid, raw_tx: proof[:raw_tx], merkle_path: proof[:merkle_path])
+          [proof[:raw_tx], proof[:merkle_path]]
+        end
 
         # Distinct transactions reachable through the in-memory
         # +source_transaction+ graph rooted at +tx+ (the subject counted).

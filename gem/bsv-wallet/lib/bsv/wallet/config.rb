@@ -45,7 +45,10 @@ module BSV
       # Sequel connection pool size for walletd.
       attr_accessor :daemon_pool_size
 
-      # EF hint cache capacity (entries).
+      # Shared hydration cache capacity (entries). The wtxid-keyed
+      # substrate both the EF broadcast path and the Hydrator's deep BEEF
+      # walk read; default sized for multi-hop cascade working sets
+      # (#296 Phase D).
       attr_accessor :tx_cache_size
 
       # Optional cross-process EF hint socket path. +nil+ = feature off.
@@ -70,7 +73,7 @@ module BSV
         @network          = self.class.parse_network(ENV.fetch('BSV_WALLET_NETWORK', nil))
         @limp_threshold   = Integer(ENV.fetch('LIMP_THRESHOLD', '50000'))
         @daemon_pool_size = Integer(ENV.fetch('BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS', '16'))
-        @tx_cache_size    = Integer(ENV.fetch('BSV_WALLET_TX_CACHE_SIZE', '1000'))
+        @tx_cache_size    = Integer(ENV.fetch('BSV_WALLET_TX_CACHE_SIZE', '20000'))
         @hints_socket     = blank_to_nil(ENV.fetch('BSV_WALLET_HINTS_SOCKET', nil))
         @reap_threshold   = Integer(ENV.fetch('BSV_WALLET_REAP_THRESHOLD_S', '3600'))
         @fee_model        = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(

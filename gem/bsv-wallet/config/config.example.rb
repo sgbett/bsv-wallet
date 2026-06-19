@@ -46,9 +46,11 @@ BSV::Wallet.configure do |c|
 
   # --- EF hint cache (#269) ---
 
-  # EF hint cache capacity (entries). Default 1000; reads
+  # Shared hydration cache capacity (entries) — the wtxid-keyed substrate
+  # the broadcast EF path and the Hydrator's deep BEEF walk both read.
+  # Default 20000 (sized for multi-hop cascade working sets); reads
   # +BSV_WALLET_TX_CACHE_SIZE+.
-  # c.tx_cache_size = 1000
+  # c.tx_cache_size = 20000
 
   # Optional cross-process EF hint socket. When set, producers (CLI,
   # API) PUSH hints to walletd via this socket, eliminating the
