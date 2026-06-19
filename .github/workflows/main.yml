@@ -6,7 +6,27 @@ on:
   pull_request:
 
 jobs:
+  # Cheap gate: did anything CI actually exercises change? Output drives the
+  # spec jobs' `if:`. Filtering here (not via trigger-level paths-ignore) means
+  # the workflow always runs, so on docs-only changes the spec jobs report a
+  # `skipped` conclusion — which branch protection treats as PASSED, rather than
+  # leaving a required check pending forever and blocking the PR.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'gem/**'
+              - '.github/workflows/**'
+
   test:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     name: Ruby ${{ matrix.ruby }}
 
@@ -74,7 +94,8 @@ jobs:
         working-directory: gem/bsv-wallet
 
   integration:
-    if: github.event_name == 'push' || !github.event.pull_request.head.repo.fork
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name == 'push' || !github.event.pull_request.head.repo.fork) }}
     runs-on: ubuntu-latest
     name: Integration (CLI porcelain pipeline)
 
