@@ -258,7 +258,15 @@ module BSV
             t = beef_tx.transaction
             next unless t
 
-            @hydrated_tx_cache.put(t.wtxid, raw_tx: t.to_binary, merkle_path: t.merkle_path&.to_binary)
+            # Merkle can be wired directly onto the transaction OR referenced
+            # indirectly via the entry's BUMP index — mirror BeefImporter's
+            # +merkle_path_for+ so a BUMP-indexed proof isn't lost to the
+            # cache (which would force wire_ancestor past what is in fact a
+            # proven terminal).
+            mp = t.merkle_path ||
+                 (beef_tx.respond_to?(:bump_index) && beef_tx.bump_index &&
+                  beef.bumps[beef_tx.bump_index])
+            @hydrated_tx_cache.put(t.wtxid, raw_tx: t.to_binary, merkle_path: mp&.to_binary)
           end
         end
 
@@ -268,12 +276,19 @@ module BSV
         # resolve_inputs JOIN can then attach the full set cleanly), or the
         # fully-attached +tx+ on success.
         def hydrate_sources_from_cache(tx)
+          # Memoize parsed parents by wtxid — multiple inputs frequently
+          # spend distinct vouts of the same parent (fan-in / consolidation
+          # patterns); without memoization that would re-parse the same
+          # binary per input.
+          parents = {}
           pairs = tx.inputs.map do |input|
-            cached = @hydrated_tx_cache.get(input.prev_wtxid)
-            return nil unless cached
+            unless parents.key?(input.prev_wtxid)
+              cached = @hydrated_tx_cache.get(input.prev_wtxid)
+              return nil unless cached
 
-            parent = BSV::Transaction::Tx.from_binary(cached[:raw_tx])
-            out = parent.outputs[input.prev_tx_out_index]
+              parents[input.prev_wtxid] = BSV::Transaction::Tx.from_binary(cached[:raw_tx])
+            end
+            out = parents[input.prev_wtxid].outputs[input.prev_tx_out_index]
             return nil unless out
 
             [input, out]

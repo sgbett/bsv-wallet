@@ -207,6 +207,17 @@ module BSV
             # "proven". Acquisition of the real proof happens later via the
             # daemon's proof-acquisition task (#167). Per #177.
             subject_proof_id = proof_id if wtxid == subject_wtxid && merkle_path
+            # Monotonic cache enrichment — every save_proof site informs the
+            # shared substrate so the cache stays a true projection over
+            # +tx_proofs+. Without this, a BUMP-indirect ingress can leave a
+            # cache entry stuck at +merkle_path: nil+ even after the proof
+            # has persisted, defeating wire_ancestor's terminal short-circuit.
+            # #296 Phase D.
+            @hydrator&.proof_arrived(
+              wtxid: wtxid,
+              raw_tx: beef_tx.transaction.to_binary,
+              merkle_path: merkle_path&.to_binary
+            )
           end
 
           @store.link_proof(action_id: action_id, tx_proof_id: subject_proof_id) if subject_proof_id
@@ -218,9 +229,10 @@ module BSV
         # assert_proofs_complete! (what should have persisted) so the two can
         # never disagree about which entries are merkle-bearing.
         def merkle_path_for(beef, beef_tx)
-          beef_tx.transaction.merkle_path ||
-            (beef_tx.respond_to?(:bump_index) && beef_tx.bump_index &&
-             beef.bumps[beef_tx.bump_index])
+          return beef_tx.transaction.merkle_path if beef_tx.transaction.merkle_path
+          return nil unless beef_tx.respond_to?(:bump_index) && beef_tx.bump_index
+
+          beef.bumps[beef_tx.bump_index]
         end
 
         # Phase C ingress completeness invariant (#296). Post-condition over
