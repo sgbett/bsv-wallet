@@ -39,3 +39,4 @@ Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 | 25 | [ADR-022](20260610_ADR-022-state-as-a-fk-row.md) | 2026-06-10 | Accepted | State as a FK row (the general membership-row pattern) |
 | 26 | [ADR-023](20260615_ADR-023-promotion-as-a-row.md) | 2026-06-15 | Accepted | Promotion is a row, not a column (supersedes ADR-011 promotion) |
 | 27 | [ADR-025](20260619_ADR-025-transmission-distinct-domain.md) | 2026-06-19 | Accepted | Transmission is a distinct domain from Broadcast (transmit→peer vs submit→miner) |
+| 28 | [ADR-026](20260619_ADR-026-engine-primitive-granularity.md) | 2026-06-19 | Accepted | Engine primitive surface — per-domain-operation granularity, thin wrappers admissible (#397 Stage 2a of #396) |
