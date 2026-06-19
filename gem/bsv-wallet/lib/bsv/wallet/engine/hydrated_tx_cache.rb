@@ -82,7 +82,15 @@ module BSV
             # Monotonic: keep an already-present merkle_path when the caller
             # supplies none.
             kept_path = merkle_path || existing&.fetch(:merkle_path, nil)
-            @entries[wtxid] = { raw_tx: raw_tx, merkle_path: kept_path }.freeze
+            # +dup.freeze+ the String values so a caller that retains a
+            # reference and later mutates in place cannot corrupt cached
+            # bytes across fibers — Hash#freeze alone freezes the wrapper
+            # but not its contents. Entries returning through #get are
+            # cross-fiber-safe by construction.
+            @entries[wtxid] = {
+              raw_tx: raw_tx.dup.freeze,
+              merkle_path: kept_path&.dup&.freeze
+            }.freeze
             @entries.shift while @entries.size > @capacity
           end
         end

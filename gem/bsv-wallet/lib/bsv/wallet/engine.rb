@@ -249,6 +249,11 @@ module BSV
             proof: { raw_tx: raw_tx, merkle_path: merkle_path_binary, height: block_height }
           )
           @store.link_proof(action_id: import_action[:id], tx_proof_id: proof_id)
+          # Inform the shared Hydrator cache so any subsequent wire_ancestor
+          # walk through +wtxid+ terminates here without re-fetching. Mirrors
+          # the BeefImporter / Broadcast / TxProof discipline — every
+          # save_proof + merkle site notifies the substrate. #296 Phase D.
+          @hydrator&.proof_arrived(wtxid: wtxid, raw_tx: raw_tx, merkle_path: merkle_path_binary)
           output_ids = @store.promote_action(
             action_id: import_action[:id],
             outputs: [{ satoshis: satoshis, vout: vout, locking_script: locking_script.to_binary, output_type: 'root' }]
@@ -1120,6 +1125,10 @@ module BSV
 
         proof_id = @store.save_proof(wtxid: wtxid, proof: proof)
         @store.link_proof(action_id: action_id, tx_proof_id: proof_id)
+        # Inform the shared Hydrator cache so any subsequent wire_ancestor
+        # walk through +wtxid+ terminates here (when merkle present) or at
+        # least short-circuits the store lookup for raw_tx. #296 Phase D.
+        @hydrator&.proof_arrived(wtxid: wtxid, raw_tx: raw_tx, merkle_path: merkle_path)
       end
 
       def secure_compare(a, b)

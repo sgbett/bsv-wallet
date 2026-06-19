@@ -90,18 +90,27 @@ module BSV
           raise NotImplementedError
         end
 
-        # Monotonic proof-arrival enrichment (#296 Phase D).
+        # Monotonic substrate-enrichment hook (#296 Phase D).
         #
-        # Called when a fresh merkle proof persists (the daemon's
-        # +Engine::TxProof+ loop, or the eager broadcast-response path) so
-        # the shared hydration cache learns the new terminal. A future
-        # +wire_ancestor+ that walks through +wtxid+ then stops there
-        # without descending. Enrichment never invalidates: a +merkle_path+
-        # already present is never cleared.
+        # Called whenever the wallet learns durable information about a
+        # +wtxid+: at minimum the +raw_tx+ bytes; additionally a
+        # +merkle_path+ when (and only when) a proof has landed. Sites that
+        # call this include +Engine::TxProof+ (daemon proof acquisition),
+        # +Engine::Broadcast+ (eager broadcast-response proof),
+        # +Engine::BeefImporter+ (every BEEF entry, merkle-bearing or not),
+        # and +Engine#import_utxo+ (root UTXO import). The shared cache
+        # then short-circuits future +wire_ancestor+ walks: through the
+        # +wtxid+ as a proven terminal when +merkle_path+ is present, or
+        # at minimum serving the +raw_tx+ on cache hit.
+        #
+        # Enrichment is monotonic — never invalidates. A +merkle_path+
+        # already present is never cleared; +nil+ in this call is a
+        # no-op for the merkle slot of an existing entry.
         #
         # @param wtxid [String] 32-byte wire-order wtxid
         # @param raw_tx [String] transaction bytes (wire format)
-        # @param merkle_path [String] serialized merkle path (the new proof)
+        # @param merkle_path [String, nil] serialized merkle path, or +nil+
+        #   when the call is enriching only the +raw_tx+
         def proof_arrived(wtxid:, raw_tx:, merkle_path:)
           raise NotImplementedError
         end
