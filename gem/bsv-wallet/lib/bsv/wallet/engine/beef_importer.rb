@@ -106,6 +106,20 @@ module BSV
           { accepted: true }
         end
 
+        # Resolve the merkle path a BEEF entry carries, whether wired directly
+        # onto the transaction or referenced indirectly via its BUMP index.
+        # Public class method so every BEEF traversal that needs "which
+        # entries are merkle-bearing" funnels through one definition —
+        # save_beef_proofs (what to persist), assert_proofs_complete! (what
+        # should have persisted), and Broadcast#cache_beef_transactions
+        # (what to cache as terminal) all share the answer.
+        def self.merkle_path_for(beef, beef_tx)
+          return beef_tx.transaction.merkle_path if beef_tx.transaction.merkle_path
+          return nil unless beef_tx.respond_to?(:bump_index) && beef_tx.bump_index
+
+          beef.bumps[beef_tx.bump_index]
+        end
+
         private
 
         # Attach labels to the action via Store primitives. Two-call
@@ -191,7 +205,7 @@ module BSV
             next unless beef_tx.transaction
 
             wtxid = beef_tx.transaction.wtxid
-            merkle_path = merkle_path_for(beef, beef_tx)
+            merkle_path = self.class.merkle_path_for(beef, beef_tx)
 
             proof = { raw_tx: beef_tx.transaction.to_binary }
             if merkle_path
@@ -223,18 +237,6 @@ module BSV
           @store.link_proof(action_id: action_id, tx_proof_id: subject_proof_id) if subject_proof_id
         end
 
-        # Resolve the merkle path a BEEF entry carries, whether wired directly
-        # onto the transaction or referenced indirectly via its BUMP index.
-        # Shared by save_beef_proofs (what to persist) and
-        # assert_proofs_complete! (what should have persisted) so the two can
-        # never disagree about which entries are merkle-bearing.
-        def merkle_path_for(beef, beef_tx)
-          return beef_tx.transaction.merkle_path if beef_tx.transaction.merkle_path
-          return nil unless beef_tx.respond_to?(:bump_index) && beef_tx.bump_index
-
-          beef.bumps[beef_tx.bump_index]
-        end
-
         # Phase C ingress completeness invariant (#296). Post-condition over
         # save_beef_proofs: walk the same entries under the same skip rules and
         # assert each was actually persisted — raw_tx present, and any
@@ -260,7 +262,7 @@ module BSV
                     'persisted by save_beef_proofs'
             end
 
-            next unless merkle_path_for(beef, beef_tx) && stored[:merkle_path].nil?
+            next unless self.class.merkle_path_for(beef, beef_tx) && stored[:merkle_path].nil?
 
             raise BSV::Wallet::InvalidBeefError,
                   "ingress proof closure: dtxid=#{wtxid.to_dtxid} carried a " \

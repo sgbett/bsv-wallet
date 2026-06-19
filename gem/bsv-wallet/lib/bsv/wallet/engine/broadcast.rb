@@ -259,13 +259,13 @@ module BSV
             next unless t
 
             # Merkle can be wired directly onto the transaction OR referenced
-            # indirectly via the entry's BUMP index — mirror BeefImporter's
-            # +merkle_path_for+ so a BUMP-indexed proof isn't lost to the
-            # cache (which would force wire_ancestor past what is in fact a
-            # proven terminal).
-            mp = t.merkle_path ||
-                 (beef_tx.respond_to?(:bump_index) && beef_tx.bump_index &&
-                  beef.bumps[beef_tx.bump_index])
+            # indirectly via the entry's BUMP index — funnel through
+            # +BeefImporter.merkle_path_for+ so the cache and the ingress
+            # proof store always agree on which entries are merkle-bearing.
+            # Without this, a BUMP-indexed proof would land as
+            # +merkle_path: nil+ in the cache and force +wire_ancestor+ past
+            # what is in fact a proven terminal.
+            mp = BeefImporter.merkle_path_for(beef, beef_tx)
             @hydrated_tx_cache.put(t.wtxid, raw_tx: t.to_binary, merkle_path: mp&.to_binary)
           end
         end
