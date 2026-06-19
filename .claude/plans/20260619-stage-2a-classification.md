@@ -49,16 +49,25 @@ class Engine
                    trust_self: nil, no_send: false, change_count: nil,
                    randomize_outputs: true, send_with: nil)
     # Param-combination preconditions (was Action.create lines 38–53)
-    raise UnsupportedActionError, '...' if no_send && deferred?(sign_and_process, inputs)
+    if no_send && deferred?(sign_and_process, inputs)
+      raise UnsupportedActionError,
+            'createAction(no_send: true) combined with deferred signing is not ' \
+            'implemented in the base wallet; tracked in #192.'
+    end
     require_key_deriver! unless deferred?(sign_and_process, inputs) || skip_change?(inputs)
 
     intent = map_broadcast_intent(no_send, accept_delayed_broadcast)
 
-    # Pre-flight policy guard (was reach-back #3 + #4 first call)
+    # Pre-flight policy guards (was reach-back #3 + #4 first call).
+    # Limp check always; headroom check skipped on deferred (no funds locked
+    # yet — headroom is meaningless until signAction commits the spend).
     output_total      = (outputs || []).sum { |o| o[:satoshis] || 0 }
     pre_lock_balance  = @utxo_pool.balance
     pre_lock_count    = change_count || @utxo_pool.change_output_count
-    @policy.guard_balance!(balance: pre_lock_balance, spending: output_total)
+    @policy.guard_balance!(balance: pre_lock_balance, spending: 0)            # limp
+    unless deferred?(sign_and_process, inputs)
+      @policy.guard_balance!(balance: pre_lock_balance, spending: output_total) # headroom
+    end
 
     # Row creation + delegation to slim Action for lifecycle work
     action_row = @store.create_action(action: {
