@@ -74,7 +74,7 @@ stateless→SDK / stateful→wallet axis in `state-boundaries.md`) sitting on a
 shared *operational* substrate:
 
 ```
-            Engine::Hydrator   ← shared: wired Transaction::Tx + wtxid-keyed cache
+            Engine::Hydrator   ← shared: wtxid-keyed bytes cache → wired Transaction::Tx
              /            \
   Engine::Broadcast    Engine::Transmission   (not yet built)
    #submit  → EF→miner   #transmit → BEEF→peer

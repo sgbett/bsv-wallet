@@ -254,4 +254,68 @@ RSpec.describe BSV::Wallet::Engine::Hydrator do
                         /wallet refuses to ship structurally invalid BEEF/)
     end
   end
+
+  # --- #296 Phase D: shared wtxid cache ------------------------------
+
+  describe 'cache-aware #wire_ancestor' do
+    let(:cache) { BSV::Wallet::Engine::HydratedTxCache.new(capacity: 100) }
+    subject(:hydrator) { described_class.new(store: store, cache: cache) } # rubocop:disable RSpec/LeadingSubject
+
+    it 'populates the cache from the proof store on a miss' do
+      proven = make_fake_tx(satoshis: 1000)
+      wtxid = proven.wtxid
+      mp = make_merkle_path(wtxid: wtxid)
+      store.save_proof(wtxid: wtxid, proof: { height: 800_000, merkle_path: mp.to_binary, raw_tx: proven.to_binary })
+
+      expect(cache.get(wtxid)).to be_nil
+      hydrator.wire_ancestor(wtxid)
+      expect(cache.get(wtxid)).to include(raw_tx: proven.to_binary)
+      expect(cache.get(wtxid)[:merkle_path]).to eq(mp.to_binary)
+    end
+
+    it 'short-circuits on a cache hit (no second store read)' do
+      proven = make_fake_tx(satoshis: 1000)
+      wtxid = proven.wtxid
+      mp = make_merkle_path(wtxid: wtxid)
+      store.save_proof(wtxid: wtxid, proof: { height: 800_000, merkle_path: mp.to_binary, raw_tx: proven.to_binary })
+
+      hydrator.wire_ancestor(wtxid) # warms the cache
+      allow(store).to receive(:find_proof).and_call_original
+      result = hydrator.wire_ancestor(wtxid)
+
+      expect(store).not_to have_received(:find_proof)
+      expect(result.merkle_path).to be_a(BSV::Transaction::MerklePath)
+    end
+  end
+
+  describe '#proof_arrived' do
+    let(:cache) { BSV::Wallet::Engine::HydratedTxCache.new(capacity: 100) }
+    subject(:hydrator) { described_class.new(store: store, cache: cache) } # rubocop:disable RSpec/LeadingSubject
+
+    it 'enriches the cache so a later walk terminates without a store read' do
+      proven = make_fake_tx(satoshis: 1000)
+      wtxid = proven.wtxid
+      mp = make_merkle_path(wtxid: wtxid)
+
+      hydrator.proof_arrived(wtxid: wtxid, raw_tx: proven.to_binary, merkle_path: mp.to_binary)
+
+      allow(store).to receive(:find_proof).and_call_original
+      result = hydrator.wire_ancestor(wtxid)
+
+      expect(store).not_to have_received(:find_proof)
+      expect(result.merkle_path).to be_a(BSV::Transaction::MerklePath)
+    end
+
+    it 'is monotonic — does not clear an existing merkle_path' do
+      proven = make_fake_tx(satoshis: 1000)
+      wtxid = proven.wtxid
+      mp = make_merkle_path(wtxid: wtxid)
+
+      hydrator.proof_arrived(wtxid: wtxid, raw_tx: proven.to_binary, merkle_path: mp.to_binary)
+      # A later unconfirmed wire-up must not regress the proven terminal.
+      cache.put(wtxid, raw_tx: proven.to_binary)
+
+      expect(cache.get(wtxid)[:merkle_path]).to eq(mp.to_binary)
+    end
+  end
 end

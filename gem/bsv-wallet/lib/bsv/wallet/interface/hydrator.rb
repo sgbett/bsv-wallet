@@ -36,15 +36,18 @@ module BSV
       # before verification. The dependency is one-way: ingress depends
       # on Hydrator, never the reverse.
       #
-      # ## Not the Hydrator's concern
+      # ## The shared hydration cache (#296 Phase D)
       #
-      # Shallow broadcast EF hydration (+Broadcast#hydrated_transaction_for+
-      # plus +HydratedTxCache+) stays on +Broadcast+ — its cache
-      # invalidation is driven by the broadcast lifecycle (evict on
-      # reject / terminal). Pulling it into a pure ProofStore→Tx service
-      # would drag lifecycle coupling into machinery that has none.
-      # +InputSource+ likewise remains a standalone shared module
-      # (TxBuilder + +apply_spends+ + Broadcast all depend on it).
+      # The Hydrator owns the +HydratedTxCache+ — a wtxid-keyed,
+      # immutable-bytes, LRU-only substrate (no broadcast-lifecycle
+      # eviction; superseded the action_id-keyed #269 cache). +wire_ancestor+
+      # reads through it (a cached merkle terminal stops the walk) and
+      # +proof_arrived+ enriches it monotonically when a proof lands. The
+      # same instance is injected into +Engine::Broadcast+, whose shallow EF
+      # path (+hydrated_transaction_for+) attaches per-input source data from
+      # cached parent bytes — so one substrate serves both egress shapes.
+      # +InputSource+ remains a standalone shared module (TxBuilder +
+      # +apply_spends+ + Broadcast all depend on it).
       module Hydrator
         # Recursive ProofStore→Tx wiring primitive.
         #
@@ -84,6 +87,22 @@ module BSV
         # @param action_id [Integer] the action whose inputs to resolve
         # @return [String] Atomic BEEF binary
         def build_atomic_beef(raw_tx, action_id)
+          raise NotImplementedError
+        end
+
+        # Monotonic proof-arrival enrichment (#296 Phase D).
+        #
+        # Called when a fresh merkle proof persists (the daemon's
+        # +Engine::TxProof+ loop, or the eager broadcast-response path) so
+        # the shared hydration cache learns the new terminal. A future
+        # +wire_ancestor+ that walks through +wtxid+ then stops there
+        # without descending. Enrichment never invalidates: a +merkle_path+
+        # already present is never cleared.
+        #
+        # @param wtxid [String] 32-byte wire-order wtxid
+        # @param raw_tx [String] transaction bytes (wire format)
+        # @param merkle_path [String] serialized merkle path (the new proof)
+        def proof_arrived(wtxid:, raw_tx:, merkle_path:)
           raise NotImplementedError
         end
 

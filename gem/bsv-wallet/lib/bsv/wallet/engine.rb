@@ -95,8 +95,14 @@ module BSV
         # loop uses. Eliminates the parallel +inline_broadcast+ codepath
         # that pre-#271 duplicated submit's 202 / 400 / 503 dispatch and
         # the post-submit accept / reject / promote bookkeeping.
+        # Shared hydration cache (#296 Phase D): one wtxid-keyed substrate
+        # serving the broadcast EF path and the Hydrator's deep BEEF walk.
+        # Injected into both so a create_action that warms it (or an eager
+        # proof on broadcast) is visible to a later wire_ancestor.
+        @hydrated_tx_cache = HydratedTxCache.from_config
         @broadcast_worker = Broadcast.new(store: @store, broadcaster: @broadcaster,
-                                          callback_token: @callback_token)
+                                          callback_token: @callback_token,
+                                          hydrated_tx_cache: @hydrated_tx_cache)
         # Funding strategy — owns input acquisition (initial + top-up) and
         # the build collaborator's fixpoint loop. See ADR-024 / #323.
         @funding_strategy = FundingStrategy.new(store: @store, utxo_pool: @utxo_pool)
@@ -109,7 +115,7 @@ module BSV
         # the deep hydration (wire_ancestor) + egress BEEF assembly
         # (build_atomic_beef) + egress SPV honesty contract
         # (validate_for_handoff!). See ADR-024 / #343.
-        @hydrator = Hydrator.new(store: @store)
+        @hydrator = Hydrator.new(store: @store, cache: @hydrated_tx_cache)
         # BeefImporter — ingress counterpart to Hydrator. Owns the whole
         # incoming-BEEF flow (parse, SPV verify, persist ancestor
         # proofs, promote outputs). Consumes Hydrator#wire_ancestor for

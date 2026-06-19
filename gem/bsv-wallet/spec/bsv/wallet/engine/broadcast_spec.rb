@@ -158,9 +158,21 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         end
       end
 
-      it 'short-circuits reconstruction when the EF cache has the action (#269 hit)' do
-        cached_tx = BSV::Transaction::Tx.from_binary(raw_tx)
-        broadcast.hydrated_tx_cache.put(action_id, cached_tx)
+      it 'attaches EF source data from the shared wtxid cache, skipping the JOIN (#296 Phase D)' do
+        op_true = BSV::Script::Script.from_binary("\x51".b)
+        parent = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        parent.add_output(BSV::Transaction::TransactionOutput.new(satoshis: 111, locking_script: op_true))
+        parent.add_output(BSV::Transaction::TransactionOutput.new(satoshis: 222, locking_script: op_true))
+
+        child = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        child.add_input(BSV::Transaction::TransactionInput.new(
+                          prev_wtxid: parent.wtxid, prev_tx_out_index: 1, unlocking_script: op_true
+                        ))
+        child.add_output(BSV::Transaction::TransactionOutput.new(satoshis: 200, locking_script: op_true))
+        child_action = { id: action_id, raw_tx: child.to_binary, wtxid: submit_wtxid }
+
+        broadcast.hydrated_tx_cache.put(parent.wtxid, raw_tx: parent.to_binary)
+        allow(store).to receive(:find_action).with(id: action_id).and_return(child_action)
         captured_tx = nil
         allow(broadcaster).to receive(:broadcast) { |tx, **|
           captured_tx = tx
@@ -169,19 +181,10 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
 
         broadcast.process(action_id)
 
-        expect(captured_tx).to equal(cached_tx)
-        # Cache hit means no JOIN on the broadcast path — the DB-side
-        # resolve call must not fire.
+        # Source data came from the cached parent's outputs[1], not the JOIN.
+        expect(captured_tx.inputs[0].source_satoshis).to eq(222)
+        expect(captured_tx.inputs[0].source_locking_script.to_binary).to eq(op_true.to_binary)
         expect(store).not_to have_received(:resolve_inputs_for_signing)
-      end
-
-      it 'evicts the action from the EF cache after terminal success (#269)' do
-        broadcast.hydrated_tx_cache.put(action_id, BSV::Transaction::Tx.from_binary(raw_tx))
-        expect(broadcast.hydrated_tx_cache.get(action_id)).not_to be_nil
-
-        broadcast.process(action_id)
-
-        expect(broadcast.hydrated_tx_cache.get(action_id)).to be_nil
       end
 
       it 'records the broadcast result from normalized response data' do
@@ -466,12 +469,6 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       it 'calls reject_action on the store (releases locked inputs)' do
         broadcast.process(action_id)
         expect(store).to have_received(:reject_action).with(action_id: action_id)
-      end
-
-      it 'evicts the action from the EF cache after terminal rejection (#269)' do
-        broadcast.hydrated_tx_cache.put(action_id, BSV::Transaction::Tx.from_binary(raw_tx))
-        broadcast.process(action_id)
-        expect(broadcast.hydrated_tx_cache.get(action_id)).to be_nil
       end
     end
 
@@ -1400,23 +1397,22 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
     end
 
-    describe '#hints_pull! (#269)' do
+    describe '#hints_pull! (#296 Phase D)' do
       let(:hints_socket) { 'inproc://hints-test' }
-      # Synthesize a hint payload carrying an opaque BEEF blob. BEEF
-      # encoding correctness is the SDK's concern; the receiver's job is
-      # to decode -> extract subject_tx -> put. Stub Beef.from_binary so
-      # the spec stays focused on the wrapping behaviour.
-      let(:subject_tx) { BSV::Transaction::Tx.from_binary(raw_tx) }
-      let(:fake_beef) do
-        double('Beef', subject_wtxid: subject_tx.wtxid).tap do |b|
-          allow(b).to receive(:find_atomic_transaction).with(subject_tx.wtxid).and_return(subject_tx)
-        end
+      # A real BEEF carrying one OP_TRUE transaction; the receiver decodes
+      # it and primes the cache keyed by each tx's wtxid (bytes value).
+      let(:op_true) { BSV::Script::Script.from_binary("\x51".b) }
+      let(:hint_tx) do
+        t = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        t.add_output(BSV::Transaction::TransactionOutput.new(satoshis: 500, locking_script: op_true))
+        t
       end
-      let(:hint_payload) { { action_id: 7, beef: 'FAKE_BEEF_BYTES' } }
-
-      before do
-        allow(BSV::Transaction::Beef).to receive(:from_binary).with('FAKE_BEEF_BYTES').and_return(fake_beef)
+      let(:hint_beef_bytes) do
+        beef = BSV::Transaction::Beef.new
+        beef.merge_transaction(hint_tx)
+        beef.to_atomic_binary(hint_tx.wtxid)
       end
+      let(:hint_payload) { { action_id: 7, beef: hint_beef_bytes } }
 
       it 'is a no-op when socket_path: nil (no fiber bound, cache stays empty)' do
         Async do |task|
@@ -1428,7 +1424,7 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         end
       end
 
-      it 'pulls a hint, parses BEEF, extracts subject_tx, primes the cache' do
+      it 'pulls a hint, parses BEEF, primes the cache keyed by wtxid' do
         Async do |task|
           broadcast.hints_pull!(task: task, socket_path: hints_socket)
 
@@ -1436,10 +1432,10 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
           push << Marshal.dump(hint_payload)
 
           deadline = Time.now + 1.0
-          sleep 0.01 until broadcast.hydrated_tx_cache.get(7) || Time.now > deadline
+          sleep 0.01 until broadcast.hydrated_tx_cache.get(hint_tx.wtxid) || Time.now > deadline
 
-          cached = broadcast.hydrated_tx_cache.get(7)
-          expect(cached).to equal(subject_tx)
+          cached = broadcast.hydrated_tx_cache.get(hint_tx.wtxid)
+          expect(cached[:raw_tx]).to eq(hint_tx.to_binary)
         ensure
           task.stop
         end
@@ -1455,9 +1451,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
             push << Marshal.dump(hint_payload)
 
             deadline = Time.now + 1.0
-            sleep 0.01 until broadcast.hydrated_tx_cache.get(7) || Time.now > deadline
+            sleep 0.01 until broadcast.hydrated_tx_cache.get(hint_tx.wtxid) || Time.now > deadline
 
-            expect(broadcast.hydrated_tx_cache.get(7)).to equal(subject_tx)
+            expect(broadcast.hydrated_tx_cache.get(hint_tx.wtxid)).not_to be_nil
           ensure
             task.stop
           end
@@ -1470,9 +1466,8 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
           push = OMQ::PUSH.connect(hints_socket)
 
           # Three flavours of wrong-shape: non-Hash, Hash with string
-          # action_id, Hash with non-String beef. None should land in
-          # the cache (which keys on integer action_id, so they'd
-          # never hit a real lookup -- just consume LRU slots).
+          # action_id, Hash with non-String beef. None should reach
+          # Beef.from_binary, so none land in the cache.
           push << Marshal.dump([1, 2, 3])
           push << Marshal.dump(action_id: 'sneaky', beef: 'whatever')
           push << Marshal.dump(action_id: 99, beef: :not_a_string)
@@ -1480,9 +1475,9 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
           push << Marshal.dump(hint_payload)
 
           deadline = Time.now + 1.0
-          sleep 0.01 until broadcast.hydrated_tx_cache.get(7) || Time.now > deadline
+          sleep 0.01 until broadcast.hydrated_tx_cache.get(hint_tx.wtxid) || Time.now > deadline
 
-          expect(broadcast.hydrated_tx_cache.get(7)).to equal(subject_tx)
+          expect(broadcast.hydrated_tx_cache.get(hint_tx.wtxid)).not_to be_nil
           # The cache must contain only the valid entry.
           expect(broadcast.hydrated_tx_cache.size).to eq(1)
         ensure

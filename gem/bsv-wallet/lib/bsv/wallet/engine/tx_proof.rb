@@ -15,9 +15,16 @@ module BSV
       class TxProof
         include OmqSupport
 
-        def initialize(store:, broadcaster:)
+        # +hydrator+ (optional) is the shared-cache owner notified on a
+        # fresh proof via +proof_arrived+ (#296 Phase D). The daemon injects
+        # the same Hydrator instance whose cache +Engine::Broadcast+ reads,
+        # so a newly mined ancestor becomes a terminal for future
+        # +wire_ancestor+ walks without a store round-trip. Nil-tolerant:
+        # configurations without the shared cache simply skip enrichment.
+        def initialize(store:, broadcaster:, hydrator: nil)
           @store = store
           @broadcaster = broadcaster
+          @hydrator = hydrator
         end
 
         # Background queue — Scheduler pushes action IDs here.
@@ -92,6 +99,8 @@ module BSV
             }
           )
           @store.link_proof(action_id: action_id, tx_proof_id: proof_id)
+          # Monotonic cache enrichment: this wtxid is now a proven terminal.
+          @hydrator&.proof_arrived(wtxid: action[:wtxid], raw_tx: action[:raw_tx], merkle_path: merkle_path)
           BSV::Wallet.emit('task.succeeded', task: 'proof_acquisition', id: action_id,
                                              latency_ms: latency_ms, outcome: :acquired)
         end

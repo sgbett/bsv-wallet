@@ -3,47 +3,53 @@
 module BSV
   module Wallet
     class Engine
-      # Bounded in-process LRU cache for *hydrated* +Transaction::Tx+
-      # objects, keyed by +action_id+. "Hydrated" here means every
-      # input has +source_transaction+ populated with the full parent
-      # +Transaction::Tx+, which is what lets the cached object serialise
-      # to EF (for broadcast) or BEEF (for p2p hand-off) without
-      # touching the DB. Populated by parsing the producer-side
-      # Atomic BEEF that +Engine#create_action+ already builds, so
-      # this comes for free.
+      # Bounded in-process LRU cache for hydration bytes, keyed by
+      # +wtxid+ (wire-order, 32-byte binary). Each entry is an immutable
+      # +{ raw_tx:, merkle_path: }+ pair — the same shape a +tx_proofs+
+      # row carries — *not* a +Transaction::Tx+ object. Bytes (not
+      # objects) sidestep the mutation hazard of sharing a wired
+      # +source_transaction+ graph across concurrent reactor fibers.
       #
-      # Hit on +#get+ saves +Engine::Broadcast#submit+ from the
-      # +Store#resolve_inputs_for_signing+ JOIN; miss falls through to
-      # #252's reconstruction path. Correctness rides on the DB;
-      # performance rides on the cache. See #269.
+      # The cache is the shared substrate both egress paths read through:
       #
-      # Populated in two ways:
-      #   - Daemon's own +Engine#create_action+ calls (intra-process producer
-      #     and consumer in the same daemon).
-      #   - OMQ hint receiver fiber pulling pushes from out-of-process
-      #     producers (CLI tools, API/ABI server, wallet UI).
+      #   - +Hydrator#wire_ancestor+ (deep, BEEF): a hit whose
+      #     +merkle_path+ is present is a proven terminal — return without
+      #     descending. A hit without one is recursed over. A miss reads
+      #     +Store#find_proof+ and populates the entry.
+      #   - +Broadcast#hydrated_transaction_for+ (shallow, EF): a hit on an
+      #     input's parent wtxid supplies that input's source satoshis +
+      #     locking script (from +outputs[vout]+) without the
+      #     +resolve_inputs_for_signing+ JOIN — which stays the floor on a
+      #     miss.
       #
-      # Evicted in two ways:
-      #   - +Engine::Broadcast+ explicitly evicts on terminal broadcast
-      #     outcomes (record_broadcast_result success / reject_action).
-      #   - LRU evicts least-recently-used entries when +#put+ pushes past
-      #     the configured capacity. Backstop for entries that never
-      #     reach a terminal state.
+      # ## Monotonic enrichment, no invalidation
       #
-      # Implementation: Ruby's +Hash+ preserves insertion order from
-      # MRI 1.9+, so a +#delete+-then-+#[]=+ on read moves the entry to
-      # the MRU end; LRU eviction is a simple +#shift+ on the oldest
-      # entries when over capacity. +Mutex+ guards every operation; the
-      # daemon's Async reactor is fiber-safe under Mutex because Mutex
-      # in MRI doesn't park the reactor for uncontended acquires.
+      # State only ever progresses: entries are added; an entry's
+      # +merkle_path+ is filled in place when a proof arrives
+      # (+Hydrator#proof_arrived+ → +put+); nothing degrades except by LRU
+      # age-out under memory pressure. +put+ never clears a +merkle_path+
+      # that is already set, so a proven terminal stays proven regardless
+      # of call order. There are no lifecycle eviction hooks — broadcast
+      # outcome is irrelevant to the cache (cf. #269, which this inverts).
+      #
+      # ## Principle of state
+      #
+      # The cache is a pure projection over the proof store: each value
+      # mirrors a +tx_proofs+ row. Drop the cache and rebuild from the DB
+      # and behaviour is identical — correctness rides on the DB,
+      # performance rides on the cache. See +reference/principle-of-state.md+.
+      #
+      # Implementation: Ruby's +Hash+ preserves insertion order (MRI 1.9+),
+      # so +#delete+-then-+#[]=+ moves an entry to the MRU end; LRU eviction
+      # is a +#shift+ of the oldest entries when over capacity. A +Mutex+
+      # guards every operation; under the daemon's Async reactor an
+      # uncontended Mutex acquire does not park the reactor.
       class HydratedTxCache
-        DEFAULT_CAPACITY = 1000
+        DEFAULT_CAPACITY = 20_000
 
         attr_reader :capacity
 
         # Construct from the central config (+BSV::Wallet.config.tx_cache_size+).
-        # The default constructor used by +Engine::Broadcast+; CLI tools
-        # and specs can call +new+ directly with a specific capacity. #277.
         def self.from_config
           new(capacity: BSV::Wallet.config.tx_cache_size)
         end
@@ -58,30 +64,37 @@ module BSV
           @lock = Mutex.new
         end
 
-        # @return [Transaction::Tx, nil]
-        def get(action_id)
-          @lock.synchronize do
-            value = @entries.delete(action_id)
-            @entries[action_id] = value if value
-            value
-          end
-        end
-
-        # @param action_id [Integer]
-        # @param transaction [Transaction::Tx]
-        def put(action_id, transaction)
+        # Insert or update the entry for +wtxid+. Monotonic on
+        # +merkle_path+: a +nil+ argument never clears an already-present
+        # path, so callers that only hold +raw_tx+ (an unconfirmed wire-up)
+        # cannot regress a proven terminal. +raw_tx+ is immutable for a
+        # given wtxid, so overwriting it is a no-op in practice. Promotes
+        # the entry to MRU.
+        #
+        # @param wtxid [String] 32-byte wire-order wtxid
+        # @param raw_tx [String] transaction bytes (wire format)
+        # @param merkle_path [String, nil] serialized merkle path, or nil
+        def put(wtxid, raw_tx:, merkle_path: nil)
           return if @capacity.zero?
 
           @lock.synchronize do
-            @entries.delete(action_id)
-            @entries[action_id] = transaction
+            existing = @entries.delete(wtxid)
+            # Monotonic: keep an already-present merkle_path when the caller
+            # supplies none.
+            kept_path = merkle_path || existing&.fetch(:merkle_path, nil)
+            @entries[wtxid] = { raw_tx: raw_tx, merkle_path: kept_path }.freeze
             @entries.shift while @entries.size > @capacity
           end
         end
 
-        # @param action_id [Integer]
-        def evict(action_id)
-          @lock.synchronize { @entries.delete(action_id) }
+        # @param wtxid [String] 32-byte wire-order wtxid
+        # @return [Hash, nil] frozen +{ raw_tx:, merkle_path: }+ or nil on miss
+        def get(wtxid)
+          @lock.synchronize do
+            value = @entries.delete(wtxid)
+            @entries[wtxid] = value if value
+            value
+          end
         end
 
         # @return [Integer] current entry count.
