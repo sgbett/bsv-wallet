@@ -43,11 +43,11 @@ end
 ```ruby
 # lib/bsv/wallet/engine.rb  (Stage 2 — the orchestrator primitive)
 class Engine
-  def build_action(description:, input_beef:, inputs:, outputs:,
-                   lock_time:, version:, labels:,
-                   sign_and_process:, accept_delayed_broadcast:,
-                   trust_self:, no_send:, change_count:, randomize_outputs:,
-                   send_with: nil)
+  def build_action(description:, input_beef: nil, inputs: nil, outputs: nil,
+                   lock_time: nil, version: nil, labels: nil,
+                   sign_and_process: true, accept_delayed_broadcast: true,
+                   trust_self: nil, no_send: false, change_count: nil,
+                   randomize_outputs: true, send_with: nil)
     # Param-combination preconditions (was Action.create lines 38–53)
     raise UnsupportedActionError, '...' if no_send && deferred?(sign_and_process, inputs)
     require_key_deriver! unless deferred?(sign_and_process, inputs) || skip_change?(inputs)
@@ -96,23 +96,26 @@ class Engine
                no_send_change: action.query_change_outpoints }
     end
 
-    dispatch_broadcast(action_row[:id], atomic_beef)   # private; absorbs #5 + worker.process
+    dispatch_broadcast(action_row[:id], atomic_beef, intent: intent)   # private; absorbs #5 + worker.process
 
     { txid: built[:wtxid], tx: atomic_beef }
   end
 
   private
 
+  # Returns the broadcast_intent symbol. The Store maps to/from the
+  # +broadcast_intent+ ENUM string on persistence; in-process, the engine
+  # threads the symbol so callers (e.g. +dispatch_broadcast+) compare on
+  # symbols rather than re-fetching the string from the DB.
   def map_broadcast_intent(no_send, accept_delayed_broadcast)
     return :none    if no_send
     return :delayed if accept_delayed_broadcast
     :inline
   end
 
-  def dispatch_broadcast(action_id, atomic_beef)
+  def dispatch_broadcast(action_id, atomic_beef, intent:)
     publish_beef_hint(action_id, atomic_beef)          # internal; was reach-back #5
-    intent = @store.find_action(id: action_id)[:broadcast_intent]
-    @broadcast_worker.process(action_id) if intent == 'inline'
+    @broadcast_worker.process(action_id) if intent == :inline
     # :delayed → daemon picks up from broadcasts row; :none → no-op.
   end
 end
@@ -250,4 +253,3 @@ engine.sign_action(reference: ..., spends: ..., send_with: [parked_txids])
 
 - Action's exact instance-method names (`build_with_caller_inputs!`, `build_deferred!`, `complete_internal!`, `sign_and_save!`) are sketched here for shape — Stage 2 may refine.
 - `Engine::Policy`'s constructor and where it gets `threshold` / `bypass` from (probably the central config + an Engine init param).
-- Whether `dispatch_broadcast` reads the action row to get the intent or accepts it as a kwarg from the caller. Above sketch reads the row — a re-fetch — Stage 2 will likely thread it through.
