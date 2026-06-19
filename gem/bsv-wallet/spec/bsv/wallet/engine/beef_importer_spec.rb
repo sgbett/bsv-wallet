@@ -281,6 +281,60 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
     end
   end
 
+  # --- #assert_proofs_complete! ---------------------------------------
+
+  describe '#assert_proofs_complete! (#296 Phase C ingress invariant)' do
+    # Persist the BEEF's proofs the way #import does, then exercise the
+    # post-condition directly. Setup mirrors #save_beef_proofs's specs.
+    def persist_beef_proofs(built)
+      beef = BSV::Transaction::Beef.from_binary(built[:beef_binary])
+      action_result = store.create_action(
+        action: { description: 'assert_proofs_complete', broadcast_intent: :none }
+      )
+      store.sign_action(
+        action_id: action_result[:id],
+        wtxid: built[:subject_tx].wtxid,
+        raw_tx: built[:subject_tx].to_binary
+      )
+      store.save_proof(wtxid: built[:subject_tx].wtxid, proof: { raw_tx: built[:subject_tx].to_binary })
+      beef_importer.send(:save_beef_proofs, beef, built[:subject_tx].wtxid, action_result[:id])
+      beef
+    end
+
+    it 'passes once save_beef_proofs has persisted every non-TxidOnly entry' do
+      built = build_verifiable_beef
+      beef = persist_beef_proofs(built)
+
+      expect { beef_importer.send(:assert_proofs_complete!, beef) }.not_to raise_error
+    end
+
+    it 'raises InvalidBeefError when an entry was not persisted' do
+      built = build_verifiable_beef
+      beef = persist_beef_proofs(built)
+
+      # Simulate save_beef_proofs having silently dropped the ancestor.
+      allow(store).to receive(:find_proof).and_wrap_original do |orig, wtxid:|
+        wtxid == built[:ancestor].wtxid ? nil : orig.call(wtxid: wtxid)
+      end
+
+      expect { beef_importer.send(:assert_proofs_complete!, beef) }
+        .to raise_error(BSV::Wallet::InvalidBeefError, /not persisted/)
+    end
+
+    it 'raises InvalidBeefError when a merkle-bearing entry lost its merkle_path' do
+      built = build_verifiable_beef # ancestor carries a merkle_path
+      beef = persist_beef_proofs(built)
+
+      allow(store).to receive(:find_proof).and_wrap_original do |orig, wtxid:|
+        res = orig.call(wtxid: wtxid)
+        res && wtxid == built[:ancestor].wtxid ? res.merge(merkle_path: nil) : res
+      end
+
+      expect { beef_importer.send(:assert_proofs_complete!, beef) }
+        .to raise_error(BSV::Wallet::InvalidBeefError, /carried a merkle_path/)
+    end
+  end
+
   # --- #replace_known_ancestors! --------------------------------------
 
   describe '#replace_known_ancestors!' do
@@ -465,6 +519,30 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
           }]
         )
       end.to raise_error(BSV::Wallet::InvalidParameterError, /satoshis/)
+    end
+
+    it 'rolls the whole ingress back when proof closure is incomplete (#296 Phase C)' do
+      # Make save_proof a no-op for the ancestor so its proof never lands.
+      # The post-condition catches the gap and rolls back the subject too.
+      built = build_verifiable_beef(satoshis: 500)
+      allow(store).to receive(:save_proof).and_wrap_original do |orig, wtxid:, proof:|
+        next 0 if wtxid == built[:ancestor].wtxid
+
+        orig.call(wtxid: wtxid, proof: proof)
+      end
+
+      expect do
+        beef_importer.import(
+          tx: built[:beef_binary], description: 'proof-closure rollback',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'x' }
+          }]
+        )
+      end.to raise_error(BSV::Wallet::InvalidBeefError, /not persisted/)
+
+      expect(store.find_action(wtxid: built[:subject_tx].wtxid)).to be_nil
+      expect(store.find_proof(wtxid: built[:subject_tx].wtxid)).to be_nil
     end
 
     it 'persists ancestor proofs before trimming known ancestors (the ordering hinge)' do

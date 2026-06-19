@@ -85,6 +85,13 @@ module BSV
             # ProofStore would be converted to TXID-only and their proofs lost.
             save_beef_proofs(beef, subject_tx.wtxid, action_result[:id])
 
+            # Phase C ingress invariant (#296): assert the proof closure
+            # save_beef_proofs was supposed to land actually landed, BEFORE
+            # replace_known_ancestors! mutates the BEEF to TXID-only. A miss
+            # rolls the whole ingress back (principle of state — never a
+            # half-imported action whose ancestry can't be reproduced).
+            assert_proofs_complete!(beef)
+
             # trustSelf: replace known ancestors with TXID-only entries.
             # This runs AFTER save_beef_proofs so no proof data is lost, and
             # AFTER verify so the full graph was already validated.
@@ -184,9 +191,7 @@ module BSV
             next unless beef_tx.transaction
 
             wtxid = beef_tx.transaction.wtxid
-            merkle_path = beef_tx.transaction.merkle_path ||
-                          (beef_tx.respond_to?(:bump_index) && beef_tx.bump_index &&
-                           beef.bumps[beef_tx.bump_index])
+            merkle_path = merkle_path_for(beef, beef_tx)
 
             proof = { raw_tx: beef_tx.transaction.to_binary }
             if merkle_path
@@ -205,6 +210,50 @@ module BSV
           end
 
           @store.link_proof(action_id: action_id, tx_proof_id: subject_proof_id) if subject_proof_id
+        end
+
+        # Resolve the merkle path a BEEF entry carries, whether wired directly
+        # onto the transaction or referenced indirectly via its BUMP index.
+        # Shared by save_beef_proofs (what to persist) and
+        # assert_proofs_complete! (what should have persisted) so the two can
+        # never disagree about which entries are merkle-bearing.
+        def merkle_path_for(beef, beef_tx)
+          beef_tx.transaction.merkle_path ||
+            (beef_tx.respond_to?(:bump_index) && beef_tx.bump_index &&
+             beef.bumps[beef_tx.bump_index])
+        end
+
+        # Phase C ingress completeness invariant (#296). Post-condition over
+        # save_beef_proofs: walk the same entries under the same skip rules and
+        # assert each was actually persisted — raw_tx present, and any
+        # merkle-bearing entry kept its merkle_path. A failure means
+        # save_beef_proofs silently dropped a proof, leaving an action whose
+        # ancestry the wallet could not later reproduce for egress; raising
+        # rolls the ingress transaction back.
+        #
+        # Always-on, mirroring the egress validate_for_handoff! check — the
+        # cost is a find_proof read per entry, far below the egress re-parse +
+        # structural SPV walk that already runs unconditionally.
+        def assert_proofs_complete!(beef)
+          beef.transactions.each do |beef_tx|
+            next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
+            next unless beef_tx.transaction
+
+            wtxid = beef_tx.transaction.wtxid
+            stored = @store.find_proof(wtxid: wtxid)
+
+            if stored.nil? || stored[:raw_tx].nil?
+              raise BSV::Wallet::InvalidBeefError,
+                    "ingress proof closure: dtxid=#{wtxid.to_dtxid} was not " \
+                    'persisted by save_beef_proofs'
+            end
+
+            next unless merkle_path_for(beef, beef_tx) && stored[:merkle_path].nil?
+
+            raise BSV::Wallet::InvalidBeefError,
+                  "ingress proof closure: dtxid=#{wtxid.to_dtxid} carried a " \
+                  'merkle_path but the persisted proof has none'
+          end
         end
 
         # Replace known ancestor transactions with TXID-only entries in the BEEF.
