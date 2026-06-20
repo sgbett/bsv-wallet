@@ -9,7 +9,7 @@
 ### BRC100 interface layer
 
 ```ruby
-# lib/bsv/wallet/brc100.rb  (Stage 3 sibling; composition over engine)
+# gem/bsv-wallet/lib/bsv/wallet/brc100.rb  (Stage 3 sibling; composition over engine)
 module BSV
   module Wallet
     class BRC100
@@ -74,109 +74,113 @@ end
 ### Engine machinery layer
 
 ```ruby
-# lib/bsv/wallet/engine.rb  (Stage 2 — the orchestrator primitive)
-class Engine
-  def build_action(description:, input_beef: nil, inputs: nil, outputs: nil,
-                   lock_time: nil, version: nil, labels: nil,
-                   sign_and_process: true, accept_delayed_broadcast: true,
-                   trust_self: nil, no_send: false, change_count: nil,
-                   randomize_outputs: true, send_with: nil)
-    # Param-combination preconditions (was Action.create lines 38–53)
-    if no_send && deferred?(sign_and_process, inputs)
-      raise UnsupportedActionError,
-            'createAction(no_send: true) combined with deferred signing is not ' \
-            'implemented in the base wallet; tracked in #192.'
+# gem/bsv-wallet/lib/bsv/wallet/engine.rb  (Stage 2 — the orchestrator primitive)
+module BSV
+  module Wallet
+    class Engine
+      def build_action(description:, input_beef: nil, inputs: nil, outputs: nil,
+                       lock_time: nil, version: nil, labels: nil,
+                       sign_and_process: true, accept_delayed_broadcast: true,
+                       trust_self: nil, no_send: false, change_count: nil,
+                       randomize_outputs: true, send_with: nil)
+        # Param-combination preconditions (was Action.create lines 38–53)
+        if no_send && deferred?(sign_and_process, inputs)
+          raise UnsupportedActionError,
+                'createAction(no_send: true) combined with deferred signing is not ' \
+                'implemented in the base wallet; tracked in #192.'
+        end
+        require_key_deriver! unless deferred?(sign_and_process, inputs) || skip_change?(inputs)
+
+        intent = map_broadcast_intent(no_send, accept_delayed_broadcast)
+
+        # Pre-flight policy guards (was reach-back #3 + #4 first call).
+        # Limp check always; headroom check skipped on deferred (no funds locked
+        # yet — headroom is meaningless until signAction commits the spend).
+        output_total      = (outputs || []).sum { |o| o[:satoshis] || 0 }
+        pre_lock_balance  = @utxo_pool.balance
+        pre_lock_count    = change_count || @utxo_pool.change_output_count
+        @policy.guard_balance!(balance: pre_lock_balance, spending: 0)            # limp
+        unless deferred?(sign_and_process, inputs)
+          @policy.guard_balance!(balance: pre_lock_balance, spending: output_total) # headroom
+        end
+
+        # Row creation + delegation to slim Action for lifecycle work
+        action_row = @store.create_action(action: {
+          description: description, broadcast_intent: intent, input_beef: input_beef
+        }, inputs: [])
+        Action.attach_labels(engine: self, action_id: action_row[:id], labels: labels)
+        action = Action.new(engine: self, row: action_row)
+
+        if deferred?(sign_and_process, inputs)
+          # Returns wallet vocab: +{ signable_transaction: { atomic_beef:, reference: } }+.
+          # BRC100 translates the inner +:atomic_beef+ to BRC-100's +:tx+ key.
+          return action.build_deferred!(inputs: inputs, outputs: outputs, ...)
+        end
+
+        # Signing branch dispatch — slim Action owns the row-level mutations
+        if skip_change?(inputs)
+          built = action.build_with_caller_inputs!(inputs: inputs, outputs: outputs, ...)
+        else
+          built = @funding_strategy.fund(action_id: action_row[:id], outputs: outputs,
+                                         caller_inputs: inputs, change_count: pre_lock_count, ...)
+          # Post-loop policy guard (reach-back #4 second call)
+          @policy.guard_balance!(balance: pre_lock_balance,
+                                 spending: output_total + built[:actual_fee])
+        end
+
+        if no_send
+          action.complete_internal!(built: built, outputs: outputs)
+        else
+          action.sign_and_save!(built: built, outputs: outputs)
+        end
+
+        atomic_beef = @hydrator.build_atomic_beef(built[:raw_tx], action_row[:id])
+        @hydrator.validate_for_handoff!(atomic_beef, built[:wtxid])
+
+        if no_send
+          return { wtxid: built[:wtxid], atomic_beef: atomic_beef,
+                   no_send_change: action.query_change_outpoints }
+        end
+
+        dispatch_broadcast(action_row[:id], atomic_beef, intent: intent)   # private; absorbs #5 + worker.process
+
+        # Wallet-vocab return shape per ADR-026 decision 5; BRC100 translates
+        # to spec shape ({ txid:, tx: }) at the interface layer.
+        { wtxid: built[:wtxid], atomic_beef: atomic_beef }
+      end
+
+      private
+
+      # Returns the broadcast_intent symbol. The Store persists it as a string
+      # via +&.to_s+ on write (+store.rb:88+) and returns the DB string on read
+      # (+store.rb:114+) — coercion is one-way. The engine threads the symbol
+      # in-process, so +dispatch_broadcast+ compares on symbols without ever
+      # reading the value back from the DB.
+      def map_broadcast_intent(no_send, accept_delayed_broadcast)
+        return :none    if no_send
+        return :delayed if accept_delayed_broadcast
+        :inline
+      end
+
+      def dispatch_broadcast(action_id, atomic_beef, intent:)
+        publish_beef_hint(action_id, atomic_beef)          # internal; was reach-back #5
+        @broadcast_worker.process(action_id) if intent == :inline
+        # :delayed → daemon picks up from broadcasts row; :none → no-op.
+      end
     end
-    require_key_deriver! unless deferred?(sign_and_process, inputs) || skip_change?(inputs)
 
-    intent = map_broadcast_intent(no_send, accept_delayed_broadcast)
+    class Engine::Policy
+      def initialize(threshold:, bypass:)
+        @threshold = threshold; @bypass = bypass
+      end
 
-    # Pre-flight policy guards (was reach-back #3 + #4 first call).
-    # Limp check always; headroom check skipped on deferred (no funds locked
-    # yet — headroom is meaningless until signAction commits the spend).
-    output_total      = (outputs || []).sum { |o| o[:satoshis] || 0 }
-    pre_lock_balance  = @utxo_pool.balance
-    pre_lock_count    = change_count || @utxo_pool.change_output_count
-    @policy.guard_balance!(balance: pre_lock_balance, spending: 0)            # limp
-    unless deferred?(sign_and_process, inputs)
-      @policy.guard_balance!(balance: pre_lock_balance, spending: output_total) # headroom
+      def guard_balance!(balance:, spending:)
+        return if @bypass
+        projected = balance - spending
+        return unless projected < @threshold
+        raise LimpModeError.new(balance: projected, threshold: @threshold)
+      end
     end
-
-    # Row creation + delegation to slim Action for lifecycle work
-    action_row = @store.create_action(action: {
-      description: description, broadcast_intent: intent, input_beef: input_beef
-    }, inputs: [])
-    Action.attach_labels(engine: self, action_id: action_row[:id], labels: labels)
-    action = Action.new(engine: self, row: action_row)
-
-    if deferred?(sign_and_process, inputs)
-      # Returns wallet vocab: +{ signable_transaction: { atomic_beef:, reference: } }+.
-      # BRC100 translates the inner +:atomic_beef+ to BRC-100's +:tx+ key.
-      return action.build_deferred!(inputs: inputs, outputs: outputs, ...)
-    end
-
-    # Signing branch dispatch — slim Action owns the row-level mutations
-    if skip_change?(inputs)
-      built = action.build_with_caller_inputs!(inputs: inputs, outputs: outputs, ...)
-    else
-      built = @funding_strategy.fund(action_id: action_row[:id], outputs: outputs,
-                                     caller_inputs: inputs, change_count: pre_lock_count, ...)
-      # Post-loop policy guard (reach-back #4 second call)
-      @policy.guard_balance!(balance: pre_lock_balance,
-                             spending: output_total + built[:actual_fee])
-    end
-
-    if no_send
-      action.complete_internal!(built: built, outputs: outputs)
-    else
-      action.sign_and_save!(built: built, outputs: outputs)
-    end
-
-    atomic_beef = @hydrator.build_atomic_beef(built[:raw_tx], action_row[:id])
-    @hydrator.validate_for_handoff!(atomic_beef, built[:wtxid])
-
-    if no_send
-      return { wtxid: built[:wtxid], atomic_beef: atomic_beef,
-               no_send_change: action.query_change_outpoints }
-    end
-
-    dispatch_broadcast(action_row[:id], atomic_beef, intent: intent)   # private; absorbs #5 + worker.process
-
-    # Wallet-vocab return shape per ADR-026 decision 5; BRC100 translates
-    # to spec shape ({ txid:, tx: }) at the interface layer.
-    { wtxid: built[:wtxid], atomic_beef: atomic_beef }
-  end
-
-  private
-
-  # Returns the broadcast_intent symbol. The Store persists it as a string
-  # via +&.to_s+ on write (+store.rb:88+) and returns the DB string on read
-  # (+store.rb:114+) — coercion is one-way. The engine threads the symbol
-  # in-process, so +dispatch_broadcast+ compares on symbols without ever
-  # reading the value back from the DB.
-  def map_broadcast_intent(no_send, accept_delayed_broadcast)
-    return :none    if no_send
-    return :delayed if accept_delayed_broadcast
-    :inline
-  end
-
-  def dispatch_broadcast(action_id, atomic_beef, intent:)
-    publish_beef_hint(action_id, atomic_beef)          # internal; was reach-back #5
-    @broadcast_worker.process(action_id) if intent == :inline
-    # :delayed → daemon picks up from broadcasts row; :none → no-op.
-  end
-end
-
-class Engine::Policy
-  def initialize(threshold:, bypass:)
-    @threshold = threshold; @bypass = bypass
-  end
-
-  def guard_balance!(balance:, spending:)
-    return if @bypass
-    projected = balance - spending
-    return unless projected < @threshold
-    raise LimpModeError.new(balance: projected, threshold: @threshold)
   end
 end
 ```
@@ -222,14 +226,18 @@ end
 ### Engine machinery layer
 
 ```ruby
-class Engine
-  def import_beef(tx:, outputs:, description:, labels:, trust_self:,
-                  known_txids:, seek_permission:)
-    @beef_importer.import(
-      tx: tx, outputs: outputs, description: description, labels: labels,
-      trust_self: trust_self, known_txids: known_txids,
-      seek_permission: seek_permission
-    )
+module BSV
+  module Wallet
+    class Engine
+      def import_beef(tx:, outputs:, description:, labels:, trust_self:,
+                      known_txids:, seek_permission:)
+        @beef_importer.import(
+          tx: tx, outputs: outputs, description: description, labels: labels,
+          trust_self: trust_self, known_txids: known_txids,
+          seek_permission: seek_permission
+        )
+      end
+    end
   end
 end
 ```
