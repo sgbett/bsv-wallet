@@ -262,3 +262,4 @@ engine.sign_action(reference: ..., spends: ..., send_with: [parked_txids])
 
 - Action's exact instance-method names (`build_with_caller_inputs!`, `build_deferred!`, `complete_internal!`, `sign_and_save!`) are sketched here for shape — Stage 2 may refine.
 - `Engine::Policy`'s constructor and where it gets `threshold` / `bypass` from (probably the central config + an Engine init param).
+- `signAction` shares the broadcast tail: `Action#sign!` reaches `determine_broadcast` (`engine/action.rb:413`) the same way `create` does. It rehomes to `map_broadcast_intent` / `dispatch_broadcast` identically, so it is not worked separately here — but Stage 2 must rehome this call-site too. The five #370 reach-backs span **six call-sites** (`determine_broadcast` and `enforce_headroom_against!` each appear twice); the worked example above covers the `create` path's call-sites, and this one closes the set.
