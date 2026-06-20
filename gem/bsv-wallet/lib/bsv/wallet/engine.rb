@@ -48,6 +48,7 @@ module BSV
       autoload :InputSource,           'bsv/wallet/engine/input_source'
       autoload :MerklePathNormaliser,  'bsv/wallet/engine/merkle_path_normaliser'
       autoload :HydratedTxCache,       'bsv/wallet/engine/hydrated_tx_cache'
+      autoload :Policy,                'bsv/wallet/engine/policy'
 
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -81,6 +82,10 @@ module BSV
         @network_provider = network_provider
         @network_name = network
         @limp_threshold = limp_threshold
+        # Policy is stateless; +bypass:+ flows in at call time so the
+        # +@bypass_limp_mode+ mutation block (import-utxo self-payment)
+        # stays on Engine. See ADR-026 + Stage 2 plan.
+        @policy = Policy.new(threshold: @limp_threshold)
         # Arcade callbackToken forwarded to the broadcast worker's POST so the
         # SSE listener (subscribed to the same token at daemon boot) receives
         # status frames for inline submissions. See #266.
@@ -147,6 +152,230 @@ module BSV
 
         @store.reject_action(action_id: action_id)
         { rejected: true, action_id: action_id }
+      end
+
+      # ---- BRC-100 primitive surface (write-side, #402 Stage 2) ----------
+      #
+      # Four thick primitives the BRC100 mixin calls into. The +do_+
+      # prefix is Stage 2 scaffolding: BRC100 is still a mixin, so
+      # +Engine#sign_action+ would clash with +BRC100#sign_action+ and
+      # recurse via MRO. Stage 3's mixin→composition switch reverts the
+      # prefix. See .claude/plans/20260620-stage-2-primitive-extraction.md.
+      #
+      # These bodies are delegators in commit 3 — they shuffle calls
+      # through without changing semantics. Commit 5 inverts:
+      # +do_build_action+ becomes the orchestrator and +Action.create+
+      # slims to a row-creation helper; +do_sign_action+ moves the
+      # broadcast-dispatch tail off +Action#sign!+. Return shapes
+      # eventually become wallet vocab (+wtxid:+ binary, +atomic_beef:+)
+      # with BRC100 wrapping to BRC-100 vocab — also commit 5.
+
+      # Orchestrator. Lifted from +Engine::Action.create+'s body in
+      # #402 Stage 2 commit 5. Drives input acquisition, the build, the
+      # headroom guards, persistence (sign or atomic internal-completion),
+      # BEEF assembly + SPV honesty validation, and broadcast dispatch.
+      # Returns wallet vocab; BRC100 wraps to BRC-100 vocab.
+      #
+      # @return [Hash] sync: +{ wtxid:, atomic_beef: }+;
+      #   internal (no_send): +{ wtxid:, atomic_beef:, change_outpoints: }+;
+      #   deferred: +{ signable: { atomic_beef:, reference: } }+.
+      def do_build_action(description:, input_beef: nil, inputs: nil, outputs: nil,
+                          lock_time: nil, version: nil, labels: nil,
+                          sign_and_process: true, accept_delayed_broadcast: true,
+                          no_send: false, change_count: nil,
+                          randomize_outputs: true)
+        # Caller-supplied inputs: explicit array (possibly empty) — the
+        # wallet does not extend this set. inputs: nil means "select for me".
+        caller_supplied_inputs = !inputs.nil?
+        deferred = !sign_and_process ||
+                   inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
+
+        # Wallet-selected inputs (inputs: nil) cannot be deferred — the
+        # funding loop signs immediately so the change template can be
+        # evaluated against the actual fee. Deferred signing only makes
+        # sense with caller-supplied inputs the caller intends to script
+        # themselves.
+        if !caller_supplied_inputs && !sign_and_process
+          raise BSV::Wallet::InvalidParameterError.new(
+            'sign_and_process', 'true when inputs is nil (wallet-selected inputs sign immediately)'
+          )
+        end
+
+        # Internal-path deferred signing is not implemented in the base
+        # wallet — the internal-action Phase 4 runs synchronously during
+        # create_action, which deferred signing cannot reach (#192).
+        if no_send && deferred
+          raise BSV::Wallet::UnsupportedActionError,
+                'createAction(no_send: true) combined with deferred signing is ' \
+                'not implemented in the base wallet; tracked in #192.'
+        end
+
+        # key_deriver is required only when the wallet must derive BRC-42
+        # change keys (generate_change). Deferred signing defers to
+        # signAction; explicit zero-input transactions skip change
+        # generation. Both paths can run without a key deriver here.
+        skip_change = caller_supplied_inputs && inputs.empty?
+        require_key_deriver! unless deferred || skip_change
+
+        intent = map_broadcast_intent(no_send, accept_delayed_broadcast)
+        @policy.guard_balance!(balance: @utxo_pool.balance, bypass: @bypass_limp_mode)
+
+        # Output total drives the initial selection target and the cheap
+        # pre-flight headroom check. The exact post-loop headroom check
+        # (sum(outputs) + actual_fee) runs after generate_change converges.
+        # pre_lock_balance / change_count are captured before Phase 1
+        # locking shrinks the spendable set; both headroom checks use the
+        # pre-lock balance, and the funding loop uses the pre-lock change
+        # count so target sizing reflects the wallet's full pool.
+        output_total = outputs&.sum { |o| o[:satoshis] || 0 } || 0
+        pre_lock_balance = @utxo_pool.balance
+        # +change_count:+ kwarg overrides the pool's grooming heuristic.
+        # Use cases: consolidation (target a single output), explicit-cap
+        # callers.
+        pre_lock_change_count = change_count || @utxo_pool.change_output_count
+        unless deferred
+          @policy.guard_balance!(balance: pre_lock_balance, spending: output_total,
+                                 bypass: @bypass_limp_mode)
+        end
+
+        # Phase 1a: create the empty action row. Input acquisition runs
+        # through FundingStrategy against this row's +action_id+; an
+        # input-less action row is already routine (the deferred path
+        # and the no-output path both produce one). See option (a) in
+        # `reference/action-lifecycle.md`.
+        action = Engine::Action.create(
+          engine: self, description: description, intent: intent,
+          input_beef: input_beef, labels: labels
+        )
+
+        if deferred
+          return action.build_deferred!(
+            inputs: inputs, outputs: outputs, lock_time: lock_time,
+            version: version, randomize: randomize_outputs, intent: intent
+          )
+        end
+
+        built =
+          if skip_change
+            # Synchronous path. The empty-inputs case (OP_RETURN-only)
+            # skips change generation — already detected above to keep
+            # the key_deriver check honest. Caller inputs (if any) are
+            # caller-supplied; lock them once, no funding loop.
+            action.build_with_caller_inputs!(
+              inputs: inputs, outputs: outputs, lock_time: lock_time,
+              version: version, randomize: randomize_outputs
+            )
+          else
+            # FundingStrategy owns input acquisition (initial + top-up)
+            # and the build collaborator's fixpoint loop. On
+            # +InsufficientFundsError+ (caller-supplied shortfall, pool
+            # depletion, or contention-retry exhaustion) abort the empty
+            # action row so no orphan is left.
+            begin
+              funded = action.build_via_funding!(
+                outputs: outputs, caller_inputs: caller_supplied_inputs ? inputs : nil,
+                lock_time: lock_time, version: version,
+                randomize: randomize_outputs, change_count: pre_lock_change_count
+              )
+              # Exact post-loop headroom check: actual fee is now known.
+              actual_fee = funded[:total_input_satoshis] -
+                           output_total - funded[:change_outputs].sum { |c| c[:satoshis] }
+              @policy.guard_balance!(balance: pre_lock_balance,
+                                     spending: output_total + actual_fee,
+                                     bypass: @bypass_limp_mode)
+              funded
+            rescue BSV::Wallet::InsufficientFundsError
+              action.abort!
+              raise
+            end
+          end
+
+        if no_send
+          # Internal path: sign + proof + Phase-4 promotion happen as one
+          # atomic transition (#327 / #328).
+          action.complete_internal!(built: built, outputs: outputs)
+        else
+          action.sign_and_save!(built: built, outputs: outputs)
+        end
+
+        BSV.logger&.debug do
+          "[Engine] do_build_action: dtxid=#{built[:wtxid].to_dtxid} " \
+            "outputs=#{outputs&.length || 0} change=#{built[:change_outputs].length}"
+        end
+
+        # Read-only, post-commit: the BEEF we hand back + its SPV honesty
+        # check. Under strict create_action (#296 Phase B), returning from
+        # do_build_action implies a valid BEEF in hand. For no_send this
+        # runs AFTER internal completion commits, so a raise here leaves
+        # an already-promoted action (its outputs are the wallet's own,
+        # genuinely spendable). Near-unreachable for a self-built BEEF;
+        # the trade-off is no stranding.
+        atomic_beef = @hydrator.build_atomic_beef(built[:raw_tx], action.id)
+        @hydrator.validate_for_handoff!(atomic_beef, built[:wtxid])
+
+        if no_send
+          return { wtxid: built[:wtxid], atomic_beef: atomic_beef,
+                   change_outpoints: action.query_change_outpoints }
+        end
+
+        # Phase 3 + 4: best-effort BEEF cache hint + inline broadcast
+        # if the intent demands it. The broadcast worker handles the
+        # 202 / 400 / 503 dispatch + atomic Phase-4 promotion bookkeeping
+        # internally (#271).
+        dispatch_broadcast(action.id, atomic_beef, intent: intent)
+
+        { wtxid: built[:wtxid], atomic_beef: atomic_beef }
+      end
+
+      # Complete the deferred-signing flow: locate the parked action,
+      # apply caller spends, build + validate BEEF, dispatch broadcast
+      # per the intent mapped from the caller's +no_send+ /
+      # +accept_delayed_broadcast+ params (NOT the action row's stored
+      # +broadcast_intent+ — that drives the no_send-override guard
+      # below, not the dispatch).
+      #
+      # @return [Hash] +{ wtxid:, atomic_beef: }+ — wallet vocab; BRC100 wraps.
+      def do_sign_action(reference:, spends:, accept_delayed_broadcast: true,
+                         no_send: false)
+        action = Engine::Action.find(engine: self, reference: reference)
+        raise BSV::Wallet::InvalidParameterError, 'reference (not found)' unless action
+
+        # Runtime broadcast-override at sign time belongs to the
+        # chained-send subsystem (#192). The base wallet's signAction
+        # only completes the deferred-construction lifecycle per the
+        # original broadcast intent set at createAction time.
+        if no_send && action.row[:broadcast_intent] != 'none'
+          raise BSV::Wallet::UnsupportedActionError,
+                'signAction(no_send: true) requires the action to have been ' \
+                "created with no_send: true (broadcast intent 'none'). " \
+                'Runtime override at sign time is not implemented in the base ' \
+                'wallet; tracked in #192.'
+        end
+
+        signed = action.apply_caller_spends!(spends: spends)
+        atomic_beef = @hydrator.build_atomic_beef(signed[:raw_tx], action.id)
+        @hydrator.validate_for_handoff!(atomic_beef, signed[:wtxid])
+
+        intent = map_broadcast_intent(no_send, accept_delayed_broadcast)
+        dispatch_broadcast(action.id, atomic_beef, intent: intent) unless no_send
+
+        { wtxid: signed[:wtxid], atomic_beef: atomic_beef }
+      end
+
+      def do_abort_action(reference:)
+        action = Engine::Action.find(engine: self, reference: reference)
+        raise BSV::Wallet::InvalidParameterError, 'reference (not found)' unless action
+
+        action.abort!
+      end
+
+      def do_import_beef(tx:, outputs:, description:, labels: nil,
+                         trust_self: nil, known_txids: nil, seek_permission: true)
+        @beef_importer.import(
+          tx: tx, outputs: outputs, description: description,
+          labels: labels, trust_self: trust_self, known_txids: known_txids,
+          seek_permission: seek_permission
+        )
       end
 
       # --- UTXO Import (bootstrap) ---
@@ -778,11 +1007,37 @@ module BSV
         end
       end
 
-      def determine_broadcast(no_send, accept_delayed_broadcast)
+      # Pure mapper: caller-supplied (no_send, accept_delayed_broadcast)
+      # → +:none+ / +:delayed+ / +:inline+. (Renamed from +determine_broadcast+
+      # in #402 Stage 2 — reads as a mapper rather than a side-effectful
+      # "determine".)
+      def map_broadcast_intent(no_send, accept_delayed_broadcast)
         if no_send then :none
         elsif accept_delayed_broadcast then :delayed
         else :inline
         end
+      end
+
+      # Post-build dispatch: best-effort BEEF cache hint + inline
+      # broadcast trigger when the intent demands it. Packages the
+      # +publish_beef_hint+ / +broadcast_worker.process+ pair called
+      # from the tails of +Engine#do_build_action+ and +#do_sign_action+
+      # on the non-no_send path (pre-#402 commit 5 this pair was inlined
+      # at the tail of +Action.create+). Inline +:none+ would be a caller
+      # bug; only +:inline+ triggers a sync broadcast.
+      #
+      # Sign-path hint is by design (new in #402 Stage 2). The pre-#402
+      # +Action#sign!+ never published a hint — a missed optimization,
+      # not a defensive choice. The daemon's hint cache keys on the
+      # wtxid derived from the BEEF (see +Engine::Broadcast#hints_pull!+),
+      # and a deferred-sign produces a different wtxid from the staged
+      # unsigned one, so the sign-path entry never collides with any
+      # earlier create-time entry. The deferred-broadcast path now
+      # benefits from the same +find_action+ + JOIN skip as the inline
+      # create path.
+      def dispatch_broadcast(action_id, atomic_beef, intent:)
+        publish_beef_hint(action_id, atomic_beef) if atomic_beef
+        @broadcast_worker.process(action_id) if intent == :inline
       end
 
       # Thin delegator: call sites still on Engine in this sub-PR
@@ -843,34 +1098,6 @@ module BSV
 
       def require_key_deriver!
         raise BSV::Wallet::Error.new('wallet has no key deriver configured', code: 2) unless @key_deriver
-      end
-
-      def enforce_limp_mode!
-        return if @bypass_limp_mode
-        return unless limp_mode?
-
-        raise BSV::Wallet::LimpModeError.new(
-          balance: @utxo_pool.balance, threshold: @limp_threshold
-        )
-      end
-
-      def enforce_headroom!(spending)
-        enforce_headroom_against!(@utxo_pool.balance, spending)
-      end
-
-      # Headroom guard against a caller-supplied balance reference. The
-      # funding loop captures balance pre-lock and re-uses it for both the
-      # pre-flight and exact post-loop checks — once inputs are locked,
-      # @utxo_pool.balance no longer reflects the wallet's full pool.
-      def enforce_headroom_against!(balance, spending)
-        return if @bypass_limp_mode
-
-        projected = balance - spending
-        return unless projected < @limp_threshold
-
-        raise BSV::Wallet::LimpModeError.new(
-          balance: projected, threshold: @limp_threshold
-        )
       end
 
       # Find an available WBIKD slot or create one via self-payment.

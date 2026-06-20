@@ -992,6 +992,151 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
+  # Wallet-vocab primitive surface (#402 Stage 2 / ADR-026).
+  #
+  # +Engine#do_*+ are the four thick write-side primitives BRC100 calls
+  # into. These tests exercise them directly (non-BRC100 consumers — the
+  # future #223 HTTP wrapper, #192 batch — will call them the same way).
+  # The BRC-100-wrap behaviour is covered by the BRC-100-named blocks
+  # above (+#create_action+, +#sign_action+, +#abort_action+,
+  # +#internalize_action+); these blocks focus on the wallet-vocab
+  # return shapes the wrap layer translates from.
+  describe '#do_build_action (wallet-vocab primitive)' do
+    it 'returns { wtxid:, atomic_beef: } on the synchronous path' do
+      result = engine.do_build_action(
+        description: 'sync primitive',
+        inputs: [],
+        outputs: [
+          { satoshis: 0, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+            sender_identity_key: 'self' }
+        ]
+      )
+
+      expect(result.keys).to contain_exactly(:wtxid, :atomic_beef)
+      expect(result[:wtxid]).to be_a(String).and(have_attributes(bytesize: 32))
+      expect(result[:atomic_beef]).to be_a(String).and(satisfy { |b| b.bytesize >= 10 })
+    end
+
+    it 'returns { wtxid:, atomic_beef:, change_outpoints: } on the no_send path' do
+      fund_wallet(satoshis: 100_000, basket: 'default', suffix: 'do_build_no_send')
+      result = engine_with_keys.do_build_action(
+        description: 'no_send primitive',
+        outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
+        no_send: true
+      )
+
+      expect(result.keys).to contain_exactly(:wtxid, :atomic_beef, :change_outpoints)
+      expect(result[:wtxid].bytesize).to eq(32)
+      expect(result[:change_outpoints]).to be_an(Array)
+      # outpoint format is "dtxid.vout" (64-char hex + "." + integer)
+      expect(result[:change_outpoints]).to all(match(/\A[0-9a-f]{64}\.\d+\z/))
+    end
+
+    it 'returns { signable: { atomic_beef:, reference: } } on the deferred path' do
+      result = engine.do_build_action(
+        description: 'deferred primitive',
+        inputs: [], sign_and_process: false,
+        outputs: [
+          { satoshis: 0, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+            sender_identity_key: 'self' }
+        ]
+      )
+
+      expect(result.keys).to contain_exactly(:signable)
+      expect(result[:signable].keys).to contain_exactly(:atomic_beef, :reference)
+      expect(result[:signable][:reference]).to match(BSV::Wallet::Engine::UUID_RE)
+      expect(result[:signable][:atomic_beef]).to be_a(String).and(satisfy { |b| b.bytesize >= 10 })
+    end
+
+    it 'does not accept the BRC-100 vocabulary kwargs (+originator:+, +return_txid_only:+, +trust_self:+)' do
+      # ADR-026 decision 7 — those stay at BRC100. Verify the primitive
+      # signature actually excludes them (an accidental future +**kwargs+
+      # forwarding would silently re-accept them).
+      params = engine.method(:do_build_action).parameters.map { |_kind, name| name }
+      expect(params).not_to include(:originator, :return_txid_only, :trust_self)
+    end
+  end
+
+  describe '#do_sign_action (wallet-vocab primitive)' do
+    let(:deferred_reference) do
+      result = engine.do_build_action(
+        description: 'parked for sign primitive',
+        inputs: [], sign_and_process: false,
+        outputs: [
+          { satoshis: 0, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+            sender_identity_key: 'self' }
+        ]
+      )
+      result[:signable][:reference]
+    end
+
+    it 'returns { wtxid:, atomic_beef: } for a successful sign' do
+      result = engine.do_sign_action(reference: deferred_reference, spends: {})
+
+      expect(result.keys).to contain_exactly(:wtxid, :atomic_beef)
+      expect(result[:wtxid].bytesize).to eq(32)
+      expect(result[:atomic_beef]).to be_a(String)
+    end
+
+    it 'raises InvalidParameterError for an unknown reference' do
+      expect do
+        engine.do_sign_action(
+          reference: '00000000-0000-0000-0000-000000000000', spends: {}
+        )
+      end.to raise_error(BSV::Wallet::InvalidParameterError)
+    end
+
+    it 'rejects no_send: true when the action was not parked with broadcast_intent: none' do
+      expect do
+        engine.do_sign_action(
+          reference: deferred_reference, spends: {}, no_send: true
+        )
+      end.to raise_error(BSV::Wallet::UnsupportedActionError, /signAction\(no_send: true\)/)
+    end
+  end
+
+  describe '#do_abort_action (wallet-vocab primitive)' do
+    let(:deferred_reference) do
+      result = engine.do_build_action(
+        description: 'parked for abort primitive',
+        inputs: [], sign_and_process: false,
+        outputs: [
+          { satoshis: 500, locking_script: OP_TRUE,
+            output_description: 'output' }
+        ]
+      )
+      result[:signable][:reference]
+    end
+
+    it 'returns { aborted: true } and removes the action row' do
+      result = engine.do_abort_action(reference: deferred_reference)
+
+      expect(result).to eq({ aborted: true })
+      expect(store.find_action(reference: deferred_reference)).to be_nil
+    end
+
+    it 'raises InvalidParameterError for an unknown reference' do
+      expect do
+        engine.do_abort_action(reference: '00000000-0000-0000-0000-000000000000')
+      end.to raise_error(BSV::Wallet::InvalidParameterError)
+    end
+  end
+
+  describe '#do_import_beef (wallet-vocab primitive)' do
+    it 'delegates to Engine::BeefImporter#import and forwards the kwargs' do
+      # Smoke: build a minimal incoming-BEEF scenario indirectly via the
+      # BRC-100 wrapper, asserting the primitive does NOT consume
+      # +originator:+ (which BRC100 swallows per ADR-026 decision 7).
+      params = engine.method(:do_import_beef).parameters.map { |_kind, name| name }
+      expect(params).not_to include(:originator)
+      expect(params).to include(:tx, :outputs, :description, :labels, :trust_self,
+                                :known_txids, :seek_permission)
+    end
+  end
+
   describe '#reject_action' do
     it 'delegates to Store#reject_action and returns a structured result' do
       # A rejectable send action: broadcast_intent='inline', a broadcasts row

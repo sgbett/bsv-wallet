@@ -8,241 +8,31 @@ module BSV
       # Business object wrapping a single action's lifecycle.
       #
       # Per-call construction — cheap, discarded on completion. Wraps a
-      # +Models::Action+ row hash (or an action result hash carrying +:id+
-      # and +:reference+). Adds knowledge (BRC-100 translation, derived
-      # status) and atomic actions (sign!, abort!, broadcast!, promote!)
-      # on top of the Sequel-row data.
+      # +Models::Action+ row hash (+Store#action_to_hash+ output). Adds
+      # row-level lifecycle actions (build_deferred!, build_with_caller_inputs!,
+      # build_via_funding!, sign_and_save!, complete_internal!,
+      # apply_caller_spends!, abort!) and BRC-100 helpers
+      # (build_input_specs, build_output_specs).
       #
-      # Same pattern as +Engine::Broadcast+ / +Engine::TxProof+: collaborators
-      # reached via the +engine+ back-reference; no instance state beyond
-      # the wrapped row.
+      # Orchestration lives in +Engine#do_build_action+ / +#do_sign_action+
+      # (#402 Stage 2). +Action.create+ is now a thin row-creation helper;
+      # the lifecycle steps are instance methods so Engine can drive them
+      # sequentially without reach-backs.
       class Action
         # ---- Class methods --------------------------------------------------
 
-        # Migrate +Engine#create_action+'s body. Returns the BRC-100 hash
-        # shape that the public Engine API exposes.
-        def self.create(engine:, description:, input_beef: nil, inputs: nil, outputs: nil,
-                        lock_time: nil, version: nil, labels: nil,
-                        sign_and_process: true, accept_delayed_broadcast: true,
-                        trust_self: nil, return_txid_only: false,
-                        no_send: false, change_count: nil,
-                        randomize_outputs: true, originator: nil)
-          # Caller-supplied inputs: explicit array (possibly empty) — the
-          # wallet does not extend this set. inputs: nil means "select for me".
-          caller_supplied_inputs = !inputs.nil?
-          deferred = !sign_and_process ||
-                     inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
-
-          # Wallet-selected inputs (inputs: nil) cannot be deferred — the
-          # funding loop signs immediately so the change template can be
-          # evaluated against the actual fee. Deferred signing only makes
-          # sense with caller-supplied inputs the caller intends to script
-          # themselves.
-          if !caller_supplied_inputs && !sign_and_process
-            raise BSV::Wallet::InvalidParameterError.new(
-              'sign_and_process', 'true when inputs is nil (wallet-selected inputs sign immediately)'
-            )
-          end
-
-          # Internal-path deferred signing is not implemented in the base
-          # wallet — the internal-action Phase 4 runs synchronously during
-          # create_action, which deferred signing cannot reach (#192).
-          if no_send && deferred
-            raise BSV::Wallet::UnsupportedActionError,
-                  'createAction(no_send: true) combined with deferred signing is not implemented in the base wallet; tracked in #192.'
-          end
-
-          # key_deriver is required only when the wallet must derive BRC-42
-          # change keys (generate_change). Deferred signing defers to
-          # signAction; explicit zero-input transactions skip change
-          # generation. Both paths can run without a key deriver here.
-          skip_change = caller_supplied_inputs && inputs.empty?
-          engine.send(:require_key_deriver!) unless deferred || skip_change
-
-          broadcast = engine.send(:determine_broadcast, no_send, accept_delayed_broadcast)
-          engine.send(:enforce_limp_mode!)
-
-          # Output total drives the initial selection target and the cheap
-          # pre-flight headroom check. The exact post-loop headroom check
-          # (sum(outputs) + actual_fee) runs after generate_change converges.
-          # pre_lock_balance / change_count are captured before Phase 1
-          # locking shrinks the spendable set; both headroom checks use the
-          # pre-lock balance, and the funding loop uses the pre-lock change
-          # count so target sizing reflects the wallet's full pool.
-          output_total = outputs&.sum { |o| o[:satoshis] || 0 } || 0
-          pre_lock_balance = engine.utxo_pool.balance
-          # +change_count:+ kwarg overrides the pool's grooming heuristic. Use
-          # cases: consolidation (target a single output), explicit-cap callers.
-          pre_lock_change_count = change_count || engine.utxo_pool.change_output_count
-          engine.send(:enforce_headroom_against!, pre_lock_balance, output_total) unless deferred
-
-          # Phase 1a: create the empty action row. Input acquisition runs
-          # through FundingStrategy against this row's +action_id+; an
-          # input-less action row is already routine (the deferred path
-          # and the no-output path both produce one). See option (a) in
-          # `reference/action-lifecycle.md`.
-          action_result = engine.store.create_action(
-            action: {
-              description: description, broadcast_intent: broadcast,
-              input_beef: input_beef
-            },
+        # Row-creation helper. Returns an +Action+ instance wrapping a
+        # newly-created (empty) +actions+ row. The orchestrator
+        # (+Engine#do_build_action+) drives the lifecycle from here via
+        # the instance methods.
+        def self.create(engine:, description:, intent:, input_beef: nil, labels: nil)
+          row = engine.store.create_action(
+            action: { description: description, broadcast_intent: intent,
+                      input_beef: input_beef },
             inputs: []
           )
-
-          attach_labels(engine: engine, action_id: action_result[:id], labels: labels)
-
-          action = new(engine: engine, row: action_result)
-
-          # Deferred path: assemble unsigned tx, stage, return signable handle.
-          # Always caller-supplied inputs (enforced above). Lock the caller's
-          # inputs atomically against the empty action row, then build.
-          if deferred
-            lock_caller_inputs!(engine: engine, action_id: action_result[:id], inputs: inputs)
-            # Resolve inline — the deferred path doesn't go through
-            # FundingStrategy, so it owns its single resolve.
-            resolved = engine.store.resolve_inputs_for_signing(action_id: action_result[:id])
-            build_result = engine.tx_builder.build(
-              resolved_inputs: resolved, caller_outputs: outputs || [],
-              caller_inputs: inputs, lock_time: lock_time, version: version,
-              randomize: randomize_outputs, sign: false
-            )
-            wtxid = build_result[:wtxid]
-            raw_tx = build_result[:raw_tx]
-            vout_mapping = build_result[:vout_mapping]
-            pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
-            engine.store.stage_action(
-              action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
-              outputs: pending_outputs
-            )
-            engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-            # BRC-100: signableTransaction.tx is Atomic BEEF of the unsigned tx
-            # so external signers can inspect ancestry without a follow-up call.
-            return {
-              signable_transaction: {
-                tx: engine.hydrator.build_atomic_beef(raw_tx, action_result[:id]),
-                reference: action_result[:reference]
-              }
-            }
-          end
-
-          # Synchronous path. The empty-inputs case (OP_RETURN-only) skips
-          # change generation — already detected above to keep the
-          # key_deriver check honest. Caller inputs (if any) are caller-
-          # supplied; lock them once, no funding loop.
-          if skip_change
-            lock_caller_inputs!(engine: engine, action_id: action_result[:id], inputs: inputs)
-            # Resolve inline — skip_change bypasses the funding loop, so
-            # it owns its single resolve (mirrors the deferred path).
-            resolved = engine.store.resolve_inputs_for_signing(action_id: action_result[:id])
-            build_result = engine.tx_builder.build(
-              resolved_inputs: resolved, caller_outputs: outputs || [],
-              caller_inputs: inputs, lock_time: lock_time, version: version,
-              randomize: randomize_outputs, sign: true
-            )
-            wtxid = build_result[:wtxid]
-            raw_tx = build_result[:raw_tx]
-            vout_mapping = build_result[:vout_mapping]
-            change_outputs = []
-          else
-            # FundingStrategy owns input acquisition (initial + top-up) and
-            # the build collaborator's fixpoint loop. On +InsufficientFundsError+
-            # (caller-supplied shortfall, pool depletion, or contention-retry
-            # exhaustion) abort the empty action row so no orphan is left.
-            begin
-              funding = engine.funding_strategy.acquire(
-                action_id: action_result[:id],
-                caller_outputs: outputs || [],
-                caller_supplied_inputs: caller_supplied_inputs,
-                caller_inputs: caller_supplied_inputs ? inputs : nil,
-                build: lambda { |resolved|
-                  engine.tx_builder.build_change(
-                    resolved_inputs: resolved, caller_outputs: outputs || [],
-                    caller_inputs: caller_supplied_inputs ? inputs : nil,
-                    lock_time: lock_time, version: version,
-                    randomize: randomize_outputs,
-                    change_count: pre_lock_change_count
-                  )
-                }
-              )
-            rescue BSV::Wallet::InsufficientFundsError
-              engine.store.abort_action(action_id: action_result[:id])
-              raise
-            end
-            wtxid          = funding[:wtxid]
-            raw_tx         = funding[:raw_tx]
-            vout_mapping   = funding[:vout_mapping]
-            change_outputs = funding[:change_outputs]
-            # Exact post-loop headroom check: actual fee is now known. Use the
-            # by-value sat-total from FundingStrategy so we don't re-fetch
-            # resolved inputs.
-            actual_fee = funding[:total_input_satoshis] -
-                         output_total - change_outputs.sum { |c| c[:satoshis] }
-            engine.send(:enforce_headroom_against!, pre_lock_balance, output_total + actual_fee)
-          end
-
-          pending_outputs = broadcast == :none || outputs.nil? ? [] : build_output_specs(outputs, vout_mapping)
-          if no_send
-            # Internal path: sign + proof + Phase-4 promotion happen as one
-            # atomic transition so a crash can't strand a signed-but-unpromoted
-            # action (#327) or promoted-but-unspendable change (#328). No
-            # broadcast to wait for, so the whole completion can commit at once.
-            promote_outputs = outputs&.any? ? build_output_specs(outputs, vout_mapping) : []
-            engine.store.complete_internal_action(
-              action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
-              sign_outputs: pending_outputs, change_outputs: change_outputs,
-              promote_outputs: promote_outputs
-            )
-          else
-            engine.store.sign_action(
-              action_id: action_result[:id], wtxid: wtxid, raw_tx: raw_tx,
-              outputs: pending_outputs, change_outputs: change_outputs
-            )
-            engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-          end
-          BSV.logger&.debug do
-            "[Engine] create_action: dtxid=#{wtxid.to_dtxid} " \
-              "outputs=#{outputs&.length || 0} change=#{change_outputs.length}"
-          end
-
-          # Read-only, post-commit: the BEEF we hand back + its SPV honesty
-          # check. Under strict create_action (#296 Phase B), returning from
-          # create_action implies a valid BEEF in hand. Note this runs AFTER the
-          # internal completion commits, so for no_send it is a post-hoc check,
-          # not a promotion gate — a raise here leaves an already-promoted action
-          # (its outputs are the wallet's own, genuinely spendable). Near-
-          # unreachable for a self-built BEEF; the trade-off is no stranding.
-          atomic_beef = engine.hydrator.build_atomic_beef(raw_tx, action_result[:id])
-          engine.hydrator.validate_for_handoff!(atomic_beef, wtxid)
-
-          # Internal-path return: change outpoints for the no_send_change array.
-          if no_send
-            change = action.query_change_outpoints
-            return { txid: wtxid, tx: atomic_beef, no_send_change: change }
-          end
-
-          # Push the just-built BEEF as a cache hint so the daemon's
-          # broadcast skips both Store#find_action and the input source-data
-          # JOIN. BEEF is a strict superset of EF for the subject tx (parent
-          # transactions are inlined), so the receiver can prime the cache
-          # with a Transaction::Tx whose source_transaction is already wired;
-          # daemon's submit emits EF via Transaction::Tx#to_ef_hex on that same
-          # object. Producer pays zero extra queries (atomic_beef was built
-          # for the caller's return value either way). Opt-in via
-          # BSV_WALLET_HINTS_SOCKET; no-op otherwise. #269.
-          # publish_beef_hint stays private on Engine; reach via +send+ rather
-          # than making it part of the public surface for one caller.
-          engine.send(:publish_beef_hint, action_result[:id], atomic_beef)
-
-          # Phase 3 + 4: Broadcast inline. The broadcast worker (same one the
-          # daemon's PULL loop uses) handles the 202 / 400 / 503 dispatch
-          # internally: atomic Phase 4 promotion on accepted, reject_action
-          # cascade on terminal 400, broadcast_at clear on 503, eager proof
-          # linking when the response carries merkle material. Delayed
-          # broadcasts are picked up by the daemon's push-discovery loop from
-          # the broadcasts row that sign_action created atomically above. #271.
-          engine.broadcast_worker.process(action_result[:id]) if broadcast == :inline
-
-          { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
+          attach_labels(engine: engine, action_id: row[:id], labels: labels)
+          new(engine: engine, row: row)
         end
 
         # Migrate +Engine#list_actions+'s body. Returns the BRC-100 hash
@@ -361,9 +151,8 @@ module BSV
         # a plain Hash keyed by +:id+, +:wtxid+, +:reference+, +:status+, … .
         # Every construction site already hands one over: +.create+ via
         # +store.create_action+, +.find+/+.find_by_id+ via +store.find_action+.
-        # (The former Sequel-row and +{ id: nil }+-stub shapes are gone — the
-        # stub hack went with the BeefImporter extraction in #357.) The guard
-        # fails fast at construction rather than at the first +@row[:x]+ read.
+        # The guard fails fast at construction rather than at the first
+        # +@row[:x]+ read.
         def initialize(engine:, row:)
           unless row.is_a?(Hash) && row[:id]
             detail = row.is_a?(Hash) ? "Hash with keys #{row.keys.inspect}" : row.class.to_s
@@ -376,49 +165,129 @@ module BSV
           @id     = row[:id]
         end
 
-        # Complete the deferred-signing path: deserialise the unsigned tx,
-        # apply caller spends, sign remaining wallet-owned P2PKH inputs,
-        # persist, build the Atomic BEEF envelope, and dispatch broadcast
-        # per the action's intent.
+        # Deferred path: lock caller inputs, build unsigned tx, stage,
+        # save proof, return wallet-vocab signable handle.
         #
-        # @return [Hash] +{ txid:, tx: }+ — +txid+ is the wire-order wtxid,
-        #   +tx+ is Atomic BEEF binary (or +nil+ when +return_txid_only:+).
-        def sign!(spends:, no_send:, accept_delayed_broadcast:, return_txid_only:)
-          # Runtime broadcast-override at sign time belongs to the
-          # chained-send subsystem (#192). The base wallet's signAction
-          # only completes the deferred-construction lifecycle per the
-          # original broadcast intent set at createAction time.
-          if no_send && @row[:broadcast_intent] != 'none'
-            raise BSV::Wallet::UnsupportedActionError,
-                  'signAction(no_send: true) requires the action to have been ' \
-                  "created with no_send: true (broadcast intent 'none'). " \
-                  'Runtime override at sign time is not implemented in the base ' \
-                  'wallet; tracked in #192.'
-          end
+        # +intent+ flows from the orchestrator (always +:none+, +:delayed+,
+        # or +:inline+). +:none+ + nil outputs both suppress the staged
+        # pending-outputs persistence — they get written on +sign_action+
+        # when the caller comes back with unlocking scripts.
+        #
+        # @return [Hash] +{ signable: { atomic_beef:, reference: } }+ —
+        #   wallet vocab; BRC100 wraps to +{ signable_transaction: { tx:, reference: } }+.
+        def build_deferred!(inputs:, outputs:, lock_time:, version:, randomize:, intent:)
+          self.class.lock_caller_inputs!(engine: @engine, action_id: @id, inputs: inputs)
+          # Resolve inline — the deferred path doesn't go through
+          # FundingStrategy, so it owns its single resolve.
+          resolved = @engine.store.resolve_inputs_for_signing(action_id: @id)
+          build_result = @engine.tx_builder.build(
+            resolved_inputs: resolved, caller_outputs: outputs || [],
+            caller_inputs: inputs, lock_time: lock_time, version: version,
+            randomize: randomize, sign: false
+          )
+          wtxid = build_result[:wtxid]
+          raw_tx = build_result[:raw_tx]
+          vout_mapping = build_result[:vout_mapping]
+          pending = intent == :none || outputs.nil? ? [] : self.class.build_output_specs(outputs, vout_mapping)
+          @engine.store.stage_action(action_id: @id, wtxid: wtxid, raw_tx: raw_tx, outputs: pending)
+          @engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+          # BRC-100: signableTransaction.tx is Atomic BEEF of the unsigned tx
+          # so external signers can inspect ancestry without a follow-up call.
+          { signable: { atomic_beef: @engine.hydrator.build_atomic_beef(raw_tx, @id),
+                        reference: @row[:reference] } }
+        end
 
-          # Outputs were already written during create_action (promoted: false)
-          # so sign! only deserialises the unsigned tx, applies caller
-          # unlocking scripts, signs remaining P2PKH inputs, and updates the
-          # action with the signed raw_tx + wtxid.
+        # Synchronous + skip-change path: caller-supplied inputs only,
+        # build + sign in one TxBuilder pass (no funding loop, no change).
+        # Used by the OP_RETURN-only and explicit-caller-inputs cases.
+        #
+        # @return [Hash] +{ wtxid:, raw_tx:, vout_mapping:, change_outputs: [] }+
+        def build_with_caller_inputs!(inputs:, outputs:, lock_time:, version:, randomize:)
+          self.class.lock_caller_inputs!(engine: @engine, action_id: @id, inputs: inputs)
+          resolved = @engine.store.resolve_inputs_for_signing(action_id: @id)
+          build_result = @engine.tx_builder.build(
+            resolved_inputs: resolved, caller_outputs: outputs || [],
+            caller_inputs: inputs, lock_time: lock_time, version: version,
+            randomize: randomize, sign: true
+          )
+          { wtxid: build_result[:wtxid], raw_tx: build_result[:raw_tx],
+            vout_mapping: build_result[:vout_mapping], change_outputs: [] }
+        end
+
+        # Wallet-funded path: hand off to +FundingStrategy+ which owns input
+        # acquisition (initial + top-up) and the build collaborator's
+        # fixpoint loop. Caller-supplied inputs (if any) pin part of the
+        # input set; the strategy tops up from the wallet's pool.
+        #
+        # On +InsufficientFundsError+ the caller (Engine) aborts the empty
+        # action row — that decision belongs at the orchestrator level so
+        # the headroom recheck after the fact has somewhere to roll back to.
+        #
+        # @return [Hash] +{ wtxid:, raw_tx:, vout_mapping:, change_outputs:, total_input_satoshis: }+
+        def build_via_funding!(outputs:, caller_inputs:, lock_time:, version:, randomize:, change_count:)
+          funding = @engine.funding_strategy.acquire(
+            action_id: @id,
+            caller_outputs: outputs || [],
+            caller_supplied_inputs: !caller_inputs.nil?,
+            caller_inputs: caller_inputs,
+            build: lambda { |resolved|
+              @engine.tx_builder.build_change(
+                resolved_inputs: resolved, caller_outputs: outputs || [],
+                caller_inputs: caller_inputs,
+                lock_time: lock_time, version: version,
+                randomize: randomize, change_count: change_count
+              )
+            }
+          )
+          { wtxid: funding[:wtxid], raw_tx: funding[:raw_tx],
+            vout_mapping: funding[:vout_mapping],
+            change_outputs: funding[:change_outputs],
+            total_input_satoshis: funding[:total_input_satoshis] }
+        end
+
+        # Send-path sign-time persistence: +Store#sign_action+ writes the
+        # signed raw_tx + wtxid + pending outputs + change outputs in one
+        # atomic transition, then +#save_proof+ stages the raw_tx in the
+        # proof store so the broadcast worker can ship EF.
+        def sign_and_save!(built:, outputs:)
+          pending = outputs.nil? ? [] : self.class.build_output_specs(outputs, built[:vout_mapping])
+          @engine.store.sign_action(
+            action_id: @id, wtxid: built[:wtxid], raw_tx: built[:raw_tx],
+            outputs: pending, change_outputs: built[:change_outputs]
+          )
+          @engine.store.save_proof(wtxid: built[:wtxid], proof: { raw_tx: built[:raw_tx] })
+        end
+
+        # Internal-path atomic completion: sign + proof + Phase-4 promotion
+        # in one Store call so a crash can't strand a signed-but-unpromoted
+        # action (#327) or promoted-but-unspendable change (#328). No
+        # broadcast to wait for — the whole completion commits at once.
+        #
+        # +sign_outputs+ is empty by design here: the internal path
+        # short-circuits pending-output staging because the outputs jump
+        # straight to promoted (the canonical row in +outputs+). Caller
+        # outputs land in +promote_outputs+ only — duplicating them into
+        # +sign_outputs+ would violate +outputs_action_id_vout_key+.
+        def complete_internal!(built:, outputs:)
+          promote = outputs&.any? ? self.class.build_output_specs(outputs, built[:vout_mapping]) : []
+          @engine.store.complete_internal_action(
+            action_id: @id, wtxid: built[:wtxid], raw_tx: built[:raw_tx],
+            sign_outputs: [], change_outputs: built[:change_outputs],
+            promote_outputs: promote
+          )
+        end
+
+        # Complete the deferred-signing flow's signing step: deserialise the
+        # unsigned tx, apply caller spends, sign remaining wallet-owned
+        # P2PKH inputs, persist signed raw_tx + wtxid, save proof. Returns
+        # the signed result so the orchestrator can build BEEF + dispatch.
+        #
+        # @return [Hash] +{ wtxid:, raw_tx: }+
+        def apply_caller_spends!(spends:)
           wtxid, raw_tx, = apply_spends(spends)
           @engine.store.sign_action(action_id: @id, wtxid: wtxid, raw_tx: raw_tx)
           @engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-
-          # Build Atomic BEEF envelope for the :tx return value
-          atomic_beef = @engine.hydrator.build_atomic_beef(raw_tx, @id)
-          # SPV honesty contract (#296 Phase B): refuse to ship invalid BEEF.
-          # Same contract as Action.create's synchronous path.
-          @engine.hydrator.validate_for_handoff!(atomic_beef, wtxid)
-
-          broadcast = @engine.send(:determine_broadcast, no_send, accept_delayed_broadcast)
-
-          return { txid: wtxid, tx: atomic_beef } if no_send
-
-          # See Action.create: the broadcast worker handles dispatch +
-          # bookkeeping internally. #271.
-          @engine.broadcast_worker.process(@id) if broadcast == :inline
-
-          { txid: wtxid, tx: return_txid_only ? nil : atomic_beef }
+          { wtxid: wtxid, raw_tx: raw_tx }
         end
 
         # Abort an in-flight action. Releases any locked inputs and marks
@@ -432,8 +301,9 @@ module BSV
         end
 
         # Outpoints (+dtxid.vout+) of this action's change outputs. Public
-        # because the +.create+ class-method orchestrator invokes it on the
-        # freshly-built instance; operates on the instance's own +@id+.
+        # because +Engine#do_build_action+ invokes it on the freshly-built
+        # instance to populate the no_send return's +change_outpoints:+;
+        # operates on the instance's own +@id+.
         def query_change_outpoints
           action = @engine.store.find_action(id: @id)
           return [] unless action&.dig(:wtxid)
