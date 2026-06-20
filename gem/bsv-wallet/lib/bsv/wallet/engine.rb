@@ -790,6 +790,30 @@ module BSV
         end
       end
 
+      # Pure mapper: caller-supplied (no_send, accept_delayed_broadcast)
+      # → +:none+ / +:delayed+ / +:inline+. Same body as
+      # +determine_broadcast+; renamed to read as a mapper rather than a
+      # side-effectful "determine". Stage 2 commit 6 removes the old name
+      # once Action's call sites move.
+      def map_broadcast_intent(no_send, accept_delayed_broadcast)
+        if no_send then :none
+        elsif accept_delayed_broadcast then :delayed
+        else :inline
+        end
+      end
+
+      # Post-build dispatch: best-effort BEEF cache hint + inline
+      # broadcast trigger when the intent demands it. Packages the
+      # +publish_beef_hint+ / +broadcast_worker.process+ pair that
+      # currently sits at the tail of +Action.create+ — Stage 2's
+      # +Engine#do_build_action+ + +#do_sign_action+ both call this in
+      # the non-no_send path. Inline +:none+ would be a caller bug;
+      # only +:inline+ triggers a sync broadcast.
+      def dispatch_broadcast(action_id, atomic_beef, intent:)
+        publish_beef_hint(action_id, atomic_beef) if atomic_beef
+        @broadcast_worker.process(action_id) if intent == :inline
+      end
+
       # Thin delegator: call sites still on Engine in this sub-PR
       # (internalize_action, generate_receive_address) — move with their
       # owners in later sub-PRs. Canonical impl: +Action.attach_labels+.
