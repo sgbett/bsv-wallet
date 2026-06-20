@@ -52,30 +52,30 @@ RSpec.describe BSV::Wallet::Engine::Action do
   end
 
   describe '.create' do
-    it 'returns the BRC-100 hash shape with txid + tx for a normal action' do
-      fund_wallet(satoshis: 100_000, basket: 'default', suffix: 'a')
-
+    # +.create+ slimmed to a row-creation helper in #402 Stage 2 commit 5.
+    # The orchestrator role (input acquisition, build, persist, dispatch)
+    # moved up to +Engine#do_build_action+; +.create+ now just inserts the
+    # empty +actions+ row and returns an instance. End-to-end orchestration
+    # coverage lives at +engine_spec.rb+ ("#create_action") + integration.
+    it 'inserts an empty actions row and returns an Action wrapping it' do
       result = described_class.create(
-        engine: engine_with_keys,
-        description: 'unit smoke',
-        outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
-        accept_delayed_broadcast: true # delayed → no inline broadcaster needed
+        engine: engine, description: 'row helper smoke', intent: :delayed
       )
 
-      expect(result).to include(:txid, :tx)
-      expect(result[:txid]).to be_a(String).and(have_attributes(bytesize: 32))
-      expect(result[:tx]).to be_a(String).and(satisfy { |b| !b.empty? })
+      expect(result).to be_a(described_class)
+      expect(result.id).to be_a(Integer)
+      expect(result.row[:description]).to eq('row helper smoke')
+      expect(result.row[:broadcast_intent]).to eq('delayed')
     end
 
-    it 'is the entry point Engine#create_action delegates to' do
-      fund_wallet(satoshis: 100_000, basket: 'default', suffix: 'b')
-
-      delegator_result = engine_with_keys.create_action(
-        description: 'delegator smoke',
-        outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }]
+    it 'attaches labels when provided' do
+      result = described_class.create(
+        engine: engine, description: 'with labels', intent: :delayed,
+        labels: %w[smoke unit]
       )
-      expect(delegator_result).to include(:txid, :tx)
-      expect(delegator_result[:txid].bytesize).to eq(32)
+      labels = store.query_actions(labels: %w[smoke], include_labels: true)[:actions]
+      expect(labels.first[:labels]).to include('smoke', 'unit')
+      expect(labels.first[:id]).to eq(result.id)
     end
   end
 
@@ -121,83 +121,51 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
   end
 
-  describe '#sign!' do
-    it 'completes a deferred-signing flow when invoked directly on an Action instance' do
-      # Deferred create: outputs only, no inputs to sign — exercises the
-      # sign! lifecycle method without needing wallet-owned P2PKH inputs.
+  describe '#apply_caller_spends!' do
+    # Action#sign! split in #402 Stage 2 commit 5: the row-level signing
+    # step is +#apply_caller_spends!+ (deserialise unsigned tx, apply
+    # caller scripts, sign remaining inputs, persist signed raw_tx +
+    # proof). BEEF assembly + dispatch moved up to +Engine#do_sign_action+.
+    it 'returns the signed wtxid + raw_tx for a deferred action' do
       create_result = engine.create_action(
-        description: 'action sign! smoke',
-        inputs: [],
-        sign_and_process: false,
+        description: 'action apply_caller_spends! smoke',
+        inputs: [], sign_and_process: false,
         outputs: [
           # 0 satoshis: exercises the deferred-sign lifecycle without
-          # creating value-from-nothing (which strict validate_for_handoff!
-          # would reject in #296 Phase B).
+          # creating value-from-nothing (#296 Phase B).
           { satoshis: 0, locking_script: OP_TRUE,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
             sender_identity_key: 'self' }
         ]
       )
       reference = create_result[:signable_transaction][:reference]
-      row = store.find_action(reference: reference)
+      action = described_class.find(engine: engine, reference: reference)
 
-      result = described_class.new(engine: engine, row: row).sign!(
-        spends: {}, no_send: false,
-        accept_delayed_broadcast: true, return_txid_only: false
-      )
+      result = action.apply_caller_spends!(spends: {})
 
-      expect(result).to include(:txid, :tx)
-      expect(result[:txid].bytesize).to eq(32)
-      expect(result[:tx]).to be_a(String)
+      expect(result).to include(:wtxid, :raw_tx)
+      expect(result[:wtxid].bytesize).to eq(32)
+      expect(result[:raw_tx]).to be_a(String)
     end
+  end
 
-    it 'is the entry point Engine#sign_action delegates to' do
-      create_result = engine.create_action(
-        description: 'sign delegator',
-        inputs: [],
-        sign_and_process: false,
-        outputs: [
-          # 0 satoshis: exercises the deferred-sign lifecycle without
-          # creating value-from-nothing (which strict validate_for_handoff!
-          # would reject in #296 Phase B).
-          { satoshis: 0, locking_script: OP_TRUE,
-            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-            sender_identity_key: 'self' }
-        ]
-      )
-      reference = create_result[:signable_transaction][:reference]
-
-      result = engine.sign_action(spends: {}, reference: reference)
-
-      expect(result).to include(:txid, :tx)
-      expect(result[:txid].bytesize).to eq(32)
-    end
-
+  describe 'Engine#do_sign_action no_send guard' do
     it 'rejects no_send when the underlying action was not created with broadcast_intent: none' do
       # Deferred path defaults to broadcast_intent: :delayed — no_send: true
       # at sign time is a runtime override the base wallet does not support.
       create_result = engine.create_action(
         description: 'no_send guard',
-        inputs: [],
-        sign_and_process: false,
+        inputs: [], sign_and_process: false,
         outputs: [
-          # 0 satoshis: exercises the deferred-sign lifecycle without
-          # creating value-from-nothing (which strict validate_for_handoff!
-          # would reject in #296 Phase B).
           { satoshis: 0, locking_script: OP_TRUE,
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
             sender_identity_key: 'self' }
         ]
       )
-      row = store.find_action(reference: create_result[:signable_transaction][:reference])
-      action = described_class.new(engine: engine, row: row)
+      reference = create_result[:signable_transaction][:reference]
 
-      expect do
-        action.sign!(
-          spends: {}, no_send: true,
-          accept_delayed_broadcast: true, return_txid_only: false
-        )
-      end.to raise_error(BSV::Wallet::UnsupportedActionError, /signAction\(no_send: true\)/)
+      expect { engine.sign_action(spends: {}, reference: reference, no_send: true) }
+        .to raise_error(BSV::Wallet::UnsupportedActionError, /signAction\(no_send: true\)/)
     end
   end
 

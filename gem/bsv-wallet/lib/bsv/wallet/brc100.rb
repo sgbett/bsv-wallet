@@ -57,29 +57,43 @@ module BSV
         validate_create_action_params!(inputs: inputs, outputs: outputs)
         validate_output_ownership!(outputs)
 
-        # +originator+ stays at BRC100 per ADR-026 decision 7 — it is
-        # BRC-100 vocabulary that doesn't propagate into Engine.
-        do_build_action(
+        # +originator+, +return_txid_only+, +trust_self+ stay at BRC100
+        # per ADR-026 decisions 5/7 — BRC-100 vocabulary that doesn't
+        # propagate into Engine. +return_txid_only+ is applied at wrap
+        # time below.
+        result = do_build_action(
           description: description, input_beef: input_beef,
           inputs: inputs, outputs: outputs,
           lock_time: lock_time, version: version, labels: labels,
           sign_and_process: sign_and_process,
           accept_delayed_broadcast: accept_delayed_broadcast,
-          trust_self: trust_self, return_txid_only: return_txid_only,
           no_send: no_send, change_count: change_count,
           randomize_outputs: randomize_outputs
         )
+
+        # Wallet vocab → BRC-100 vocab. Engine returns one of three shapes
+        # (sync / no_send / deferred); each maps to a distinct BRC-100
+        # createAction return.
+        if result[:signable]
+          { signable_transaction: { tx: result[:signable][:atomic_beef],
+                                    reference: result[:signable][:reference] } }
+        elsif result.key?(:change_outpoints)
+          { txid: result[:wtxid], tx: result[:atomic_beef],
+            no_send_change: result[:change_outpoints] }
+        else
+          { txid: result[:wtxid], tx: return_txid_only ? nil : result[:atomic_beef] }
+        end
       end
 
       def sign_action(spends:, reference:, accept_delayed_broadcast: true,
                       return_txid_only: false, no_send: false,
                       originator: nil)
         validate_reference!(reference)
-        do_sign_action(
+        result = do_sign_action(
           reference: reference, spends: spends,
-          accept_delayed_broadcast: accept_delayed_broadcast,
-          return_txid_only: return_txid_only, no_send: no_send
+          accept_delayed_broadcast: accept_delayed_broadcast, no_send: no_send
         )
+        { txid: result[:wtxid], tx: return_txid_only ? nil : result[:atomic_beef] }
       end
 
       def abort_action(reference:, originator: nil)

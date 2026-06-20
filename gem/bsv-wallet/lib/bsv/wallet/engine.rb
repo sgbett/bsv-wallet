@@ -170,18 +170,193 @@ module BSV
       # eventually become wallet vocab (+wtxid:+ binary, +atomic_beef:+)
       # with BRC100 wrapping to BRC-100 vocab — also commit 5.
 
-      def do_build_action(**)
-        Engine::Action.create(engine: self, **)
+      # Orchestrator. Lifted from +Engine::Action.create+'s body in
+      # #402 Stage 2 commit 5. Drives input acquisition, the build, the
+      # headroom guards, persistence (sign or atomic internal-completion),
+      # BEEF assembly + SPV honesty validation, and broadcast dispatch.
+      # Returns wallet vocab; BRC100 wraps to BRC-100 vocab.
+      #
+      # @return [Hash] sync: +{ wtxid:, atomic_beef: }+;
+      #   internal (no_send): +{ wtxid:, atomic_beef:, change_outpoints: }+;
+      #   deferred: +{ signable: { atomic_beef:, reference: } }+.
+      def do_build_action(description:, input_beef: nil, inputs: nil, outputs: nil,
+                          lock_time: nil, version: nil, labels: nil,
+                          sign_and_process: true, accept_delayed_broadcast: true,
+                          no_send: false, change_count: nil,
+                          randomize_outputs: true)
+        # Caller-supplied inputs: explicit array (possibly empty) — the
+        # wallet does not extend this set. inputs: nil means "select for me".
+        caller_supplied_inputs = !inputs.nil?
+        deferred = !sign_and_process ||
+                   inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
+
+        # Wallet-selected inputs (inputs: nil) cannot be deferred — the
+        # funding loop signs immediately so the change template can be
+        # evaluated against the actual fee. Deferred signing only makes
+        # sense with caller-supplied inputs the caller intends to script
+        # themselves.
+        if !caller_supplied_inputs && !sign_and_process
+          raise BSV::Wallet::InvalidParameterError.new(
+            'sign_and_process', 'true when inputs is nil (wallet-selected inputs sign immediately)'
+          )
+        end
+
+        # Internal-path deferred signing is not implemented in the base
+        # wallet — the internal-action Phase 4 runs synchronously during
+        # create_action, which deferred signing cannot reach (#192).
+        if no_send && deferred
+          raise BSV::Wallet::UnsupportedActionError,
+                'createAction(no_send: true) combined with deferred signing is ' \
+                'not implemented in the base wallet; tracked in #192.'
+        end
+
+        # key_deriver is required only when the wallet must derive BRC-42
+        # change keys (generate_change). Deferred signing defers to
+        # signAction; explicit zero-input transactions skip change
+        # generation. Both paths can run without a key deriver here.
+        skip_change = caller_supplied_inputs && inputs.empty?
+        require_key_deriver! unless deferred || skip_change
+
+        intent = map_broadcast_intent(no_send, accept_delayed_broadcast)
+        @policy.guard_balance!(balance: @utxo_pool.balance, bypass: @bypass_limp_mode)
+
+        # Output total drives the initial selection target and the cheap
+        # pre-flight headroom check. The exact post-loop headroom check
+        # (sum(outputs) + actual_fee) runs after generate_change converges.
+        # pre_lock_balance / change_count are captured before Phase 1
+        # locking shrinks the spendable set; both headroom checks use the
+        # pre-lock balance, and the funding loop uses the pre-lock change
+        # count so target sizing reflects the wallet's full pool.
+        output_total = outputs&.sum { |o| o[:satoshis] || 0 } || 0
+        pre_lock_balance = @utxo_pool.balance
+        # +change_count:+ kwarg overrides the pool's grooming heuristic.
+        # Use cases: consolidation (target a single output), explicit-cap
+        # callers.
+        pre_lock_change_count = change_count || @utxo_pool.change_output_count
+        unless deferred
+          @policy.guard_balance!(balance: pre_lock_balance, spending: output_total,
+                                 bypass: @bypass_limp_mode)
+        end
+
+        # Phase 1a: create the empty action row. Input acquisition runs
+        # through FundingStrategy against this row's +action_id+; an
+        # input-less action row is already routine (the deferred path
+        # and the no-output path both produce one). See option (a) in
+        # `reference/action-lifecycle.md`.
+        action = Engine::Action.create(
+          engine: self, description: description, intent: intent,
+          input_beef: input_beef, labels: labels
+        )
+
+        if deferred
+          return action.build_deferred!(
+            inputs: inputs, outputs: outputs, lock_time: lock_time,
+            version: version, randomize: randomize_outputs, intent: intent
+          )
+        end
+
+        built =
+          if skip_change
+            # Synchronous path. The empty-inputs case (OP_RETURN-only)
+            # skips change generation — already detected above to keep
+            # the key_deriver check honest. Caller inputs (if any) are
+            # caller-supplied; lock them once, no funding loop.
+            action.build_with_caller_inputs!(
+              inputs: inputs, outputs: outputs, lock_time: lock_time,
+              version: version, randomize: randomize_outputs
+            )
+          else
+            # FundingStrategy owns input acquisition (initial + top-up)
+            # and the build collaborator's fixpoint loop. On
+            # +InsufficientFundsError+ (caller-supplied shortfall, pool
+            # depletion, or contention-retry exhaustion) abort the empty
+            # action row so no orphan is left.
+            begin
+              funded = action.build_via_funding!(
+                outputs: outputs, caller_inputs: caller_supplied_inputs ? inputs : nil,
+                lock_time: lock_time, version: version,
+                randomize: randomize_outputs, change_count: pre_lock_change_count
+              )
+              # Exact post-loop headroom check: actual fee is now known.
+              actual_fee = funded[:total_input_satoshis] -
+                           output_total - funded[:change_outputs].sum { |c| c[:satoshis] }
+              @policy.guard_balance!(balance: pre_lock_balance,
+                                     spending: output_total + actual_fee,
+                                     bypass: @bypass_limp_mode)
+              funded
+            rescue BSV::Wallet::InsufficientFundsError
+              action.abort!
+              raise
+            end
+          end
+
+        if no_send
+          # Internal path: sign + proof + Phase-4 promotion happen as one
+          # atomic transition (#327 / #328).
+          action.complete_internal!(built: built, outputs: outputs)
+        else
+          action.sign_and_save!(built: built, outputs: outputs)
+        end
+
+        BSV.logger&.debug do
+          "[Engine] do_build_action: dtxid=#{built[:wtxid].to_dtxid} " \
+            "outputs=#{outputs&.length || 0} change=#{built[:change_outputs].length}"
+        end
+
+        # Read-only, post-commit: the BEEF we hand back + its SPV honesty
+        # check. Under strict create_action (#296 Phase B), returning from
+        # do_build_action implies a valid BEEF in hand. For no_send this
+        # runs AFTER internal completion commits, so a raise here leaves
+        # an already-promoted action (its outputs are the wallet's own,
+        # genuinely spendable). Near-unreachable for a self-built BEEF;
+        # the trade-off is no stranding.
+        atomic_beef = @hydrator.build_atomic_beef(built[:raw_tx], action.id)
+        @hydrator.validate_for_handoff!(atomic_beef, built[:wtxid])
+
+        if no_send
+          return { wtxid: built[:wtxid], atomic_beef: atomic_beef,
+                   change_outpoints: action.query_change_outpoints }
+        end
+
+        # Phase 3 + 4: best-effort BEEF cache hint + inline broadcast
+        # if the intent demands it. The broadcast worker handles the
+        # 202 / 400 / 503 dispatch + atomic Phase-4 promotion bookkeeping
+        # internally (#271).
+        dispatch_broadcast(action.id, atomic_beef, intent: intent)
+
+        { wtxid: built[:wtxid], atomic_beef: atomic_beef }
       end
 
+      # Complete the deferred-signing flow: locate the parked action,
+      # apply caller spends, build + validate BEEF, dispatch broadcast
+      # per the action's intent.
+      #
+      # @return [Hash] +{ wtxid:, atomic_beef: }+ — wallet vocab; BRC100 wraps.
       def do_sign_action(reference:, spends:, accept_delayed_broadcast: true,
-                         return_txid_only: false, no_send: false)
+                         no_send: false)
         action = Engine::Action.find(engine: self, reference: reference)
         raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
-        action.sign!(spends: spends, no_send: no_send,
-                     accept_delayed_broadcast: accept_delayed_broadcast,
-                     return_txid_only: return_txid_only)
+        # Runtime broadcast-override at sign time belongs to the
+        # chained-send subsystem (#192). The base wallet's signAction
+        # only completes the deferred-construction lifecycle per the
+        # original broadcast intent set at createAction time.
+        if no_send && action.row[:broadcast_intent] != 'none'
+          raise BSV::Wallet::UnsupportedActionError,
+                'signAction(no_send: true) requires the action to have been ' \
+                "created with no_send: true (broadcast intent 'none'). " \
+                'Runtime override at sign time is not implemented in the base ' \
+                'wallet; tracked in #192.'
+        end
+
+        signed = action.apply_caller_spends!(spends: spends)
+        atomic_beef = @hydrator.build_atomic_beef(signed[:raw_tx], action.id)
+        @hydrator.validate_for_handoff!(atomic_beef, signed[:wtxid])
+
+        intent = map_broadcast_intent(no_send, accept_delayed_broadcast)
+        dispatch_broadcast(action.id, atomic_beef, intent: intent) unless no_send
+
+        { wtxid: signed[:wtxid], atomic_beef: atomic_beef }
       end
 
       def do_abort_action(reference:)
