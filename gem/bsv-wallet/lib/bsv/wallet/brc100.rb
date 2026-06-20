@@ -82,7 +82,7 @@ module BSV
         # per ADR-026 decisions 5/7 — BRC-100 vocabulary that doesn't
         # propagate into Engine. +return_txid_only+ is applied at wrap
         # time below.
-        result = @engine.do_build_action(
+        result = @engine.build_action(
           description: description, input_beef: input_beef,
           inputs: inputs, outputs: outputs,
           lock_time: lock_time, version: version, labels: labels,
@@ -110,7 +110,7 @@ module BSV
                       return_txid_only: false, no_send: false,
                       originator: nil)
         validate_reference!(reference)
-        result = @engine.do_sign_action(
+        result = @engine.sign_action(
           reference: reference, spends: spends,
           accept_delayed_broadcast: accept_delayed_broadcast, no_send: no_send
         )
@@ -119,7 +119,7 @@ module BSV
 
       def abort_action(reference:, originator: nil)
         validate_reference!(reference)
-        @engine.do_abort_action(reference: reference)
+        @engine.abort_action(reference: reference)
       end
 
       def list_actions(labels:, label_query_mode: :any,
@@ -129,7 +129,7 @@ module BSV
                        include_outputs: false, include_output_locking_scripts: false,
                        limit: 10, offset: 0, seek_permission: true,
                        originator: nil)
-        result = @engine.do_list_actions(
+        result = @engine.list_actions(
           labels: labels, label_query_mode: label_query_mode,
           include_labels: include_labels, include_inputs: include_inputs,
           include_input_source_locking_scripts: include_input_source_locking_scripts,
@@ -148,7 +148,7 @@ module BSV
         # known_txids is the BRC-100 spec param name; values are wire-order wtxids
         known_txids&.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'known_txids entry') }
 
-        @engine.do_import_beef(
+        @engine.import_beef(
           tx: tx, outputs: outputs, description: description,
           labels: labels, trust_self: trust_self, known_txids: known_txids,
           seek_permission: seek_permission
@@ -159,7 +159,7 @@ module BSV
                        include_custom_instructions: false, include_tags: false,
                        include_labels: false, limit: 10, offset: 0,
                        seek_permission: true, originator: nil)
-        result = @engine.do_list_outputs(
+        result = @engine.list_outputs(
           basket: basket, tags: tags, tag_query_mode: tag_query_mode,
           include: include,
           include_custom_instructions: include_custom_instructions,
@@ -170,7 +170,7 @@ module BSV
       end
 
       def relinquish_output(basket:, output:, originator: nil)
-        @engine.do_relinquish_output(output_id: output)
+        @engine.relinquish_output(output_id: output)
         { relinquished: true }
       end
 
@@ -180,7 +180,7 @@ module BSV
                          privileged: false, privileged_reason: nil,
                          counterparty: nil, for_self: false,
                          seek_permission: true, originator: nil)
-        pub = @engine.do_get_public_key(
+        pub = @engine.get_public_key(
           identity_key: identity_key, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty, for_self: for_self, privileged: privileged
         )
@@ -190,7 +190,7 @@ module BSV
       def reveal_counterparty_key_linkage(counterparty:, verifier:,
                                           privileged: false, privileged_reason: nil,
                                           originator: nil)
-        @engine.do_reveal_counterparty_key_linkage(
+        @engine.reveal_counterparty_key_linkage(
           counterparty: counterparty, verifier: verifier, privileged: privileged
         )
       end
@@ -198,7 +198,7 @@ module BSV
       def reveal_specific_key_linkage(counterparty:, verifier:, protocol_id:, key_id:,
                                       privileged: false, privileged_reason: nil,
                                       originator: nil)
-        @engine.do_reveal_specific_key_linkage(
+        @engine.reveal_specific_key_linkage(
           counterparty: counterparty, verifier: verifier,
           protocol_id: protocol_id, key_id: key_id, privileged: privileged
         )
@@ -209,7 +209,7 @@ module BSV
       def encrypt(plaintext:, protocol_id:, key_id:,
                   privileged: false, privileged_reason: nil,
                   counterparty: nil, seek_permission: true, originator: nil)
-        ciphertext = @engine.do_encrypt(
+        ciphertext = @engine.encrypt(
           plaintext: plaintext, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -219,7 +219,7 @@ module BSV
       def decrypt(ciphertext:, protocol_id:, key_id:,
                   privileged: false, privileged_reason: nil,
                   counterparty: nil, seek_permission: true, originator: nil)
-        plaintext = @engine.do_decrypt(
+        plaintext = @engine.decrypt(
           ciphertext: ciphertext, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -229,7 +229,7 @@ module BSV
       def create_hmac(data:, protocol_id:, key_id:,
                       privileged: false, privileged_reason: nil,
                       counterparty: nil, seek_permission: true, originator: nil)
-        hmac = @engine.do_create_hmac(
+        hmac = @engine.create_hmac(
           data: data, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -239,7 +239,7 @@ module BSV
       def verify_hmac(data:, hmac:, protocol_id:, key_id:,
                       privileged: false, privileged_reason: nil,
                       counterparty: nil, seek_permission: true, originator: nil)
-        valid = @engine.do_verify_hmac(
+        valid = @engine.verify_hmac(
           data: data, hmac: hmac, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -251,7 +251,7 @@ module BSV
       def create_signature(protocol_id:, key_id:, data: nil, hash_to_directly_sign: nil,
                            privileged: false, privileged_reason: nil,
                            counterparty: nil, seek_permission: true, originator: nil)
-        signature = @engine.do_create_signature(
+        signature = @engine.create_signature(
           data: data, hash_to_directly_sign: hash_to_directly_sign,
           protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
@@ -264,7 +264,7 @@ module BSV
                            privileged: false, privileged_reason: nil,
                            counterparty: nil, for_self: false,
                            seek_permission: true, originator: nil)
-        valid = @engine.do_verify_signature(
+        valid = @engine.verify_signature(
           signature: signature, data: data,
           hash_to_directly_verify: hash_to_directly_verify,
           protocol_id: protocol_id, key_id: key_id,
@@ -287,7 +287,7 @@ module BSV
         # validation per ADR-026 decision 6.
         case acquisition_protocol
         when :direct, 'direct'
-          @engine.do_acquire_certificate(
+          @engine.acquire_certificate(
             type: type, certifier: certifier, fields: fields,
             serial_number: serial_number, revocation_outpoint: revocation_outpoint,
             signature: signature, keyring_for_subject: keyring_for_subject
@@ -302,7 +302,7 @@ module BSV
 
       def list_certificates(certifiers:, types:, limit: 10, offset: 0,
                             privileged: false, privileged_reason: nil, originator: nil)
-        result = @engine.do_list_certificates(
+        result = @engine.list_certificates(
           certifiers: certifiers, types: types, limit: limit, offset: offset
         )
         { total_certificates: result[:total], certificates: result[:certificates] }
@@ -310,7 +310,7 @@ module BSV
 
       def prove_certificate(certificate:, fields_to_reveal:, verifier:,
                             privileged: false, privileged_reason: nil, originator: nil)
-        keyring = @engine.do_prove_certificate(
+        keyring = @engine.prove_certificate(
           certificate: certificate, fields_to_reveal: fields_to_reveal,
           verifier: verifier, privileged: privileged
         )
@@ -318,13 +318,13 @@ module BSV
       end
 
       def relinquish_certificate(type:, serial_number:, certifier:, originator: nil)
-        @engine.do_relinquish_certificate(type: type, serial_number: serial_number, certifier: certifier)
+        @engine.relinquish_certificate(type: type, serial_number: serial_number, certifier: certifier)
         { relinquished: true }
       end
 
       def discover_by_identity_key(identity_key:, limit: 10, offset: 0,
                                    seek_permission: true, originator: nil)
-        result = @engine.do_discover_by_identity_key(
+        result = @engine.discover_by_identity_key(
           identity_key: identity_key, limit: limit, offset: offset
         )
         { total_certificates: result[:total], certificates: result[:certificates] }
@@ -332,7 +332,7 @@ module BSV
 
       def discover_by_attributes(attributes:, limit: 10, offset: 0,
                                  seek_permission: true, originator: nil)
-        result = @engine.do_discover_by_attributes(
+        result = @engine.discover_by_attributes(
           attributes: attributes, limit: limit, offset: offset
         )
         { total_certificates: result[:total], certificates: result[:certificates] }
@@ -341,30 +341,30 @@ module BSV
       # --- Authentication (codes 23-24) ---
 
       def authenticated?(originator: nil)
-        { authenticated: @engine.do_authenticated? }
+        { authenticated: @engine.authenticated? }
       end
 
       def wait_for_authentication(originator: nil)
-        @engine.do_wait_for_authentication
+        @engine.wait_for_authentication
         { authenticated: true }
       end
 
       # --- Blockchain and Network Data (codes 25-28) ---
 
       def get_height(originator: nil)
-        { height: @engine.do_get_height }
+        { height: @engine.get_height }
       end
 
       def get_header_for_height(height:, originator: nil)
-        { header: @engine.do_get_header_for_height(height: height) }
+        { header: @engine.get_header_for_height(height: height) }
       end
 
       def get_network(originator: nil)
-        { network: @engine.do_get_network }
+        { network: @engine.get_network }
       end
 
       def get_version(originator: nil)
-        { version: @engine.do_get_version }
+        { version: @engine.get_version }
       end
 
       private

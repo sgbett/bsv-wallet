@@ -97,13 +97,13 @@ RSpec.describe BSV::Wallet::BRC100 do
   end
 
   describe 'smoke: a method delegates to the engine primitive' do
-    it '#get_network routes through @engine.do_get_network' do
+    it '#get_network routes through @engine.get_network' do
       # Stub an engine that responds to the post-Stage-2 wallet-vocab
-      # primitive +#do_get_network+. After Stage 3 commit 4 the same
+      # primitive +#get_network+. After Stage 3 commit 4 the same
       # method exists on Engine as +#get_network+ (prefix dropped);
       # this spec runs after commit 3 (BRC100→class) and before commit
-      # 4 (rename), so it uses +do_get_network+.
-      fake_engine = instance_double(BSV::Wallet::Engine, do_get_network: :mainnet)
+      # 4 (rename), so it uses +get_network+.
+      fake_engine = instance_double(BSV::Wallet::Engine, get_network: :mainnet)
       brc100 = described_class.new(fake_engine)
 
       expect(brc100.get_network).to eq(network: :mainnet)

@@ -54,7 +54,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
   describe '.create' do
     # +.create+ slimmed to a row-creation helper in #402 Stage 2 commit 5.
     # The orchestrator role (input acquisition, build, persist, dispatch)
-    # moved up to +Engine#do_build_action+; +.create+ now just inserts the
+    # moved up to +Engine#build_action+; +.create+ now just inserts the
     # empty +actions+ row and returns an instance. End-to-end orchestration
     # coverage lives at +engine_spec.rb+ ("#create_action") + integration.
     it 'inserts an empty actions row and returns an Action wrapping it' do
@@ -125,7 +125,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     # Action#sign! split in #402 Stage 2 commit 5: the row-level signing
     # step is +#apply_caller_spends!+ (deserialise unsigned tx, apply
     # caller scripts, sign remaining inputs, persist signed raw_tx +
-    # proof). BEEF assembly + dispatch moved up to +Engine#do_sign_action+.
+    # proof). BEEF assembly + dispatch moved up to +Engine#sign_action+.
     it 'returns the signed wtxid + raw_tx for a deferred action' do
       create_result = engine.brc100.create_action(
         description: 'action apply_caller_spends! smoke',
@@ -149,7 +149,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
   end
 
-  describe 'Engine#do_sign_action no_send guard' do
+  describe 'Engine#sign_action no_send guard' do
     it 'rejects no_send when the underlying action was not created with broadcast_intent: none' do
       # Deferred path defaults to broadcast_intent: :delayed — no_send: true
       # at sign time is a runtime override the base wallet does not support.
@@ -317,8 +317,8 @@ RSpec.describe BSV::Wallet::Engine::Action do
       # (#402 PR 2 normalisation — all collection primitives now use
       # +:total+ on the Engine side with the domain key for the rows:
       # +{ total:, actions: }+ here, +{ total:, outputs: }+ for
-      # +do_list_outputs+, +{ total:, certificates: }+ for
-      # +do_list_certificates+ + +do_discover_by_*+).
+      # +list_outputs+, +{ total:, certificates: }+ for
+      # +list_certificates+ + +do_discover_by_*+).
       store.create_action(action: { description: 'list smoke other', broadcast_intent: :none })
       action = store.create_action(action: { description: 'list smoke target', broadcast_intent: :none })
       described_class.attach_labels(engine: engine, action_id: action[:id], labels: ['list-smoke'])

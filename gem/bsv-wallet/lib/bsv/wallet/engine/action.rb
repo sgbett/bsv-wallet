@@ -14,7 +14,7 @@ module BSV
       # apply_caller_spends!, abort!) and BRC-100 helpers
       # (build_input_specs, build_output_specs).
       #
-      # Orchestration lives in +Engine#do_build_action+ / +#do_sign_action+
+      # Orchestration lives in +Engine#build_action+ / +#sign_action+
       # (#402 Stage 2). +Action.create+ is now a thin row-creation helper;
       # the lifecycle steps are instance methods so Engine can drive them
       # sequentially without reach-backs.
@@ -23,7 +23,7 @@ module BSV
 
         # Row-creation helper. Returns an +Action+ instance wrapping a
         # newly-created (empty) +actions+ row. The orchestrator
-        # (+Engine#do_build_action+) drives the lifecycle from here via
+        # (+Engine#build_action+) drives the lifecycle from here via
         # the instance methods.
         def self.create(engine:, description:, intent:, input_beef: nil, labels: nil)
           row = engine.store.create_action(
@@ -39,7 +39,7 @@ module BSV
         # matching the shape +Store#query_actions+ produces and the
         # other +do_list_*+ collection primitives use. BRC100 re-keys
         # +:total+ → +:total_actions+ at the wrap layer.
-        # Called from +Engine#do_list_actions+; +originator:+ stops at
+        # Called from +Engine#list_actions+; +originator:+ stops at
         # the wrap layer per ADR-026 decision 7 and is not accepted here.
         def self.list(engine:, labels:, label_query_mode: :any,
                       include_labels: false, include_inputs: false,
@@ -304,7 +304,7 @@ module BSV
         end
 
         # Outpoints (+dtxid.vout+) of this action's change outputs. Public
-        # because +Engine#do_build_action+ invokes it on the freshly-built
+        # because +Engine#build_action+ invokes it on the freshly-built
         # instance to populate the no_send return's +change_outpoints:+;
         # operates on the instance's own +@id+.
         def query_change_outpoints

@@ -1006,9 +1006,9 @@ RSpec.describe BSV::Wallet::Engine do
   # above (+#create_action+, +#sign_action+, +#abort_action+,
   # +#internalize_action+); these blocks focus on the wallet-vocab
   # return shapes the wrap layer translates from.
-  describe '#do_build_action (wallet-vocab primitive)' do
+  describe '#build_action (wallet-vocab primitive)' do
     it 'returns { wtxid:, atomic_beef: } on the synchronous path' do
-      result = engine.do_build_action(
+      result = engine.build_action(
         description: 'sync primitive',
         inputs: [],
         outputs: [
@@ -1025,7 +1025,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'returns { wtxid:, atomic_beef:, change_outpoints: } on the no_send path' do
       fund_wallet(satoshis: 100_000, basket: 'default', suffix: 'do_build_no_send')
-      result = engine_with_keys.do_build_action(
+      result = engine_with_keys.build_action(
         description: 'no_send primitive',
         outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
         no_send: true
@@ -1039,7 +1039,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'returns { signable: { atomic_beef:, reference: } } on the deferred path' do
-      result = engine.do_build_action(
+      result = engine.build_action(
         description: 'deferred primitive',
         inputs: [], sign_and_process: false,
         outputs: [
@@ -1059,14 +1059,14 @@ RSpec.describe BSV::Wallet::Engine do
       # ADR-026 decision 7 — those stay at BRC100. Verify the primitive
       # signature actually excludes them (an accidental future +**kwargs+
       # forwarding would silently re-accept them).
-      params = engine.method(:do_build_action).parameters.map { |_kind, name| name }
+      params = engine.method(:build_action).parameters.map { |_kind, name| name }
       expect(params).not_to include(:originator, :return_txid_only, :trust_self)
     end
   end
 
-  describe '#do_sign_action (wallet-vocab primitive)' do
+  describe '#sign_action (wallet-vocab primitive)' do
     let(:deferred_reference) do
-      result = engine.do_build_action(
+      result = engine.build_action(
         description: 'parked for sign primitive',
         inputs: [], sign_and_process: false,
         outputs: [
@@ -1079,7 +1079,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'returns { wtxid:, atomic_beef: } for a successful sign' do
-      result = engine.do_sign_action(reference: deferred_reference, spends: {})
+      result = engine.sign_action(reference: deferred_reference, spends: {})
 
       expect(result.keys).to contain_exactly(:wtxid, :atomic_beef)
       expect(result[:wtxid].bytesize).to eq(32)
@@ -1088,7 +1088,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'raises InvalidParameterError for an unknown reference' do
       expect do
-        engine.do_sign_action(
+        engine.sign_action(
           reference: '00000000-0000-0000-0000-000000000000', spends: {}
         )
       end.to raise_error(BSV::Wallet::InvalidParameterError)
@@ -1096,16 +1096,16 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'rejects no_send: true when the action was not parked with broadcast_intent: none' do
       expect do
-        engine.do_sign_action(
+        engine.sign_action(
           reference: deferred_reference, spends: {}, no_send: true
         )
       end.to raise_error(BSV::Wallet::UnsupportedActionError, /signAction\(no_send: true\)/)
     end
   end
 
-  describe '#do_abort_action (wallet-vocab primitive)' do
+  describe '#abort_action (wallet-vocab primitive)' do
     let(:deferred_reference) do
-      result = engine.do_build_action(
+      result = engine.build_action(
         description: 'parked for abort primitive',
         inputs: [], sign_and_process: false,
         outputs: [
@@ -1117,7 +1117,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'returns { aborted: true } and removes the action row' do
-      result = engine.do_abort_action(reference: deferred_reference)
+      result = engine.abort_action(reference: deferred_reference)
 
       expect(result).to eq({ aborted: true })
       expect(store.find_action(reference: deferred_reference)).to be_nil
@@ -1125,17 +1125,17 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'raises InvalidParameterError for an unknown reference' do
       expect do
-        engine.do_abort_action(reference: '00000000-0000-0000-0000-000000000000')
+        engine.abort_action(reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
   end
 
-  describe '#do_import_beef (wallet-vocab primitive)' do
+  describe '#import_beef (wallet-vocab primitive)' do
     it 'delegates to Engine::BeefImporter#import and forwards the kwargs' do
       # Smoke: build a minimal incoming-BEEF scenario indirectly via the
       # BRC-100 wrapper, asserting the primitive does NOT consume
       # +originator:+ (which BRC100 swallows per ADR-026 decision 7).
-      params = engine.method(:do_import_beef).parameters.map { |_kind, name| name }
+      params = engine.method(:import_beef).parameters.map { |_kind, name| name }
       expect(params).not_to include(:originator)
       expect(params).to include(:tx, :outputs, :description, :labels, :trust_self,
                                 :known_txids, :seek_permission)
@@ -1152,14 +1152,14 @@ RSpec.describe BSV::Wallet::Engine do
   # - None accepts +originator:+ (BRC-100 vocab — stays at the wrap layer).
   describe 'read-side primitive surface' do
     READ_SIDE_PRIMITIVES = %i[
-      do_encrypt do_decrypt do_create_hmac do_verify_hmac
-      do_create_signature do_verify_signature
-      do_get_public_key do_reveal_counterparty_key_linkage do_reveal_specific_key_linkage
-      do_acquire_certificate do_list_certificates do_prove_certificate
-      do_relinquish_certificate do_discover_by_identity_key do_discover_by_attributes
-      do_list_actions do_list_outputs do_relinquish_output
-      do_authenticated? do_wait_for_authentication
-      do_get_height do_get_header_for_height do_get_network do_get_version
+      encrypt decrypt create_hmac verify_hmac
+      create_signature verify_signature
+      get_public_key reveal_counterparty_key_linkage reveal_specific_key_linkage
+      acquire_certificate list_certificates prove_certificate
+      relinquish_certificate discover_by_identity_key discover_by_attributes
+      list_actions list_outputs relinquish_output
+      authenticated? wait_for_authentication
+      get_height get_header_for_height get_network get_version
     ].freeze
 
     it 'defines exactly 24 read-side do_ primitives' do
