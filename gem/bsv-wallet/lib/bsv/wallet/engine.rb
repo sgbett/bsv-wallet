@@ -378,6 +378,218 @@ module BSV
         )
       end
 
+      # ---- BRC-100 primitive surface (read-side, #402 Stage 2 PR 2) -------
+      #
+      # 24 thin wrappers — the indivisible domain operations BRC100 maps
+      # one-to-one to BRC-100 spec methods. Engine returns raw values
+      # (wallet vocab); BRC100 wraps in spec-shaped hashes (BRC-100 vocab).
+      # Same +do_+ prefix scaffold as the write-side; Stage 3 reverts.
+      #
+      # +require_key_deriver!+ lives per-primitive (operation invariant per
+      # ADR-026 decision 6), not at the BRC100 layer — non-BRC100 callers
+      # of these primitives get the same fail-fast.
+
+      # --- Crypto (codes 11-16, 6 primitives) ---
+
+      def do_encrypt(plaintext:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
+        require_key_deriver!
+        @key_deriver.encrypt(plaintext: plaintext, protocol_id: protocol_id, key_id: key_id,
+                             counterparty: counterparty, privileged: privileged)
+      end
+
+      def do_decrypt(ciphertext:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
+        require_key_deriver!
+        @key_deriver.decrypt(ciphertext: ciphertext, protocol_id: protocol_id, key_id: key_id,
+                             counterparty: counterparty, privileged: privileged)
+      end
+
+      def do_create_hmac(data:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
+        require_key_deriver!
+        @key_deriver.create_hmac(data: data, protocol_id: protocol_id, key_id: key_id,
+                                 counterparty: counterparty, privileged: privileged)
+      end
+
+      # Returns +true+ on match, +false+ on mismatch. BRC100 raises
+      # +InvalidHmacError+ on +false+ per the BRC-100 contract; a non-BRC100
+      # consumer gets the boolean for their own dispatch.
+      def do_verify_hmac(data:, hmac:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
+        require_key_deriver!
+        expected = @key_deriver.create_hmac(data: data, protocol_id: protocol_id, key_id: key_id,
+                                            counterparty: counterparty, privileged: privileged)
+        secure_compare(expected, hmac)
+      end
+
+      def do_create_signature(protocol_id:, key_id:, data: nil, hash_to_directly_sign: nil,
+                              counterparty: 'self', privileged: false)
+        require_key_deriver!
+        @key_deriver.create_signature(
+          data: data, hash_to_directly_sign: hash_to_directly_sign,
+          protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty, privileged: privileged
+        )
+      end
+
+      # Returns +true+ on valid, +false+ on invalid. BRC100 raises
+      # +InvalidSignatureError+ on +false+ per the BRC-100 contract.
+      def do_verify_signature(signature:, protocol_id:, key_id:, data: nil,
+                              hash_to_directly_verify: nil, counterparty: 'self',
+                              for_self: false, privileged: false)
+        require_key_deriver!
+        @key_deriver.verify_signature(
+          signature: signature, data: data,
+          hash_to_directly_verify: hash_to_directly_verify,
+          protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty, for_self: for_self, privileged: privileged
+        )
+      end
+
+      # --- Pubkey (codes 8-10, 3 primitives) ---
+
+      # Returns pubkey hex (identity or derived). The +identity_key+ flag
+      # selects between the wallet's stable identity pubkey and a derived
+      # pubkey under +protocol_id+/+key_id+/+counterparty+.
+      def do_get_public_key(identity_key: false, protocol_id: nil, key_id: nil,
+                            counterparty: nil, for_self: false, privileged: false)
+        require_key_deriver!
+        if identity_key
+          @key_deriver.identity_key
+        else
+          @key_deriver.derive_public_key(
+            protocol_id: protocol_id, key_id: key_id,
+            counterparty: counterparty || 'self',
+            for_self: for_self, privileged: privileged
+          )
+        end
+      end
+
+      def do_reveal_counterparty_key_linkage(counterparty:, verifier:, privileged: false)
+        require_key_deriver!
+        @key_deriver.reveal_counterparty_linkage(
+          counterparty: counterparty, verifier: verifier, privileged: privileged
+        )
+      end
+
+      def do_reveal_specific_key_linkage(counterparty:, verifier:, protocol_id:, key_id:, privileged: false)
+        require_key_deriver!
+        @key_deriver.reveal_specific_linkage(
+          counterparty: counterparty, verifier: verifier,
+          protocol_id: protocol_id, key_id: key_id, privileged: privileged
+        )
+      end
+
+      # --- Certificates (codes 17-22, 6 primitives) ---
+
+      # Direct-acquisition only. The +:issuance+ branch is dispatched +
+      # raised at the BRC100 layer (spec-shape validation per ADR-026
+      # decision 6); this primitive does the store save.
+      def do_acquire_certificate(type:, certifier:, fields:,
+                                 serial_number: nil, revocation_outpoint: nil,
+                                 signature: nil, keyring_for_subject: nil)
+        @store.save_certificate(
+          type: type, certifier: certifier, fields: fields,
+          serial_number: serial_number, revocation_outpoint: revocation_outpoint,
+          signature: signature, subject: @key_deriver&.identity_key,
+          keyring: keyring_for_subject
+        )
+      end
+
+      def do_list_certificates(certifiers:, types:, limit: 10, offset: 0)
+        @store.query_certificates(
+          certifiers: certifiers, types: types,
+          limit: [limit, 10_000].min, offset: offset
+        )
+      end
+
+      def do_prove_certificate(certificate:, fields_to_reveal:, verifier:, privileged: false)
+        require_key_deriver!
+        @key_deriver.derive_revelation_keyring(
+          certificate: certificate,
+          fields_to_reveal: fields_to_reveal,
+          verifier: verifier, privileged: privileged
+        )
+      end
+
+      def do_relinquish_certificate(type:, serial_number:, certifier:)
+        @store.delete_certificate(type: type, serial_number: serial_number, certifier: certifier)
+      end
+
+      # Local lookup — external discovery is a future concern (no live
+      # cert provider integrated yet). Filters the local cert store by
+      # subject pubkey hex.
+      def do_discover_by_identity_key(identity_key:, limit: 10, offset: 0)
+        result = @store.query_certificates(
+          certifiers: [], types: [],
+          limit: [limit, 10_000].min, offset: offset
+        )
+        matching = result[:certificates].select { |c| c[:subject] == identity_key }
+        { total: matching.size, certificates: matching }
+      end
+
+      # Local lookup — same external-discovery caveat as
+      # +do_discover_by_identity_key+. Currently always empty because the
+      # Store doesn't index by cert field values yet.
+      def do_discover_by_attributes(attributes:, limit: 10, offset: 0)
+        { total: 0, certificates: [] }
+      end
+
+      # --- Action read-side (3 primitives) ---
+
+      def do_list_actions(**)
+        Engine::Action.list(engine: self, **)
+      end
+
+      def do_list_outputs(basket:, tags: nil, tag_query_mode: :any, include: nil,
+                          include_custom_instructions: false, include_tags: false,
+                          include_labels: false, limit: 10, offset: 0,
+                          seek_permission: true)
+        @store.query_outputs(
+          basket: basket, tags: tags, tag_query_mode: tag_query_mode,
+          limit: [limit, 10_000].min, offset: offset,
+          include_locking_scripts: [:locking_scripts, 'locking scripts'].include?(include),
+          include_custom_instructions: include_custom_instructions,
+          include_tags: include_tags, include_labels: include_labels
+        )
+      end
+
+      def do_relinquish_output(output_id:)
+        @store.relinquish_output(output_id: output_id)
+      end
+
+      # --- Auth (codes 23-24, 2 primitives) ---
+
+      # +true+ iff the wallet has a key deriver wired. Authentication in
+      # this codebase is "do we hold the keys to sign?" — sessions / agents
+      # / TLS attestation are out of scope.
+      def do_authenticated?
+        !@key_deriver.nil?
+      end
+
+      # Raises +Error+ (code 2) when not authenticated; returns +true+ when
+      # authenticated. BRC100 wraps as +{ authenticated: true }+.
+      def do_wait_for_authentication
+        raise BSV::Wallet::Error.new('wallet is not authenticated', code: 2) unless @key_deriver
+
+        true
+      end
+
+      # --- Static / network (codes 25-28, 4 primitives) ---
+
+      def do_get_height
+        raise BSV::Wallet::UnsupportedActionError, 'get_height'
+      end
+
+      def do_get_header_for_height(height:)
+        raise BSV::Wallet::UnsupportedActionError, 'get_header_for_height'
+      end
+
+      def do_get_network
+        @network_name
+      end
+
+      def do_get_version
+        "bsv-wallet-#{BSV::Wallet::VERSION}"
+      end
+
       # --- UTXO Import (bootstrap) ---
 
       # Import a root-key UTXO and immediately pay to self on a derived address.

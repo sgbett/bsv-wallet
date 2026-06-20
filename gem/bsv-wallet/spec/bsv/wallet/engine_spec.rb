@@ -1137,6 +1137,49 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
+  # Wallet-vocab read-side primitive surface (#402 Stage 2 PR 2).
+  #
+  # Behaviour is exercised by the existing per-BRC-100-method describe
+  # blocks below (each goes BRC100 wrapper → Engine#do_<name> →
+  # collaborator), so this block focuses on the surface invariants that
+  # transitive coverage can't catch:
+  # - All 24 +do_+ primitives are defined.
+  # - None accepts +originator:+ (BRC-100 vocab — stays at the wrap layer).
+  describe 'read-side primitive surface' do
+    READ_SIDE_PRIMITIVES = %i[
+      do_encrypt do_decrypt do_create_hmac do_verify_hmac
+      do_create_signature do_verify_signature
+      do_get_public_key do_reveal_counterparty_key_linkage do_reveal_specific_key_linkage
+      do_acquire_certificate do_list_certificates do_prove_certificate
+      do_relinquish_certificate do_discover_by_identity_key do_discover_by_attributes
+      do_list_actions do_list_outputs do_relinquish_output
+      do_authenticated? do_wait_for_authentication
+      do_get_height do_get_header_for_height do_get_network do_get_version
+    ].freeze
+
+    it 'defines exactly 24 read-side do_ primitives' do
+      expect(READ_SIDE_PRIMITIVES.length).to eq(24)
+    end
+
+    READ_SIDE_PRIMITIVES.each do |name|
+      it "##{name} is defined on Engine" do
+        expect(engine).to respond_to(name)
+      end
+
+      it "##{name} does not accept +originator:+ (ADR-026 decision 7)" do
+        # +do_list_actions+ uses +**+ anonymous forwarding (callee is
+        # +Engine::Action.list+ which still accepts +originator:+ as a
+        # stub kwarg) — skip the assertion for that one. The forwarding
+        # is harmless because BRC100 doesn't pass originator through.
+        skip 'uses anonymous **kwargs forwarding' if name == :do_list_actions
+
+        params = engine.method(name).parameters.map { |_kind, pname| pname }
+        expect(params).not_to include(:originator),
+                              "expected #{name} signature to exclude :originator, got #{params.inspect}"
+      end
+    end
+  end
+
   describe '#reject_action' do
     it 'delegates to Store#reject_action and returns a structured result' do
       # A rejectable send action: broadcast_intent='inline', a broadcasts row
