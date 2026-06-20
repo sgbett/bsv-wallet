@@ -2,14 +2,16 @@
 
 require 'bsv-wallet'
 require 'bsv/wallet/engine'
-require 'bsv/wallet/engine/brc100'
+require 'bsv/wallet/brc100'
 
-# Method-resolution-order regression spec for the Engine::BRC100 slice
-# (#364, Phase 7 of the #291 "Monolith to Manageable" roadmap).
+# Method-resolution-order regression spec for the BRC100 mixin
+# (#364 introduced as Engine::BRC100; #400 Stage 1 of #396 relocated to
+# sibling +BSV::Wallet::BRC100+). Still a mixin at Stage 1 — Stage 3
+# will convert to a composition over Engine primitives (#397).
 #
-# The slice is a mixin facade: Engine includes Engine::BRC100, which
+# The slice is a mixin facade: Engine includes BSV::Wallet::BRC100, which
 # itself includes the SDK contract Interface::BRC100. The expected
-# ancestry is +Engine → Engine::BRC100 → Interface::BRC100+ so the
+# ancestry is +Engine → BRC100 → Interface::BRC100+ so the
 # 28 impls always beat the contract's +NotImplementedError+ stubs.
 #
 # These assertions are belt-and-braces. A future reorder of `include`
@@ -32,38 +34,38 @@ BRC100_SPEC_METHODS = %i[
   get_height get_header_for_height get_network get_version
 ].freeze
 
-RSpec.describe BSV::Wallet::Engine::BRC100 do
+RSpec.describe BSV::Wallet::BRC100 do
   it 'covers exactly the 28 BRC-100 spec methods' do
     expect(BRC100_SPEC_METHODS.length).to eq(28)
   end
 
   describe 'method-resolution order' do
-    it 'places Engine::BRC100 ahead of Interface::BRC100 in Engine.ancestors' do
+    it 'places BRC100 ahead of Interface::BRC100 in Engine.ancestors' do
       ancestors = BSV::Wallet::Engine.ancestors
       slice_idx = ancestors.index(described_class)
       contract_idx = ancestors.index(BSV::Wallet::Interface::BRC100)
 
-      expect(slice_idx).not_to be_nil, 'Engine::BRC100 not in ancestry'
+      expect(slice_idx).not_to be_nil, 'BSV::Wallet::BRC100 not in ancestry'
       expect(contract_idx).not_to be_nil, 'Interface::BRC100 not in ancestry'
       expect(slice_idx).to be < contract_idx,
-                           "expected Engine::BRC100 (#{slice_idx}) to precede " \
+                           "expected BSV::Wallet::BRC100 (#{slice_idx}) to precede " \
                            "Interface::BRC100 (#{contract_idx}) — impls must beat stubs"
     end
 
-    it 'inherits Interface::BRC100 transitively through Engine::BRC100' do
-      # Engine::BRC100 itself includes the SDK contract.
+    it 'inherits Interface::BRC100 transitively through BRC100' do
+      # BSV::Wallet::BRC100 itself includes the SDK contract.
       expect(described_class.ancestors).to include(BSV::Wallet::Interface::BRC100)
-      # Engine acquires it via Engine::BRC100, no direct include needed.
+      # Engine acquires it via BSV::Wallet::BRC100, no direct include needed.
       expect(BSV::Wallet::Engine.ancestors).to include(BSV::Wallet::Interface::BRC100)
     end
   end
 
   describe 'each of the 28 methods' do
     BRC100_SPEC_METHODS.each do |name|
-      it "##{name} is owned by Engine::BRC100 (not Engine, not Interface::BRC100)" do
+      it "##{name} is owned by BSV::Wallet::BRC100 (not Engine, not Interface::BRC100)" do
         owner = BSV::Wallet::Engine.instance_method(name).owner
         expect(owner).to eq(described_class),
-                         "expected #{name} on Engine::BRC100, found on #{owner} — " \
+                         "expected #{name} on BSV::Wallet::BRC100, found on #{owner} — " \
                          'stub-shadowing or missed move?'
       end
     end
@@ -74,7 +76,7 @@ RSpec.describe BSV::Wallet::Engine::BRC100 do
       direct = BSV::Wallet::Engine.instance_methods(false)
       leaked = BRC100_SPEC_METHODS & direct
       expect(leaked).to eq([]),
-                        "expected the 28 to live on Engine::BRC100, but Engine still owns: #{leaked.inspect}"
+                        "expected the 28 to live on BSV::Wallet::BRC100, but Engine still owns: #{leaked.inspect}"
     end
   end
 

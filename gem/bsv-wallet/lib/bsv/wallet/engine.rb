@@ -2,9 +2,10 @@
 
 require 'securerandom'
 
-# Eager require: Engine's class body references Engine::BRC100 at
+# Eager require: Engine's class body references BSV::Wallet::BRC100 at
 # class-definition time via +include+, so autoload won't fire in time.
-require_relative 'engine/brc100'
+# (Relocated from +engine/brc100+ to sibling +brc100+ in #400 Stage 1.)
+require_relative 'brc100'
 
 using BSV::Wallet::Txid
 
@@ -33,7 +34,7 @@ module BSV
     #   )
     #   engine.create_action(description: 'payment', outputs: [...])
     class Engine
-      include Engine::BRC100
+      include ::BSV::Wallet::BRC100
 
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :BeefImporter,          'bsv/wallet/engine/beef_importer'
