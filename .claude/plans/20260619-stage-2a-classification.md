@@ -51,9 +51,11 @@ module BSV
             }
           }
         end
-        # +return_txid_only+ nilifies the +tx+ key (BRC-100 keeps the key
-        # present); engine's atomic_beef is computed regardless because the
-        # SPV honesty check runs on it (#296 Phase B).
+        # +return_txid_only+ nilifies the +tx+ key on the broadcast path only —
+        # the +no_send+ path always returns +tx+ (the parked internal action's
+        # BEEF is the caller's only handle on the staged tx). BRC-100 keeps the
+        # +tx+ key present either way; engine's atomic_beef is computed
+        # regardless because the SPV honesty check runs on it (#296 Phase B).
         return { txid: result[:wtxid], tx: nil } if return_txid_only && !no_send
         spec = { txid: result[:wtxid], tx: result[:atomic_beef] }
         spec[:no_send_change] = result[:no_send_change] if no_send
@@ -282,7 +284,7 @@ result2 = engine.build_action(
 ### Flush (the future #192 surface)
 
 ```ruby
-# Either: a final createAction with send_with:
+# Either: a final build_action call (no_send: false) carrying send_with:
 flush = engine.build_action(
   description: "final + flush batch",
   outputs: [...],
