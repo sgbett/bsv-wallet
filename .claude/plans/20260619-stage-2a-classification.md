@@ -51,10 +51,19 @@ module BSV
             }
           }
         end
-        return { txid: result[:wtxid] } if return_txid_only && !no_send
+        # +return_txid_only+ nilifies the +tx+ key (BRC-100 keeps the key
+        # present); engine's atomic_beef is computed regardless because the
+        # SPV honesty check runs on it (#296 Phase B).
+        return { txid: result[:wtxid], tx: nil } if return_txid_only && !no_send
         spec = { txid: result[:wtxid], tx: result[:atomic_beef] }
         spec[:no_send_change] = result[:no_send_change] if no_send
-        spec[:send_with_results] = result[:send_with_results] if result[:send_with_results]
+        if result[:send_with_results]
+          # Per-item translation: engine returns wallet vocab (+wtxid:+),
+          # BRC-100 ships spec-shape (+txid:+) for each companion's outcome.
+          spec[:send_with_results] = result[:send_with_results].map { |r|
+            { txid: r[:wtxid], status: r[:status] }
+          }
+        end
         spec
       end
     end
