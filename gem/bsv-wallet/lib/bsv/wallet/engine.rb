@@ -154,6 +154,52 @@ module BSV
         { rejected: true, action_id: action_id }
       end
 
+      # ---- BRC-100 primitive surface (write-side, #402 Stage 2) ----------
+      #
+      # Four thick primitives the BRC100 mixin calls into. The +do_+
+      # prefix is Stage 2 scaffolding: BRC100 is still a mixin, so
+      # +Engine#sign_action+ would clash with +BRC100#sign_action+ and
+      # recurse via MRO. Stage 3's mixin→composition switch reverts the
+      # prefix. See .claude/plans/20260620-stage-2-primitive-extraction.md.
+      #
+      # These bodies are delegators in commit 3 — they shuffle calls
+      # through without changing semantics. Commit 5 inverts:
+      # +do_build_action+ becomes the orchestrator and +Action.create+
+      # slims to a row-creation helper; +do_sign_action+ moves the
+      # broadcast-dispatch tail off +Action#sign!+. Return shapes
+      # eventually become wallet vocab (+wtxid:+ binary, +atomic_beef:+)
+      # with BRC100 wrapping to BRC-100 vocab — also commit 5.
+
+      def do_build_action(**)
+        Engine::Action.create(engine: self, **)
+      end
+
+      def do_sign_action(reference:, spends:, accept_delayed_broadcast: true,
+                         return_txid_only: false, no_send: false)
+        action = Engine::Action.find(engine: self, reference: reference)
+        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
+
+        action.sign!(spends: spends, no_send: no_send,
+                     accept_delayed_broadcast: accept_delayed_broadcast,
+                     return_txid_only: return_txid_only)
+      end
+
+      def do_abort_action(reference:)
+        action = Engine::Action.find(engine: self, reference: reference)
+        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
+
+        action.abort!
+      end
+
+      def do_import_beef(tx:, outputs:, description:, labels: nil,
+                         trust_self: nil, known_txids: nil, seek_permission: true)
+        @beef_importer.import(
+          tx: tx, outputs: outputs, description: description,
+          labels: labels, trust_self: trust_self, known_txids: known_txids,
+          seek_permission: seek_permission
+        )
+      end
+
       # --- UTXO Import (bootstrap) ---
 
       # Import a root-key UTXO and immediately pay to self on a derived address.
