@@ -87,7 +87,7 @@ The Engine and its collaborators **orchestrate** atomic transitions; they do not
 
 When you find yourself writing application code that checks "is this state valid?", ask whether the schema *could* enforce the same invariant. If yes, lift it to the schema. The application check then becomes a boundary guard that produces a friendlier error message — but the schema is the actual gate.
 
-Collaborators are stateless or hold transient state only. Their durable state goes through the Store. `Engine::FundingStrategy`, `Engine::TxBuilder`, `Engine::Hydrator`, `Engine::BeefImporter`, `BSV::Wallet::BRC100` — none should hold persistent state. They orchestrate operations on database-canonical state.
+Collaborators are stateless or hold transient state only. Their durable state goes through the Store. `Engine::FundingStrategy`, `Engine::TxBuilder`, `Engine::Hydrator`, `Engine::BeefImporter`, `Engine::Policy`, `BSV::Wallet::BRC100` — none should hold persistent state. They orchestrate operations on database-canonical state.
 
 ## Performance projections sit *over* canonical state
 

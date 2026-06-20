@@ -1004,18 +1004,10 @@ module BSV
         end
       end
 
-      def determine_broadcast(no_send, accept_delayed_broadcast)
-        if no_send then :none
-        elsif accept_delayed_broadcast then :delayed
-        else :inline
-        end
-      end
-
       # Pure mapper: caller-supplied (no_send, accept_delayed_broadcast)
-      # → +:none+ / +:delayed+ / +:inline+. Same body as
-      # +determine_broadcast+; renamed to read as a mapper rather than a
-      # side-effectful "determine". Stage 2 commit 6 removes the old name
-      # once Action's call sites move.
+      # → +:none+ / +:delayed+ / +:inline+. (Renamed from +determine_broadcast+
+      # in #402 Stage 2 — reads as a mapper rather than a side-effectful
+      # "determine".)
       def map_broadcast_intent(no_send, accept_delayed_broadcast)
         if no_send then :none
         elsif accept_delayed_broadcast then :delayed
@@ -1093,22 +1085,6 @@ module BSV
 
       def require_key_deriver!
         raise BSV::Wallet::Error.new('wallet has no key deriver configured', code: 2) unless @key_deriver
-      end
-
-      def enforce_limp_mode!
-        @policy.guard_balance!(balance: @utxo_pool.balance, bypass: @bypass_limp_mode)
-      end
-
-      def enforce_headroom!(spending)
-        enforce_headroom_against!(@utxo_pool.balance, spending)
-      end
-
-      # Headroom guard against a caller-supplied balance reference. The
-      # funding loop captures balance pre-lock and re-uses it for both the
-      # pre-flight and exact post-loop checks — once inputs are locked,
-      # @utxo_pool.balance no longer reflects the wallet's full pool.
-      def enforce_headroom_against!(balance, spending)
-        @policy.guard_balance!(balance: balance, spending: spending, bypass: @bypass_limp_mode)
       end
 
       # Find an available WBIKD slot or create one via self-payment.
