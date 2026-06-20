@@ -338,7 +338,7 @@ module BSV
       def do_sign_action(reference:, spends:, accept_delayed_broadcast: true,
                          no_send: false)
         action = Engine::Action.find(engine: self, reference: reference)
-        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
+        raise BSV::Wallet::InvalidParameterError, 'reference (not found)' unless action
 
         # Runtime broadcast-override at sign time belongs to the
         # chained-send subsystem (#192). The base wallet's signAction
@@ -364,7 +364,7 @@ module BSV
 
       def do_abort_action(reference:)
         action = Engine::Action.find(engine: self, reference: reference)
-        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
+        raise BSV::Wallet::InvalidParameterError, 'reference (not found)' unless action
 
         action.abort!
       end
@@ -1025,6 +1025,16 @@ module BSV
       # +Engine#do_build_action+ + +#do_sign_action+ both call this in
       # the non-no_send path. Inline +:none+ would be a caller bug;
       # only +:inline+ triggers a sync broadcast.
+      #
+      # Sign-path hint is by design (new in #402 Stage 2). The pre-#402
+      # +Action#sign!+ never published a hint — a missed optimization,
+      # not a defensive choice. The daemon's hint cache keys on the
+      # wtxid derived from the BEEF (see +Engine::Broadcast#hints_pull!+),
+      # and a deferred-sign produces a different wtxid from the staged
+      # unsigned one, so the sign-path entry never collides with any
+      # earlier create-time entry. The deferred-broadcast path now
+      # benefits from the same +find_action+ + JOIN skip as the inline
+      # create path.
       def dispatch_broadcast(action_id, atomic_beef, intent:)
         publish_beef_hint(action_id, atomic_beef) if atomic_beef
         @broadcast_worker.process(action_id) if intent == :inline

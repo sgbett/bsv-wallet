@@ -301,7 +301,8 @@ module BSV
         end
 
         # Outpoints (+dtxid.vout+) of this action's change outputs. Public
-        # because the orchestrator invokes it on the freshly-built instance;
+        # because +Engine#do_build_action+ invokes it on the freshly-built
+        # instance to populate the no_send return's +change_outpoints:+;
         # operates on the instance's own +@id+.
         def query_change_outpoints
           action = @engine.store.find_action(id: @id)
