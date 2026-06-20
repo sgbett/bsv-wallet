@@ -15,8 +15,13 @@ RSpec.describe BSV::Wallet::Engine do
       expect(engine).to be_a(described_class)
     end
 
-    it 'includes BRC100 interface' do
-      expect(described_class.ancestors).to include(BSV::Wallet::Interface::BRC100)
+    it 'exposes the BRC-100 interface via the +#brc100+ accessor (#405 Stage 3)' do
+      # Pre-Stage-3: Engine included BSV::Wallet::BRC100 (which itself
+      # included Interface::BRC100), putting the contract in Engine's
+      # ancestry. Stage 3 swapped the mixin for composition — the
+      # contract now lives on the BRC100 instance the accessor returns.
+      expect(engine.brc100).to be_a(BSV::Wallet::BRC100)
+      expect(engine.brc100.class.ancestors).to include(BSV::Wallet::Interface::BRC100)
     end
   end
 
@@ -393,7 +398,7 @@ RSpec.describe BSV::Wallet::Engine do
           callback_token: 'tok-inline-xyz'
         )
 
-        engine_with_token.create_action(
+        engine_with_token.brc100.create_action(
           description: 'inline broadcast with token',
           inputs: [],
           accept_delayed_broadcast: false,
@@ -1597,7 +1602,7 @@ RSpec.describe BSV::Wallet::Engine do
         beef_data = build_test_beef(satoshis: 500)
 
         expect do
-          engine_reject.internalize_action(
+          engine_reject.brc100.internalize_action(
             tx: beef_data,
             description: 'tracker rejects',
             outputs: []
@@ -2193,17 +2198,17 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#authenticated?' do
     it 'returns true with key_deriver' do
-      expect(engine_with_keys.authenticated?).to eq({ authenticated: true })
+      expect(engine_with_keys.brc100.authenticated?).to eq({ authenticated: true })
     end
 
     it 'returns false without key_deriver' do
-      expect(engine.authenticated?).to eq({ authenticated: false })
+      expect(engine.brc100.authenticated?).to eq({ authenticated: false })
     end
   end
 
   describe '#wait_for_authentication' do
     it 'returns immediately when authenticated' do
-      expect(engine_with_keys.wait_for_authentication).to eq({ authenticated: true })
+      expect(engine_with_keys.brc100.wait_for_authentication).to eq({ authenticated: true })
     end
 
     it 'raises when not authenticated' do
@@ -2213,10 +2218,10 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe 'privileged mode' do
     it 'derives a different public key with privileged: true' do
-      normal = engine_with_privileged_keys.get_public_key(
+      normal = engine_with_privileged_keys.brc100.get_public_key(
         protocol_id: [1, 'test proto'], key_id: 'key1', counterparty: 'self'
       )
-      privileged = engine_with_privileged_keys.get_public_key(
+      privileged = engine_with_privileged_keys.brc100.get_public_key(
         protocol_id: [1, 'test proto'], key_id: 'key1', counterparty: 'self',
         privileged: true
       )
@@ -2225,12 +2230,12 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'round-trips encrypt/decrypt with privileged: true' do
       plaintext = 'privileged secret'.b
-      encrypted = engine_with_privileged_keys.encrypt(
+      encrypted = engine_with_privileged_keys.brc100.encrypt(
         plaintext: plaintext,
         protocol_id: [1, 'priv encrypt test'], key_id: 'p1',
         privileged: true
       )
-      decrypted = engine_with_privileged_keys.decrypt(
+      decrypted = engine_with_privileged_keys.brc100.decrypt(
         ciphertext: encrypted[:ciphertext],
         protocol_id: [1, 'priv encrypt test'], key_id: 'p1',
         privileged: true
@@ -2239,11 +2244,11 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'round-trips HMAC create/verify with privileged: true' do
-      created = engine_with_privileged_keys.create_hmac(
+      created = engine_with_privileged_keys.brc100.create_hmac(
         data: 'privileged data'.b, protocol_id: [1, 'priv hmac test'], key_id: 'p1',
         privileged: true
       )
-      result = engine_with_privileged_keys.verify_hmac(
+      result = engine_with_privileged_keys.brc100.verify_hmac(
         data: 'privileged data'.b, hmac: created[:hmac],
         protocol_id: [1, 'priv hmac test'], key_id: 'p1',
         privileged: true
@@ -2252,11 +2257,11 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'round-trips signature create/verify with privileged: true' do
-      created = engine_with_privileged_keys.create_signature(
+      created = engine_with_privileged_keys.brc100.create_signature(
         data: 'privileged data'.b, protocol_id: [1, 'priv sig test'], key_id: 'p1',
         privileged: true
       )
-      result = engine_with_privileged_keys.verify_signature(
+      result = engine_with_privileged_keys.brc100.verify_signature(
         signature: created[:signature], data: 'privileged data'.b,
         protocol_id: [1, 'priv sig test'], key_id: 'p1',
         privileged: true
@@ -2288,7 +2293,7 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#get_network' do
     it 'returns the configured network' do
-      expect(engine.get_network).to eq({ network: :mainnet })
+      expect(engine.brc100.get_network).to eq({ network: :mainnet })
     end
   end
 

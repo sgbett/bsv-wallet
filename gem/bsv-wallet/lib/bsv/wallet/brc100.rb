@@ -2,31 +2,45 @@
 
 module BSV
   module Wallet
-    # The 28 BRC-100 spec methods, sliced out of Engine as a mixin facade
-    # (#364, Phase 7 of the #291 "Monolith to Manageable" roadmap; relocated
-    # to a sibling of Engine in #400, Stage 1 of #396 "Manageable to
-    # Machined"; thinned to a uniform "validate → primitive → wrap"
-    # shape over Engine's +do_*+ surface in #402, Stage 2).
+    # The 28 BRC-100 spec methods, composed over an Engine instance.
     #
-    # At Stage 2 this remains a *slice of Engine* (mixin), but the
-    # methods no longer reach engine ivars or collaborators directly —
-    # every method routes through an Engine +do_*+ primitive
-    # (+do_build_action+, +do_encrypt+, +do_get_public_key+, …). The only
-    # Engine privates BRC100 still calls are the BRC-100 spec-shape
-    # validators (+validate_description!+, +validate_reference!+,
-    # +validate_create_action_params!+, +validate_output_ownership!+),
-    # which stay here per ADR-026 decision 6.
+    # Lifecycle of this class:
+    # - #364, Phase 7 of #291 "Monolith to Manageable" — sliced out of
+    #   Engine as a +module+ included into Engine (mixin facade).
+    # - #400, Stage 1 of #396 "Manageable to Machined" — relocated to a
+    #   sibling of Engine at +BSV::Wallet::BRC100+.
+    # - #402, Stage 2 — thinned to a uniform "validate → primitive → wrap"
+    #   shape over Engine's +do_*+ surface (still a mixin).
+    # - #405, Stage 3 (this) — promoted from +module+ to +class+ composed
+    #   over an Engine instance via +initialize(engine)+. Engine no
+    #   longer includes BRC100 in its ancestry; +Engine#brc100+ returns
+    #   a memoised wrapper. The +do_+ prefix Stage 2 scaffolded onto
+    #   Engine's primitives is dropped in commit 4 of this stage.
     #
-    # Stage 3 will convert this from a mixin into a composition over
-    # the Engine primitive surface (+@engine.<name>+ at every call
-    # site, dropping the +do_+ prefix on Engine side).
+    # Construction: +BSV::Wallet::BRC100.new(engine)+ — or, idiomatically,
+    # via the +Engine#brc100+ memoised accessor.
     #
-    # Method-resolution order: by +include+-ing +Interface::BRC100+ here
-    # and +BSV::Wallet::BRC100+ on the Engine class, ancestry resolves as
-    # +Engine → BRC100 → Interface::BRC100+ so impls always beat
-    # the SDK contract's +NotImplementedError+ stubs.
-    module BRC100
+    # Responsibility split per ADR-026:
+    # - Spec-shape validation (decision 6) lives here — the +validate_*+
+    #   private methods at the bottom of the file. Engine primitives
+    #   trust their input shape.
+    # - BRC-100 vocabulary translation (decision 5) lives here — each
+    #   method takes wallet vocab from the Engine primitive and wraps in
+    #   the BRC-100 hash shape the spec mandates.
+    # - +originator:+ (decision 7) is accepted at this layer for BRC-100
+    #   spec compliance but never propagates into Engine.
+    #
+    # Method-resolution: +include+s the SDK contract +Interface::BRC100+,
+    # so any of the 28 method names a concrete instance doesn't override
+    # falls through to the contract's +NotImplementedError+ stub.
+    class BRC100
       include BSV::Wallet::Interface::BRC100
+
+      attr_reader :engine
+
+      def initialize(engine)
+        @engine = engine
+      end
 
       # --- Transaction Operations (codes 1-7) ---
 
@@ -68,7 +82,7 @@ module BSV
         # per ADR-026 decisions 5/7 — BRC-100 vocabulary that doesn't
         # propagate into Engine. +return_txid_only+ is applied at wrap
         # time below.
-        result = do_build_action(
+        result = @engine.do_build_action(
           description: description, input_beef: input_beef,
           inputs: inputs, outputs: outputs,
           lock_time: lock_time, version: version, labels: labels,
@@ -96,7 +110,7 @@ module BSV
                       return_txid_only: false, no_send: false,
                       originator: nil)
         validate_reference!(reference)
-        result = do_sign_action(
+        result = @engine.do_sign_action(
           reference: reference, spends: spends,
           accept_delayed_broadcast: accept_delayed_broadcast, no_send: no_send
         )
@@ -105,7 +119,7 @@ module BSV
 
       def abort_action(reference:, originator: nil)
         validate_reference!(reference)
-        do_abort_action(reference: reference)
+        @engine.do_abort_action(reference: reference)
       end
 
       def list_actions(labels:, label_query_mode: :any,
@@ -115,7 +129,7 @@ module BSV
                        include_outputs: false, include_output_locking_scripts: false,
                        limit: 10, offset: 0, seek_permission: true,
                        originator: nil)
-        result = do_list_actions(
+        result = @engine.do_list_actions(
           labels: labels, label_query_mode: label_query_mode,
           include_labels: include_labels, include_inputs: include_inputs,
           include_input_source_locking_scripts: include_input_source_locking_scripts,
@@ -134,7 +148,7 @@ module BSV
         # known_txids is the BRC-100 spec param name; values are wire-order wtxids
         known_txids&.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'known_txids entry') }
 
-        do_import_beef(
+        @engine.do_import_beef(
           tx: tx, outputs: outputs, description: description,
           labels: labels, trust_self: trust_self, known_txids: known_txids,
           seek_permission: seek_permission
@@ -145,7 +159,7 @@ module BSV
                        include_custom_instructions: false, include_tags: false,
                        include_labels: false, limit: 10, offset: 0,
                        seek_permission: true, originator: nil)
-        result = do_list_outputs(
+        result = @engine.do_list_outputs(
           basket: basket, tags: tags, tag_query_mode: tag_query_mode,
           include: include,
           include_custom_instructions: include_custom_instructions,
@@ -156,7 +170,7 @@ module BSV
       end
 
       def relinquish_output(basket:, output:, originator: nil)
-        do_relinquish_output(output_id: output)
+        @engine.do_relinquish_output(output_id: output)
         { relinquished: true }
       end
 
@@ -166,7 +180,7 @@ module BSV
                          privileged: false, privileged_reason: nil,
                          counterparty: nil, for_self: false,
                          seek_permission: true, originator: nil)
-        pub = do_get_public_key(
+        pub = @engine.do_get_public_key(
           identity_key: identity_key, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty, for_self: for_self, privileged: privileged
         )
@@ -176,7 +190,7 @@ module BSV
       def reveal_counterparty_key_linkage(counterparty:, verifier:,
                                           privileged: false, privileged_reason: nil,
                                           originator: nil)
-        do_reveal_counterparty_key_linkage(
+        @engine.do_reveal_counterparty_key_linkage(
           counterparty: counterparty, verifier: verifier, privileged: privileged
         )
       end
@@ -184,7 +198,7 @@ module BSV
       def reveal_specific_key_linkage(counterparty:, verifier:, protocol_id:, key_id:,
                                       privileged: false, privileged_reason: nil,
                                       originator: nil)
-        do_reveal_specific_key_linkage(
+        @engine.do_reveal_specific_key_linkage(
           counterparty: counterparty, verifier: verifier,
           protocol_id: protocol_id, key_id: key_id, privileged: privileged
         )
@@ -195,7 +209,7 @@ module BSV
       def encrypt(plaintext:, protocol_id:, key_id:,
                   privileged: false, privileged_reason: nil,
                   counterparty: nil, seek_permission: true, originator: nil)
-        ciphertext = do_encrypt(
+        ciphertext = @engine.do_encrypt(
           plaintext: plaintext, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -205,7 +219,7 @@ module BSV
       def decrypt(ciphertext:, protocol_id:, key_id:,
                   privileged: false, privileged_reason: nil,
                   counterparty: nil, seek_permission: true, originator: nil)
-        plaintext = do_decrypt(
+        plaintext = @engine.do_decrypt(
           ciphertext: ciphertext, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -215,7 +229,7 @@ module BSV
       def create_hmac(data:, protocol_id:, key_id:,
                       privileged: false, privileged_reason: nil,
                       counterparty: nil, seek_permission: true, originator: nil)
-        hmac = do_create_hmac(
+        hmac = @engine.do_create_hmac(
           data: data, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -225,7 +239,7 @@ module BSV
       def verify_hmac(data:, hmac:, protocol_id:, key_id:,
                       privileged: false, privileged_reason: nil,
                       counterparty: nil, seek_permission: true, originator: nil)
-        valid = do_verify_hmac(
+        valid = @engine.do_verify_hmac(
           data: data, hmac: hmac, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -237,7 +251,7 @@ module BSV
       def create_signature(protocol_id:, key_id:, data: nil, hash_to_directly_sign: nil,
                            privileged: false, privileged_reason: nil,
                            counterparty: nil, seek_permission: true, originator: nil)
-        signature = do_create_signature(
+        signature = @engine.do_create_signature(
           data: data, hash_to_directly_sign: hash_to_directly_sign,
           protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
@@ -250,7 +264,7 @@ module BSV
                            privileged: false, privileged_reason: nil,
                            counterparty: nil, for_self: false,
                            seek_permission: true, originator: nil)
-        valid = do_verify_signature(
+        valid = @engine.do_verify_signature(
           signature: signature, data: data,
           hash_to_directly_verify: hash_to_directly_verify,
           protocol_id: protocol_id, key_id: key_id,
@@ -273,7 +287,7 @@ module BSV
         # validation per ADR-026 decision 6.
         case acquisition_protocol
         when :direct, 'direct'
-          do_acquire_certificate(
+          @engine.do_acquire_certificate(
             type: type, certifier: certifier, fields: fields,
             serial_number: serial_number, revocation_outpoint: revocation_outpoint,
             signature: signature, keyring_for_subject: keyring_for_subject
@@ -288,7 +302,7 @@ module BSV
 
       def list_certificates(certifiers:, types:, limit: 10, offset: 0,
                             privileged: false, privileged_reason: nil, originator: nil)
-        result = do_list_certificates(
+        result = @engine.do_list_certificates(
           certifiers: certifiers, types: types, limit: limit, offset: offset
         )
         { total_certificates: result[:total], certificates: result[:certificates] }
@@ -296,7 +310,7 @@ module BSV
 
       def prove_certificate(certificate:, fields_to_reveal:, verifier:,
                             privileged: false, privileged_reason: nil, originator: nil)
-        keyring = do_prove_certificate(
+        keyring = @engine.do_prove_certificate(
           certificate: certificate, fields_to_reveal: fields_to_reveal,
           verifier: verifier, privileged: privileged
         )
@@ -304,13 +318,13 @@ module BSV
       end
 
       def relinquish_certificate(type:, serial_number:, certifier:, originator: nil)
-        do_relinquish_certificate(type: type, serial_number: serial_number, certifier: certifier)
+        @engine.do_relinquish_certificate(type: type, serial_number: serial_number, certifier: certifier)
         { relinquished: true }
       end
 
       def discover_by_identity_key(identity_key:, limit: 10, offset: 0,
                                    seek_permission: true, originator: nil)
-        result = do_discover_by_identity_key(
+        result = @engine.do_discover_by_identity_key(
           identity_key: identity_key, limit: limit, offset: offset
         )
         { total_certificates: result[:total], certificates: result[:certificates] }
@@ -318,7 +332,7 @@ module BSV
 
       def discover_by_attributes(attributes:, limit: 10, offset: 0,
                                  seek_permission: true, originator: nil)
-        result = do_discover_by_attributes(
+        result = @engine.do_discover_by_attributes(
           attributes: attributes, limit: limit, offset: offset
         )
         { total_certificates: result[:total], certificates: result[:certificates] }
@@ -327,30 +341,90 @@ module BSV
       # --- Authentication (codes 23-24) ---
 
       def authenticated?(originator: nil)
-        { authenticated: do_authenticated? }
+        { authenticated: @engine.do_authenticated? }
       end
 
       def wait_for_authentication(originator: nil)
-        do_wait_for_authentication
+        @engine.do_wait_for_authentication
         { authenticated: true }
       end
 
       # --- Blockchain and Network Data (codes 25-28) ---
 
       def get_height(originator: nil)
-        { height: do_get_height }
+        { height: @engine.do_get_height }
       end
 
       def get_header_for_height(height:, originator: nil)
-        { header: do_get_header_for_height(height: height) }
+        { header: @engine.do_get_header_for_height(height: height) }
       end
 
       def get_network(originator: nil)
-        { network: do_get_network }
+        { network: @engine.do_get_network }
       end
 
       def get_version(originator: nil)
-        { version: do_get_version }
+        { version: @engine.do_get_version }
+      end
+
+      private
+
+      # ---- BRC-100 spec-shape validators ---------------------------------
+      #
+      # Moved from Engine to BRC100 in #405 Stage 3 commit 3, per ADR-026
+      # decision 6: spec-shape validation is the wrap layer's job, not
+      # the primitive's. Non-BRC100 callers of Engine primitives are
+      # responsible for their own input validation.
+
+      def validate_description!(description)
+        return if description.is_a?(String) && description.length.between?(5, 50)
+
+        raise BSV::Wallet::InvalidParameterError.new('description', 'a string between 5 and 50 characters')
+      end
+
+      def validate_create_action_params!(inputs:, outputs:)
+        has_inputs = inputs&.any?
+        has_outputs = outputs&.any?
+        return if has_inputs || has_outputs
+
+        raise BSV::Wallet::InvalidParameterError.new('inputs/outputs',
+                                                     'present (at least one input or output required)')
+      end
+
+      # Validate output_type declarations against locking scripts.
+      #
+      # If output_type is 'root', the locking script must be P2PKH to the
+      # wallet's identity key. Other output_type values are not validated here.
+      def validate_output_ownership!(outputs)
+        return unless outputs && @engine.key_deriver
+
+        root_hash = nil
+        outputs.each_with_index do |out, idx|
+          next unless out[:output_type] == 'root'
+
+          script = BSV::Wallet::Engine::TxBuilder.resolve_locking_script(out[:locking_script])
+          unless script.p2pkh?
+            raise BSV::Wallet::InvalidParameterError.new(
+              "outputs[#{idx}].output_type",
+              "'root' requires a P2PKH script"
+            )
+          end
+
+          root_hash ||= BSV::Primitives::Digest.hash160(@engine.key_deriver.identity_key_bytes)
+          pubkey_hash = script.chunks[2].data
+          next if pubkey_hash == root_hash
+
+          raise BSV::Wallet::InvalidParameterError.new(
+            "outputs[#{idx}].output_type",
+            "'root' but script does not match identity key"
+          )
+        end
+      end
+
+      def validate_reference!(reference)
+        return if reference.is_a?(String) && reference.match?(BSV::Wallet::Engine::UUID_RE)
+
+        raise BSV::Wallet::InvalidParameterError, 'reference'
       end
     end
   end

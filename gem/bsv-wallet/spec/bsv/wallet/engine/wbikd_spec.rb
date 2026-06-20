@@ -188,7 +188,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         engine_net.scan_receive_addresses
 
         # The internalized output should be spendable in default basket
-        outputs = engine_net.list_outputs(basket: 'default')
+        outputs = engine_net.brc100.list_outputs(basket: 'default')
         internalized = outputs[:outputs].find { |o| o[:satoshis] == 25_000 }
         expect(internalized).not_to be_nil
       end
@@ -200,7 +200,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         address = addr_result[:address]
 
         # Before scan: one slot locked, others still available
-        slots_before = engine_net.list_outputs(basket: 'p wbikd')
+        slots_before = engine_net.brc100.list_outputs(basket: 'p wbikd')
         locked_count = slots_before[:total_outputs]
 
         # Build tx
@@ -230,7 +230,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         engine_net.scan_receive_addresses
 
         # After scan: locking action aborted, slot recycled — one more than before
-        slots_after = engine_net.list_outputs(basket: 'p wbikd')
+        slots_after = engine_net.brc100.list_outputs(basket: 'p wbikd')
         expect(slots_after[:total_outputs]).to eq(locked_count + 1)
       end
 

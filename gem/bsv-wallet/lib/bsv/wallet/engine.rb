@@ -2,11 +2,6 @@
 
 require 'securerandom'
 
-# Eager require: Engine's class body references BSV::Wallet::BRC100 at
-# class-definition time via +include+, so autoload won't fire in time.
-# (Relocated from +engine/brc100+ to sibling +brc100+ in #400 Stage 1.)
-require_relative 'brc100'
-
 using BSV::Wallet::Txid
 
 module BSV
@@ -34,8 +29,6 @@ module BSV
     #   )
     #   engine.create_action(description: 'payment', outputs: [...])
     class Engine
-      include ::BSV::Wallet::BRC100
-
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :BeefImporter,          'bsv/wallet/engine/beef_importer'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
@@ -143,14 +136,14 @@ module BSV
         [@utxo_pool.balance - @limp_threshold, 0].max
       end
 
-      # BRC-100 wrap layer. While BRC100 is still a mixin (commit 2 of
-      # #405), this accessor returns +self+ so +engine.brc100.create_action+
-      # resolves through the mixin. Commit 3 swaps the body for
-      # +@brc100 ||= BSV::Wallet::BRC100.new(self)+ when BRC100 becomes a
-      # class and Engine drops the mixin. Callers should target this
-      # accessor regardless of which side of the switch is live.
+      # BRC-100 wrap layer. Memoised — returns the same +BSV::Wallet::BRC100+
+      # instance for the lifetime of this engine. The wrapper holds an
+      # +@engine+ reference back to +self+; all 28 BRC-100 method calls
+      # route through it and dispatch to Engine's primitive surface.
+      # Callers in this codebase use this accessor; external callers may
+      # also construct +BSV::Wallet::BRC100.new(engine)+ directly.
       def brc100
-        self
+        @brc100 ||= BSV::Wallet::BRC100.new(self)
       end
 
       # Operator-facing entry to Store#reject_action. The daemon's
@@ -888,7 +881,7 @@ module BSV
       def list_receive_addresses
         require_key_deriver!
 
-        result = list_actions(labels: ['wbikd'], include_inputs: true, limit: 10_000)
+        result = brc100.list_actions(labels: ['wbikd'], include_inputs: true, limit: 10_000)
         result[:actions].filter_map do |action|
           next unless action[:status] == :internal
 
@@ -988,7 +981,7 @@ module BSV
         # randomize_outputs: false guarantees the payment output stays at
         # index 0. Change outputs from generate_change are appended after
         # caller outputs.
-        result = create_action(
+        result = brc100.create_action(
           description: "send #{satoshis} sats",
           outputs: [{ satoshis: satoshis, locking_script: locking_script }],
           no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
@@ -1200,51 +1193,6 @@ module BSV
 
       private
 
-      def validate_description!(description)
-        return if description.is_a?(String) && description.length.between?(5, 50)
-
-        raise BSV::Wallet::InvalidParameterError.new('description', 'a string between 5 and 50 characters')
-      end
-
-      def validate_create_action_params!(inputs:, outputs:)
-        has_inputs = inputs&.any?
-        has_outputs = outputs&.any?
-        return if has_inputs || has_outputs
-
-        raise BSV::Wallet::InvalidParameterError.new('inputs/outputs',
-                                                     'present (at least one input or output required)')
-      end
-
-      # Validate output_type declarations against locking scripts.
-      #
-      # If output_type is 'root', the locking script must be P2PKH to the
-      # wallet's identity key. Other output_type values are not validated here.
-      def validate_output_ownership!(outputs)
-        return unless outputs && @key_deriver
-
-        root_hash = nil
-        outputs.each_with_index do |out, idx|
-          next unless out[:output_type] == 'root'
-
-          script = TxBuilder.resolve_locking_script(out[:locking_script])
-          unless script.p2pkh?
-            raise BSV::Wallet::InvalidParameterError.new(
-              "outputs[#{idx}].output_type",
-              "'root' requires a P2PKH script"
-            )
-          end
-
-          root_hash ||= BSV::Primitives::Digest.hash160(@key_deriver.identity_key_bytes)
-          pubkey_hash = script.chunks[2].data
-          next if pubkey_hash == root_hash
-
-          raise BSV::Wallet::InvalidParameterError.new(
-            "outputs[#{idx}].output_type",
-            "'root' but script does not match identity key"
-          )
-        end
-      end
-
       # Pure mapper: caller-supplied (no_send, accept_delayed_broadcast)
       # → +:none+ / +:delayed+ / +:inline+. (Renamed from +determine_broadcast+
       # in #402 Stage 2 — reads as a mapper rather than a side-effectful
@@ -1328,12 +1276,6 @@ module BSV
         raise ArgumentError, "invalid recipient key: expected 66-char compressed public key hex, got #{key.inspect}"
       end
 
-      def validate_reference!(reference)
-        return if reference.is_a?(String) && reference.match?(UUID_RE)
-
-        raise BSV::Wallet::InvalidParameterError, 'reference'
-      end
-
       def require_key_deriver!
         raise BSV::Wallet::Error.new('wallet has no key deriver configured', code: 2) unless @key_deriver
       end
@@ -1375,7 +1317,7 @@ module BSV
         marker = compute_wbikd_marker(slot_sats)
         op_return_script = BSV::Script::Script.op_return(marker).to_binary
 
-        create_result = create_action(
+        create_result = brc100.create_action(
           description: 'wbikd slot creation',
           accept_delayed_broadcast: false,
           outputs: [
@@ -1473,7 +1415,7 @@ module BSV
         end
 
         # 6. Abort the locking action — CASCADE releases slot back to p wbikd basket
-        abort_action(reference: action_reference)
+        brc100.abort_action(reference: action_reference)
       end
 
       # Import-path network reads, with retry on retryable responses
