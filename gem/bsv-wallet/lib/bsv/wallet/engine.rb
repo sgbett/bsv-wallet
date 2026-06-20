@@ -1020,11 +1020,11 @@ module BSV
 
       # Post-build dispatch: best-effort BEEF cache hint + inline
       # broadcast trigger when the intent demands it. Packages the
-      # +publish_beef_hint+ / +broadcast_worker.process+ pair that
-      # currently sits at the tail of +Action.create+ — Stage 2's
-      # +Engine#do_build_action+ + +#do_sign_action+ both call this in
-      # the non-no_send path. Inline +:none+ would be a caller bug;
-      # only +:inline+ triggers a sync broadcast.
+      # +publish_beef_hint+ / +broadcast_worker.process+ pair called
+      # from the tails of +Engine#do_build_action+ and +#do_sign_action+
+      # on the non-no_send path (pre-#402 commit 5 this pair was inlined
+      # at the tail of +Action.create+). Inline +:none+ would be a caller
+      # bug; only +:inline+ triggers a sync broadcast.
       #
       # Sign-path hint is by design (new in #402 Stage 2). The pre-#402
       # +Action#sign!+ never published a hint — a missed optimization,
