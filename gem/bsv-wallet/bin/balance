@@ -23,7 +23,7 @@ end.parse!(args)
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 engine = ctx[:engine]
 
-listed = engine.list_outputs(basket: options[:basket], limit: 10_000)
+listed = engine.brc100.list_outputs(basket: options[:basket], limit: 10_000)
 total = listed[:outputs].sum { |o| o[:satoshis] }
 
 # Machine-readable to stdout

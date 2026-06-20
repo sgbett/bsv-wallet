@@ -78,7 +78,7 @@ outputs = [
     sender_identity_key: ctx[:identity_key] }
 ]
 
-result = engine.create_action(
+result = engine.brc100.create_action(
   description: "send #{payment} sats",
   inputs: inputs,
   outputs: outputs,

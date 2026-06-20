@@ -24,7 +24,7 @@ end.parse!(args)
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 engine = ctx[:engine]
 
-listed = engine.list_outputs(
+listed = engine.brc100.list_outputs(
   basket: options[:basket],
   limit: options[:limit],
   include: options[:scripts] ? :locking_scripts : nil

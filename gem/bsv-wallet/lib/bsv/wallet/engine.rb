@@ -143,6 +143,16 @@ module BSV
         [@utxo_pool.balance - @limp_threshold, 0].max
       end
 
+      # BRC-100 wrap layer. While BRC100 is still a mixin (commit 2 of
+      # #405), this accessor returns +self+ so +engine.brc100.create_action+
+      # resolves through the mixin. Commit 3 swaps the body for
+      # +@brc100 ||= BSV::Wallet::BRC100.new(self)+ when BRC100 becomes a
+      # class and Engine drops the mixin. Callers should target this
+      # accessor regardless of which side of the switch is live.
+      def brc100
+        self
+      end
+
       # Operator-facing entry to Store#reject_action. The daemon's
       # resolution loop calls store directly; this wrapper lets bin/
       # tools target specific stuck rows (action_id is a wallet-local
@@ -729,7 +739,7 @@ module BSV
         # funded in the first place.
         @bypass_limp_mode = true
         begin
-          create_action(
+          brc100.create_action(
             description: 'import self-payment',
             inputs: [{ output_id: imported_output_id }],
             outputs: [],
@@ -1028,7 +1038,7 @@ module BSV
         merged = (smallest + largest).uniq { |o| o[:id] }
         input_specs = merged.each_with_index.map { |o, i| { output_id: o[:id], vin: i } }
 
-        create_action(
+        brc100.create_action(
           description: 'consolidation',
           inputs: input_specs,
           outputs: [],
@@ -1102,7 +1112,7 @@ module BSV
         # convention.
         @bypass_limp_mode = true
         begin
-          create_action(
+          brc100.create_action(
             description: 'sweep',
             inputs: input_specs,
             outputs: [{ satoshis: total - fee, locking_script: locking_script }],

@@ -63,7 +63,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect(listed_before.length).to eq(1)
 
       # Abort the locking action — the address should disappear
-      engine_with_keys.abort_action(reference: listed_before.first[:action_reference])
+      engine_with_keys.brc100.abort_action(reference: listed_before.first[:action_reference])
       listed_after = engine_with_keys.list_receive_addresses
 
       expect(listed_after).to eq([])
@@ -315,7 +315,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       engine_with_keys.generate_receive_address
 
       # Slot was consumed — locking action created with wbikd label
-      actions = engine_with_keys.list_actions(labels: ['wbikd'])
+      actions = engine_with_keys.brc100.list_actions(labels: ['wbikd'])
       expect(actions[:total_actions]).to eq(1)
     end
 
@@ -351,7 +351,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     it 'attaches the wbikd label to the locking action' do
       engine_with_keys.generate_receive_address
 
-      actions = engine_with_keys.list_actions(labels: ['wbikd'], include_labels: true)
+      actions = engine_with_keys.brc100.list_actions(labels: ['wbikd'], include_labels: true)
       expect(actions[:total_actions]).to eq(1)
       expect(actions[:actions].first[:labels]).to include('wbikd')
     end
@@ -359,7 +359,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     it 'creates a locking action with internal status' do
       engine_with_keys.generate_receive_address
 
-      actions = engine_with_keys.list_actions(labels: ['wbikd'])
+      actions = engine_with_keys.brc100.list_actions(labels: ['wbikd'])
       locking_action = actions[:actions].first
       expect(locking_action[:status]).to eq(:internal)
     end
