@@ -3,6 +3,17 @@
 > Sister plan to `20260617-manageable-machined.md`. Deliverable for #397.
 > Code is *sketch* — not committed source. Stage 2 implements; this proves
 > the primitive surface holds end-to-end on three representative shapes.
+>
+> **Naming note (added with the Stage 2 plan).** The sketches below show
+> Engine primitives at their spec-aligned destination names
+> (`engine.build_action`, `engine.encrypt`, …). Stage 2's actual
+> implementation prefixes every Engine primitive with `do_`
+> (`do_build_action`, `do_encrypt`, …) to avoid an MRO recursion trap while
+> BRC100 is still a mixin — 26 of 28 primitive names collide with
+> BRC-100 spec method names. Stage 3 (mixin → composition) reverts the
+> prefix, restoring the sketches' vocabulary. See
+> `20260620-stage-2-primitive-extraction.md` for the convention's rationale
+> and ADR-026's implementation notes for the cross-reference.
 
 ## A — `createAction` (write-build, the main pressure test)
 
