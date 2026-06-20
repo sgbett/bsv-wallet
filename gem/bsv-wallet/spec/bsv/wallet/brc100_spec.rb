@@ -39,6 +39,13 @@ RSpec.describe BSV::Wallet::BRC100 do
     expect(BRC100_SPEC_METHODS.length).to eq(28)
   end
 
+  it 'no longer exists at the pre-#400 path BSV::Wallet::Engine::BRC100 (no deprecation alias)' do
+    # Decision 3 of #400: the old constant is gone, not aliased. Locks in the
+    # commitment so a future accidental +Engine::BRC100 = BRC100+ would surface
+    # as a red spec rather than silently reintroducing the legacy name.
+    expect { BSV::Wallet::Engine.const_get(:BRC100, false) }.to raise_error(NameError)
+  end
+
   describe 'method-resolution order' do
     it 'places BRC100 ahead of Interface::BRC100 in Engine.ancestors' do
       ancestors = BSV::Wallet::Engine.ancestors
