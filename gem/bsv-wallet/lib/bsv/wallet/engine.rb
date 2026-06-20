@@ -48,6 +48,7 @@ module BSV
       autoload :InputSource,           'bsv/wallet/engine/input_source'
       autoload :MerklePathNormaliser,  'bsv/wallet/engine/merkle_path_normaliser'
       autoload :HydratedTxCache,       'bsv/wallet/engine/hydrated_tx_cache'
+      autoload :Policy,                'bsv/wallet/engine/policy'
 
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -81,6 +82,10 @@ module BSV
         @network_provider = network_provider
         @network_name = network
         @limp_threshold = limp_threshold
+        # Policy is stateless; +bypass:+ flows in at call time so the
+        # +@bypass_limp_mode+ mutation block (import-utxo self-payment)
+        # stays on Engine. See ADR-026 + Stage 2 plan.
+        @policy = Policy.new(threshold: @limp_threshold)
         # Arcade callbackToken forwarded to the broadcast worker's POST so the
         # SSE listener (subscribed to the same token at daemon boot) receives
         # status frames for inline submissions. See #266.
@@ -846,12 +851,7 @@ module BSV
       end
 
       def enforce_limp_mode!
-        return if @bypass_limp_mode
-        return unless limp_mode?
-
-        raise BSV::Wallet::LimpModeError.new(
-          balance: @utxo_pool.balance, threshold: @limp_threshold
-        )
+        @policy.guard_balance!(balance: @utxo_pool.balance, bypass: @bypass_limp_mode)
       end
 
       def enforce_headroom!(spending)
@@ -863,14 +863,7 @@ module BSV
       # pre-flight and exact post-loop checks — once inputs are locked,
       # @utxo_pool.balance no longer reflects the wallet's full pool.
       def enforce_headroom_against!(balance, spending)
-        return if @bypass_limp_mode
-
-        projected = balance - spending
-        return unless projected < @limp_threshold
-
-        raise BSV::Wallet::LimpModeError.new(
-          balance: projected, threshold: @limp_threshold
-        )
+        @policy.guard_balance!(balance: balance, spending: spending, bypass: @bypass_limp_mode)
       end
 
       # Find an available WBIKD slot or create one via self-payment.
