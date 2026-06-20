@@ -149,10 +149,11 @@ class Engine
 
   private
 
-  # Returns the broadcast_intent symbol. The Store maps to/from the
-  # +broadcast_intent+ ENUM string on persistence; in-process, the engine
-  # threads the symbol so callers (e.g. +dispatch_broadcast+) compare on
-  # symbols rather than re-fetching the string from the DB.
+  # Returns the broadcast_intent symbol. The Store persists it as a string
+  # via +&.to_s+ on write (+store.rb:88+) and returns the DB string on read
+  # (+store.rb:114+) — coercion is one-way. The engine threads the symbol
+  # in-process, so +dispatch_broadcast+ compares on symbols without ever
+  # reading the value back from the DB.
   def map_broadcast_intent(no_send, accept_delayed_broadcast)
     return :none    if no_send
     return :delayed if accept_delayed_broadcast
