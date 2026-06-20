@@ -127,9 +127,9 @@ def do_build_action(**kwargs)
 end
 ```
 
-Accepted kwargs (mirrors `Action.create` exactly): `description:, input_beef: nil, inputs: nil, outputs: nil, lock_time: nil, version: nil, labels: nil, sign_and_process: true, accept_delayed_broadcast: true, trust_self: nil, return_txid_only: false, no_send: false, change_count: nil, randomize_outputs: true`.
+Accepted kwargs (mirrors `Action.create` minus `originator:`): `description:, input_beef: nil, inputs: nil, outputs: nil, lock_time: nil, version: nil, labels: nil, sign_and_process: true, accept_delayed_broadcast: true, trust_self: nil, return_txid_only: false, no_send: false, change_count: nil, randomize_outputs: true`.
 
-`originator:` is NOT propagated — ADR-026 decision 7.
+`originator:` exists today on `Engine::Action.create` (line 24-29) but is swallowed at the BRC100 layer — it does NOT propagate into Engine per ADR-026 decision 7. The commit 5 inversion (orchestrator into Engine) also drops it from the Engine primitive signature.
 
 **`Engine#do_sign_action(reference:, spends:, accept_delayed_broadcast: true, return_txid_only: false, no_send: false)`**
 

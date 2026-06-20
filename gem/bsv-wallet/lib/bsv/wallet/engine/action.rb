@@ -9,8 +9,9 @@ module BSV
       #
       # Per-call construction — cheap, discarded on completion. Wraps a
       # +Models::Action+ row hash (+Store#action_to_hash+ output). Adds
-      # row-level lifecycle actions (build_deferred!, sign_and_save!,
-      # complete_internal!, sign!, abort!, …) and BRC-100 helpers
+      # row-level lifecycle actions (build_deferred!, build_with_caller_inputs!,
+      # build_via_funding!, sign_and_save!, complete_internal!,
+      # apply_caller_spends!, abort!) and BRC-100 helpers
       # (build_input_specs, build_output_specs).
       #
       # Orchestration lives in +Engine#do_build_action+ / +#do_sign_action+

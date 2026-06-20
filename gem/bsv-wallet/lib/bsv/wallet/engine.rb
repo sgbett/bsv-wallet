@@ -329,7 +329,10 @@ module BSV
 
       # Complete the deferred-signing flow: locate the parked action,
       # apply caller spends, build + validate BEEF, dispatch broadcast
-      # per the action's intent.
+      # per the intent mapped from the caller's +no_send+ /
+      # +accept_delayed_broadcast+ params (NOT the action row's stored
+      # +broadcast_intent+ — that drives the no_send-override guard
+      # below, not the dispatch).
       #
       # @return [Hash] +{ wtxid:, atomic_beef: }+ — wallet vocab; BRC100 wraps.
       def do_sign_action(reference:, spends:, accept_delayed_broadcast: true,
