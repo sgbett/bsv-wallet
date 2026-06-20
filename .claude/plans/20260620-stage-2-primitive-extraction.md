@@ -476,7 +476,7 @@ Acceptance: AC#1–4 of HLR #402 (the structural ACs) green; full suite green; R
 
 ## Open follow-ups (not in either PR)
 
-- Stage 3 (mixin → composition over Engine primitives) — separate HLR.
+- ~~Stage 3 (mixin → composition over Engine primitives)~~ — landed as #405 (HLR + PR `feat/405-stage-3-composition`). The `do_` prefix established by this plan is now reverted; Engine primitives are at their spec-aligned destination names. See `.claude/plans/20260620-stage-3-composition.md`.
 - Sub-namespace grouping (`engine.crypto.encrypt`) — ADR-026 alternative D, deferred.
 - `#192` chained-send restoration — consumes Stage 2's surface.
 - `#385` Transmission domain — consumes Stage 2's surface.
