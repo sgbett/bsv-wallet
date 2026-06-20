@@ -5,14 +5,21 @@ module BSV
     # The 28 BRC-100 spec methods, sliced out of Engine as a mixin facade
     # (#364, Phase 7 of the #291 "Monolith to Manageable" roadmap; relocated
     # to a sibling of Engine in #400, Stage 1 of #396 "Manageable to
-    # Machined" — the namespace destination Stage 3 will promote to a
-    # composition over the Engine primitive surface ratified in #397).
+    # Machined"; thinned to a uniform "validate → primitive → wrap"
+    # shape over Engine's +do_*+ surface in #402, Stage 2).
     #
-    # At Stage 1 this remains a *slice of Engine*, not an island — it is
-    # +include+d into Engine and runs with +self+ as the engine instance.
-    # The methods reach back to engine ivars (+@store+, +@key_deriver+,
-    # +@beef_importer+, +@utxo_pool+, +@network_name+) and Engine privates
-    # (+validate_*+, +require_key_deriver!+, +secure_compare+) unchanged.
+    # At Stage 2 this remains a *slice of Engine* (mixin), but the
+    # methods no longer reach engine ivars or collaborators directly —
+    # every method routes through an Engine +do_*+ primitive
+    # (+do_build_action+, +do_encrypt+, +do_get_public_key+, …). The only
+    # Engine privates BRC100 still calls are the BRC-100 spec-shape
+    # validators (+validate_description!+, +validate_reference!+,
+    # +validate_create_action_params!+, +validate_output_ownership!+),
+    # which stay here per ADR-026 decision 6.
+    #
+    # Stage 3 will convert this from a mixin into a composition over
+    # the Engine primitive surface (+@engine.<name>+ at every call
+    # site, dropping the +do_+ prefix on Engine side).
     #
     # Method-resolution order: by +include+-ing +Interface::BRC100+ here
     # and +BSV::Wallet::BRC100+ on the Engine class, ancestry resolves as
@@ -101,8 +108,23 @@ module BSV
         do_abort_action(reference: reference)
       end
 
-      def list_actions(**params)
-        Engine::Action.list(engine: self, **params)
+      def list_actions(labels:, label_query_mode: :any,
+                       include_labels: false, include_inputs: false,
+                       include_input_source_locking_scripts: false,
+                       include_input_unlocking_scripts: false,
+                       include_outputs: false, include_output_locking_scripts: false,
+                       limit: 10, offset: 0, seek_permission: true,
+                       originator: nil)
+        result = do_list_actions(
+          labels: labels, label_query_mode: label_query_mode,
+          include_labels: include_labels, include_inputs: include_inputs,
+          include_input_source_locking_scripts: include_input_source_locking_scripts,
+          include_input_unlocking_scripts: include_input_unlocking_scripts,
+          include_outputs: include_outputs,
+          include_output_locking_scripts: include_output_locking_scripts,
+          limit: limit, offset: offset, seek_permission: seek_permission
+        )
+        { total_actions: result[:total], actions: result[:actions] }
       end
 
       def internalize_action(tx:, outputs:, description:, labels: nil,
@@ -123,18 +145,18 @@ module BSV
                        include_custom_instructions: false, include_tags: false,
                        include_labels: false, limit: 10, offset: 0,
                        seek_permission: true, originator: nil)
-        result = @store.query_outputs(
+        result = do_list_outputs(
           basket: basket, tags: tags, tag_query_mode: tag_query_mode,
-          limit: [limit, 10_000].min, offset: offset,
-          include_locking_scripts: [:locking_scripts, 'locking scripts'].include?(include),
+          include: include,
           include_custom_instructions: include_custom_instructions,
-          include_tags: include_tags, include_labels: include_labels
+          include_tags: include_tags, include_labels: include_labels,
+          limit: limit, offset: offset, seek_permission: seek_permission
         )
         { total_outputs: result[:total], outputs: result[:outputs] }
       end
 
       def relinquish_output(basket:, output:, originator: nil)
-        @store.relinquish_output(output_id: output)
+        do_relinquish_output(output_id: output)
         { relinquished: true }
       end
 
@@ -144,25 +166,17 @@ module BSV
                          privileged: false, privileged_reason: nil,
                          counterparty: nil, for_self: false,
                          seek_permission: true, originator: nil)
-        require_key_deriver!
-
-        if identity_key
-          { public_key: @key_deriver.identity_key }
-        else
-          pub = @key_deriver.derive_public_key(
-            protocol_id: protocol_id, key_id: key_id,
-            counterparty: counterparty || 'self',
-            for_self: for_self, privileged: privileged
-          )
-          { public_key: pub }
-        end
+        pub = do_get_public_key(
+          identity_key: identity_key, protocol_id: protocol_id, key_id: key_id,
+          counterparty: counterparty, for_self: for_self, privileged: privileged
+        )
+        { public_key: pub }
       end
 
       def reveal_counterparty_key_linkage(counterparty:, verifier:,
                                           privileged: false, privileged_reason: nil,
                                           originator: nil)
-        require_key_deriver!
-        @key_deriver.reveal_counterparty_linkage(
+        do_reveal_counterparty_key_linkage(
           counterparty: counterparty, verifier: verifier, privileged: privileged
         )
       end
@@ -170,8 +184,7 @@ module BSV
       def reveal_specific_key_linkage(counterparty:, verifier:, protocol_id:, key_id:,
                                       privileged: false, privileged_reason: nil,
                                       originator: nil)
-        require_key_deriver!
-        @key_deriver.reveal_specific_linkage(
+        do_reveal_specific_key_linkage(
           counterparty: counterparty, verifier: verifier,
           protocol_id: protocol_id, key_id: key_id, privileged: privileged
         )
@@ -182,8 +195,7 @@ module BSV
       def encrypt(plaintext:, protocol_id:, key_id:,
                   privileged: false, privileged_reason: nil,
                   counterparty: nil, seek_permission: true, originator: nil)
-        require_key_deriver!
-        ciphertext = @key_deriver.encrypt(
+        ciphertext = do_encrypt(
           plaintext: plaintext, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -193,8 +205,7 @@ module BSV
       def decrypt(ciphertext:, protocol_id:, key_id:,
                   privileged: false, privileged_reason: nil,
                   counterparty: nil, seek_permission: true, originator: nil)
-        require_key_deriver!
-        plaintext = @key_deriver.decrypt(
+        plaintext = do_decrypt(
           ciphertext: ciphertext, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -204,8 +215,7 @@ module BSV
       def create_hmac(data:, protocol_id:, key_id:,
                       privileged: false, privileged_reason: nil,
                       counterparty: nil, seek_permission: true, originator: nil)
-        require_key_deriver!
-        hmac = @key_deriver.create_hmac(
+        hmac = do_create_hmac(
           data: data, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
@@ -215,12 +225,11 @@ module BSV
       def verify_hmac(data:, hmac:, protocol_id:, key_id:,
                       privileged: false, privileged_reason: nil,
                       counterparty: nil, seek_permission: true, originator: nil)
-        require_key_deriver!
-        expected = @key_deriver.create_hmac(
-          data: data, protocol_id: protocol_id, key_id: key_id,
+        valid = do_verify_hmac(
+          data: data, hmac: hmac, protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
         )
-        raise BSV::Wallet::InvalidHmacError unless secure_compare(expected, hmac)
+        raise BSV::Wallet::InvalidHmacError unless valid
 
         { valid: true }
       end
@@ -228,8 +237,7 @@ module BSV
       def create_signature(protocol_id:, key_id:, data: nil, hash_to_directly_sign: nil,
                            privileged: false, privileged_reason: nil,
                            counterparty: nil, seek_permission: true, originator: nil)
-        require_key_deriver!
-        signature = @key_deriver.create_signature(
+        signature = do_create_signature(
           data: data, hash_to_directly_sign: hash_to_directly_sign,
           protocol_id: protocol_id, key_id: key_id,
           counterparty: counterparty || 'self', privileged: privileged
@@ -242,8 +250,7 @@ module BSV
                            privileged: false, privileged_reason: nil,
                            counterparty: nil, for_self: false,
                            seek_permission: true, originator: nil)
-        require_key_deriver!
-        valid = @key_deriver.verify_signature(
+        valid = do_verify_signature(
           signature: signature, data: data,
           hash_to_directly_verify: hash_to_directly_verify,
           protocol_id: protocol_id, key_id: key_id,
@@ -262,13 +269,14 @@ module BSV
                               signature: nil, certifier_url: nil,
                               keyring_revealer: nil, keyring_for_subject: nil,
                               privileged: false, privileged_reason: nil, originator: nil)
+        # Dispatch on acquisition_protocol stays at BRC100 — spec-shape
+        # validation per ADR-026 decision 6.
         case acquisition_protocol
         when :direct, 'direct'
-          @store.save_certificate(
+          do_acquire_certificate(
             type: type, certifier: certifier, fields: fields,
             serial_number: serial_number, revocation_outpoint: revocation_outpoint,
-            signature: signature, subject: @key_deriver&.identity_key,
-            keyring: keyring_for_subject
+            signature: signature, keyring_for_subject: keyring_for_subject
           )
         when :issuance, 'issuance'
           raise BSV::Wallet::UnsupportedActionError, 'certificate issuance protocol'
@@ -280,78 +288,69 @@ module BSV
 
       def list_certificates(certifiers:, types:, limit: 10, offset: 0,
                             privileged: false, privileged_reason: nil, originator: nil)
-        result = @store.query_certificates(
-          certifiers: certifiers, types: types,
-          limit: [limit, 10_000].min, offset: offset
+        result = do_list_certificates(
+          certifiers: certifiers, types: types, limit: limit, offset: offset
         )
         { total_certificates: result[:total], certificates: result[:certificates] }
       end
 
       def prove_certificate(certificate:, fields_to_reveal:, verifier:,
                             privileged: false, privileged_reason: nil, originator: nil)
-        require_key_deriver!
-        keyring = @key_deriver.derive_revelation_keyring(
-          certificate: certificate,
-          fields_to_reveal: fields_to_reveal,
-          verifier: verifier,
-          privileged: privileged
+        keyring = do_prove_certificate(
+          certificate: certificate, fields_to_reveal: fields_to_reveal,
+          verifier: verifier, privileged: privileged
         )
         { keyring_for_verifier: keyring }
       end
 
       def relinquish_certificate(type:, serial_number:, certifier:, originator: nil)
-        @store.delete_certificate(type: type, serial_number: serial_number, certifier: certifier)
+        do_relinquish_certificate(type: type, serial_number: serial_number, certifier: certifier)
         { relinquished: true }
       end
 
       def discover_by_identity_key(identity_key:, limit: 10, offset: 0,
                                    seek_permission: true, originator: nil)
-        # Local lookup — external discovery is a future concern
-        result = @store.query_certificates(
-          certifiers: [], types: [],
-          limit: [limit, 10_000].min, offset: offset
+        result = do_discover_by_identity_key(
+          identity_key: identity_key, limit: limit, offset: offset
         )
-        # Filter by subject (identity_key) in application layer
-        matching = result[:certificates].select { |c| c[:subject] == identity_key }
-        { total_certificates: matching.size, certificates: matching }
+        { total_certificates: result[:total], certificates: result[:certificates] }
       end
 
       def discover_by_attributes(attributes:, limit: 10, offset: 0,
                                  seek_permission: true, originator: nil)
-        # Local lookup — external discovery is a future concern
-        # This requires scanning certificate fields, which the Store
-        # doesn't support yet. Return empty for now.
-        { total_certificates: 0, certificates: [] }
+        result = do_discover_by_attributes(
+          attributes: attributes, limit: limit, offset: offset
+        )
+        { total_certificates: result[:total], certificates: result[:certificates] }
       end
 
       # --- Authentication (codes 23-24) ---
 
       def authenticated?(originator: nil)
-        { authenticated: !@key_deriver.nil? }
+        { authenticated: do_authenticated? }
       end
 
       def wait_for_authentication(originator: nil)
-        raise BSV::Wallet::Error.new('wallet is not authenticated', code: 2) unless @key_deriver
-
+        do_wait_for_authentication
         { authenticated: true }
       end
 
       # --- Blockchain and Network Data (codes 25-28) ---
 
       def get_height(originator: nil)
-        raise BSV::Wallet::UnsupportedActionError, 'get_height'
+        { height: do_get_height }
       end
 
       def get_header_for_height(height:, originator: nil)
-        raise BSV::Wallet::UnsupportedActionError, 'get_header_for_height'
+        { header: do_get_header_for_height(height: height) }
       end
 
       def get_network(originator: nil)
-        { network: @network_name }
+        { network: do_get_network }
       end
 
       def get_version(originator: nil)
-        { version: "bsv-wallet-#{BSV::Wallet::VERSION}" }
+        { version: do_get_version }
       end
     end
   end
