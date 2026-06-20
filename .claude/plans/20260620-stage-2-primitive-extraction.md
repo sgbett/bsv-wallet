@@ -4,6 +4,45 @@ Plan companion to HLR #402. Covers the substantive write-side PR: `Engine::Polic
 
 The 28 + 2 surface and granularity rules come from ADR-026 and the worked-example sketch at [`.claude/plans/20260619-stage-2a-classification.md`](20260619-stage-2a-classification.md). This file specifies implementation order, per-primitive signatures, Action's new shape, and spec migration.
 
+## Naming convention (Stage 2 only — reverted in Stage 3)
+
+BRC100 is a mixin into Engine at Stage 2 (HLR #402 decision 3). Bare invocation from BRC100 method bodies resolves via Ruby MRO — and 26 of the 28 primitive names collide with BRC-100 spec method names (`sign_action`, `encrypt`, `decrypt`, `create_hmac`, all of certificates, all of read-side outputs/actions/auth/static). Only `build_action` and `import_beef` are clash-free (BRC100 names them `create_action` and `internalize_action`).
+
+**Convention:** uniform `do_` prefix on all 28 Engine primitives.
+
+```ruby
+# Engine
+def do_build_action(...); end
+def do_sign_action(reference:, spends:, ...); end
+def do_abort_action(reference:); end
+def do_import_beef(...); end
+def do_encrypt(...); end
+# ... all 24 read-side similarly
+
+# BRC100 (mixin — bare invocation, self IS engine)
+def create_action(...)
+  validate_...
+  do_build_action(...)
+end
+
+def sign_action(spends:, reference:, ...)
+  validate_reference!(reference)
+  do_sign_action(reference: reference, spends: spends, ...)
+end
+```
+
+**Stage 3 sweep (committed — see [docs reference below](#stage-3-rename-commitment)):**
+- `do_<name>` everywhere → `@engine.<name>`
+- Drop the `do_` prefix on Engine methods, leaving `Engine#sign_action`, `Engine#encrypt`, etc. at their spec-aligned names.
+- The mixin-vs-composition switch makes the prefix unnecessary because BRC100 is no longer in Engine's MRO; the two `sign_action` methods live on distinct classes.
+
+The Stage 2 prefix is scaffolding for the mixin constraint, not a long-term name. Stage 3's HLR MUST land the rename — leaving `do_` prefixed primitives in place would be a regression against ADR-026 and the destination state.
+
+<a name="stage-3-rename-commitment"></a>**Where this commitment lives:**
+- This plan (above).
+- HLR #402 to be amended: explicit "Stage 3 reverts the `do_` prefix" line under decision 3.
+- ADR-026 to be amended: short note in decision 5 (or a new corollary) recording the Stage 2 prefix as scaffolding and the Stage 3 revert as a precondition for composition.
+
 ## Commit sequence (PR 1)
 
 Six commits. Suite stays green at every commit — verify with the full unit run (Postgres + SQLite) before each. Order is dependency-driven, not aesthetic.
@@ -75,12 +114,12 @@ end
 
 ### Commit 3 — Add 4 write-side primitives as delegators
 
-The primitives appear on Engine's public surface; their bodies are pass-throughs initially. Inversion happens in commit 5.
+The primitives appear on Engine's public surface (under the `do_` prefix; see [naming convention](#naming-convention-stage-2-only--reverted-in-stage-3)); their bodies are pass-throughs initially. Inversion happens in commit 5.
 
-**`Engine#build_action(**kwargs)`**
+**`Engine#do_build_action(**kwargs)`**
 
 ```ruby
-def build_action(**kwargs)
+def do_build_action(**kwargs)
   # Initial: delegate to Action.create. Commit 5 inverts — the
   # orchestrator body moves up here and Action.create slims to a
   # row-creation helper.
@@ -92,11 +131,11 @@ Accepted kwargs (mirrors `Action.create` exactly): `description:, input_beef: ni
 
 `originator:` is NOT propagated — ADR-026 decision 7.
 
-**`Engine#sign_action(reference:, spends:, accept_delayed_broadcast: true, return_txid_only: false, no_send: false)`**
+**`Engine#do_sign_action(reference:, spends:, accept_delayed_broadcast: true, return_txid_only: false, no_send: false)`**
 
 ```ruby
-def sign_action(reference:, spends:, accept_delayed_broadcast: true,
-                return_txid_only: false, no_send: false)
+def do_sign_action(reference:, spends:, accept_delayed_broadcast: true,
+                   return_txid_only: false, no_send: false)
   action = Engine::Action.find(engine: self, reference: reference)
   raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
@@ -106,10 +145,10 @@ def sign_action(reference:, spends:, accept_delayed_broadcast: true,
 end
 ```
 
-**`Engine#abort_action(reference:)`**
+**`Engine#do_abort_action(reference:)`**
 
 ```ruby
-def abort_action(reference:)
+def do_abort_action(reference:)
   action = Engine::Action.find(engine: self, reference: reference)
   raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
@@ -117,11 +156,11 @@ def abort_action(reference:)
 end
 ```
 
-**`Engine#import_beef(tx:, outputs:, description:, labels: nil, trust_self: nil, known_txids: nil, seek_permission: true)`**
+**`Engine#do_import_beef(tx:, outputs:, description:, labels: nil, trust_self: nil, known_txids: nil, seek_permission: true)`**
 
 ```ruby
-def import_beef(tx:, outputs:, description:, labels: nil,
-                trust_self: nil, known_txids: nil, seek_permission: true)
+def do_import_beef(tx:, outputs:, description:, labels: nil,
+                   trust_self: nil, known_txids: nil, seek_permission: true)
   @beef_importer.import(
     tx: tx, outputs: outputs, description: description,
     labels: labels, trust_self: trust_self, known_txids: known_txids,
@@ -130,7 +169,7 @@ def import_beef(tx:, outputs:, description:, labels: nil,
 end
 ```
 
-Note: `originator:` does not appear in `import_beef`'s signature; if BRC100's `internalize_action` accepts it for spec compliance, BRC100 swallows it.
+Note: `originator:` does not appear in `do_import_beef`'s signature; if BRC100's `internalize_action` accepts it for spec compliance, BRC100 swallows it.
 
 **Acceptance gate (commit 3):** Suite green. BRC100 still calls `Engine::Action.create/find` directly; the new primitives are unused on the hot path but visible on the surface.
 
@@ -151,7 +190,7 @@ def create_action(description:, input_beef: nil, inputs: nil, outputs: nil,
   validate_create_action_params!(inputs: inputs, outputs: outputs)
   validate_output_ownership!(outputs)
 
-  build_action(  # bare; mixin's self is engine
+  do_build_action(  # bare; mixin's self is engine
     description: description, input_beef: input_beef,
     inputs: inputs, outputs: outputs,
     lock_time: lock_time, version: version, labels: labels,
@@ -164,7 +203,7 @@ def create_action(description:, input_beef: nil, inputs: nil, outputs: nil,
 end
 ```
 
-Return-shape note: at this commit `build_action` still returns the BRC100-shaped hash because it delegates to `Action.create`. The hash-wrap inversion (Engine returns raw, BRC100 wraps) happens in commit 5 alongside the orchestrator move. This is the transient state the 6-commit version accepts; reviewers should see commits 4 and 5 as a logical pair.
+Return-shape note: at this commit `do_build_action` still returns the BRC100-shaped hash because it delegates to `Action.create`. The hash-wrap inversion (Engine returns raw, BRC100 wraps) happens in commit 5 alongside the orchestrator move. This is the transient state the 6-commit version accepts; reviewers should see commits 4 and 5 as a logical pair.
 
 **`BRC100#sign_action`:**
 
@@ -172,7 +211,7 @@ Return-shape note: at this commit `build_action` still returns the BRC100-shaped
 def sign_action(spends:, reference:, accept_delayed_broadcast: true,
                 return_txid_only: false, no_send: false, originator: nil)
   validate_reference!(reference)
-  sign_action(  # name-clash: this calls Engine's sign_action, not itself
+  do_sign_action(
     reference: reference, spends: spends,
     accept_delayed_broadcast: accept_delayed_broadcast,
     return_txid_only: return_txid_only, no_send: no_send
@@ -180,21 +219,12 @@ def sign_action(spends:, reference:, accept_delayed_broadcast: true,
 end
 ```
 
-**Name-clash trap:** `BRC100#sign_action` and `Engine#sign_action` share a name. Mixin's `self` IS the engine, so the bare call resolves to BRC100 itself → infinite recursion. Mitigation options:
-- (a) Rename Engine's primitive to `sign_parked_action` or `complete_sign`.
-- (b) Inside BRC100, explicit `Engine.instance_method(:sign_action).bind(self).call(...)` — ugly.
-- (c) Call `Engine::Action.find(...)` + `action.sign!(...)` directly from BRC100, skipping the primitive — defeats the point.
-
-**Recommend (a): rename the Engine primitive `complete_sign`** (or similar) to avoid the clash. Same applies to `abort_action`. The classification table treats them as distinct verbs anyway (Engine's primitive operates on a row by reference; BRC100's method is the BRC-100 spec call). The four primitives become: `build_action`, `complete_sign`, `complete_abort`, `import_beef`. Update HLR #402 + ADR-026 worked-example sketch accordingly.
-
-Actually — simpler still: Stage 3 converts BRC100 to composition (`@engine.sign_action`), so the name clash dissolves then. For Stage 2 we live with the bare-call constraint via renaming. Worth confirming with reviewer before commit 4.
-
 **`BRC100#abort_action`:**
 
 ```ruby
 def abort_action(reference:, originator: nil)
   validate_reference!(reference)
-  complete_abort(reference: reference)  # name avoided per above
+  do_abort_action(reference: reference)
 end
 ```
 
@@ -207,7 +237,7 @@ def internalize_action(tx:, outputs:, description:, labels: nil,
   validate_description!(description)
   known_txids&.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'known_txids entry') }
 
-  import_beef(  # bare; mixin's self is engine
+  do_import_beef(  # bare; mixin's self is engine
     tx: tx, outputs: outputs, description: description,
     labels: labels, trust_self: trust_self, known_txids: known_txids,
     seek_permission: seek_permission
@@ -219,17 +249,17 @@ end
 
 ### Commit 5 — Action reshape (the substantive interlock)
 
-Lifts the orchestrator body of `Action.create` (lines 38–246) up into `Engine#build_action`. `Action.create` shrinks to a row-creation helper. Action grows instance methods for each row-level lifecycle step. All `engine.send(:_)` calls disappear.
+Lifts the orchestrator body of `Action.create` (lines 38–246) up into `Engine#do_build_action`. `Action.create` shrinks to a row-creation helper. Action grows instance methods for each row-level lifecycle step. All `engine.send(:_)` calls disappear.
 
-**New `Engine#build_action` body** (replaces commit 3's delegator):
+**New `Engine#do_build_action` body** (replaces commit 3's delegator):
 
 ```ruby
-def build_action(description:, input_beef: nil, inputs: nil, outputs: nil,
-                 lock_time: nil, version: nil, labels: nil,
-                 sign_and_process: true, accept_delayed_broadcast: true,
-                 trust_self: nil, return_txid_only: false,
-                 no_send: false, change_count: nil,
-                 randomize_outputs: true)
+def do_build_action(description:, input_beef: nil, inputs: nil, outputs: nil,
+                    lock_time: nil, version: nil, labels: nil,
+                    sign_and_process: true, accept_delayed_broadcast: true,
+                    trust_self: nil, return_txid_only: false,
+                    no_send: false, change_count: nil,
+                    randomize_outputs: true)
   caller_supplied_inputs = !inputs.nil?
   deferred = !sign_and_process ||
              inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
@@ -341,11 +371,11 @@ end
 
 Plus existing `#sign!`, `#abort!`, `#query_change_outpoints` (sign! body changes too — see below).
 
-**`Engine#sign_action` body** (replaces commit 3's delegator):
+**`Engine#do_sign_action` body** (replaces commit 3's delegator):
 
 ```ruby
-def sign_action(reference:, spends:, accept_delayed_broadcast: true,
-                return_txid_only: false, no_send: false)
+def do_sign_action(reference:, spends:, accept_delayed_broadcast: true,
+                   return_txid_only: false, no_send: false)
   action = Engine::Action.find(engine: self, reference: reference)
   raise BSV::Wallet::InvalidParameterError, 'reference' unless action
 
@@ -390,7 +420,7 @@ Action's `#sign!` splits: `#apply_caller_spends!` does the deserialise + apply +
 |---|---|
 | `spec/bsv/wallet/engine/policy_spec.rb` | NEW (commit 1) — guard_balance! truth table |
 | `spec/bsv/wallet/engine/action_spec.rb` | Rewrite (commit 5). Orchestration tests move to engine_spec; remaining tests cover row-level instance methods + helpers (build_input_specs etc.) |
-| `spec/bsv/wallet/engine_spec.rb` | Grow (commit 5). New describe blocks for `build_action`, `sign_action`, `abort_action`, `import_beef` as primitives — orchestration semantics tested at Engine layer |
+| `spec/bsv/wallet/engine_spec.rb` | Grow (commit 5). New describe blocks for `do_build_action`, `do_sign_action`, `do_abort_action`, `do_import_beef` as primitives — orchestration semantics tested at Engine layer |
 | `spec/bsv/wallet/brc100_spec.rb` | Unchanged in body. MRO + ownership assertions still hold (BRC100 still owns the 28). The `get_network` smoke still passes |
 | `spec/integration/*` | Should pass unchanged — behaviour-preserving end-to-end is the gate |
 
@@ -398,19 +428,21 @@ Action's `#sign!` splits: `#apply_caller_spends!` does the deserialise + apply +
 
 These are the small judgement calls the plan can't pre-decide; flag at implementation time:
 
-1. **Name clash for `sign_action` / `abort_action`** (BRC100 method name = Engine primitive name). Recommended rename: Engine's primitives become `complete_sign` and `complete_abort` (or similar verbs). Confirm at commit 3 — update HLR #402 + ADR-026 worked-example sketch if the rename lands.
-2. **Engine#`reject_action`** — currently in `engine.rb:145` as an operator-facing wrapper. Not part of the 28 primitives (action_id is wallet-local, not a BRC-100 reference). Keep as-is or migrate to a `Engine#reject` private + bin/-only public is a Stage 2 nit, not a blocker.
-3. **`require_key_deriver!` placement** — currently on Engine, called by 6+ methods (line 185, 319, 374, 422, 507, 564, 605, 685). Stays on Engine; not a Policy concern. Internal `private` method.
+1. **Engine#`reject_action`** — currently in `engine.rb:145` as an operator-facing wrapper. Not part of the 28 primitives (action_id is wallet-local, not a BRC-100 reference). Keep as-is, or migrate to `Engine#do_reject` private + bin/-only public wrapper — Stage 2 nit, not a blocker.
+2. **`require_key_deriver!` placement** — currently on Engine, called by 6+ methods (line 185, 319, 374, 422, 507, 564, 605, 685). Stays on Engine; not a Policy concern. Internal `private` method.
+3. **Whether `do_` primitives are private or public on Engine** — they need to be reachable from BRC100's mixin (which is in Engine's MRO, so private works), but bin/ tools and integration tests will want them accessible. Default to public; revisit if surface noise becomes a problem.
 
 ## PR 2 — Read-side (24 thin wrappers)
 
 Mechanical sweep. One commit. Per the classification table: 6 crypto + 3 pubkey + 6 cert + 3 action-read + 2 auth + 4 static = 24.
 
+All 24 use the same `do_` prefix established for PR 1.
+
 For each method:
 
 ```ruby
 # Engine
-def encrypt(plaintext:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
+def do_encrypt(plaintext:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
   require_key_deriver!
   @key_deriver.encrypt(plaintext: plaintext, protocol_id: protocol_id,
                        key_id: key_id, counterparty: counterparty, privileged: privileged)
@@ -418,15 +450,13 @@ end
 
 # BRC100
 def encrypt(plaintext:, protocol_id:, key_id:, ..., originator: nil)
-  ciphertext = encrypt(plaintext: plaintext, protocol_id: protocol_id,
-                       key_id: key_id, counterparty: counterparty, privileged: privileged)
+  ciphertext = do_encrypt(plaintext: plaintext, protocol_id: protocol_id,
+                          key_id: key_id, counterparty: counterparty, privileged: privileged)
   { ciphertext: ciphertext }
 end
 ```
 
-Same name-clash issue here — `BRC100#encrypt` calling bare `encrypt` resolves to itself. Either rename Engine's primitives (`encrypt_data` etc.) or use the `Engine.instance_method(:encrypt).bind(self).call(...)` escape hatch. PR 2 will decide the uniform convention; whatever lands here informs the PR 1 sign/abort rename above.
-
-Tests: `engine_spec.rb` grows 24 new describe blocks asserting each primitive's signature + delegation. BRC100 specs unchanged.
+Tests: `engine_spec.rb` grows 24 new describe blocks asserting each primitive's signature + delegation. BRC100 specs unchanged (still assert the 28 spec names live on BRC100, MRO unaltered).
 
 Acceptance: AC#1–4 of HLR #402 (the structural ACs) green; full suite green; Rubocop green.
 
