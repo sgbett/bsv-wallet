@@ -57,8 +57,9 @@ module BSV
         validate_create_action_params!(inputs: inputs, outputs: outputs)
         validate_output_ownership!(outputs)
 
-        Engine::Action.create(
-          engine: self,
+        # +originator+ stays at BRC100 per ADR-026 decision 7 — it is
+        # BRC-100 vocabulary that doesn't propagate into Engine.
+        do_build_action(
           description: description, input_beef: input_beef,
           inputs: inputs, outputs: outputs,
           lock_time: lock_time, version: version, labels: labels,
@@ -66,7 +67,7 @@ module BSV
           accept_delayed_broadcast: accept_delayed_broadcast,
           trust_self: trust_self, return_txid_only: return_txid_only,
           no_send: no_send, change_count: change_count,
-          randomize_outputs: randomize_outputs, originator: originator
+          randomize_outputs: randomize_outputs
         )
       end
 
@@ -74,23 +75,16 @@ module BSV
                       return_txid_only: false, no_send: false,
                       originator: nil)
         validate_reference!(reference)
-        action = Engine::Action.find(engine: self, reference: reference)
-        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
-
-        action.sign!(
-          spends: spends,
-          no_send: no_send,
+        do_sign_action(
+          reference: reference, spends: spends,
           accept_delayed_broadcast: accept_delayed_broadcast,
-          return_txid_only: return_txid_only
+          return_txid_only: return_txid_only, no_send: no_send
         )
       end
 
       def abort_action(reference:, originator: nil)
         validate_reference!(reference)
-        action = Engine::Action.find(engine: self, reference: reference)
-        raise BSV::Wallet::InvalidParameterError, 'reference' unless action
-
-        action.abort!
+        do_abort_action(reference: reference)
       end
 
       def list_actions(**params)
@@ -104,10 +98,10 @@ module BSV
         # known_txids is the BRC-100 spec param name; values are wire-order wtxids
         known_txids&.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'known_txids entry') }
 
-        @beef_importer.import(
+        do_import_beef(
           tx: tx, outputs: outputs, description: description,
           labels: labels, trust_self: trust_self, known_txids: known_txids,
-          seek_permission: seek_permission, originator: originator
+          seek_permission: seek_permission
         )
       end
 
