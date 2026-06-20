@@ -10,30 +10,54 @@
 
 ```ruby
 # lib/bsv/wallet/brc100.rb  (Stage 3 sibling; composition over engine)
-class BRC100
-  def create_action(description:, input_beef: nil, inputs: nil, outputs: nil,
-                    lock_time: nil, version: nil, labels: nil,
-                    sign_and_process: true, accept_delayed_broadcast: true,
-                    trust_self: nil, return_txid_only: false,
-                    no_send: false, change_count: nil,
-                    randomize_outputs: true, originator: nil)
-    validate_description!(description)              # BRC100-private
-    validate_create_action_params!(inputs: inputs, outputs: outputs)
-    validate_output_ownership!(outputs)
+module BSV
+  module Wallet
+    class BRC100
+      def create_action(description:, input_beef: nil, inputs: nil, outputs: nil,
+                        lock_time: nil, version: nil, labels: nil,
+                        sign_and_process: true, accept_delayed_broadcast: true,
+                        trust_self: nil, return_txid_only: false,
+                        no_send: false, change_count: nil,
+                        randomize_outputs: true, originator: nil)
+        # BRC-100 spec-shape validation — does the input meet the BRC-100
+        # contract? Distinct from operation invariants (key_deriver presence,
+        # parameter-combination semantics) which live on the primitive per
+        # ADR-026 decision 6. BRC100 owns spec-shape; Engine owns invariants.
+        validate_description!(description)
+        validate_create_action_params!(inputs: inputs, outputs: outputs)
+        validate_output_ownership!(outputs)
 
-    result = @engine.build_action(
-      description: description, input_beef: input_beef,
-      inputs: inputs, outputs: outputs,
-      lock_time: lock_time, version: version, labels: labels,
-      sign_and_process: sign_and_process,
-      accept_delayed_broadcast: accept_delayed_broadcast,
-      trust_self: trust_self, no_send: no_send,
-      change_count: change_count, randomize_outputs: randomize_outputs
-    )
-    # `originator` stays here — recorded for audit at the interface,
-    # not forwarded into engine.
-    return { txid: result[:txid] } if return_txid_only && !no_send
-    result
+        result = @engine.build_action(
+          description: description, input_beef: input_beef,
+          inputs: inputs, outputs: outputs,
+          lock_time: lock_time, version: version, labels: labels,
+          sign_and_process: sign_and_process,
+          accept_delayed_broadcast: accept_delayed_broadcast,
+          trust_self: trust_self, no_send: no_send,
+          change_count: change_count, randomize_outputs: randomize_outputs
+        )
+        # `originator` stays here — recorded for audit at the interface,
+        # not forwarded into engine.
+
+        # Translate Engine's wallet-vocab return to BRC-100 spec shape
+        # (ADR-026 decision 5). +:txid+ here is the BRC-100 spec key name;
+        # the value carried is a wtxid (wire-order binary) until JSON
+        # serialisation dtxid-converts at the wire boundary.
+        if result[:signable_transaction]
+          return {
+            signable_transaction: {
+              tx: result[:signable_transaction][:atomic_beef],
+              reference: result[:signable_transaction][:reference]
+            }
+          }
+        end
+        return { txid: result[:wtxid] } if return_txid_only && !no_send
+        spec = { txid: result[:wtxid], tx: result[:atomic_beef] }
+        spec[:no_send_change] = result[:no_send_change] if no_send
+        spec[:send_with_results] = result[:send_with_results] if result[:send_with_results]
+        spec
+      end
+    end
   end
 end
 ```
@@ -101,13 +125,15 @@ class Engine
     @hydrator.validate_for_handoff!(atomic_beef, built[:wtxid])
 
     if no_send
-      return { txid: built[:wtxid], tx: atomic_beef,
+      return { wtxid: built[:wtxid], atomic_beef: atomic_beef,
                no_send_change: action.query_change_outpoints }
     end
 
     dispatch_broadcast(action_row[:id], atomic_beef, intent: intent)   # private; absorbs #5 + worker.process
 
-    { txid: built[:wtxid], tx: atomic_beef }
+    # Wallet-vocab return shape per ADR-026 decision 5; BRC100 translates
+    # to spec shape ({ txid:, tx: }) at the interface layer.
+    { wtxid: built[:wtxid], atomic_beef: atomic_beef }
   end
 
   private
@@ -160,18 +186,23 @@ end
 ### BRC100 interface layer
 
 ```ruby
-class BRC100
-  def internalize_action(tx:, outputs:, description:, labels: nil,
-                         trust_self: nil, known_txids: nil,
-                         seek_permission: true, originator: nil)
-    validate_description!(description)
-    known_txids&.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'known_txids') }
+module BSV
+  module Wallet
+    class BRC100
+      def internalize_action(tx:, outputs:, description:, labels: nil,
+                             trust_self: nil, known_txids: nil,
+                             seek_permission: true, originator: nil)
+        # Spec-shape validation (BRC100-owned per ADR-026 decision 6).
+        validate_description!(description)
+        known_txids&.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'known_txids entry') }
 
-    @engine.import_beef(
-      tx: tx, outputs: outputs, description: description, labels: labels,
-      trust_self: trust_self, known_txids: known_txids,
-      seek_permission: seek_permission
-    )
+        @engine.import_beef(
+          tx: tx, outputs: outputs, description: description, labels: labels,
+          trust_self: trust_self, known_txids: known_txids,
+          seek_permission: seek_permission
+        )
+      end
+    end
   end
 end
 ```
@@ -199,6 +230,10 @@ The wrapper is the canonical thin-wrapper example: indivisible domain op, 1:1 wi
 
 ## C — `noSend` composability (the #192 pressure test)
 
+> Sections C examples call `engine.build_action` directly (not BRC100),
+> so they use the wallet-vocab return shape (`wtxid:` / `atomic_beef:`).
+> The BRC100 layer translates to `{ txid:, tx: }` per ADR-026 decision 5.
+
 ### Stage 1 batch member (today, single-tx noSend)
 
 ```ruby
@@ -207,7 +242,7 @@ result = engine.build_action(
   description: "first batch member", outputs: [...],
   no_send: true, accept_delayed_broadcast: false
 )
-# => { txid:, tx:, no_send_change: [outpoint, ...] }
+# => { wtxid:, atomic_beef:, no_send_change: [outpoint, ...] }
 ```
 
 ### Stage 2 batch member (chained — depends on stage-1 outpoints)
@@ -221,7 +256,7 @@ result2 = engine.build_action(
   outputs: [...],
   no_send: true
 )
-# => { txid:, tx:, no_send_change: [...] }
+# => { wtxid:, atomic_beef:, no_send_change: [...] }
 ```
 
 ### Flush (the future #192 surface)
@@ -232,12 +267,12 @@ flush = engine.build_action(
   description: "final + flush batch",
   outputs: [...],
   no_send: false,
-  send_with: [result[:txid], result2[:txid]]
+  send_with: [result[:wtxid], result2[:wtxid]]
 )
-# => { txid:, tx:, send_with_results: [{ txid:, status: }, ...] }
+# => { wtxid:, atomic_beef:, send_with_results: [{ wtxid:, status: }, ...] }
 
 # Or: a sign_action with send_with: (for the deferred-signing flow):
-engine.sign_action(reference: ..., spends: ..., send_with: [parked_txids])
+engine.sign_action(reference: ..., spends: ..., send_with: [parked_wtxids])
 ```
 
 ### What the example proves
