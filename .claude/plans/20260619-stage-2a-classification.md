@@ -110,6 +110,8 @@ class Engine
     action = Action.new(engine: self, row: action_row)
 
     if deferred?(sign_and_process, inputs)
+      # Returns wallet vocab: +{ signable_transaction: { atomic_beef:, reference: } }+.
+      # BRC100 translates the inner +:atomic_beef+ to BRC-100's +:tx+ key.
       return action.build_deferred!(inputs: inputs, outputs: outputs, ...)
     end
 
