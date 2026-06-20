@@ -397,12 +397,25 @@ end
 
 Action's `#sign!` splits: `#apply_caller_spends!` does the deserialise + apply + sign + persist + save_proof; Engine handles BEEF assembly + dispatch. The old `#sign!` is gone.
 
+**BRC100 hash-wrap updates (commit 5, alongside the orchestrator move):**
+
+Once `do_build_action` returns wallet vocab, BRC100's four write methods wrap to BRC-100 vocab per ADR-026 decision 5:
+
+- `create_action` — wraps `{ wtxid:, atomic_beef:, ... }` → `{ txid:, tx:, ... }`; the `no_send` path adds `no_send_change:` from `change_outpoints:`; the deferred path wraps `{ signable: { atomic_beef:, reference: } }` → `{ signable_transaction: { tx:, reference: } }` (key rename `:signable` → `:signable_transaction`, `:atomic_beef` → `:tx`).
+- `sign_action` — wraps `{ wtxid:, atomic_beef: }` → `{ txid:, tx: }`; `return_txid_only:` handled at the wrap (nil out `:tx`).
+- `abort_action` — already returns `{ aborted: true }` from `Action#abort!`; no shape change.
+- `internalize_action` — wraps `do_import_beef`'s return per BeefImporter's existing shape (unchanged from today's path).
+
+The transient state across commits 3–5 (Engine returning BRC100-shaped hash while delegating to old `Action.create`) collapses here: commit 5 inverts so Engine returns raw and BRC100 wraps.
+
 **Removals in this commit:**
 - `Action.create`'s monolithic body (lines 38–246).
 - `Action#sign!` (becomes `#apply_caller_spends!` with narrower responsibility).
 - All `engine.send(:_)` calls inside Action.
 
-**Acceptance gate (commit 5):** Full unit + integration suite green. AC#9 (Action LOC 200–300) achieved. AC#6/#7/#8 (zero `engine.send`, no direct `broadcast_worker.process`, `.create` returns instance) satisfied.
+**Acceptance gate (commit 5):** Full unit + integration suite green. AC#9 (Action LOC ≤ 350; see [LOC calibration note](#loc-calibration-ac-9)) achieved. AC#6/#7/#8 (zero `engine.send`, no direct `broadcast_worker.process`, `.create` returns instance) satisfied.
+
+<a name="loc-calibration-ac-9"></a>**LOC calibration (AC #9).** HLR #402 originally set Action LOC target 200–300 (from 484). Back-of-envelope after this commit: −208 (orchestrator body) − 37 (old `#sign!`) + ~75 (5 new instance methods @ ~15 LOC) ≈ **314**. The widened ceiling (200–350) reflects the helpers `build_input_specs` / `build_output_specs` / `attach_labels` / `lock_caller_inputs!` (~60 LOC combined) that remain on Action as class methods — moving them to a sibling module would buy ~50 LOC at the cost of a new file. Not worth it for Stage 2; if Stage 3's composition switch surfaces a natural seam, revisit. HLR #402 to be amended with the widened ceiling once this commit lands.
 
 ### Commit 6 — Cleanup
 
