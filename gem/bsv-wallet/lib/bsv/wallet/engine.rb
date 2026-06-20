@@ -27,7 +27,7 @@ module BSV
     #     key_deriver:   key_deriver,
     #     chain_tracker: chain_tracker
     #   )
-    #   engine.create_action(description: 'payment', outputs: [...])
+    #   engine.brc100.create_action(description: 'payment', outputs: [...])
     class Engine
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :BeefImporter,          'bsv/wallet/engine/beef_importer'
@@ -157,21 +157,22 @@ module BSV
         { rejected: true, action_id: action_id }
       end
 
-      # ---- BRC-100 primitive surface (write-side, #402 Stage 2) ----------
+      # ---- BRC-100 primitive surface (write-side) ------------------------
       #
-      # Four thick primitives the BRC100 mixin calls into. The +do_+
-      # prefix is Stage 2 scaffolding: BRC100 is still a mixin, so
-      # +Engine#sign_action+ would clash with +BRC100#sign_action+ and
-      # recurse via MRO. Stage 3's mixin→composition switch reverts the
-      # prefix. See .claude/plans/20260620-stage-2-primitive-extraction.md.
+      # Four thick primitives the +BSV::Wallet::BRC100+ wrap layer
+      # calls through +@engine.<name>+. Return shapes are wallet vocab
+      # (+wtxid:+ binary, +atomic_beef:+, +change_outpoints:+, +signable:+);
+      # BRC100 translates to BRC-100 vocab (+txid:+, +tx:+, +no_send_change:+,
+      # +signable_transaction:+) at the spec boundary.
       #
-      # These bodies are delegators in commit 3 — they shuffle calls
-      # through without changing semantics. Commit 5 inverts:
-      # +build_action+ becomes the orchestrator and +Action.create+
-      # slims to a row-creation helper; +sign_action+ moves the
-      # broadcast-dispatch tail off +Action#sign!+. Return shapes
-      # eventually become wallet vocab (+wtxid:+ binary, +atomic_beef:+)
-      # with BRC100 wrapping to BRC-100 vocab — also commit 5.
+      # Per ADR-026: the primitives carry their own operation invariants
+      # (+require_key_deriver!+, parameter-combination semantics) so
+      # non-BRC100 consumers (#192 batch, #223 HTTP wrapper, the daemon)
+      # can't bypass them; spec-shape validation stays at the wrap layer.
+      #
+      # History: extracted as +do_+-prefixed primitives in #402 Stage 2
+      # (the prefix dodged an MRO clash while BRC100 was still a mixin);
+      # prefix reverted in #405 Stage 3 when BRC100 became a class.
 
       # Orchestrator. Lifted from +Engine::Action.create+'s body in
       # #402 Stage 2 commit 5. Drives input acquisition, the build, the

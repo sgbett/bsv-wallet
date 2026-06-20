@@ -318,7 +318,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       # +:total+ on the Engine side with the domain key for the rows:
       # +{ total:, actions: }+ here, +{ total:, outputs: }+ for
       # +list_outputs+, +{ total:, certificates: }+ for
-      # +list_certificates+ + +do_discover_by_*+).
+      # +list_certificates+ + +discover_by_*+).
       store.create_action(action: { description: 'list smoke other', broadcast_intent: :none })
       action = store.create_action(action: { description: 'list smoke target', broadcast_intent: :none })
       described_class.attach_labels(engine: engine, action_id: action[:id], labels: ['list-smoke'])

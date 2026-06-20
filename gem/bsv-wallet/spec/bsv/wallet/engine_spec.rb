@@ -1162,7 +1162,7 @@ RSpec.describe BSV::Wallet::Engine do
       get_height get_header_for_height get_network get_version
     ].freeze
 
-    it 'defines exactly 24 read-side do_ primitives' do
+    it 'defines exactly 24 read-side primitives' do
       expect(READ_SIDE_PRIMITIVES.length).to eq(24)
     end
 
