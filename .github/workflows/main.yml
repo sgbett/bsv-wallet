@@ -146,3 +146,32 @@ jobs:
           # +skip unless ENV['DATABASE_URL']+ guards in those specs hide
           # failures in CI while they surface locally.
           DATABASE_URL: postgres://postgres:postgres@localhost:5433/bsv_wallet_test
+
+  # The single required status check (see the "Block unless CI green" ruleset).
+  # The spec jobs above are matrix / job-level-`if:` gated, so on docs-only
+  # changes they don't expand — they report once under the un-expanded name
+  # `Ruby ${{ matrix.ruby }}`, and the per-version contexts the ruleset would
+  # otherwise require (`Ruby 3.3`, `Ruby 3.4`) never appear, leaving the PR
+  # blocked on checks that never arrive. This aggregator always runs
+  # (`if: always()`), so the `ci` context is always reported: it passes when the
+  # spec jobs succeeded OR were legitimately skipped, and fails only when one
+  # actually failed or was cancelled. Require `ci` instead of the matrix names.
+  ci:
+    name: ci
+    needs: [changes, test, integration]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require spec jobs to pass (skips are OK on docs-only changes)
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          TEST: ${{ needs.test.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+        run: |
+          echo "changes=$CHANGES test=$TEST integration=$INTEGRATION"
+          for result in "$CHANGES" "$TEST" "$INTEGRATION"; do
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              echo "::error::A required CI job did not pass (result=$result)"
+              exit 1
+            fi
+          done
