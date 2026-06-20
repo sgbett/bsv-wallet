@@ -51,7 +51,7 @@ module BSV
             }
           }
         end
-        # +return_txid_only+ nilifies the +tx+ key on the broadcast path only —
+        # +return_txid_only+ sets the +tx+ key to nil on the broadcast path only —
         # the +no_send+ path always returns +tx+ (the parked internal action's
         # BEEF is the caller's only handle on the staged tx). BRC-100 keeps the
         # +tx+ key present either way; engine's atomic_beef is computed
