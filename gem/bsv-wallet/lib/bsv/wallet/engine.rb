@@ -534,8 +534,21 @@ module BSV
 
       # --- Action read-side (3 primitives) ---
 
-      def do_list_actions(**)
-        Engine::Action.list(engine: self, **)
+      def do_list_actions(labels:, label_query_mode: :any,
+                          include_labels: false, include_inputs: false,
+                          include_input_source_locking_scripts: false,
+                          include_input_unlocking_scripts: false,
+                          include_outputs: false, include_output_locking_scripts: false,
+                          limit: 10, offset: 0, seek_permission: true)
+        Engine::Action.list(
+          engine: self, labels: labels, label_query_mode: label_query_mode,
+          include_labels: include_labels, include_inputs: include_inputs,
+          include_input_source_locking_scripts: include_input_source_locking_scripts,
+          include_input_unlocking_scripts: include_input_unlocking_scripts,
+          include_outputs: include_outputs,
+          include_output_locking_scripts: include_output_locking_scripts,
+          limit: limit, offset: offset, seek_permission: seek_permission
+        )
       end
 
       def do_list_outputs(basket:, tags: nil, tag_query_mode: :any, include: nil,

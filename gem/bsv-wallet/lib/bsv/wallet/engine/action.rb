@@ -37,12 +37,15 @@ module BSV
 
         # Migrate +Engine#list_actions+'s body. Returns the BRC-100 hash
         # shape +{ total_actions:, actions: }+ from +Store#query_actions+.
+        # Called from +Engine#do_list_actions+; BRC100's
+        # +originator:+ stops at the wrap layer per ADR-026 decision 7
+        # and is not accepted here.
         def self.list(engine:, labels:, label_query_mode: :any,
                       include_labels: false, include_inputs: false,
                       include_input_source_locking_scripts: false,
                       include_input_unlocking_scripts: false,
                       include_outputs: false, include_output_locking_scripts: false,
-                      limit: 10, offset: 0, seek_permission: true, originator: nil)
+                      limit: 10, offset: 0, seek_permission: true)
           result = engine.store.query_actions(
             labels: labels, label_query_mode: label_query_mode,
             limit: [limit, 10_000].min, offset: offset,

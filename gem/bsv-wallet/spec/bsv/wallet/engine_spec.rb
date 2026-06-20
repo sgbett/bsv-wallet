@@ -1167,15 +1167,18 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it "##{name} does not accept +originator:+ (ADR-026 decision 7)" do
-        # +do_list_actions+ uses +**+ anonymous forwarding (callee is
-        # +Engine::Action.list+ which still accepts +originator:+ as a
-        # stub kwarg) — skip the assertion for that one. The forwarding
-        # is harmless because BRC100 doesn't pass originator through.
-        skip 'uses anonymous **kwargs forwarding' if name == :do_list_actions
-
         params = engine.method(name).parameters.map { |_kind, pname| pname }
         expect(params).not_to include(:originator),
                               "expected #{name} signature to exclude :originator, got #{params.inspect}"
+      end
+
+      it "##{name} has an explicit keyword signature (no anonymous **kwargs)" do
+        # Anonymous +**+ forwarding would silently accept arbitrary
+        # kwargs including +originator:+, defeating the previous test.
+        # Explicit signatures are the structural guarantee.
+        forwards = engine.method(name).parameters.any? { |kind, _| kind == :keyrest }
+        expect(forwards).to be(false),
+                            "expected #{name} to declare its keywords explicitly, found anonymous **kwargs"
       end
     end
   end

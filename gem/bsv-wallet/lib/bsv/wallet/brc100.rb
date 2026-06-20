@@ -101,8 +101,22 @@ module BSV
         do_abort_action(reference: reference)
       end
 
-      def list_actions(**params)
-        do_list_actions(**params)
+      def list_actions(labels:, label_query_mode: :any,
+                       include_labels: false, include_inputs: false,
+                       include_input_source_locking_scripts: false,
+                       include_input_unlocking_scripts: false,
+                       include_outputs: false, include_output_locking_scripts: false,
+                       limit: 10, offset: 0, seek_permission: true,
+                       originator: nil)
+        do_list_actions(
+          labels: labels, label_query_mode: label_query_mode,
+          include_labels: include_labels, include_inputs: include_inputs,
+          include_input_source_locking_scripts: include_input_source_locking_scripts,
+          include_input_unlocking_scripts: include_input_unlocking_scripts,
+          include_outputs: include_outputs,
+          include_output_locking_scripts: include_output_locking_scripts,
+          limit: limit, offset: offset, seek_permission: seek_permission
+        )
       end
 
       def internalize_action(tx:, outputs:, description:, labels: nil,
