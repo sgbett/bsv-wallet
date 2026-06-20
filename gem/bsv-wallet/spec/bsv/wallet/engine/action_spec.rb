@@ -312,15 +312,18 @@ RSpec.describe BSV::Wallet::Engine::Action do
   end
 
   describe '.list' do
-    it 'returns the BRC-100 { total_actions:, actions: } hash shape' do
+    it 'returns the wallet-vocab { total:, actions: } hash shape' do
+      # BRC100 re-keys +:total+ → +:total_actions+ at the wrap layer
+      # (#402 PR 2 normalization — all collection primitives now use
+      # generic +{ total:, items: }+ on the Engine side).
       store.create_action(action: { description: 'list smoke other', broadcast_intent: :none })
       action = store.create_action(action: { description: 'list smoke target', broadcast_intent: :none })
       described_class.attach_labels(engine: engine, action_id: action[:id], labels: ['list-smoke'])
 
       result = described_class.list(engine: engine, labels: ['list-smoke'])
 
-      expect(result).to include(:total_actions, :actions)
-      expect(result[:total_actions]).to eq(1)
+      expect(result).to include(:total, :actions)
+      expect(result[:total]).to eq(1)
       expect(result[:actions].first[:description]).to eq('list smoke target')
     end
 

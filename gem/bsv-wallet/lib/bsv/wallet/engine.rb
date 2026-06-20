@@ -479,9 +479,12 @@ module BSV
 
       # --- Certificates (codes 17-22, 6 primitives) ---
 
-      # Direct-acquisition only. The +:issuance+ branch is dispatched +
+      # Direct-acquisition only — the +:issuance+ branch is dispatched +
       # raised at the BRC100 layer (spec-shape validation per ADR-026
-      # decision 6); this primitive does the store save.
+      # decision 6); this primitive does the store save unconditionally.
+      # *Callers MUST pre-validate +acquisition_protocol+ themselves* —
+      # a non-BRC100 caller invoking this with issuance semantics in
+      # mind will get a silent direct-save instead.
       def do_acquire_certificate(type:, certifier:, fields:,
                                  serial_number: nil, revocation_outpoint: nil,
                                  signature: nil, keyring_for_subject: nil)

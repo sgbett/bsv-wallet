@@ -35,18 +35,19 @@ module BSV
           new(engine: engine, row: row)
         end
 
-        # Migrate +Engine#list_actions+'s body. Returns the BRC-100 hash
-        # shape +{ total_actions:, actions: }+ from +Store#query_actions+.
-        # Called from +Engine#do_list_actions+; BRC100's
-        # +originator:+ stops at the wrap layer per ADR-026 decision 7
-        # and is not accepted here.
+        # Wallet-vocab action query — returns +{ total:, actions: }+,
+        # matching the shape +Store#query_actions+ produces and the
+        # other +do_list_*+ collection primitives use. BRC100 re-keys
+        # +:total+ → +:total_actions+ at the wrap layer.
+        # Called from +Engine#do_list_actions+; +originator:+ stops at
+        # the wrap layer per ADR-026 decision 7 and is not accepted here.
         def self.list(engine:, labels:, label_query_mode: :any,
                       include_labels: false, include_inputs: false,
                       include_input_source_locking_scripts: false,
                       include_input_unlocking_scripts: false,
                       include_outputs: false, include_output_locking_scripts: false,
                       limit: 10, offset: 0, seek_permission: true)
-          result = engine.store.query_actions(
+          engine.store.query_actions(
             labels: labels, label_query_mode: label_query_mode,
             limit: [limit, 10_000].min, offset: offset,
             include_labels: include_labels, include_inputs: include_inputs,
@@ -54,7 +55,6 @@ module BSV
             include_outputs: include_outputs,
             include_output_locking_scripts: include_output_locking_scripts
           )
-          { total_actions: result[:total], actions: result[:actions] }
         end
 
         # Canonical lookup by BRC-100 reference. Returns an Action wrapping

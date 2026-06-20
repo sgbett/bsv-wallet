@@ -5,14 +5,21 @@ module BSV
     # The 28 BRC-100 spec methods, sliced out of Engine as a mixin facade
     # (#364, Phase 7 of the #291 "Monolith to Manageable" roadmap; relocated
     # to a sibling of Engine in #400, Stage 1 of #396 "Manageable to
-    # Machined" — the namespace destination Stage 3 will promote to a
-    # composition over the Engine primitive surface ratified in #397).
+    # Machined"; thinned to a uniform "validate → primitive → wrap"
+    # shape over Engine's +do_*+ surface in #402, Stage 2).
     #
-    # At Stage 1 this remains a *slice of Engine*, not an island — it is
-    # +include+d into Engine and runs with +self+ as the engine instance.
-    # The methods reach back to engine ivars (+@store+, +@key_deriver+,
-    # +@beef_importer+, +@utxo_pool+, +@network_name+) and Engine privates
-    # (+validate_*+, +require_key_deriver!+, +secure_compare+) unchanged.
+    # At Stage 2 this remains a *slice of Engine* (mixin), but the
+    # methods no longer reach engine ivars or collaborators directly —
+    # every method routes through an Engine +do_*+ primitive
+    # (+do_build_action+, +do_encrypt+, +do_get_public_key+, …). The only
+    # Engine privates BRC100 still calls are the BRC-100 spec-shape
+    # validators (+validate_description!+, +validate_reference!+,
+    # +validate_create_action_params!+, +validate_output_ownership!+),
+    # which stay here per ADR-026 decision 6.
+    #
+    # Stage 3 will convert this from a mixin into a composition over
+    # the Engine primitive surface (+@engine.<name>+ at every call
+    # site, dropping the +do_+ prefix on Engine side).
     #
     # Method-resolution order: by +include+-ing +Interface::BRC100+ here
     # and +BSV::Wallet::BRC100+ on the Engine class, ancestry resolves as
@@ -108,7 +115,7 @@ module BSV
                        include_outputs: false, include_output_locking_scripts: false,
                        limit: 10, offset: 0, seek_permission: true,
                        originator: nil)
-        do_list_actions(
+        result = do_list_actions(
           labels: labels, label_query_mode: label_query_mode,
           include_labels: include_labels, include_inputs: include_inputs,
           include_input_source_locking_scripts: include_input_source_locking_scripts,
@@ -117,6 +124,7 @@ module BSV
           include_output_locking_scripts: include_output_locking_scripts,
           limit: limit, offset: offset, seek_permission: seek_permission
         )
+        { total_actions: result[:total], actions: result[:actions] }
       end
 
       def internalize_action(tx:, outputs:, description:, labels: nil,
