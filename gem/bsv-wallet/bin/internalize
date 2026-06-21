@@ -69,7 +69,7 @@ abort 'No BEEF data on stdin' if beef_data.nil? || beef_data.empty?
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 engine = ctx[:engine]
 
-engine.internalize_action(
+engine.brc100.internalize_action(
   tx: beef_data,
   outputs: output_specs,
   description: options[:description],

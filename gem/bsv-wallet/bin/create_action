@@ -74,7 +74,7 @@ engine = ctx[:engine]
 no_send = options[:no_send] || false
 accept_delayed_broadcast = !options[:inline]
 
-result = engine.create_action(
+result = engine.brc100.create_action(
   description: options[:description],
   inputs: inputs.any? ? inputs : nil,
   outputs: outputs.any? ? outputs : nil,

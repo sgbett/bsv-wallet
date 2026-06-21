@@ -54,7 +54,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
   describe '.create' do
     # +.create+ slimmed to a row-creation helper in #402 Stage 2 commit 5.
     # The orchestrator role (input acquisition, build, persist, dispatch)
-    # moved up to +Engine#do_build_action+; +.create+ now just inserts the
+    # moved up to +Engine#build_action+; +.create+ now just inserts the
     # empty +actions+ row and returns an instance. End-to-end orchestration
     # coverage lives at +engine_spec.rb+ ("#create_action") + integration.
     it 'inserts an empty actions row and returns an Action wrapping it' do
@@ -125,9 +125,9 @@ RSpec.describe BSV::Wallet::Engine::Action do
     # Action#sign! split in #402 Stage 2 commit 5: the row-level signing
     # step is +#apply_caller_spends!+ (deserialise unsigned tx, apply
     # caller scripts, sign remaining inputs, persist signed raw_tx +
-    # proof). BEEF assembly + dispatch moved up to +Engine#do_sign_action+.
+    # proof). BEEF assembly + dispatch moved up to +Engine#sign_action+.
     it 'returns the signed wtxid + raw_tx for a deferred action' do
-      create_result = engine.create_action(
+      create_result = engine.brc100.create_action(
         description: 'action apply_caller_spends! smoke',
         inputs: [], sign_and_process: false,
         outputs: [
@@ -149,11 +149,11 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
   end
 
-  describe 'Engine#do_sign_action no_send guard' do
+  describe 'Engine#sign_action no_send guard' do
     it 'rejects no_send when the underlying action was not created with broadcast_intent: none' do
       # Deferred path defaults to broadcast_intent: :delayed — no_send: true
       # at sign time is a runtime override the base wallet does not support.
-      create_result = engine.create_action(
+      create_result = engine.brc100.create_action(
         description: 'no_send guard',
         inputs: [], sign_and_process: false,
         outputs: [
@@ -164,14 +164,14 @@ RSpec.describe BSV::Wallet::Engine::Action do
       )
       reference = create_result[:signable_transaction][:reference]
 
-      expect { engine.sign_action(spends: {}, reference: reference, no_send: true) }
+      expect { engine.brc100.sign_action(spends: {}, reference: reference, no_send: true) }
         .to raise_error(BSV::Wallet::UnsupportedActionError, /signAction\(no_send: true\)/)
     end
   end
 
   describe '#abort!' do
     it 'aborts an unsigned action when invoked directly on an Action instance' do
-      create_result = engine.create_action(
+      create_result = engine.brc100.create_action(
         description: 'action abort! smoke',
         inputs: [],
         sign_and_process: false,
@@ -190,7 +190,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     end
 
     it 'is the entry point Engine#abort_action delegates to' do
-      create_result = engine.create_action(
+      create_result = engine.brc100.create_action(
         description: 'abort delegator',
         inputs: [],
         sign_and_process: false,
@@ -201,7 +201,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       )
       reference = create_result[:signable_transaction][:reference]
 
-      expect(engine.abort_action(reference: reference)).to eq({ aborted: true })
+      expect(engine.brc100.abort_action(reference: reference)).to eq({ aborted: true })
       expect(store.find_action(reference: reference)).to be_nil
     end
   end
@@ -261,7 +261,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     it 'returns BRC-100 { accepted: true } and persists the incoming action' do
       beef_data, subject_tx = build_internalize_beef(satoshis: 500)
 
-      result = engine_with_tracker.internalize_action(
+      result = engine_with_tracker.brc100.internalize_action(
         tx: beef_data,
         description: 'action internalize smoke',
         labels: ['incoming'],
@@ -279,7 +279,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       expect(result).to eq({ accepted: true })
 
       # Output landed in the basket
-      listed = engine_with_tracker.list_outputs(basket: 'smoke')
+      listed = engine_with_tracker.brc100.list_outputs(basket: 'smoke')
       expect(listed[:total_outputs]).to eq(1)
 
       # Action row was persisted with the subject tx's wtxid
@@ -292,7 +292,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
     it 'delegates to Engine::BeefImporter (the ingress collaborator)' do
       beef_data, = build_internalize_beef(satoshis: 700)
 
-      result = engine_with_tracker.internalize_action(
+      result = engine_with_tracker.brc100.internalize_action(
         tx: beef_data,
         description: 'internalize delegator smoke',
         outputs: [
@@ -317,8 +317,8 @@ RSpec.describe BSV::Wallet::Engine::Action do
       # (#402 PR 2 normalisation — all collection primitives now use
       # +:total+ on the Engine side with the domain key for the rows:
       # +{ total:, actions: }+ here, +{ total:, outputs: }+ for
-      # +do_list_outputs+, +{ total:, certificates: }+ for
-      # +do_list_certificates+ + +do_discover_by_*+).
+      # +list_outputs+, +{ total:, certificates: }+ for
+      # +list_certificates+ + +discover_by_*+).
       store.create_action(action: { description: 'list smoke other', broadcast_intent: :none })
       action = store.create_action(action: { description: 'list smoke target', broadcast_intent: :none })
       described_class.attach_labels(engine: engine, action_id: action[:id], labels: ['list-smoke'])
@@ -334,7 +334,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       action = store.create_action(action: { description: 'list delegator smoke', broadcast_intent: :none })
       described_class.attach_labels(engine: engine, action_id: action[:id], labels: ['list-delegator'])
 
-      expect(engine.list_actions(labels: ['list-delegator'])).to include(total_actions: 1)
+      expect(engine.brc100.list_actions(labels: ['list-delegator'])).to include(total_actions: 1)
     end
   end
 

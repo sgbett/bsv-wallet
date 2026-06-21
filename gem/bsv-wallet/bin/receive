@@ -54,7 +54,7 @@ output_specs = pay_outputs.map do |out|
   }
 end
 
-engine.internalize_action(
+engine.brc100.internalize_action(
   tx: beef_data,
   outputs: output_specs,
   description: 'received payment',

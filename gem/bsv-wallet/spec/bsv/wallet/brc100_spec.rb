@@ -4,20 +4,26 @@ require 'bsv-wallet'
 require 'bsv/wallet/engine'
 require 'bsv/wallet/brc100'
 
-# Method-resolution-order regression spec for the BRC100 mixin
-# (#364 introduced as Engine::BRC100; #400 Stage 1 of #396 relocated to
-# sibling +BSV::Wallet::BRC100+). Still a mixin at Stage 1 — Stage 3
-# will convert to a composition over Engine primitives (#397).
+# Class-shape regression spec for the BRC100 wrap layer.
 #
-# The slice is a mixin facade: Engine includes BSV::Wallet::BRC100, which
-# itself includes the SDK contract Interface::BRC100. The expected
-# ancestry is +Engine → BRC100 → Interface::BRC100+ so the
-# 28 impls always beat the contract's +NotImplementedError+ stubs.
+# Lifecycle of this class:
+# - #364 Phase 7 of #291: introduced as +Engine::BRC100+ mixin.
+# - #400 Stage 1 of #396: relocated to sibling +BSV::Wallet::BRC100+
+#   (still a mixin).
+# - #405 Stage 3 of #396: promoted from +module+ to +class+ composed
+#   over an Engine instance via +BRC100.new(engine)+ / +Engine#brc100+.
 #
-# These assertions are belt-and-braces. A future reorder of `include`
-# lines, a missed move, or an accidental stub-shadowing all show up
-# here as a red spec rather than a silent +NotImplementedError+ at
-# runtime.
+# Post-Stage-3 invariants this spec locks in:
+#   - BRC100 is a +Class+ (not a +Module+).
+#   - +BSV::Wallet::Engine+ does NOT include BRC100 (the mixin is gone).
+#   - +Engine#brc100+ returns a memoised +BRC100+ instance wrapping
+#     +self+.
+#   - BRC100 still +include+s the SDK contract +Interface::BRC100+ so
+#     unimplemented methods would fall through to +NotImplementedError+
+#     stubs (currently all 28 are implemented).
+#   - The 28 BRC-100 spec method names land on Engine TOO (post-#405
+#     commit 4) as the wallet-vocab primitive surface — but those are
+#     a different shape (wallet vocab) from BRC100's wraps.
 # Frozen list — a future contract change must force a deliberate edit.
 # Defined at file scope so the rubocop RSpec/LeakyLocalVariable cop is
 # satisfied; the iteration below builds one +it+ per name at load time,
@@ -40,37 +46,33 @@ RSpec.describe BSV::Wallet::BRC100 do
   end
 
   it 'no longer exists at the pre-#400 path BSV::Wallet::Engine::BRC100 (no deprecation alias)' do
-    # Decision 3 of #400: the old constant is gone, not aliased. Locks in the
-    # commitment so a future accidental +Engine::BRC100 = BRC100+ would surface
-    # as a red spec rather than silently reintroducing the legacy name.
     expect { BSV::Wallet::Engine.const_get(:BRC100, false) }.to raise_error(NameError)
   end
 
-  describe 'method-resolution order' do
-    it 'places BRC100 ahead of Interface::BRC100 in Engine.ancestors' do
-      ancestors = BSV::Wallet::Engine.ancestors
-      slice_idx = ancestors.index(described_class)
-      contract_idx = ancestors.index(BSV::Wallet::Interface::BRC100)
-
-      expect(slice_idx).not_to be_nil, 'BSV::Wallet::BRC100 not in ancestry'
-      expect(contract_idx).not_to be_nil, 'Interface::BRC100 not in ancestry'
-      expect(slice_idx).to be < contract_idx,
-                           "expected BSV::Wallet::BRC100 (#{slice_idx}) to precede " \
-                           "Interface::BRC100 (#{contract_idx}) — impls must beat stubs"
+  describe 'class shape (#405 Stage 3)' do
+    it 'is a Class (was a Module pre-#405)' do
+      expect(described_class).to be_a(Class)
     end
 
-    it 'inherits Interface::BRC100 transitively through BRC100' do
-      # BSV::Wallet::BRC100 itself includes the SDK contract.
+    it 'still +include+s the SDK contract Interface::BRC100' do
       expect(described_class.ancestors).to include(BSV::Wallet::Interface::BRC100)
-      # Engine acquires it via BSV::Wallet::BRC100, no direct include needed.
-      expect(BSV::Wallet::Engine.ancestors).to include(BSV::Wallet::Interface::BRC100)
+    end
+
+    it 'is NOT in Engine.ancestors (mixin removed)' do
+      expect(BSV::Wallet::Engine.ancestors).not_to include(described_class)
+    end
+
+    it 'wraps an engine reference passed to .new' do
+      fake_engine = Object.new
+      instance = described_class.new(fake_engine)
+      expect(instance.engine).to be(fake_engine)
     end
   end
 
   describe 'each of the 28 methods' do
     BRC100_SPEC_METHODS.each do |name|
-      it "##{name} is owned by BSV::Wallet::BRC100 (not Engine, not Interface::BRC100)" do
-        owner = BSV::Wallet::Engine.instance_method(name).owner
+      it "##{name} is defined on BSV::Wallet::BRC100" do
+        owner = described_class.instance_method(name).owner
         expect(owner).to eq(described_class),
                          "expected #{name} on BSV::Wallet::BRC100, found on #{owner} — " \
                          'stub-shadowing or missed move?'
@@ -78,23 +80,31 @@ RSpec.describe BSV::Wallet::BRC100 do
     end
   end
 
-  describe 'Engine.instance_methods(false)' do
-    it 'no longer defines any of the 28 directly on Engine' do
-      direct = BSV::Wallet::Engine.instance_methods(false)
-      leaked = BRC100_SPEC_METHODS & direct
-      expect(leaked).to eq([]),
-                        "expected the 28 to live on BSV::Wallet::BRC100, but Engine still owns: #{leaked.inspect}"
+  describe 'Engine#brc100 accessor' do
+    let(:engine) { instance_double(BSV::Wallet::Engine) }
+
+    it 'is callable on a real Engine' do
+      real_engine = BSV::Wallet::Engine.allocate
+      expect(real_engine.brc100).to be_a(described_class)
+    end
+
+    it 'is memoised — returns the same instance across calls' do
+      real_engine = BSV::Wallet::Engine.allocate
+      first = real_engine.brc100
+      second = real_engine.brc100
+      expect(first).to be(second)
     end
   end
 
-  describe 'smoke: a moved impl resolves to the slice, not the contract' do
-    # Reach for the cheapest no-side-effect impl: get_network just reads @network_name.
-    it '#get_network returns a real value, not NotImplementedError' do
-      engine = BSV::Wallet::Engine.allocate
-      engine.instance_variable_set(:@network_name, :mainnet)
+  describe 'smoke: a method delegates to the engine primitive' do
+    it '#get_network routes through @engine.get_network' do
+      # +BRC100#get_network+ wraps +Engine#get_network+'s return
+      # (wallet vocab: the bare network symbol) in BRC-100 vocab
+      # +{ network: symbol }+.
+      fake_engine = instance_double(BSV::Wallet::Engine, get_network: :mainnet)
+      brc100 = described_class.new(fake_engine)
 
-      expect { engine.get_network }.not_to raise_error
-      expect(engine.get_network).to eq(network: :mainnet)
+      expect(brc100.get_network).to eq(network: :mainnet)
     end
   end
 end

@@ -15,8 +15,13 @@ RSpec.describe BSV::Wallet::Engine do
       expect(engine).to be_a(described_class)
     end
 
-    it 'includes BRC100 interface' do
-      expect(described_class.ancestors).to include(BSV::Wallet::Interface::BRC100)
+    it 'exposes the BRC-100 interface via the +#brc100+ accessor (#405 Stage 3)' do
+      # Pre-Stage-3: Engine included BSV::Wallet::BRC100 (which itself
+      # included Interface::BRC100), putting the contract in Engine's
+      # ancestry. Stage 3 swapped the mixin for composition — the
+      # contract now lives on the BRC100 instance the accessor returns.
+      expect(engine.brc100).to be_a(BSV::Wallet::BRC100)
+      expect(engine.brc100.class.ancestors).to include(BSV::Wallet::Interface::BRC100)
     end
   end
 
@@ -41,7 +46,7 @@ RSpec.describe BSV::Wallet::Engine do
     it 'internalize_action rejects hex entries in known_txids' do
       hex_dtxid = 'c' * 64
       expect do
-        engine.internalize_action(
+        engine.brc100.internalize_action(
           tx: "\x00".b, # will fail later, but validation fires first
           description: 'validation test',
           trust_self: 'known',
@@ -62,7 +67,7 @@ RSpec.describe BSV::Wallet::Engine do
       BSV::Wallet.configure { |c| c.hints_socket = nil }
       allow(OMQ::PUSH).to receive(:connect)
 
-      engine.create_action(
+      engine.brc100.create_action(
         description: 'hint disabled',
         inputs: [],
         outputs: [
@@ -83,7 +88,7 @@ RSpec.describe BSV::Wallet::Engine do
         BSV::Wallet.reset_config!
         allow(OMQ::PUSH).to receive(:connect)
 
-        engine.create_action(
+        engine.brc100.create_action(
           description: 'hint disabled by blank env',
           inputs: [],
           outputs: [
@@ -105,7 +110,7 @@ RSpec.describe BSV::Wallet::Engine do
       allow(fake_socket).to receive(:<<) { |payload| sent << payload }
       allow(OMQ::PUSH).to receive(:connect).with('inproc://test-hints-publish').and_return(fake_socket)
 
-      engine.create_action(
+      engine.brc100.create_action(
         description: 'hint enabled',
         inputs: [],
         outputs: [
@@ -127,7 +132,7 @@ RSpec.describe BSV::Wallet::Engine do
       allow(OMQ::PUSH).to receive(:connect).and_raise(StandardError, 'connect boom')
 
       expect do
-        engine.create_action(
+        engine.brc100.create_action(
           description: 'hint fail swallowed',
           inputs: [],
           outputs: [
@@ -142,7 +147,7 @@ RSpec.describe BSV::Wallet::Engine do
       BSV::Wallet.configure { |c| c.hints_socket = 'inproc://test-hints-no-send' }
       allow(OMQ::PUSH).to receive(:connect)
 
-      engine.create_action(
+      engine.brc100.create_action(
         description: 'no_send hint skip',
         inputs: [],
         no_send: true,
@@ -158,7 +163,7 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#create_action' do
     it 'creates an action with outputs' do
-      result = engine.create_action(
+      result = engine.brc100.create_action(
         description: 'test payment',
         inputs: [],
         outputs: [
@@ -176,7 +181,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'saves raw_tx to ProofStore at sign time' do
-      result = engine.create_action(
+      result = engine.brc100.create_action(
         description: 'proof store test',
         inputs: [],
         outputs: [
@@ -193,7 +198,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'creates a deferred signing action with outputs queued for Phase 4' do
-      result = engine.create_action(
+      result = engine.brc100.create_action(
         description: 'deferred action',
         inputs: [],
         sign_and_process: false,
@@ -213,7 +218,7 @@ RSpec.describe BSV::Wallet::Engine do
       # in the outputs table but aren't in the canonical UTXO set until Phase 4
       # (broadcast acceptance) records the promotions row and inserts spendable
       # rows. list_outputs is gated on spendable, so total is 0.
-      listed = engine.list_outputs(basket: 'deferred')
+      listed = engine.brc100.list_outputs(basket: 'deferred')
       expect(listed[:total_outputs]).to eq(0)
 
       action = store.find_action(reference: result[:signable_transaction][:reference])
@@ -226,7 +231,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'creates a no-send action' do
-      result = engine.create_action(
+      result = engine.brc100.create_action(
         description: 'no-send action',
         inputs: [],
         no_send: true,
@@ -240,7 +245,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'attaches labels' do
-      engine.create_action(
+      engine.brc100.create_action(
         description: 'labeled action',
         inputs: [],
         no_send: true,
@@ -251,20 +256,20 @@ RSpec.describe BSV::Wallet::Engine do
         ]
       )
 
-      actions = engine.list_actions(labels: ['payment'], include_labels: true)
+      actions = engine.brc100.list_actions(labels: ['payment'], include_labels: true)
       expect(actions[:total_actions]).to eq(1)
       expect(actions[:actions].first[:labels]).to include('payment', 'urgent')
     end
 
     it 'validates description length' do
       expect do
-        engine.create_action(description: 'hi', inputs: [], outputs: [{ satoshis: 1, output_description: 'x' }])
+        engine.brc100.create_action(description: 'hi', inputs: [], outputs: [{ satoshis: 1, output_description: 'x' }])
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
 
     it 'validates at least one input or output' do
       expect do
-        engine.create_action(description: 'no inputs or outputs')
+        engine.brc100.create_action(description: 'no inputs or outputs')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
 
@@ -289,7 +294,7 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it 'broadcasts inline and promotes on acceptance' do
-        result = engine.create_action(
+        result = engine.brc100.create_action(
           description: 'inline broadcast',
           inputs: [],
           accept_delayed_broadcast: false,
@@ -303,7 +308,7 @@ RSpec.describe BSV::Wallet::Engine do
         expect(broadcaster).to have_received(:broadcast).with(anything, wtxid: anything)
 
         # Verify outputs were promoted
-        listed = engine.list_outputs(basket: 'payments')
+        listed = engine.brc100.list_outputs(basket: 'payments')
         expect(listed[:total_outputs]).to eq(1)
       end
 
@@ -319,7 +324,7 @@ RSpec.describe BSV::Wallet::Engine do
         end
 
         expect do
-          engine.create_action(
+          engine.brc100.create_action(
             description: 'pre-POST stamp guard',
             inputs: [],
             accept_delayed_broadcast: false,
@@ -336,7 +341,7 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it 'records tx_status from the ARC response' do
-        engine.create_action(
+        engine.brc100.create_action(
           description: 'records tx_status',
           inputs: [],
           accept_delayed_broadcast: false,
@@ -363,7 +368,7 @@ RSpec.describe BSV::Wallet::Engine do
           double('ProtocolResponse', http_success?: false, code: '400', data: { 'txStatus' => 'REJECTED' })
         )
 
-        engine.create_action(
+        engine.brc100.create_action(
           description: 'inline broadcast rejected',
           inputs: [],
           accept_delayed_broadcast: false,
@@ -377,7 +382,7 @@ RSpec.describe BSV::Wallet::Engine do
         # action is gone and no spendable output was promoted.
         action = store.send(:models)::Action.where(description: 'inline broadcast rejected').last
         expect(action).to be_nil
-        expect(engine.list_outputs(basket: 'payments')[:total_outputs]).to eq(0)
+        expect(engine.brc100.list_outputs(basket: 'payments')[:total_outputs]).to eq(0)
       end
 
       it 'forwards the configured callback_token on the broadcaster call (X-CallbackToken plumbing)' do
@@ -393,7 +398,7 @@ RSpec.describe BSV::Wallet::Engine do
           callback_token: 'tok-inline-xyz'
         )
 
-        engine_with_token.create_action(
+        engine_with_token.brc100.create_action(
           description: 'inline broadcast with token',
           inputs: [],
           accept_delayed_broadcast: false,
@@ -417,7 +422,7 @@ RSpec.describe BSV::Wallet::Engine do
           double('ProtocolResponse', http_success?: false, code: '503', data: nil)
         )
 
-        engine.create_action(
+        engine.brc100.create_action(
           description: 'inline 503 backpressure',
           inputs: [],
           accept_delayed_broadcast: false,
@@ -462,7 +467,7 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it 'creates a broadcasts row with broadcast_at IS NULL and does not call ARC' do
-        engine.create_action(
+        engine.brc100.create_action(
           description: 'delayed broadcast',
           inputs: [],
           accept_delayed_broadcast: true,
@@ -484,7 +489,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'with no_send: true' do
       it 'creates no broadcasts row (regression guard for #184 atomic invariant)' do
-        engine_with_keys.create_action(
+        engine_with_keys.brc100.create_action(
           description: 'no_send guard',
           inputs: [],
           no_send: true,
@@ -503,20 +508,20 @@ RSpec.describe BSV::Wallet::Engine do
   describe '#sign_action' do
     it 'raises for non-UUID reference' do
       expect do
-        engine.sign_action(spends: {}, reference: 'not-a-uuid')
+        engine.brc100.sign_action(spends: {}, reference: 'not-a-uuid')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
 
     it 'raises for nonexistent reference' do
       expect do
-        engine.sign_action(spends: {}, reference: '00000000-0000-0000-0000-000000000000')
+        engine.brc100.sign_action(spends: {}, reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
 
     it 'completes a deferred signing flow with outputs only' do
       # Deferred action with outputs but no inputs
       locking_script = OP_TRUE
-      create_result = engine.create_action(
+      create_result = engine.brc100.create_action(
         description: 'deferred outputs',
         inputs: [],
         sign_and_process: false,
@@ -532,12 +537,12 @@ RSpec.describe BSV::Wallet::Engine do
       # written unpromoted at stage time. Phase 4 (broadcast acceptance) is
       # what records the promotions row and inserts the spendable rows that
       # list_outputs queries.
-      listed_before = engine.list_outputs(basket: 'deferred_sign')
+      listed_before = engine.brc100.list_outputs(basket: 'deferred_sign')
       expect(listed_before[:total_outputs]).to eq(0)
 
       # Sign with empty spends (no inputs to sign). no_send: true short-
       # circuits broadcast — Phase 4 never runs, so outputs stay invisible.
-      result = engine.sign_action(
+      result = engine.brc100.sign_action(
         spends: {},
         reference: reference
       )
@@ -552,13 +557,13 @@ RSpec.describe BSV::Wallet::Engine do
       expect(parsed.outputs[0].satoshis).to eq(0)
 
       # Still no spendable rows — no broadcast acceptance was simulated.
-      listed_after = engine.list_outputs(basket: 'deferred_sign')
+      listed_after = engine.brc100.list_outputs(basket: 'deferred_sign')
       expect(listed_after[:total_outputs]).to eq(0)
     end
 
     it 'promotes outputs after broadcast acceptance on a deferred sign-then-broadcast flow' do
       basket = 'deferred_promoted'
-      create_result = engine.create_action(
+      create_result = engine.brc100.create_action(
         description: 'deferred to broadcast',
         inputs: [],
         sign_and_process: false,
@@ -576,10 +581,10 @@ RSpec.describe BSV::Wallet::Engine do
       # creates the broadcasts row; the engine returns without invoking
       # ARC because broadcast_intent: :delayed defers to the daemon. The test
       # then simulates the daemon's Phase 4 trigger directly.
-      engine.sign_action(spends: {}, reference: reference)
+      engine.brc100.sign_action(spends: {}, reference: reference)
 
       # Outputs still pending — no Phase 4 yet.
-      expect(engine.list_outputs(basket: basket)[:total_outputs]).to eq(0)
+      expect(engine.brc100.list_outputs(basket: basket)[:total_outputs]).to eq(0)
 
       # Simulate the daemon recording a non-rejected broadcast result on
       # acceptance — record_broadcast_result promotes (QUEUED is non-rejected).
@@ -587,7 +592,7 @@ RSpec.describe BSV::Wallet::Engine do
       expect(BSV::Wallet::Store::Models::Promotion.where(action_id: action[:id]).any?).to be(true)
 
       # The output is now in the canonical UTXO set.
-      listed = engine.list_outputs(basket: basket)
+      listed = engine.brc100.list_outputs(basket: basket)
       expect(listed[:total_outputs]).to eq(1)
       expect(listed[:outputs].first[:satoshis]).to eq(0)
     end
@@ -598,7 +603,7 @@ RSpec.describe BSV::Wallet::Engine do
       # Even with the new action unpromoted (no promotions row),
       # BEEF construction should produce a valid envelope.
       basket = 'beef_before_phase4'
-      create_result = engine.create_action(
+      create_result = engine.brc100.create_action(
         description: 'beef pre phase4',
         inputs: [],
         outputs: [
@@ -674,11 +679,11 @@ RSpec.describe BSV::Wallet::Engine do
         output_script = p2pkh_locking_script_for(derive_key).to_binary
 
         # Get the funded output ID
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
 
         # Create a deferred action with an input
-        create_result = engine_with_keys.create_action(
+        create_result = engine_with_keys.brc100.create_action(
           description: 'deferred p2pkh',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
@@ -688,7 +693,7 @@ RSpec.describe BSV::Wallet::Engine do
         reference = create_result[:signable_transaction][:reference]
 
         # Sign with empty spends — wallet signs the P2PKH input
-        result = engine_with_keys.sign_action(
+        result = engine_with_keys.brc100.sign_action(
           spends: {},
           reference: reference
         )
@@ -720,12 +725,12 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet_with_keys(satoshis: 1000)
         output_script = OP_TRUE
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
 
         # engine_with_keys is needed because build_transaction (now called
         # during deferred create_action) requires a key_deriver for P2PKH inputs
-        create_result = engine_with_keys.create_action(
+        create_result = engine_with_keys.brc100.create_action(
           description: 'deferred caller',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
@@ -736,7 +741,7 @@ RSpec.describe BSV::Wallet::Engine do
         custom_unlock = "\x01\x02\x03".b
 
         # Caller provides unlocking script for input 0
-        result = engine_with_keys.sign_action(
+        result = engine_with_keys.brc100.sign_action(
           spends: { 0 => { unlocking_script: custom_unlock } },
           reference: reference
         )
@@ -757,10 +762,10 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet_with_keys(satoshis: 1000, count: 2)
         output_script = OP_TRUE
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_ids = listed[:outputs].map { |o| o[:id] }
 
-        create_result = engine_with_keys.create_action(
+        create_result = engine_with_keys.brc100.create_action(
           description: 'deferred mixed',
           sign_and_process: false,
           inputs: output_ids.each_with_index.map { |id, i| { output_id: id, vin: i } },
@@ -771,7 +776,7 @@ RSpec.describe BSV::Wallet::Engine do
         custom_unlock = "\x04\x05\x06".b
 
         # Caller provides script for input 0, wallet signs input 1
-        result = engine_with_keys.sign_action(
+        result = engine_with_keys.brc100.sign_action(
           spends: { 0 => { unlocking_script: custom_unlock } },
           reference: reference
         )
@@ -797,10 +802,10 @@ RSpec.describe BSV::Wallet::Engine do
         # for the egress-validity contract on the caller-supplied path.
         fund_wallet_with_keys(satoshis: 1000)
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
 
-        create_result = engine_with_keys.create_action(
+        create_result = engine_with_keys.brc100.create_action(
           description: 'deferred valid caller',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
@@ -825,7 +830,7 @@ RSpec.describe BSV::Wallet::Engine do
         # such call in the sign flow), letting it execute for real.
         allow(BSV::Transaction::Beef).to receive(:from_binary).and_call_original
 
-        result = engine_with_keys.sign_action(
+        result = engine_with_keys.brc100.sign_action(
           spends: { 0 => { unlocking_script: valid_unlock } },
           reference: create_result[:signable_transaction][:reference]
         )
@@ -840,7 +845,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'invalid input reference' do
       it 'raises for non-existent vin in spends' do
-        create_result = engine.create_action(
+        create_result = engine.brc100.create_action(
           description: 'deferred invalid',
           inputs: [],
           sign_and_process: false,
@@ -850,7 +855,7 @@ RSpec.describe BSV::Wallet::Engine do
         reference = create_result[:signable_transaction][:reference]
 
         expect do
-          engine.sign_action(
+          engine.brc100.sign_action(
             spends: { 99 => { unlocking_script: "\x00".b } },
             reference: reference
           )
@@ -861,7 +866,7 @@ RSpec.describe BSV::Wallet::Engine do
     context 'output persistence at stage time' do
       it 'writes outputs with no promotions row during deferred create_action' do
         binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
-        create_result = engine.create_action(
+        create_result = engine.brc100.create_action(
           description: 'deferred promo',
           inputs: [],
           sign_and_process: false,
@@ -873,7 +878,7 @@ RSpec.describe BSV::Wallet::Engine do
 
         # Send-path outputs are pending Phase 4 — written but not in the
         # canonical UTXO set, so list_outputs returns nothing.
-        listed = engine.list_outputs(basket: 'deferred_test')
+        listed = engine.brc100.list_outputs(basket: 'deferred_test')
         expect(listed[:total_outputs]).to eq(0)
 
         # The output row itself exists, but no promotions row has been recorded.
@@ -885,7 +890,7 @@ RSpec.describe BSV::Wallet::Engine do
       end
 
       it 'stores unsigned raw_tx on the action' do
-        create_result = engine.create_action(
+        create_result = engine.brc100.create_action(
           description: 'deferred rawtx',
           inputs: [],
           sign_and_process: false,
@@ -904,7 +909,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'RESTRICT cleanup' do
       it 'raw delete of an action with outputs is blocked by RESTRICT FK (#189)' do
-        create_result = engine.create_action(
+        create_result = engine.brc100.create_action(
           description: 'cascade test action',
           inputs: [],
           sign_and_process: false,
@@ -934,10 +939,10 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet_with_keys(satoshis: 1000)
         output_script = OP_TRUE
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
 
-        create_result = engine_with_keys.create_action(
+        create_result = engine_with_keys.brc100.create_action(
           description: 'deferred seqnum',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
@@ -946,7 +951,7 @@ RSpec.describe BSV::Wallet::Engine do
 
         reference = create_result[:signable_transaction][:reference]
 
-        result = engine_with_keys.sign_action(
+        result = engine_with_keys.brc100.sign_action(
           spends: { 0 => { unlocking_script: "\x01".b, sequence_number: 42 } },
           reference: reference
         )
@@ -959,7 +964,7 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#abort_action' do
     it 'aborts an unsigned action' do
-      create_result = engine.create_action(
+      create_result = engine.brc100.create_action(
         description: 'to be aborted',
         inputs: [],
         sign_and_process: false,
@@ -970,7 +975,7 @@ RSpec.describe BSV::Wallet::Engine do
       )
 
       reference = create_result[:signable_transaction][:reference]
-      result = engine.abort_action(reference: reference)
+      result = engine.brc100.abort_action(reference: reference)
 
       expect(result).to eq({ aborted: true })
 
@@ -981,13 +986,13 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'raises for non-UUID reference' do
       expect do
-        engine.abort_action(reference: 'not-a-uuid')
+        engine.brc100.abort_action(reference: 'not-a-uuid')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
 
     it 'raises for nonexistent reference' do
       expect do
-        engine.abort_action(reference: '00000000-0000-0000-0000-000000000000')
+        engine.brc100.abort_action(reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
   end
@@ -1001,9 +1006,9 @@ RSpec.describe BSV::Wallet::Engine do
   # above (+#create_action+, +#sign_action+, +#abort_action+,
   # +#internalize_action+); these blocks focus on the wallet-vocab
   # return shapes the wrap layer translates from.
-  describe '#do_build_action (wallet-vocab primitive)' do
+  describe '#build_action (wallet-vocab primitive)' do
     it 'returns { wtxid:, atomic_beef: } on the synchronous path' do
-      result = engine.do_build_action(
+      result = engine.build_action(
         description: 'sync primitive',
         inputs: [],
         outputs: [
@@ -1020,7 +1025,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'returns { wtxid:, atomic_beef:, change_outpoints: } on the no_send path' do
       fund_wallet(satoshis: 100_000, basket: 'default', suffix: 'do_build_no_send')
-      result = engine_with_keys.do_build_action(
+      result = engine_with_keys.build_action(
         description: 'no_send primitive',
         outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
         no_send: true
@@ -1034,7 +1039,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'returns { signable: { atomic_beef:, reference: } } on the deferred path' do
-      result = engine.do_build_action(
+      result = engine.build_action(
         description: 'deferred primitive',
         inputs: [], sign_and_process: false,
         outputs: [
@@ -1054,14 +1059,14 @@ RSpec.describe BSV::Wallet::Engine do
       # ADR-026 decision 7 — those stay at BRC100. Verify the primitive
       # signature actually excludes them (an accidental future +**kwargs+
       # forwarding would silently re-accept them).
-      params = engine.method(:do_build_action).parameters.map { |_kind, name| name }
+      params = engine.method(:build_action).parameters.map { |_kind, name| name }
       expect(params).not_to include(:originator, :return_txid_only, :trust_self)
     end
   end
 
-  describe '#do_sign_action (wallet-vocab primitive)' do
+  describe '#sign_action (wallet-vocab primitive)' do
     let(:deferred_reference) do
-      result = engine.do_build_action(
+      result = engine.build_action(
         description: 'parked for sign primitive',
         inputs: [], sign_and_process: false,
         outputs: [
@@ -1074,7 +1079,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'returns { wtxid:, atomic_beef: } for a successful sign' do
-      result = engine.do_sign_action(reference: deferred_reference, spends: {})
+      result = engine.sign_action(reference: deferred_reference, spends: {})
 
       expect(result.keys).to contain_exactly(:wtxid, :atomic_beef)
       expect(result[:wtxid].bytesize).to eq(32)
@@ -1083,7 +1088,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'raises InvalidParameterError for an unknown reference' do
       expect do
-        engine.do_sign_action(
+        engine.sign_action(
           reference: '00000000-0000-0000-0000-000000000000', spends: {}
         )
       end.to raise_error(BSV::Wallet::InvalidParameterError)
@@ -1091,16 +1096,16 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'rejects no_send: true when the action was not parked with broadcast_intent: none' do
       expect do
-        engine.do_sign_action(
+        engine.sign_action(
           reference: deferred_reference, spends: {}, no_send: true
         )
       end.to raise_error(BSV::Wallet::UnsupportedActionError, /signAction\(no_send: true\)/)
     end
   end
 
-  describe '#do_abort_action (wallet-vocab primitive)' do
+  describe '#abort_action (wallet-vocab primitive)' do
     let(:deferred_reference) do
-      result = engine.do_build_action(
+      result = engine.build_action(
         description: 'parked for abort primitive',
         inputs: [], sign_and_process: false,
         outputs: [
@@ -1112,7 +1117,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'returns { aborted: true } and removes the action row' do
-      result = engine.do_abort_action(reference: deferred_reference)
+      result = engine.abort_action(reference: deferred_reference)
 
       expect(result).to eq({ aborted: true })
       expect(store.find_action(reference: deferred_reference)).to be_nil
@@ -1120,17 +1125,17 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'raises InvalidParameterError for an unknown reference' do
       expect do
-        engine.do_abort_action(reference: '00000000-0000-0000-0000-000000000000')
+        engine.abort_action(reference: '00000000-0000-0000-0000-000000000000')
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
   end
 
-  describe '#do_import_beef (wallet-vocab primitive)' do
+  describe '#import_beef (wallet-vocab primitive)' do
     it 'delegates to Engine::BeefImporter#import and forwards the kwargs' do
       # Smoke: build a minimal incoming-BEEF scenario indirectly via the
       # BRC-100 wrapper, asserting the primitive does NOT consume
       # +originator:+ (which BRC100 swallows per ADR-026 decision 7).
-      params = engine.method(:do_import_beef).parameters.map { |_kind, name| name }
+      params = engine.method(:import_beef).parameters.map { |_kind, name| name }
       expect(params).not_to include(:originator)
       expect(params).to include(:tx, :outputs, :description, :labels, :trust_self,
                                 :known_txids, :seek_permission)
@@ -1147,17 +1152,17 @@ RSpec.describe BSV::Wallet::Engine do
   # - None accepts +originator:+ (BRC-100 vocab — stays at the wrap layer).
   describe 'read-side primitive surface' do
     READ_SIDE_PRIMITIVES = %i[
-      do_encrypt do_decrypt do_create_hmac do_verify_hmac
-      do_create_signature do_verify_signature
-      do_get_public_key do_reveal_counterparty_key_linkage do_reveal_specific_key_linkage
-      do_acquire_certificate do_list_certificates do_prove_certificate
-      do_relinquish_certificate do_discover_by_identity_key do_discover_by_attributes
-      do_list_actions do_list_outputs do_relinquish_output
-      do_authenticated? do_wait_for_authentication
-      do_get_height do_get_header_for_height do_get_network do_get_version
+      encrypt decrypt create_hmac verify_hmac
+      create_signature verify_signature
+      get_public_key reveal_counterparty_key_linkage reveal_specific_key_linkage
+      acquire_certificate list_certificates prove_certificate
+      relinquish_certificate discover_by_identity_key discover_by_attributes
+      list_actions list_outputs relinquish_output
+      authenticated? wait_for_authentication
+      get_height get_header_for_height get_network get_version
     ].freeze
 
-    it 'defines exactly 24 read-side do_ primitives' do
+    it 'defines exactly 24 read-side primitives' do
       expect(READ_SIDE_PRIMITIVES.length).to eq(24)
     end
 
@@ -1208,7 +1213,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'propagates CannotRejectInternalActionError from the store' do
-      engine.create_action(
+      engine.brc100.create_action(
         description: 'internal action',
         inputs: [],
         outputs: [{ satoshis: 0, locking_script: OP_TRUE, output_description: 'out' }],
@@ -1225,38 +1230,38 @@ RSpec.describe BSV::Wallet::Engine do
       # Vary locking_script per action so they hash to distinct wtxids
       # (actions.wtxid is UNIQUE). All three carry 0 satoshis to stay
       # within strict validate_for_handoff!'s output_total <= input_total.
-      engine.create_action(
+      engine.brc100.create_action(
         description: 'payment action', inputs: [], no_send: true, labels: ['payment'],
         outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x01".b }]
       )
-      engine.create_action(
+      engine.brc100.create_action(
         description: 'transfer action', inputs: [], no_send: true, labels: ['transfer'],
         outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x02".b }]
       )
-      engine.create_action(
+      engine.brc100.create_action(
         description: 'both labels', inputs: [], no_send: true, labels: %w[payment transfer],
         outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x03".b }]
       )
     end
 
     it 'filters by label (any mode)' do
-      result = engine.list_actions(labels: ['payment'])
+      result = engine.brc100.list_actions(labels: ['payment'])
       expect(result[:total_actions]).to eq(2)
     end
 
     it 'filters by label (all mode)' do
-      result = engine.list_actions(labels: %w[payment transfer], label_query_mode: :all)
+      result = engine.brc100.list_actions(labels: %w[payment transfer], label_query_mode: :all)
       expect(result[:total_actions]).to eq(1)
     end
 
     it 'paginates' do
-      result = engine.list_actions(labels: ['payment'], limit: 1, offset: 0)
+      result = engine.brc100.list_actions(labels: ['payment'], limit: 1, offset: 0)
       expect(result[:actions].size).to eq(1)
       expect(result[:total_actions]).to eq(2)
     end
 
     it 'includes derived status' do
-      result = engine.list_actions(labels: ['payment'])
+      result = engine.brc100.list_actions(labels: ['payment'])
       statuses = result[:actions].map { |a| a[:status] }
       expect(statuses).to all(be_a(Symbol))
     end
@@ -1347,7 +1352,7 @@ RSpec.describe BSV::Wallet::Engine do
     it 'creates a completed incoming action with basket insertion' do
       beef_data = build_test_beef(satoshis: 500)
 
-      result = engine_with_tracker.internalize_action(
+      result = engine_with_tracker.brc100.internalize_action(
         tx: beef_data,
         description: 'incoming payment',
         labels: ['incoming'],
@@ -1369,7 +1374,7 @@ RSpec.describe BSV::Wallet::Engine do
       expect(result).to eq({ accepted: true })
 
       # Verify outputs are in the basket (list_outputs shares the same store)
-      listed = engine.list_outputs(basket: 'tokens', include_tags: true)
+      listed = engine.brc100.list_outputs(basket: 'tokens', include_tags: true)
       expect(listed[:total_outputs]).to eq(1)
       expect(listed[:outputs].first[:tags]).to eq(['nft'])
     end
@@ -1377,7 +1382,7 @@ RSpec.describe BSV::Wallet::Engine do
     it 'creates a completed incoming action with wallet payment' do
       beef_data = build_test_beef(satoshis: 1000)
 
-      result = engine_with_tracker.internalize_action(
+      result = engine_with_tracker.brc100.internalize_action(
         tx: beef_data,
         description: 'incoming payment',
         outputs: [
@@ -1404,7 +1409,7 @@ RSpec.describe BSV::Wallet::Engine do
       beef = BSV::Transaction::Beef.from_binary(beef_data)
       expected_wtxid = beef.subject_wtxid
 
-      engine_with_tracker.internalize_action(
+      engine_with_tracker.brc100.internalize_action(
         tx: beef_data,
         description: 'wtxid storage test',
         labels: ['test'],
@@ -1414,7 +1419,7 @@ RSpec.describe BSV::Wallet::Engine do
         ]
       )
 
-      listed = engine.list_actions(labels: ['test'])
+      listed = engine.brc100.list_actions(labels: ['test'])
       action = listed[:actions].first
       expect(action[:wtxid]).to eq(expected_wtxid)
     end
@@ -1428,7 +1433,7 @@ RSpec.describe BSV::Wallet::Engine do
                             .grep(BSV::Transaction::Beef::ProvenTxEntry)
                             .map(&:wtxid)
 
-      engine_with_tracker.internalize_action(
+      engine_with_tracker.brc100.internalize_action(
         tx: beef_data,
         description: 'ancestor proof test',
         outputs: [
@@ -1451,7 +1456,7 @@ RSpec.describe BSV::Wallet::Engine do
       beef = BSV::Transaction::Beef.from_binary(beef_data)
       subject_wtxid = beef.subject_wtxid
 
-      engine_with_tracker.internalize_action(
+      engine_with_tracker.brc100.internalize_action(
         tx: beef_data,
         description: 'proof link test',
         labels: ['proof-link'],
@@ -1479,7 +1484,7 @@ RSpec.describe BSV::Wallet::Engine do
     it 'does not link proof when subject has no BUMP' do
       beef_data = build_test_beef(satoshis: 0, with_proof: false)
 
-      engine_with_tracker.internalize_action(
+      engine_with_tracker.brc100.internalize_action(
         tx: beef_data,
         description: 'no proof link test',
         labels: ['no-proof'],
@@ -1489,14 +1494,14 @@ RSpec.describe BSV::Wallet::Engine do
         ]
       )
 
-      listed = engine.list_actions(labels: ['no-proof'])
+      listed = engine.brc100.list_actions(labels: ['no-proof'])
       action = listed[:actions].first
       expect(action[:tx_proof_id]).to be_nil
     end
 
     it 'raises InvalidBeefError for truncated BEEF' do
       expect do
-        engine_with_tracker.internalize_action(
+        engine_with_tracker.brc100.internalize_action(
           tx: "\x01\x00".b,
           description: 'truncated test',
           outputs: []
@@ -1506,7 +1511,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'raises InvalidBeefError for non-BEEF data' do
       expect do
-        engine_with_tracker.internalize_action(
+        engine_with_tracker.brc100.internalize_action(
           tx: SecureRandom.random_bytes(200),
           description: 'random data test',
           outputs: []
@@ -1525,7 +1530,7 @@ RSpec.describe BSV::Wallet::Engine do
       buf << "\x00" # 0 transactions
 
       expect do
-        engine_with_tracker.internalize_action(
+        engine_with_tracker.brc100.internalize_action(
           tx: buf,
           description: 'empty beef test',
           outputs: []
@@ -1535,7 +1540,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'validates description' do
       expect do
-        engine_with_tracker.internalize_action(tx: "\x00".b, description: 'hi', outputs: [])
+        engine_with_tracker.brc100.internalize_action(tx: "\x00".b, description: 'hi', outputs: [])
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
 
@@ -1543,7 +1548,7 @@ RSpec.describe BSV::Wallet::Engine do
       beef_data = build_test_beef(satoshis: 500)
 
       expect do
-        engine.internalize_action(
+        engine.brc100.internalize_action(
           tx: beef_data,
           description: 'no tracker fails',
           outputs: []
@@ -1557,7 +1562,7 @@ RSpec.describe BSV::Wallet::Engine do
       it 'accepts valid BEEF that passes full verification' do
         beef_data = build_test_beef(satoshis: 500)
 
-        result = engine_with_tracker.internalize_action(
+        result = engine_with_tracker.brc100.internalize_action(
           tx: beef_data,
           description: 'valid beef passes',
           outputs: [
@@ -1572,7 +1577,7 @@ RSpec.describe BSV::Wallet::Engine do
       it 'verifies merkle roots against chain tracker' do
         beef_data = build_test_beef(satoshis: 0, with_proof: true)
 
-        result = engine_with_tracker.internalize_action(
+        result = engine_with_tracker.brc100.internalize_action(
           tx: beef_data,
           description: 'chain tracker ok',
           outputs: [
@@ -1597,7 +1602,7 @@ RSpec.describe BSV::Wallet::Engine do
         beef_data = build_test_beef(satoshis: 500)
 
         expect do
-          engine_reject.internalize_action(
+          engine_reject.brc100.internalize_action(
             tx: beef_data,
             description: 'tracker rejects',
             outputs: []
@@ -1631,7 +1636,7 @@ RSpec.describe BSV::Wallet::Engine do
         beef_data = beef.to_atomic_binary(subject_tx.wtxid)
 
         expect do
-          engine_with_tracker.internalize_action(
+          engine_with_tracker.brc100.internalize_action(
             tx: beef_data,
             description: 'missing ancestor',
             outputs: []
@@ -1644,7 +1649,7 @@ RSpec.describe BSV::Wallet::Engine do
       it 'accepts a transaction with adequate fee' do
         beef_data = build_test_beef(satoshis: 900, input_satoshis: 1000)
 
-        result = engine_with_tracker.internalize_action(
+        result = engine_with_tracker.brc100.internalize_action(
           tx: beef_data,
           description: 'fee adequate test',
           outputs: [
@@ -1660,7 +1665,7 @@ RSpec.describe BSV::Wallet::Engine do
         beef_data = build_test_beef(satoshis: 600, input_satoshis: 500)
 
         expect do
-          engine_with_tracker.internalize_action(
+          engine_with_tracker.brc100.internalize_action(
             tx: beef_data,
             description: 'negative fee test',
             outputs: []
@@ -1686,7 +1691,7 @@ RSpec.describe BSV::Wallet::Engine do
           )
         end
 
-        result = engine_with_tracker.internalize_action(
+        result = engine_with_tracker.brc100.internalize_action(
           tx: beef_data,
           description: 'all ancestors known',
           trust_self: 'known',
@@ -1713,7 +1718,7 @@ RSpec.describe BSV::Wallet::Engine do
           proof: { height: 800_000, raw_tx: first_ancestor.transaction.to_binary }
         )
 
-        result = engine_with_tracker.internalize_action(
+        result = engine_with_tracker.brc100.internalize_action(
           tx: beef_data,
           description: 'some known some bump',
           trust_self: 'known',
@@ -1751,7 +1756,7 @@ RSpec.describe BSV::Wallet::Engine do
         beef_data = beef.to_atomic_binary(subject_tx.wtxid)
 
         expect do
-          engine_with_tracker.internalize_action(
+          engine_with_tracker.brc100.internalize_action(
             tx: beef_data,
             description: 'unknown no bump rej',
             trust_self: 'known',
@@ -1769,7 +1774,7 @@ RSpec.describe BSV::Wallet::Engine do
                              .find { |bt| bt.is_a?(BSV::Transaction::Beef::ProvenTxEntry) }
                              &.wtxid
 
-        result = engine_with_tracker.internalize_action(
+        result = engine_with_tracker.brc100.internalize_action(
           tx: beef_data,
           description: 'known txids supple',
           trust_self: 'known',
@@ -1799,7 +1804,7 @@ RSpec.describe BSV::Wallet::Engine do
 
         # Without trust_self, BEEF keeps its original proven format — validation passes
         # because the ancestors have valid BUMPs in the BEEF itself
-        result = engine_with_tracker.internalize_action(
+        result = engine_with_tracker.brc100.internalize_action(
           tx: beef_data,
           description: 'no trust self full',
           outputs: [
@@ -1823,7 +1828,7 @@ RSpec.describe BSV::Wallet::Engine do
                               .grep(BSV::Transaction::Beef::ProvenTxEntry)
                               .map(&:wtxid)
 
-        engine_with_tracker.internalize_action(
+        engine_with_tracker.brc100.internalize_action(
           tx: beef_data,
           description: 'raw_tx storage test',
           outputs: [
@@ -1854,7 +1859,7 @@ RSpec.describe BSV::Wallet::Engine do
         end
         ancestor_txid = ancestor_bt.wtxid
 
-        engine_with_tracker.internalize_action(
+        engine_with_tracker.brc100.internalize_action(
           tx: beef_data,
           description: 'format consistency',
           outputs: [
@@ -1885,7 +1890,7 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#list_outputs' do
     before do
-      engine.create_action(
+      engine.brc100.create_action(
         description: 'create outputs', inputs: [], no_send: true,
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
@@ -1902,17 +1907,17 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'filters by basket' do
-      result = engine.list_outputs(basket: 'wallet')
+      result = engine.brc100.list_outputs(basket: 'wallet')
       expect(result[:total_outputs]).to eq(2)
     end
 
     it 'filters by tag' do
-      result = engine.list_outputs(basket: 'wallet', tags: ['payment'])
+      result = engine.brc100.list_outputs(basket: 'wallet', tags: ['payment'])
       expect(result[:total_outputs]).to eq(1)
     end
 
     it 'paginates' do
-      result = engine.list_outputs(basket: 'wallet', limit: 1)
+      result = engine.brc100.list_outputs(basket: 'wallet', limit: 1)
       expect(result[:outputs].size).to eq(1)
       expect(result[:total_outputs]).to eq(2)
     end
@@ -1920,7 +1925,7 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#relinquish_output' do
     it 'removes output from tracking' do
-      engine.create_action(
+      engine.brc100.create_action(
         description: 'with output', inputs: [], no_send: true,
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
@@ -1929,20 +1934,20 @@ RSpec.describe BSV::Wallet::Engine do
         ]
       )
 
-      listed = engine.list_outputs(basket: 'wallet')
+      listed = engine.brc100.list_outputs(basket: 'wallet')
       output_id = listed[:outputs].first[:id]
 
-      result = engine.relinquish_output(basket: 'wallet', output: output_id)
+      result = engine.brc100.relinquish_output(basket: 'wallet', output: output_id)
       expect(result).to eq({ relinquished: true })
 
-      listed_after = engine.list_outputs(basket: 'wallet')
+      listed_after = engine.brc100.list_outputs(basket: 'wallet')
       expect(listed_after[:total_outputs]).to eq(0)
     end
   end
 
   describe '#get_public_key' do
     it 'returns the identity key when identity_key: true' do
-      result = engine_with_keys.get_public_key(identity_key: true)
+      result = engine_with_keys.brc100.get_public_key(identity_key: true)
       expect(result[:public_key]).to be_a(String)
       expect(result[:public_key].length).to eq(66)
       expect(result[:public_key]).to match(/\A(?:02|03)[0-9a-f]{64}\z/)
@@ -1950,28 +1955,28 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'derives a public key with protocol_id and key_id' do
-      result = engine_with_keys.get_public_key(
+      result = engine_with_keys.brc100.get_public_key(
         protocol_id: [1, 'test proto'], key_id: 'key1', counterparty: 'self'
       )
       expect(result[:public_key]).to be_a(String)
       expect(result[:public_key].bytesize).to eq(33)
 
       # Verify determinism — same params yield same key
-      result2 = engine_with_keys.get_public_key(
+      result2 = engine_with_keys.brc100.get_public_key(
         protocol_id: [1, 'test proto'], key_id: 'key1', counterparty: 'self'
       )
       expect(result2[:public_key]).to eq(result[:public_key])
     end
 
     it 'raises without key_deriver' do
-      expect { engine.get_public_key(identity_key: true) }
+      expect { engine.brc100.get_public_key(identity_key: true) }
         .to raise_error(BSV::Wallet::Error, /key deriver/)
     end
   end
 
   describe '#reveal_counterparty_key_linkage' do
     it 'returns revelation with encrypted linkage and proof' do
-      result = engine_with_keys.reveal_counterparty_key_linkage(
+      result = engine_with_keys.brc100.reveal_counterparty_key_linkage(
         counterparty: counterparty_hex,
         verifier: verifier_hex
       )
@@ -1987,7 +1992,7 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#reveal_specific_key_linkage' do
     it 'returns revelation with encrypted linkage and proof_type' do
-      result = engine_with_keys.reveal_specific_key_linkage(
+      result = engine_with_keys.brc100.reveal_specific_key_linkage(
         counterparty: counterparty_hex,
         verifier: verifier_hex,
         protocol_id: [1, 'test proto'], key_id: 'key1'
@@ -2002,7 +2007,7 @@ RSpec.describe BSV::Wallet::Engine do
     let(:plaintext) { 'hello world'.b }
 
     it 'encrypts data to ciphertext different from plaintext' do
-      result = engine_with_keys.encrypt(
+      result = engine_with_keys.brc100.encrypt(
         plaintext: plaintext,
         protocol_id: [1, 'encryption test'], key_id: 'enc1'
       )
@@ -2011,11 +2016,11 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'round-trips encrypt then decrypt' do
-      encrypted = engine_with_keys.encrypt(
+      encrypted = engine_with_keys.brc100.encrypt(
         plaintext: plaintext,
         protocol_id: [1, 'encryption test'], key_id: 'enc1'
       )
-      decrypted = engine_with_keys.decrypt(
+      decrypted = engine_with_keys.brc100.decrypt(
         ciphertext: encrypted[:ciphertext],
         protocol_id: [1, 'encryption test'], key_id: 'enc1'
       )
@@ -2024,14 +2029,14 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'raises without key_deriver' do
       expect do
-        engine.encrypt(plaintext: 'data'.b, protocol_id: [1, 'test proto'], key_id: 'k')
+        engine.brc100.encrypt(plaintext: 'data'.b, protocol_id: [1, 'test proto'], key_id: 'k')
       end.to raise_error(BSV::Wallet::Error, /key deriver/)
     end
   end
 
   describe '#create_hmac / #verify_hmac' do
     it 'creates a 32-byte HMAC' do
-      result = engine_with_keys.create_hmac(
+      result = engine_with_keys.brc100.create_hmac(
         data: 'test data'.b, protocol_id: [1, 'hmac test proto'], key_id: 'h1'
       )
       expect(result[:hmac]).to be_a(String)
@@ -2039,10 +2044,10 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'round-trips create then verify' do
-      created = engine_with_keys.create_hmac(
+      created = engine_with_keys.brc100.create_hmac(
         data: 'test data'.b, protocol_id: [1, 'hmac test proto'], key_id: 'h1'
       )
-      result = engine_with_keys.verify_hmac(
+      result = engine_with_keys.brc100.verify_hmac(
         data: 'test data'.b, hmac: created[:hmac],
         protocol_id: [1, 'hmac test proto'], key_id: 'h1'
       )
@@ -2051,7 +2056,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'raises InvalidHmacError for wrong HMAC' do
       expect do
-        engine_with_keys.verify_hmac(
+        engine_with_keys.brc100.verify_hmac(
           data: 'test data'.b, hmac: SecureRandom.random_bytes(32),
           protocol_id: [1, 'hmac test proto'], key_id: 'h1'
         )
@@ -2061,17 +2066,17 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#create_signature / #verify_signature' do
     it 'creates a signature object' do
-      result = engine_with_keys.create_signature(
+      result = engine_with_keys.brc100.create_signature(
         data: 'sign me'.b, protocol_id: [1, 'sig test proto'], key_id: 's1'
       )
       expect(result[:signature]).to be_a(BSV::Primitives::Signature)
     end
 
     it 'round-trips create then verify' do
-      created = engine_with_keys.create_signature(
+      created = engine_with_keys.brc100.create_signature(
         data: 'sign me'.b, protocol_id: [1, 'sig test proto'], key_id: 's1'
       )
-      result = engine_with_keys.verify_signature(
+      result = engine_with_keys.brc100.verify_signature(
         signature: created[:signature], data: 'sign me'.b,
         protocol_id: [1, 'sig test proto'], key_id: 's1'
       )
@@ -2079,12 +2084,12 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'raises InvalidSignatureError for wrong data' do
-      created = engine_with_keys.create_signature(
+      created = engine_with_keys.brc100.create_signature(
         data: 'sign me'.b, protocol_id: [1, 'sig test proto'], key_id: 's1'
       )
 
       expect do
-        engine_with_keys.verify_signature(
+        engine_with_keys.brc100.verify_signature(
           signature: created[:signature], data: 'wrong data'.b,
           protocol_id: [1, 'sig test proto'], key_id: 's1'
         )
@@ -2094,7 +2099,7 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#acquire_certificate' do
     it 'acquires a certificate directly' do
-      result = engine_with_keys.acquire_certificate(
+      result = engine_with_keys.brc100.acquire_certificate(
         type: 'identity', certifier: 'certifier_key',
         acquisition_protocol: :direct,
         fields: { 'name' => 'Alice', 'email' => 'alice@test.com' },
@@ -2107,7 +2112,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'raises for issuance protocol (not yet supported)' do
       expect do
-        engine_with_keys.acquire_certificate(
+        engine_with_keys.brc100.acquire_certificate(
           type: 'identity', certifier: 'c1',
           acquisition_protocol: :issuance,
           fields: {}, certifier_url: 'https://cert.example.com'
@@ -2118,18 +2123,18 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#list_certificates' do
     before do
-      engine_with_keys.acquire_certificate(
+      engine_with_keys.brc100.acquire_certificate(
         type: 'id', certifier: 'c1', acquisition_protocol: :direct,
         fields: { 'name' => 'Alice' }, serial_number: 'sn1', signature: 's1'
       )
-      engine_with_keys.acquire_certificate(
+      engine_with_keys.brc100.acquire_certificate(
         type: 'id', certifier: 'c2', acquisition_protocol: :direct,
         fields: { 'name' => 'Bob' }, serial_number: 'sn2', signature: 's2'
       )
     end
 
     it 'lists certificates filtered by certifier and type' do
-      result = engine_with_keys.list_certificates(certifiers: ['c1'], types: ['id'])
+      result = engine_with_keys.brc100.list_certificates(certifiers: ['c1'], types: ['id'])
       expect(result[:total_certificates]).to eq(1)
       expect(result[:certificates].first[:fields]['name']).to eq('Alice')
     end
@@ -2163,7 +2168,7 @@ RSpec.describe BSV::Wallet::Engine do
         keyring: keyring
       }
 
-      result = engine_with_keys.prove_certificate(
+      result = engine_with_keys.brc100.prove_certificate(
         certificate: cert, fields_to_reveal: ['name'],
         verifier: verifier_hex
       )
@@ -2176,47 +2181,47 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#relinquish_certificate' do
     it 'soft-deletes a certificate' do
-      engine_with_keys.acquire_certificate(
+      engine_with_keys.brc100.acquire_certificate(
         type: 'id', certifier: 'c1', acquisition_protocol: :direct,
         fields: { 'name' => 'Alice' }, serial_number: 'sn1', signature: 's1'
       )
 
-      result = engine_with_keys.relinquish_certificate(
+      result = engine_with_keys.brc100.relinquish_certificate(
         type: 'id', serial_number: 'sn1', certifier: 'c1'
       )
       expect(result).to eq({ relinquished: true })
 
-      listed = engine_with_keys.list_certificates(certifiers: ['c1'], types: ['id'])
+      listed = engine_with_keys.brc100.list_certificates(certifiers: ['c1'], types: ['id'])
       expect(listed[:total_certificates]).to eq(0)
     end
   end
 
   describe '#authenticated?' do
     it 'returns true with key_deriver' do
-      expect(engine_with_keys.authenticated?).to eq({ authenticated: true })
+      expect(engine_with_keys.brc100.authenticated?).to eq({ authenticated: true })
     end
 
     it 'returns false without key_deriver' do
-      expect(engine.authenticated?).to eq({ authenticated: false })
+      expect(engine.brc100.authenticated?).to eq({ authenticated: false })
     end
   end
 
   describe '#wait_for_authentication' do
     it 'returns immediately when authenticated' do
-      expect(engine_with_keys.wait_for_authentication).to eq({ authenticated: true })
+      expect(engine_with_keys.brc100.wait_for_authentication).to eq({ authenticated: true })
     end
 
     it 'raises when not authenticated' do
-      expect { engine.wait_for_authentication }.to raise_error(BSV::Wallet::Error)
+      expect { engine.brc100.wait_for_authentication }.to raise_error(BSV::Wallet::Error)
     end
   end
 
   describe 'privileged mode' do
     it 'derives a different public key with privileged: true' do
-      normal = engine_with_privileged_keys.get_public_key(
+      normal = engine_with_privileged_keys.brc100.get_public_key(
         protocol_id: [1, 'test proto'], key_id: 'key1', counterparty: 'self'
       )
-      privileged = engine_with_privileged_keys.get_public_key(
+      privileged = engine_with_privileged_keys.brc100.get_public_key(
         protocol_id: [1, 'test proto'], key_id: 'key1', counterparty: 'self',
         privileged: true
       )
@@ -2225,12 +2230,12 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'round-trips encrypt/decrypt with privileged: true' do
       plaintext = 'privileged secret'.b
-      encrypted = engine_with_privileged_keys.encrypt(
+      encrypted = engine_with_privileged_keys.brc100.encrypt(
         plaintext: plaintext,
         protocol_id: [1, 'priv encrypt test'], key_id: 'p1',
         privileged: true
       )
-      decrypted = engine_with_privileged_keys.decrypt(
+      decrypted = engine_with_privileged_keys.brc100.decrypt(
         ciphertext: encrypted[:ciphertext],
         protocol_id: [1, 'priv encrypt test'], key_id: 'p1',
         privileged: true
@@ -2239,11 +2244,11 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'round-trips HMAC create/verify with privileged: true' do
-      created = engine_with_privileged_keys.create_hmac(
+      created = engine_with_privileged_keys.brc100.create_hmac(
         data: 'privileged data'.b, protocol_id: [1, 'priv hmac test'], key_id: 'p1',
         privileged: true
       )
-      result = engine_with_privileged_keys.verify_hmac(
+      result = engine_with_privileged_keys.brc100.verify_hmac(
         data: 'privileged data'.b, hmac: created[:hmac],
         protocol_id: [1, 'priv hmac test'], key_id: 'p1',
         privileged: true
@@ -2252,11 +2257,11 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'round-trips signature create/verify with privileged: true' do
-      created = engine_with_privileged_keys.create_signature(
+      created = engine_with_privileged_keys.brc100.create_signature(
         data: 'privileged data'.b, protocol_id: [1, 'priv sig test'], key_id: 'p1',
         privileged: true
       )
-      result = engine_with_privileged_keys.verify_signature(
+      result = engine_with_privileged_keys.brc100.verify_signature(
         signature: created[:signature], data: 'privileged data'.b,
         protocol_id: [1, 'priv sig test'], key_id: 'p1',
         privileged: true
@@ -2266,7 +2271,7 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'raises when privileged key is not configured' do
       expect do
-        engine_with_keys.get_public_key(
+        engine_with_keys.brc100.get_public_key(
           protocol_id: [1, 'test proto'], key_id: 'key1',
           counterparty: 'self', privileged: true
         )
@@ -2276,25 +2281,25 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#get_height' do
     it 'raises UnsupportedActionError (chain data source not configured)' do
-      expect { engine.get_height }.to raise_error(BSV::Wallet::UnsupportedActionError)
+      expect { engine.brc100.get_height }.to raise_error(BSV::Wallet::UnsupportedActionError)
     end
   end
 
   describe '#get_header_for_height' do
     it 'raises UnsupportedActionError (chain data source not configured)' do
-      expect { engine.get_header_for_height(height: 1) }.to raise_error(BSV::Wallet::UnsupportedActionError)
+      expect { engine.brc100.get_header_for_height(height: 1) }.to raise_error(BSV::Wallet::UnsupportedActionError)
     end
   end
 
   describe '#get_network' do
     it 'returns the configured network' do
-      expect(engine.get_network).to eq({ network: :mainnet })
+      expect(engine.brc100.get_network).to eq({ network: :mainnet })
     end
   end
 
   describe '#get_version' do
     it 'returns the wallet version' do
-      result = engine.get_version
+      result = engine.brc100.get_version
       expect(result[:version]).to start_with('bsv-wallet-')
     end
   end
@@ -2338,13 +2343,13 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet(satoshis: 100_000, prefix: 'reserve', suffix: 'reserve', basket: 'reserve')
         fund_wallet(satoshis: 1000)
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
 
         output_key = derive_key
         output_script = p2pkh_locking_script_for(output_key).to_binary
 
-        result = engine_with_keys.create_action(
+        result = engine_with_keys.brc100.create_action(
           description: 'e2e payment test',
           no_send: true,
           inputs: [{ output_id: output_id }],
@@ -2385,7 +2390,7 @@ RSpec.describe BSV::Wallet::Engine do
         expect(reparsed.to_binary).to eq(parsed.to_binary)
 
         # Verify outputs are promoted in the database
-        payments = engine_with_keys.list_outputs(basket: 'payments')
+        payments = engine_with_keys.brc100.list_outputs(basket: 'payments')
         expect(payments[:total_outputs]).to eq(1)
       end
     end
@@ -2399,14 +2404,14 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet(satoshis: 500, suffix: 'multi1')
         fund_wallet(satoshis: 500, suffix: 'multi2')
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         outputs_by_id = listed[:outputs].sort_by { |o| o[:id] }
         expect(outputs_by_id.length).to eq(3)
 
         output_key = derive_key
         output_script = p2pkh_locking_script_for(output_key).to_binary
 
-        result = engine_with_keys.create_action(
+        result = engine_with_keys.brc100.create_action(
           description: 'multi input test',
           no_send: true,
           inputs: outputs_by_id.each_with_index.map { |o, i| { output_id: o[:id], vin: i } },
@@ -2446,7 +2451,7 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet(satoshis: 100_000, prefix: 'reserve', suffix: 'reserve', basket: 'reserve')
         fund_wallet(satoshis: 2000)
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
 
         key1 = derive_key(suffix: 'out1')
@@ -2459,7 +2464,7 @@ RSpec.describe BSV::Wallet::Engine do
           p2pkh_locking_script_for(key3).to_binary
         ]
 
-        result = engine_with_keys.create_action(
+        result = engine_with_keys.brc100.create_action(
           description: 'multi output test',
           no_send: true,
           inputs: [{ output_id: output_id }],
@@ -2497,11 +2502,11 @@ RSpec.describe BSV::Wallet::Engine do
       it 'returns transaction data without broadcasting' do
         fund_wallet(satoshis: 1000)
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
         output_script = p2pkh_locking_script_for(derive_key).to_binary
 
-        result = engine_with_keys.create_action(
+        result = engine_with_keys.brc100.create_action(
           description: 'no send e2e test',
           no_send: true,
           inputs: [{ output_id: output_id }],
@@ -2527,12 +2532,12 @@ RSpec.describe BSV::Wallet::Engine do
       it 'creates unsigned then signs via sign_action' do
         fund_wallet(satoshis: 1000)
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
         output_script = p2pkh_locking_script_for(derive_key).to_binary
 
         # Phase 1: create deferred action
-        create_result = engine_with_keys.create_action(
+        create_result = engine_with_keys.brc100.create_action(
           description: 'deferred e2e test',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
@@ -2546,7 +2551,7 @@ RSpec.describe BSV::Wallet::Engine do
         reference = create_result[:signable_transaction][:reference]
 
         # Phase 2: sign with empty spends (wallet signs all P2PKH)
-        sign_result = engine_with_keys.sign_action(
+        sign_result = engine_with_keys.brc100.sign_action(
           spends: {},
           reference: reference
         )
@@ -2580,12 +2585,12 @@ RSpec.describe BSV::Wallet::Engine do
         allow_any_instance_of(BSV::Wallet::Engine::Hydrator).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet(satoshis: 1000)
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
         output_script = p2pkh_locking_script_for(derive_key).to_binary
 
         # Create deferred action, then provide a custom unlocking script
-        create_result = engine_with_keys.create_action(
+        create_result = engine_with_keys.brc100.create_action(
           description: 'custom script test',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
@@ -2598,7 +2603,7 @@ RSpec.describe BSV::Wallet::Engine do
         reference = create_result[:signable_transaction][:reference]
         custom_unlock = "\x48".b + SecureRandom.random_bytes(71) + "\x21".b + SecureRandom.random_bytes(33)
 
-        result = engine_with_keys.sign_action(
+        result = engine_with_keys.brc100.sign_action(
           spends: { 0 => { unlocking_script: custom_unlock } },
           reference: reference
         )
@@ -2617,11 +2622,11 @@ RSpec.describe BSV::Wallet::Engine do
       it 'stores a wtxid that matches the actual transaction hash' do
         fund_wallet(satoshis: 1000)
 
-        listed = engine_with_keys.list_outputs(basket: 'default')
+        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
         output_id = listed[:outputs].first[:id]
         output_script = p2pkh_locking_script_for(derive_key).to_binary
 
-        result = engine_with_keys.create_action(
+        result = engine_with_keys.brc100.create_action(
           description: 'db consistency test',
           no_send: true,
           labels: ['test-wtxid'],

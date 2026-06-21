@@ -104,6 +104,15 @@ Naming/PredicateMethod:
     - 'gem/bsv-wallet/lib/bsv/wallet/brc100.rb'
     - 'gem/bsv-wallet/lib/bsv/wallet/store/**/*'
 
+# BRC-100 spec mandates +get_height+, +get_header_for_height+, +get_network+,
+# +get_version+ — getX is the camelCase the spec uses, snake_cased here.
+# Same rationale applies to the wallet-vocab primitive surface on Engine
+# (#405 Stage 3 drops the +do_+ prefix; the +get_+ names land on Engine too).
+Naming/AccessorMethodName:
+  Exclude:
+    - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'
+    - 'gem/bsv-wallet/lib/bsv/wallet/brc100.rb'
+
 Style/SafeNavigationChainLength:
   Exclude:
     - 'gem/bsv-wallet/lib/bsv/wallet/engine.rb'

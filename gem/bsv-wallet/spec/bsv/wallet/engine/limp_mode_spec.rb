@@ -86,7 +86,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       fund_wallet_limp(satoshis: 30_000)
 
       expect do
-        engine_with_keys.create_action(
+        engine_with_keys.brc100.create_action(
           description: 'limp blocked',
           outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }],
           no_send: true
@@ -96,11 +96,11 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
     it 'blocks caller-provided-inputs createAction when in limp mode' do
       fund_wallet_limp(satoshis: 30_000)
-      listed = engine_with_keys.list_outputs(basket: 'default')
+      listed = engine_with_keys.brc100.list_outputs(basket: 'default')
       output_id = listed[:outputs].first[:id]
 
       expect do
-        engine_with_keys.create_action(
+        engine_with_keys.brc100.create_action(
           description: 'limp manual',
           inputs: [{ output_id: output_id }],
           outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25),
@@ -115,7 +115,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect(engine_with_keys.limp_mode?).to be true
 
       expect do
-        engine_with_keys.internalize_action(
+        engine_with_keys.brc100.internalize_action(
           tx: 'invalid', description: 'limp receive',
           outputs: [{ vout: 0, basket: 'default' }]
         )
@@ -129,7 +129,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect(engine_with_keys.limp_mode?).to be false
 
       expect do
-        engine_with_keys.create_action(
+        engine_with_keys.brc100.create_action(
           description: 'limp headroom',
           outputs: [{ satoshis: 60_000, locking_script: SecureRandom.random_bytes(25) }],
           no_send: true
@@ -141,7 +141,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       fund_wallet_limp(satoshis: 200_000)
       expect(engine_with_keys.limp_mode?).to be false
 
-      result = engine_with_keys.create_action(
+      result = engine_with_keys.brc100.create_action(
         description: 'limp within headroom',
         outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
         no_send: true

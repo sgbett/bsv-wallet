@@ -2,11 +2,6 @@
 
 require 'securerandom'
 
-# Eager require: Engine's class body references BSV::Wallet::BRC100 at
-# class-definition time via +include+, so autoload won't fire in time.
-# (Relocated from +engine/brc100+ to sibling +brc100+ in #400 Stage 1.)
-require_relative 'brc100'
-
 using BSV::Wallet::Txid
 
 module BSV
@@ -32,10 +27,8 @@ module BSV
     #     key_deriver:   key_deriver,
     #     chain_tracker: chain_tracker
     #   )
-    #   engine.create_action(description: 'payment', outputs: [...])
+    #   engine.brc100.create_action(description: 'payment', outputs: [...])
     class Engine
-      include ::BSV::Wallet::BRC100
-
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :BeefImporter,          'bsv/wallet/engine/beef_importer'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
@@ -143,6 +136,16 @@ module BSV
         [@utxo_pool.balance - @limp_threshold, 0].max
       end
 
+      # BRC-100 wrap layer. Memoised — returns the same +BSV::Wallet::BRC100+
+      # instance for the lifetime of this engine. The wrapper holds an
+      # +@engine+ reference back to +self+; all 28 BRC-100 method calls
+      # route through it and dispatch to Engine's primitive surface.
+      # Callers in this codebase use this accessor; external callers may
+      # also construct +BSV::Wallet::BRC100.new(engine)+ directly.
+      def brc100
+        @brc100 ||= BSV::Wallet::BRC100.new(self)
+      end
+
       # Operator-facing entry to Store#reject_action. The daemon's
       # resolution loop calls store directly; this wrapper lets bin/
       # tools target specific stuck rows (action_id is a wallet-local
@@ -154,21 +157,22 @@ module BSV
         { rejected: true, action_id: action_id }
       end
 
-      # ---- BRC-100 primitive surface (write-side, #402 Stage 2) ----------
+      # ---- BRC-100 primitive surface (write-side) ------------------------
       #
-      # Four thick primitives the BRC100 mixin calls into. The +do_+
-      # prefix is Stage 2 scaffolding: BRC100 is still a mixin, so
-      # +Engine#sign_action+ would clash with +BRC100#sign_action+ and
-      # recurse via MRO. Stage 3's mixin→composition switch reverts the
-      # prefix. See .claude/plans/20260620-stage-2-primitive-extraction.md.
+      # Four thick primitives the +BSV::Wallet::BRC100+ wrap layer
+      # calls through +@engine.<name>+. Return shapes are wallet vocab
+      # (+wtxid:+ binary, +atomic_beef:+, +change_outpoints:+, +signable:+);
+      # BRC100 translates to BRC-100 vocab (+txid:+, +tx:+, +no_send_change:+,
+      # +signable_transaction:+) at the spec boundary.
       #
-      # These bodies are delegators in commit 3 — they shuffle calls
-      # through without changing semantics. Commit 5 inverts:
-      # +do_build_action+ becomes the orchestrator and +Action.create+
-      # slims to a row-creation helper; +do_sign_action+ moves the
-      # broadcast-dispatch tail off +Action#sign!+. Return shapes
-      # eventually become wallet vocab (+wtxid:+ binary, +atomic_beef:+)
-      # with BRC100 wrapping to BRC-100 vocab — also commit 5.
+      # Per ADR-026: the primitives carry their own operation invariants
+      # (+require_key_deriver!+, parameter-combination semantics) so
+      # non-BRC100 consumers (#192 batch, #223 HTTP wrapper, the daemon)
+      # can't bypass them; spec-shape validation stays at the wrap layer.
+      #
+      # History: extracted as +do_+-prefixed primitives in #402 Stage 2
+      # (the prefix dodged an MRO clash while BRC100 was still a mixin);
+      # prefix reverted in #405 Stage 3 when BRC100 became a class.
 
       # Orchestrator. Lifted from +Engine::Action.create+'s body in
       # #402 Stage 2 commit 5. Drives input acquisition, the build, the
@@ -179,11 +183,11 @@ module BSV
       # @return [Hash] sync: +{ wtxid:, atomic_beef: }+;
       #   internal (no_send): +{ wtxid:, atomic_beef:, change_outpoints: }+;
       #   deferred: +{ signable: { atomic_beef:, reference: } }+.
-      def do_build_action(description:, input_beef: nil, inputs: nil, outputs: nil,
-                          lock_time: nil, version: nil, labels: nil,
-                          sign_and_process: true, accept_delayed_broadcast: true,
-                          no_send: false, change_count: nil,
-                          randomize_outputs: true)
+      def build_action(description:, input_beef: nil, inputs: nil, outputs: nil,
+                       lock_time: nil, version: nil, labels: nil,
+                       sign_and_process: true, accept_delayed_broadcast: true,
+                       no_send: false, change_count: nil,
+                       randomize_outputs: true)
         # Caller-supplied inputs: explicit array (possibly empty) — the
         # wallet does not extend this set. inputs: nil means "select for me".
         caller_supplied_inputs = !inputs.nil?
@@ -299,13 +303,13 @@ module BSV
         end
 
         BSV.logger&.debug do
-          "[Engine] do_build_action: dtxid=#{built[:wtxid].to_dtxid} " \
+          "[Engine] build_action: dtxid=#{built[:wtxid].to_dtxid} " \
             "outputs=#{outputs&.length || 0} change=#{built[:change_outputs].length}"
         end
 
         # Read-only, post-commit: the BEEF we hand back + its SPV honesty
         # check. Under strict create_action (#296 Phase B), returning from
-        # do_build_action implies a valid BEEF in hand. For no_send this
+        # build_action implies a valid BEEF in hand. For no_send this
         # runs AFTER internal completion commits, so a raise here leaves
         # an already-promoted action (its outputs are the wallet's own,
         # genuinely spendable). Near-unreachable for a self-built BEEF;
@@ -335,8 +339,8 @@ module BSV
       # below, not the dispatch).
       #
       # @return [Hash] +{ wtxid:, atomic_beef: }+ — wallet vocab; BRC100 wraps.
-      def do_sign_action(reference:, spends:, accept_delayed_broadcast: true,
-                         no_send: false)
+      def sign_action(reference:, spends:, accept_delayed_broadcast: true,
+                      no_send: false)
         action = Engine::Action.find(engine: self, reference: reference)
         raise BSV::Wallet::InvalidParameterError, 'reference (not found)' unless action
 
@@ -362,15 +366,15 @@ module BSV
         { wtxid: signed[:wtxid], atomic_beef: atomic_beef }
       end
 
-      def do_abort_action(reference:)
+      def abort_action(reference:)
         action = Engine::Action.find(engine: self, reference: reference)
         raise BSV::Wallet::InvalidParameterError, 'reference (not found)' unless action
 
         action.abort!
       end
 
-      def do_import_beef(tx:, outputs:, description:, labels: nil,
-                         trust_self: nil, known_txids: nil, seek_permission: true)
+      def import_beef(tx:, outputs:, description:, labels: nil,
+                      trust_self: nil, known_txids: nil, seek_permission: true)
         @beef_importer.import(
           tx: tx, outputs: outputs, description: description,
           labels: labels, trust_self: trust_self, known_txids: known_txids,
@@ -391,19 +395,19 @@ module BSV
 
       # --- Crypto (codes 11-16, 6 primitives) ---
 
-      def do_encrypt(plaintext:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
+      def encrypt(plaintext:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
         require_key_deriver!
         @key_deriver.encrypt(plaintext: plaintext, protocol_id: protocol_id, key_id: key_id,
                              counterparty: counterparty, privileged: privileged)
       end
 
-      def do_decrypt(ciphertext:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
+      def decrypt(ciphertext:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
         require_key_deriver!
         @key_deriver.decrypt(ciphertext: ciphertext, protocol_id: protocol_id, key_id: key_id,
                              counterparty: counterparty, privileged: privileged)
       end
 
-      def do_create_hmac(data:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
+      def create_hmac(data:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
         require_key_deriver!
         @key_deriver.create_hmac(data: data, protocol_id: protocol_id, key_id: key_id,
                                  counterparty: counterparty, privileged: privileged)
@@ -412,15 +416,15 @@ module BSV
       # Returns +true+ on match, +false+ on mismatch. BRC100 raises
       # +InvalidHmacError+ on +false+ per the BRC-100 contract; a non-BRC100
       # consumer gets the boolean for their own dispatch.
-      def do_verify_hmac(data:, hmac:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
+      def verify_hmac(data:, hmac:, protocol_id:, key_id:, counterparty: 'self', privileged: false)
         require_key_deriver!
         expected = @key_deriver.create_hmac(data: data, protocol_id: protocol_id, key_id: key_id,
                                             counterparty: counterparty, privileged: privileged)
         secure_compare(expected, hmac)
       end
 
-      def do_create_signature(protocol_id:, key_id:, data: nil, hash_to_directly_sign: nil,
-                              counterparty: 'self', privileged: false)
+      def create_signature(protocol_id:, key_id:, data: nil, hash_to_directly_sign: nil,
+                           counterparty: 'self', privileged: false)
         require_key_deriver!
         @key_deriver.create_signature(
           data: data, hash_to_directly_sign: hash_to_directly_sign,
@@ -431,9 +435,9 @@ module BSV
 
       # Returns +true+ on valid, +false+ on invalid. BRC100 raises
       # +InvalidSignatureError+ on +false+ per the BRC-100 contract.
-      def do_verify_signature(signature:, protocol_id:, key_id:, data: nil,
-                              hash_to_directly_verify: nil, counterparty: 'self',
-                              for_self: false, privileged: false)
+      def verify_signature(signature:, protocol_id:, key_id:, data: nil,
+                           hash_to_directly_verify: nil, counterparty: 'self',
+                           for_self: false, privileged: false)
         require_key_deriver!
         @key_deriver.verify_signature(
           signature: signature, data: data,
@@ -448,8 +452,8 @@ module BSV
       # Returns pubkey hex (identity or derived). The +identity_key+ flag
       # selects between the wallet's stable identity pubkey and a derived
       # pubkey under +protocol_id+/+key_id+/+counterparty+.
-      def do_get_public_key(identity_key: false, protocol_id: nil, key_id: nil,
-                            counterparty: nil, for_self: false, privileged: false)
+      def get_public_key(identity_key: false, protocol_id: nil, key_id: nil,
+                         counterparty: nil, for_self: false, privileged: false)
         require_key_deriver!
         if identity_key
           @key_deriver.identity_key
@@ -462,14 +466,14 @@ module BSV
         end
       end
 
-      def do_reveal_counterparty_key_linkage(counterparty:, verifier:, privileged: false)
+      def reveal_counterparty_key_linkage(counterparty:, verifier:, privileged: false)
         require_key_deriver!
         @key_deriver.reveal_counterparty_linkage(
           counterparty: counterparty, verifier: verifier, privileged: privileged
         )
       end
 
-      def do_reveal_specific_key_linkage(counterparty:, verifier:, protocol_id:, key_id:, privileged: false)
+      def reveal_specific_key_linkage(counterparty:, verifier:, protocol_id:, key_id:, privileged: false)
         require_key_deriver!
         @key_deriver.reveal_specific_linkage(
           counterparty: counterparty, verifier: verifier,
@@ -485,9 +489,9 @@ module BSV
       # *Callers MUST pre-validate +acquisition_protocol+ themselves* —
       # a non-BRC100 caller invoking this with issuance semantics in
       # mind will get a silent direct-save instead.
-      def do_acquire_certificate(type:, certifier:, fields:,
-                                 serial_number: nil, revocation_outpoint: nil,
-                                 signature: nil, keyring_for_subject: nil)
+      def acquire_certificate(type:, certifier:, fields:,
+                              serial_number: nil, revocation_outpoint: nil,
+                              signature: nil, keyring_for_subject: nil)
         @store.save_certificate(
           type: type, certifier: certifier, fields: fields,
           serial_number: serial_number, revocation_outpoint: revocation_outpoint,
@@ -496,14 +500,14 @@ module BSV
         )
       end
 
-      def do_list_certificates(certifiers:, types:, limit: 10, offset: 0)
+      def list_certificates(certifiers:, types:, limit: 10, offset: 0)
         @store.query_certificates(
           certifiers: certifiers, types: types,
           limit: [limit, 10_000].min, offset: offset
         )
       end
 
-      def do_prove_certificate(certificate:, fields_to_reveal:, verifier:, privileged: false)
+      def prove_certificate(certificate:, fields_to_reveal:, verifier:, privileged: false)
         require_key_deriver!
         @key_deriver.derive_revelation_keyring(
           certificate: certificate,
@@ -512,14 +516,14 @@ module BSV
         )
       end
 
-      def do_relinquish_certificate(type:, serial_number:, certifier:)
+      def relinquish_certificate(type:, serial_number:, certifier:)
         @store.delete_certificate(type: type, serial_number: serial_number, certifier: certifier)
       end
 
       # Local lookup — external discovery is a future concern (no live
       # cert provider integrated yet). Filters the local cert store by
       # subject pubkey hex.
-      def do_discover_by_identity_key(identity_key:, limit: 10, offset: 0)
+      def discover_by_identity_key(identity_key:, limit: 10, offset: 0)
         result = @store.query_certificates(
           certifiers: [], types: [],
           limit: [limit, 10_000].min, offset: offset
@@ -529,20 +533,20 @@ module BSV
       end
 
       # Local lookup — same external-discovery caveat as
-      # +do_discover_by_identity_key+. Currently always empty because the
+      # +discover_by_identity_key+. Currently always empty because the
       # Store doesn't index by cert field values yet.
-      def do_discover_by_attributes(attributes:, limit: 10, offset: 0)
+      def discover_by_attributes(attributes:, limit: 10, offset: 0)
         { total: 0, certificates: [] }
       end
 
       # --- Action read-side (3 primitives) ---
 
-      def do_list_actions(labels:, label_query_mode: :any,
-                          include_labels: false, include_inputs: false,
-                          include_input_source_locking_scripts: false,
-                          include_input_unlocking_scripts: false,
-                          include_outputs: false, include_output_locking_scripts: false,
-                          limit: 10, offset: 0, seek_permission: true)
+      def list_actions(labels:, label_query_mode: :any,
+                       include_labels: false, include_inputs: false,
+                       include_input_source_locking_scripts: false,
+                       include_input_unlocking_scripts: false,
+                       include_outputs: false, include_output_locking_scripts: false,
+                       limit: 10, offset: 0, seek_permission: true)
         Engine::Action.list(
           engine: self, labels: labels, label_query_mode: label_query_mode,
           include_labels: include_labels, include_inputs: include_inputs,
@@ -554,10 +558,10 @@ module BSV
         )
       end
 
-      def do_list_outputs(basket:, tags: nil, tag_query_mode: :any, include: nil,
-                          include_custom_instructions: false, include_tags: false,
-                          include_labels: false, limit: 10, offset: 0,
-                          seek_permission: true)
+      def list_outputs(basket:, tags: nil, tag_query_mode: :any, include: nil,
+                       include_custom_instructions: false, include_tags: false,
+                       include_labels: false, limit: 10, offset: 0,
+                       seek_permission: true)
         @store.query_outputs(
           basket: basket, tags: tags, tag_query_mode: tag_query_mode,
           limit: [limit, 10_000].min, offset: offset,
@@ -567,7 +571,7 @@ module BSV
         )
       end
 
-      def do_relinquish_output(output_id:)
+      def relinquish_output(output_id:)
         @store.relinquish_output(output_id: output_id)
       end
 
@@ -576,13 +580,13 @@ module BSV
       # +true+ iff the wallet has a key deriver wired. Authentication in
       # this codebase is "do we hold the keys to sign?" — sessions / agents
       # / TLS attestation are out of scope.
-      def do_authenticated?
+      def authenticated?
         !@key_deriver.nil?
       end
 
       # Raises +Error+ (code 2) when not authenticated; returns +true+ when
       # authenticated. BRC100 wraps as +{ authenticated: true }+.
-      def do_wait_for_authentication
+      def wait_for_authentication
         raise BSV::Wallet::Error.new('wallet is not authenticated', code: 2) unless @key_deriver
 
         true
@@ -590,19 +594,19 @@ module BSV
 
       # --- Static / network (codes 25-28, 4 primitives) ---
 
-      def do_get_height
+      def get_height
         raise BSV::Wallet::UnsupportedActionError, 'get_height'
       end
 
-      def do_get_header_for_height(height:)
+      def get_header_for_height(height:)
         raise BSV::Wallet::UnsupportedActionError, 'get_header_for_height'
       end
 
-      def do_get_network
+      def get_network
         @network_name
       end
 
-      def do_get_version
+      def get_version
         "bsv-wallet-#{BSV::Wallet::VERSION}"
       end
 
@@ -729,7 +733,7 @@ module BSV
         # funded in the first place.
         @bypass_limp_mode = true
         begin
-          create_action(
+          brc100.create_action(
             description: 'import self-payment',
             inputs: [{ output_id: imported_output_id }],
             outputs: [],
@@ -878,7 +882,7 @@ module BSV
       def list_receive_addresses
         require_key_deriver!
 
-        result = list_actions(labels: ['wbikd'], include_inputs: true, limit: 10_000)
+        result = brc100.list_actions(labels: ['wbikd'], include_inputs: true, limit: 10_000)
         result[:actions].filter_map do |action|
           next unless action[:status] == :internal
 
@@ -978,7 +982,7 @@ module BSV
         # randomize_outputs: false guarantees the payment output stays at
         # index 0. Change outputs from generate_change are appended after
         # caller outputs.
-        result = create_action(
+        result = brc100.create_action(
           description: "send #{satoshis} sats",
           outputs: [{ satoshis: satoshis, locking_script: locking_script }],
           no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
@@ -1028,7 +1032,7 @@ module BSV
         merged = (smallest + largest).uniq { |o| o[:id] }
         input_specs = merged.each_with_index.map { |o, i| { output_id: o[:id], vin: i } }
 
-        create_action(
+        brc100.create_action(
           description: 'consolidation',
           inputs: input_specs,
           outputs: [],
@@ -1102,7 +1106,7 @@ module BSV
         # convention.
         @bypass_limp_mode = true
         begin
-          create_action(
+          brc100.create_action(
             description: 'sweep',
             inputs: input_specs,
             outputs: [{ satoshis: total - fee, locking_script: locking_script }],
@@ -1190,51 +1194,6 @@ module BSV
 
       private
 
-      def validate_description!(description)
-        return if description.is_a?(String) && description.length.between?(5, 50)
-
-        raise BSV::Wallet::InvalidParameterError.new('description', 'a string between 5 and 50 characters')
-      end
-
-      def validate_create_action_params!(inputs:, outputs:)
-        has_inputs = inputs&.any?
-        has_outputs = outputs&.any?
-        return if has_inputs || has_outputs
-
-        raise BSV::Wallet::InvalidParameterError.new('inputs/outputs',
-                                                     'present (at least one input or output required)')
-      end
-
-      # Validate output_type declarations against locking scripts.
-      #
-      # If output_type is 'root', the locking script must be P2PKH to the
-      # wallet's identity key. Other output_type values are not validated here.
-      def validate_output_ownership!(outputs)
-        return unless outputs && @key_deriver
-
-        root_hash = nil
-        outputs.each_with_index do |out, idx|
-          next unless out[:output_type] == 'root'
-
-          script = TxBuilder.resolve_locking_script(out[:locking_script])
-          unless script.p2pkh?
-            raise BSV::Wallet::InvalidParameterError.new(
-              "outputs[#{idx}].output_type",
-              "'root' requires a P2PKH script"
-            )
-          end
-
-          root_hash ||= BSV::Primitives::Digest.hash160(@key_deriver.identity_key_bytes)
-          pubkey_hash = script.chunks[2].data
-          next if pubkey_hash == root_hash
-
-          raise BSV::Wallet::InvalidParameterError.new(
-            "outputs[#{idx}].output_type",
-            "'root' but script does not match identity key"
-          )
-        end
-      end
-
       # Pure mapper: caller-supplied (no_send, accept_delayed_broadcast)
       # → +:none+ / +:delayed+ / +:inline+. (Renamed from +determine_broadcast+
       # in #402 Stage 2 — reads as a mapper rather than a side-effectful
@@ -1249,7 +1208,7 @@ module BSV
       # Post-build dispatch: best-effort BEEF cache hint + inline
       # broadcast trigger when the intent demands it. Packages the
       # +publish_beef_hint+ / +broadcast_worker.process+ pair called
-      # from the tails of +Engine#do_build_action+ and +#do_sign_action+
+      # from the tails of +Engine#build_action+ and +#sign_action+
       # on the non-no_send path (pre-#402 commit 5 this pair was inlined
       # at the tail of +Action.create+). Inline +:none+ would be a caller
       # bug; only +:inline+ triggers a sync broadcast.
@@ -1318,12 +1277,6 @@ module BSV
         raise ArgumentError, "invalid recipient key: expected 66-char compressed public key hex, got #{key.inspect}"
       end
 
-      def validate_reference!(reference)
-        return if reference.is_a?(String) && reference.match?(UUID_RE)
-
-        raise BSV::Wallet::InvalidParameterError, 'reference'
-      end
-
       def require_key_deriver!
         raise BSV::Wallet::Error.new('wallet has no key deriver configured', code: 2) unless @key_deriver
       end
@@ -1365,7 +1318,7 @@ module BSV
         marker = compute_wbikd_marker(slot_sats)
         op_return_script = BSV::Script::Script.op_return(marker).to_binary
 
-        create_result = create_action(
+        create_result = brc100.create_action(
           description: 'wbikd slot creation',
           accept_delayed_broadcast: false,
           outputs: [
@@ -1463,7 +1416,7 @@ module BSV
         end
 
         # 6. Abort the locking action — CASCADE releases slot back to p wbikd basket
-        abort_action(reference: action_reference)
+        brc100.abort_action(reference: action_reference)
       end
 
       # Import-path network reads, with retry on retryable responses
