@@ -127,3 +127,13 @@ The decision pushes funding into the wallet where a BRC-100 wallet is expected t
 ## Unverified claims
 
 None.
+
+## Implementation evolution
+
+**#402 + #405 (Stages 2 + 3 of #396).** This ADR was written when the auto-fund orchestrator lived in `Engine#create_action` (a method on Engine, via the BRC100 mixin) which delegated to `Action.create` (the orchestrator class method). Both call-sites in this document (line 113, "Validation" §(a)) refer to that pre-#396 shape.
+
+Post-#396 the API surface changed; the **decision** here (the four-state input-handling policy — `nil` → `select_inputs`, `[]` → `skip_change`, caller-supplied → verbatim, deferred → no funding loop) is unchanged. The mapping:
+
+- `Engine#create_action` (old, gone) → `BRC100#create_action` (the BRC-100 wrap layer; same hash return shape) → calls `Engine#build_action` (new wallet-vocab primitive; same input policy).
+- `Action.create` (old orchestrator) → `Engine#build_action` is the new orchestrator; `Action.create` is now a thin row-creation helper.
+- The four-state input branch lives unchanged in `Engine#build_action`. See `.claude/plans/20260620-stage-2-primitive-extraction.md` for the orchestrator move.

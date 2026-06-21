@@ -6,11 +6,18 @@ using BSV::Wallet::Txid
 
 module BSV
   module Wallet
-    # Layer 3 — BRC-100 business process orchestration.
+    # Layer 3 — wallet-vocab primitive surface beneath BRC-100.
     #
-    # Receives Layer 2a components at construction time and orchestrates
-    # them to fulfill the 28 BRC-100 methods. Contains no SQL, no ARC
-    # calls, no thread management. Pure orchestration.
+    # Receives Layer 2a components at construction time and exposes 28
+    # spec-aligned primitive methods (e.g. +#build_action+, +#sign_action+,
+    # +#encrypt+, +#get_public_key+ — per ADR-026 / #397 classification)
+    # plus two internals (+Engine::Policy#guard_balance!+,
+    # +Engine#dispatch_broadcast+). BRC-100 spec compliance lives one
+    # layer up, in +BSV::Wallet::BRC100+ (a class composed over an engine
+    # instance — reached via +Engine#brc100+ since #405 Stage 3 of #396
+    # retired the mixin). Engine contains no SQL, no ARC calls, no
+    # thread management — pure orchestration over the primitives'
+    # collaborators.
     #
     # @example Via the CLI's auto-discovery (recommended for typical use)
     #   require 'bsv/wallet/cli'    # not autoloaded — CLI is opt-in
@@ -160,7 +167,9 @@ module BSV
       # ---- BRC-100 primitive surface (write-side) ------------------------
       #
       # Four thick primitives the +BSV::Wallet::BRC100+ wrap layer
-      # calls through +@engine.<name>+. Return shapes are wallet vocab
+      # calls through its memoised +@engine+ reference (e.g.
+      # +@engine.build_action+, +@engine.sign_action+). Return shapes
+      # are wallet vocab
       # (+wtxid:+ binary, +atomic_beef:+, +change_outpoints:+, +signable:+);
       # BRC100 translates to BRC-100 vocab (+txid:+, +tx:+, +no_send_change:+,
       # +signable_transaction:+) at the spec boundary.

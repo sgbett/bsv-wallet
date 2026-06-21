@@ -5,7 +5,8 @@
 #
 # Reads a JSON envelope from stdin (as produced by bin/send) containing
 # BEEF and derivation metadata, then internalizes the payment outputs
-# via Engine#internalize_action with proper BRC-42 derivation parameters.
+# via engine.brc100.internalize_action with proper BRC-42 derivation
+# parameters.
 #
 # Usage:
 #   bin/send alice --to <bob_key> --sats 500 | bin/receive bob

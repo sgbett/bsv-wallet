@@ -94,3 +94,14 @@ A plain Ruby module is the minimum that satisfies a behavioural specification in
 * `bsv-sdk` (`~> 0.24`) `lib/bsv/wallet/interface/brc100.rb` — the contract module.
 * `docs/design.md` — four-layer SOA; BRC-100 is Layer 3 (business-process orchestration).
 * HLR/issue trail for the deferred name/calling-convention pass (interface move to the SDK), not asserted complete here.
+
+## Implementation evolution
+
+**#405 (Stage 3 of #396).** The Decision section above ("Engine realises the interface by `include BSV::Wallet::Interface::BRC100`", line 26) and the Validation section's corresponding bullet ("`BSV::Wallet::Engine` does `include BSV::Wallet::Interface::BRC100`") both describe the original implementation and should be read as historical, not current guidance. Stage 3 of #396 swapped the mixin for composition:
+
+- `BSV::Wallet::BRC100` was promoted from `module` to `class` with `initialize(engine)` constructor (no longer mixed into Engine).
+- `Engine#brc100` is a memoised lazy accessor returning a `BSV::Wallet::BRC100` instance wrapping `self`.
+- Engine exposes 28 wallet-vocab primitives (`#sign_action`, `#encrypt`, etc.) at the spec-aligned names; BRC100's instance methods translate to BRC-100 hash vocab at the wrap layer.
+- `Interface::BRC100` is included by the `BRC100` class (not by `Engine`); contract resolution flows through the class instance.
+
+The decisions in this ADR (plain Ruby module for the SDK contract; no struct/type-alias layer; synchronous return; hex-at-boundary) all still hold — the implementation evolution is purely about where the contract is included and how it's reached. Full rationale: ADR-026 (engine primitive granularity) + HLR #405 (mixin → composition).
