@@ -167,7 +167,9 @@ module BSV
       # ---- BRC-100 primitive surface (write-side) ------------------------
       #
       # Four thick primitives the +BSV::Wallet::BRC100+ wrap layer
-      # calls through +@engine.<name>+. Return shapes are wallet vocab
+      # calls through its memoised +@engine+ reference (e.g.
+      # +@engine.build_action+, +@engine.sign_action+). Return shapes
+      # are wallet vocab
       # (+wtxid:+ binary, +atomic_beef:+, +change_outpoints:+, +signable:+);
       # BRC100 translates to BRC-100 vocab (+txid:+, +tx:+, +no_send_change:+,
       # +signable_transaction:+) at the spec boundary.
