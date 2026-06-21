@@ -1,9 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Raw Engine#internalize_action wrapper.
+# Raw BRC-100 internalizeAction wrapper.
 #
-# Reads BEEF from stdin and internalizes specified outputs.
+# Reads BEEF from stdin, calls engine.brc100.internalize_action, and
+# internalizes the specified outputs.
 #
 # Usage:
 #   bin/send alice ... | bin/internalize bob --description "received" --output "0:basket:received"

@@ -1,10 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Raw Engine#create_action wrapper.
+# Raw BRC-100 createAction wrapper.
 #
 # Reads a JSON specification of inputs and outputs from stdin,
-# calls create_action, and writes BEEF to stdout.
+# calls engine.brc100.create_action, and writes BEEF to stdout.
 #
 # Usage:
 #   echo '{"inputs":[...], "outputs":[...]}' | \
