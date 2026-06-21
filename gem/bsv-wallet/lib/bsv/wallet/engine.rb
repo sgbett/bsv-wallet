@@ -9,13 +9,15 @@ module BSV
     # Layer 3 — wallet-vocab primitive surface beneath BRC-100.
     #
     # Receives Layer 2a components at construction time and exposes 28
-    # +#<name>+ primitives (per ADR-026 / #397 classification) plus two
-    # internals (+Engine::Policy#guard_balance!+, +Engine#dispatch_broadcast+).
-    # BRC-100 spec compliance lives one layer up, in +BSV::Wallet::BRC100+
-    # (a class composed over an engine instance — reached via
-    # +Engine#brc100+ since #405 Stage 3 of #396 retired the mixin).
-    # Engine contains no SQL, no ARC calls, no thread management — pure
-    # orchestration over the primitives' collaborators.
+    # spec-aligned primitive methods (e.g. +#build_action+, +#sign_action+,
+    # +#encrypt+, +#get_public_key+ — per ADR-026 / #397 classification)
+    # plus two internals (+Engine::Policy#guard_balance!+,
+    # +Engine#dispatch_broadcast+). BRC-100 spec compliance lives one
+    # layer up, in +BSV::Wallet::BRC100+ (a class composed over an engine
+    # instance — reached via +Engine#brc100+ since #405 Stage 3 of #396
+    # retired the mixin). Engine contains no SQL, no ARC calls, no
+    # thread management — pure orchestration over the primitives'
+    # collaborators.
     #
     # @example Via the CLI's auto-discovery (recommended for typical use)
     #   require 'bsv/wallet/cli'    # not autoloaded — CLI is opt-in

@@ -97,7 +97,7 @@ A plain Ruby module is the minimum that satisfies a behavioural specification in
 
 ## Implementation evolution
 
-**#405 (Stage 3 of #396).** The "Engine realises the interface by `include BSV::Wallet::Interface::BRC100`" wording above describes the original implementation. Stage 3 of #396 swapped the mixin for composition:
+**#405 (Stage 3 of #396).** The Decision section above ("Engine realises the interface by `include BSV::Wallet::Interface::BRC100`", line 26) and the Validation section's corresponding bullet ("`BSV::Wallet::Engine` does `include BSV::Wallet::Interface::BRC100`") both describe the original implementation and should be read as historical, not current guidance. Stage 3 of #396 swapped the mixin for composition:
 
 - `BSV::Wallet::BRC100` was promoted from `module` to `class` with `initialize(engine)` constructor (no longer mixed into Engine).
 - `Engine#brc100` is a memoised lazy accessor returning a `BSV::Wallet::BRC100` instance wrapping `self`.
