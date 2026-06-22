@@ -128,15 +128,34 @@ module BSV
         # egress-specific trust model the Hydrator owns, not an engine
         # dependency.
         #
+        # ## Callers and +allow_txid_only:+
+        #
+        # Two egress sites call this method:
+        #
+        # - +Engine#build_action+ / +Engine#sign_action+ — full BEEF, no
+        #   peer-specific trim. Default +allow_txid_only: false+: any
+        #   +TxidOnlyEntry+ is a defect because nothing should have trimmed
+        #   yet.
+        # - +Engine::Transmission#transmit+ — peer-specific BEEF whose
+        #   trim step (BeefParty, #388) deliberately produces
+        #   +TxidOnlyEntry+ records for ancestors the peer already holds.
+        #   Pass +allow_txid_only: true+ so the structural walk treats
+        #   those trimmed slots as known terminals (the peer fills them
+        #   from local state).
+        #
         # @param atomic_beef [String] BEEF binary as built by
         #   +#build_atomic_beef+
         # @param subject_wtxid [String] 32-byte wire-order wtxid of the
         #   subject transaction (the action's own tx)
+        # @param allow_txid_only [Boolean] tolerate +TxidOnlyEntry+ records
+        #   during structural verification (default +false+). Set to +true+
+        #   from +Engine::Transmission#transmit+ post-trim; leave default
+        #   at build-time call sites.
         # @raise [BSV::Wallet::EgressBeefInvalidError] when the subject
         #   is missing from the constructed BEEF, or when verification
         #   fails (almost always an upstream proof-closure gap that
         #   should have been caught at import / +save_beef_proofs+ time)
-        def validate_for_handoff!(atomic_beef, subject_wtxid)
+        def validate_for_handoff!(atomic_beef, subject_wtxid, allow_txid_only: false)
           raise NotImplementedError
         end
       end

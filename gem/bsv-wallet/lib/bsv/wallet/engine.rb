@@ -42,6 +42,7 @@ module BSV
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
       autoload :Hydrator,              'bsv/wallet/engine/hydrator'
       autoload :Reaper,                'bsv/wallet/engine/reaper'
+      autoload :Transmission,          'bsv/wallet/engine/transmission'
       autoload :TxBuilder,             'bsv/wallet/engine/tx_builder'
       autoload :TxProof,               'bsv/wallet/engine/tx_proof'
       autoload :OmqSupport,            'bsv/wallet/engine/omq_support'
@@ -60,7 +61,8 @@ module BSV
       RETRYABLE_IMPORT_BACKOFF_BASE_S = 1.0
 
       attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker,
-                  :funding_strategy, :tx_builder, :hydrator, :beef_importer
+                  :funding_strategy, :tx_builder, :hydrator, :beef_importer,
+                  :transmission
 
       # Engine collaborator surface exposed for Engine::Action use.
       # Not public API — these are internal handles for in-process logical models.
@@ -129,6 +131,18 @@ module BSV
         # ADR-024 / #357.
         @beef_importer = BeefImporter.new(
           store: @store, chain_tracker: @chain_tracker, hydrator: @hydrator
+        )
+        # Transmission — wallet-to-peer BEEF delivery domain, sibling to
+        # Broadcast/TxProof over the shared Hydrator substrate. The
+        # +delivery:+ slot is wired with +Network::PeerDelivery+ here
+        # (#390): SSRF gate via +EndpointPolicy+, ACK validation with
+        # wtxid binding, bounded HTTP timeouts. The HTTP transport is
+        # only invoked when a caller passes +endpoint:+ to
+        # +#transmit+ — the deferred caller-driven path (return BEEF,
+        # let the operator shuttle it) still works. See ADR-025 / HLR
+        # #385 / reference/transactions.md.
+        @transmission = Transmission.new(
+          store: @store, hydrator: @hydrator, delivery: Network::PeerDelivery.new
         )
       end
 

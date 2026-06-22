@@ -178,6 +178,49 @@ module BSV
           raise NotImplementedError
         end
 
+        # --- Transmissions (wallet→peer BEEF delivery, #385 / ADR-025) ---
+
+        # Record a transmission of +action_id+'s BEEF to +counterparty+.
+        # Idempotent and concurrency-safe at grain (action, peer): a
+        # re-transmit refreshes +updated_at+ and returns the same id.
+        # This does NOT populate +transmission_txids+ — the known-set is
+        # written only on ack (#mark_transmission_acked), two-phase, so a
+        # failed delivery never trims the peer's next BEEF below
+        # verifiability.
+        #
+        # @param action_id [Integer]
+        # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
+        # @return [Integer] transmission id
+        def record_transmission(action_id:, counterparty:)
+          raise NotImplementedError
+        end
+
+        # The wtxids +counterparty+ has acknowledged across every
+        # transmission to them — the BeefParty known set for trimming
+        # the next BEEF.
+        #
+        # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
+        # @return [Array<String>] wire-order binary wtxids (deduplicated)
+        def transmission_known_wtxids(counterparty:)
+          raise NotImplementedError
+        end
+
+        # Mark a transmission acknowledged by the peer and record the
+        # wtxids the BEEF carried (two-phase, HLR #385: known-set writes
+        # live here, not in record_transmission). Idempotent on re-ack —
+        # +acked_at+ overwrites, the txid batch is INSERT ON CONFLICT DO
+        # NOTHING. Delivery status is derived from +acked_at+ presence;
+        # there is no status column (principle of state).
+        #
+        # @param action_id [Integer]
+        # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
+        # @param wtxids [Array<String>] wire-order binary wtxids carried by the BEEF
+        # @param acked_at [Time] ack timestamp
+        # @return [Integer, nil] transmission id, or +nil+ if no matching row
+        def mark_transmission_acked(action_id:, counterparty:, wtxids: [], acked_at: Time.now)
+          raise NotImplementedError
+        end
+
         # Abort an action. CASCADE deletes inputs, releasing locked UTXOs.
         # Only valid for unsigned actions (wtxid IS NULL).
         #

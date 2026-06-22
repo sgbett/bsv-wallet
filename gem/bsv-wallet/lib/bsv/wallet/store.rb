@@ -238,6 +238,83 @@ module BSV
         models::Action.where(id: action_id).update(tx_proof_id: tx_proof_id)
       end
 
+      # --- Transmissions (wallet→peer BEEF delivery, #385 / ADR-025) ---
+
+      # Record that +action_id+'s BEEF was (or is being) transmitted to
+      # +counterparty+. Idempotent and concurrency-safe at grain (action,
+      # peer) via +INSERT ... ON CONFLICT DO UPDATE RETURNING id+: a
+      # re-transmit refreshes +updated_at+ and returns the same row.
+      #
+      # NOTE: this does NOT write +transmission_txids+ rows. The known-set
+      # is written only on ack (+mark_transmission_acked+) — recording
+      # wtxids the peer never received would over-trim a future BEEF into
+      # unverifiability (HLR #385 two-phase gate).
+      #
+      # @param action_id [Integer]
+      # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
+      # @return [Integer] transmission id
+      def record_transmission(action_id:, counterparty:)
+        now = Time.now
+        rows = models::Transmission.dataset
+                                   .insert_conflict(
+                                     target: %i[action_id counterparty],
+                                     update: { updated_at: Sequel[:excluded][:updated_at] }
+                                   )
+                                   .returning(:id)
+                                   .insert(action_id: action_id, counterparty: counterparty,
+                                           created_at: now, updated_at: now)
+        rows.first[:id]
+      end
+
+      # The set of wtxids +counterparty+ has acknowledged across every
+      # transmission to them — the BeefParty known set for trimming the
+      # next BEEF. Wire-order binary wtxids; deduplicated across
+      # transmissions.
+      #
+      # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
+      # @return [Array<String>] wire-order binary wtxids
+      def transmission_known_wtxids(counterparty:)
+        models::TransmissionTxid
+          .join(:transmissions, id: :transmission_id)
+          .where(Sequel[:transmissions][:counterparty] => counterparty)
+          .distinct
+          .select_map(Sequel[:transmission_txids][:wtxid])
+      end
+
+      # Mark a transmission acknowledged by the peer and record the
+      # wtxids that the BEEF carried (the known-set, written here and
+      # only here — two-phase, HLR #385). Idempotent: re-ack updates
+      # +acked_at+ and adds only wtxids not already recorded.
+      #
+      # Returns the transmission id, or +nil+ when no matching row
+      # exists for (action_id, counterparty).
+      #
+      # @param action_id [Integer]
+      # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
+      # @param wtxids [Array<String>] wire-order binary wtxids carried by the BEEF
+      # @param acked_at [Time] ack timestamp
+      # @return [Integer, nil]
+      def mark_transmission_acked(action_id:, counterparty:, wtxids: [], acked_at: Time.now)
+        @db.transaction do
+          row = models::Transmission.first(action_id: action_id, counterparty: counterparty)
+          next nil unless row
+
+          row.update(acked_at: acked_at)
+
+          if wtxids.any?
+            # Batch INSERT ... ON CONFLICT (transmission_id, wtxid) DO NOTHING
+            # — one statement, dedup'd at the schema (no N+1). Frozen-string
+            # safety: wrap each wtxid in a fresh Sequel.blob.
+            rows = wtxids.map { |wtxid| { transmission_id: row.id, wtxid: Sequel.blob(wtxid) } }
+            models::TransmissionTxid.dataset
+                                    .insert_conflict(target: %i[transmission_id wtxid])
+                                    .multi_insert(rows)
+          end
+
+          row.id
+        end
+      end
+
       def abort_action(action_id:)
         @db.transaction do
           broadcast_exists = models::Broadcast.where(action_id: action_id).any?

@@ -190,10 +190,43 @@ Sequel.migration do
     alter_table(:tags) do
       add_constraint(:tag_length, 'length(tag) BETWEEN 1 AND 300')
     end
+
+    # --- 20. transmissions ---
+    # +counterparty+ is a BRC-43 identity pubkey (hex, 66-char compressed).
+    # Postgres gets the full regex; SQLite gets a length + 02/03-prefix check
+    # (SQLite has no regex in CHECKs without the optional ICU/regexp module).
+    alter_table(:transmissions) do
+      if postgres
+        add_constraint(
+          :counterparty_shape,
+          Sequel.lit("length(counterparty) = 66 AND counterparty ~ '^0[23][0-9a-f]{64}$'")
+        )
+      else
+        add_constraint(
+          :counterparty_shape,
+          "length(counterparty) = 66 AND (substr(counterparty, 1, 2) = '02' OR substr(counterparty, 1, 2) = '03')"
+        )
+      end
+    end
+
+    # --- 21. transmission_txids ---
+    alter_table(:transmission_txids) do
+      add_constraint(:wtxid_length) { length(wtxid) =~ 32 }
+    end
   end
 
   down do
     postgres = database_type == :postgres
+
+    # --- 21. transmission_txids ---
+    alter_table(:transmission_txids) do
+      drop_constraint :wtxid_length
+    end
+
+    # --- 20. transmissions ---
+    alter_table(:transmissions) do
+      drop_constraint :counterparty_shape
+    end
 
     # --- 13. tags ---
     alter_table(:tags) do

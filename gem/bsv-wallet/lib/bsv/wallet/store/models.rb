@@ -35,6 +35,8 @@ module BSV
         autoload :CertificateField, 'bsv/wallet/store/models/certificate_field'
         autoload :Setting,          'bsv/wallet/store/models/setting'
         autoload :SseCursor,        'bsv/wallet/store/models/sse_cursor'
+        autoload :Transmission,     'bsv/wallet/store/models/transmission'
+        autoload :TransmissionTxid, 'bsv/wallet/store/models/transmission_txid'
       end
     end
   end

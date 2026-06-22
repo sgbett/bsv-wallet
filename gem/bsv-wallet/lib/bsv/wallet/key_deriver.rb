@@ -16,6 +16,32 @@ module BSV
       ANYONE_PRIVATE_KEY = BSV::Primitives::PrivateKey.new(OpenSSL::BN.new(1))
       ANYONE_PUBLIC_KEY = ANYONE_PRIVATE_KEY.public_key
 
+      # Validate that +hex+ is a syntactically well-formed compressed or
+      # uncompressed public key hex string (BRC-43 counterparty shape).
+      # Class method — a pure regex check with no instance state, hoisted
+      # out of the private instance-method form so callers without a
+      # +KeyDeriver+ instance (e.g. +Engine::Transmission+) can validate
+      # counterparties at the engine boundary before any DB write.
+      #
+      # Accepts a BRC-43 compressed identity pubkey: +02+ / +03+ prefix +
+      # 64 hex chars (66 chars total). Case is tolerated. The +04+
+      # uncompressed shape is **not** accepted — the regex's 64 trailing
+      # hex chars match only the compressed tail; an actual uncompressed
+      # pubkey needs 128 trailing hex chars and so falls through to the
+      # raise. The wallet has no caller that passes uncompressed identity
+      # keys, and BRC-43 mandates compressed. Callers that need stricter
+      # parity with the schema CHECK (lowercase only) layer their own
+      # regex on top — see +Engine::Transmission#validate_counterparty!+.
+      #
+      # @param hex [String]
+      # @raise [BSV::Wallet::InvalidParameterError]
+      def self.validate_counterparty_hex!(hex)
+        return if hex.is_a?(String) && hex.match?(/\A(?:02|03|04)[0-9a-fA-F]{64}\z/)
+
+        raise BSV::Wallet::InvalidParameterError.new('counterparty',
+                                                     '"self", "anyone", or a valid hex public key')
+      end
+
       # @param private_key [BSV::Primitives::PrivateKey] everyday root key
       # @param privileged_key [BSV::Primitives::PrivateKey, nil] optional privileged root key
       def initialize(private_key:, privileged_key: nil)
@@ -450,7 +476,7 @@ module BSV
         when 'anyone'
           ANYONE_PUBLIC_KEY
         else
-          validate_counterparty_hex!(counterparty)
+          self.class.validate_counterparty_hex!(counterparty)
           BSV::Primitives::PublicKey.from_hex(counterparty)
         end
       end
@@ -504,13 +530,6 @@ module BSV
         else
           key
         end
-      end
-
-      def validate_counterparty_hex!(hex)
-        return if hex.is_a?(String) && hex.match?(/\A(?:02|03|04)[0-9a-fA-F]{64}\z/)
-
-        raise BSV::Wallet::InvalidParameterError.new('counterparty',
-                                                     '"self", "anyone", or a valid hex public key')
       end
     end
   end

@@ -1,0 +1,96 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Transmit a BRC-100 BEEF envelope to a named peer (porcelain).
+#
+# Reads a JSON envelope from stdin (as produced by bin/create), looks
+# up the action by its dtxid, and calls Engine::Transmission#transmit
+# with the caller-supplied --to (counterparty) and --endpoint. The
+# envelope is delivered over HTTP via Network::PeerDelivery (#385
+# Task 5 / #390); the trimmed BEEF rebuild happens inside the engine,
+# not in this script (so the BEEF on stdin is the producer's atomic
+# bundle, but what crosses the wire is per-peer trimmed via BeefParty
+# — Task 3, #388).
+#
+# Composable pipe (the substituting shape for bin/send | bin/receive
+# on the send side):
+#
+#   bin/create alice <bob_key> 500 --no-send \
+#     | bin/transmit alice --to <bob_key> --endpoint https://peer.example/internalize
+#
+# Stdout: JSON result envelope
+#   { transmission_id, outcome, delivered, http_status, dtxid }
+# Stderr: single-line human-readable summary (redacted per HLR #385
+# Security AC — host only, counterparty last 8 chars, no BEEF body)
+
+require_relative '../lib/bsv/wallet/cli'
+require 'optparse'
+require 'json'
+require 'uri'
+
+wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
+
+options = {}
+OptionParser.new do |opts|
+  opts.banner = 'Usage: bin/transmit [wallet] --to <identity_key> --endpoint <url>'
+  opts.on('--to KEY', 'Counterparty identity key (66-char compressed hex)') { |v| options[:to] = v }
+  opts.on('--endpoint URL', 'Peer HTTP endpoint (validated by Network::EndpointPolicy)') { |v| options[:endpoint] = v }
+end.parse!(args)
+
+abort 'Missing --to' unless options[:to]
+abort 'Missing --endpoint' unless options[:endpoint]
+abort 'Invalid identity key (expected 66-char compressed hex)' unless options[:to].match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
+
+abort 'No data on stdin' if $stdin.tty?
+raw = $stdin.read
+abort 'Empty stdin' if raw.nil? || raw.empty?
+
+envelope =
+  begin
+    JSON.parse(raw, symbolize_names: true)
+  rescue JSON::ParserError => e
+    abort "Invalid JSON on stdin: #{e.message}"
+  end
+
+dtxid   = envelope[:dtxid]               || abort('Missing "dtxid" in envelope')
+outputs = envelope[:outputs]             || abort('Missing "outputs" in envelope')
+sender  = envelope[:sender_identity_key] || abort('Missing "sender_identity_key" in envelope')
+
+ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
+engine = ctx[:engine]
+
+# Lookup action via wtxid: dtxid is display-order hex, but the store
+# keys on the wire-order binary wtxid (Sequel bytea column). The
+# established idiom for this conversion is [hex].pack('H*').reverse —
+# the inverse of bin/create's `result[:txid].reverse.unpack1('H*')`.
+wtxid = [dtxid].pack('H*').reverse
+action = engine.store.find_action(wtxid: wtxid) || abort("No action found for dtxid=#{dtxid}")
+
+result = engine.transmission.transmit(
+  counterparty: options[:to],
+  action_id: action[:id],
+  outputs: outputs,
+  sender_identity_key: sender,
+  endpoint: options[:endpoint]
+)
+
+delivery = result[:delivery]
+out = {
+  transmission_id: result[:transmission_id],
+  outcome: delivery&.outcome,
+  delivered: delivery&.delivered? || false,
+  http_status: delivery&.http_status,
+  dtxid: dtxid
+}
+BSV::Wallet::CLI::Output.write_json(out)
+
+# Log redaction (HLR #385 Security AC):
+# - endpoint surfaces as host only — never the full URL (avoids
+#   leaking credentialled URIs into logs/CI).
+# - counterparty: last 8 hex chars only (mirrors the engine-side
+#   debug line in Engine::Transmission#deliver_envelope).
+# - BEEF body never echoed (not even on failure).
+# - dtxid is the primary log key — matches existing CLI convention.
+host = URI(options[:endpoint]).host
+peer_tail = options[:to][-8..]
+warn "transmitted: dtxid=#{dtxid} peer=...#{peer_tail} via #{host} outcome=#{delivery&.outcome}"
