@@ -37,23 +37,43 @@ module BSV
       # Private / link-local / unique-local ranges that an outbound BEEF
       # delivery has no business reaching:
       #
+      # - +0.0.0.0/8+ — RFC 1122 "this network". Linux + macOS route
+      #   +0.0.0.0+ to the loopback interface (the kernel's wildcard
+      #   bind-address shorthand), so it must be rejected alongside
+      #   +127.0.0.0/8+.
       # - +127.0.0.0/8+ — IPv4 loopback (the wallet host itself).
       # - +10.0.0.0/8+, +172.16.0.0/12+, +192.168.0.0/16+ — RFC1918
       #   private networks (operator LAN, container subnets, k8s pods).
+      # - +100.64.0.0/10+ — RFC 6598 carrier-grade NAT shared space.
+      #   Not RFC1918, but indistinguishable from "private" for our
+      #   purposes — no business reaching it from an outbound BEEF.
       # - +169.254.0.0/16+ — IPv4 link-local. INCLUDES the cloud
       #   metadata service at 169.254.169.254 — the canonical SSRF
       #   target for credential exfiltration on AWS / GCP / Azure.
+      # - +224.0.0.0/4+ — IPv4 multicast (RFC 5771).
+      # - +255.255.255.255/32+ — limited broadcast (RFC 919).
       # - +::1/128+ — IPv6 loopback.
       # - +fc00::/7+ — IPv6 unique-local (the IPv6 equivalent of
       #   RFC1918).
+      # - +::ffff:0:0/96+ — IPv4-mapped IPv6 (RFC 4291 § 2.5.5.2).
+      #   Defence-in-depth: +#validate_ip!+ also unwraps any
+      #   IPv4-mapped address to its native IPv4 form BEFORE the
+      #   membership check, so +::ffff:127.0.0.1+ falls into the
+      #   +127.0.0.0/8+ rule. Listing the +/96+ here closes the gap
+      #   for any future code path that skips the unwrap.
       PRIVATE_RANGES = %w[
+        0.0.0.0/8
         127.0.0.0/8
         10.0.0.0/8
         172.16.0.0/12
         192.168.0.0/16
+        100.64.0.0/10
         169.254.0.0/16
+        224.0.0.0/4
+        255.255.255.255/32
         ::1/128
         fc00::/7
+        ::ffff:0:0/96
       ].map { |r| IPAddr.new(r) }.freeze
 
       # @param allow_private [Boolean] dev/test escape hatch. Defaults to
@@ -152,6 +172,17 @@ module BSV
         rescue IPAddr::InvalidAddressError => e
           raise Violation, "endpoint rejected: invalid resolved IP=#{address} for host=#{host} (#{e.message})"
         end
+
+        # IPv4-mapped IPv6 (+::ffff:1.2.3.4+) → unwrap to native IPv4
+        # before the membership check. Without this step, the IPv4
+        # rules (+127.0.0.0/8+, +169.254.0.0/16+, etc.) never match
+        # +::ffff:127.0.0.1+ or +::ffff:169.254.169.254+ on a
+        # dual-stack host — those addresses do route to loopback /
+        # cloud-metadata respectively on Linux + macOS. The
+        # +::ffff:0:0/96+ range is listed in +PRIVATE_RANGES+ as
+        # defence-in-depth, but the unwrap is what makes the IPv4
+        # rules bite.
+        ip_addr = ip_addr.native if ip_addr.ipv4_mapped?
 
         return unless PRIVATE_RANGES.any? { |range| range.include?(ip_addr) }
 

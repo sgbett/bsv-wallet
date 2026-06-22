@@ -43,9 +43,18 @@ RSpec.describe BSV::Network::PeerDelivery do
   # touching the network. The block is the +http.start { |conn|
   # conn.request(...) }+ body; +Net::HTTP#start+ is the unit under
   # control here so we don't need to plumb a full request object.
+  #
+  # IMPORTANT: +Net::HTTP.new+ MUST receive the *hostname*, not the
+  # resolved IP. The pre-fix code dialled +Net::HTTP.new(ip, port)+
+  # which placed the IP into +@address+ — used by Net::HTTP for BOTH
+  # SNI AND certificate hostname verification — so VERIFY_PEER would
+  # fail against every legitimate peer cert (whose SAN names the
+  # hostname, not the IP). The mock asserts the post-fix signature so
+  # a regression to +Net::HTTP.new(ip, ...)+ would fail this expect
+  # chain.
   def stub_http_response(response)
     http = instance_double(Net::HTTP)
-    allow(Net::HTTP).to receive(:new).with(ip, 443).and_return(http)
+    allow(Net::HTTP).to receive(:new).with(uri.host, 443).and_return(http)
     allow(http).to receive(:use_ssl=)
     allow(http).to receive(:verify_mode=)
     allow(http).to receive(:ipaddr=)
@@ -58,10 +67,11 @@ RSpec.describe BSV::Network::PeerDelivery do
   end
 
   # Drive Net::HTTP into raising a transport error. Used for the
-  # timeout / TLS / DNS / socket-error classes.
+  # timeout / TLS / DNS / socket-error classes. Uses the post-fix
+  # +Net::HTTP.new(hostname, port)+ signature — see +stub_http_response+.
   def stub_http_raise(error)
     http = instance_double(Net::HTTP)
-    allow(Net::HTTP).to receive(:new).and_return(http)
+    allow(Net::HTTP).to receive(:new).with(uri.host, 443).and_return(http)
     allow(http).to receive(:use_ssl=)
     allow(http).to receive(:verify_mode=)
     allow(http).to receive(:ipaddr=)
@@ -109,15 +119,70 @@ RSpec.describe BSV::Network::PeerDelivery do
         delivery.deliver(endpoint: endpoint, envelope: envelope, subject_wtxid: subject_wtxid)
 
         # The request the PeerDelivery hands to #request should carry
-        # the hex-encoded BEEF and a JSON Content-Type. We assert by
-        # round-tripping the captured request.
+        # the hex-encoded BEEF and a JSON Content-Type. The +Host:+
+        # header is NOT set explicitly — +Net::HTTP+ derives it from
+        # +@address+ (the hostname we pass to +Net::HTTP.new+), so an
+        # explicit +request['Host'] = uri.host+ would be redundant
+        # and could mask the underlying bug class (cert hostname
+        # check disagreeing with +Host:+).
         expect(http).to have_received(:request) do |req|
           expect(req['Content-Type']).to eq('application/json')
-          expect(req['Host']).to eq('peer.example.com')
           body = JSON.parse(req.body)
           expect(body['beef']).to eq(beef_binary.unpack1('H*'))
           expect(body['protocol_version']).to eq(1)
         end
+      end
+    end
+
+    # TLS hostname-verification regression guard (HLR #385 / Copilot
+    # security gate C2). The pre-fix code passed the resolved IP as
+    # the first arg to +Net::HTTP.new+, which placed the IP into
+    # +@address+. +Net::HTTP+ uses +@address+ for BOTH SNI AND
+    # +OpenSSL::SSL::VERIFY_PEER+ hostname verification, so every
+    # legitimate peer's certificate (whose SAN names the hostname,
+    # not the IP) would fail handshake. The fix dials
+    # +Net::HTTP.new(hostname, port)+ + +http.ipaddr = ip+, which
+    # preserves the DNS-TOCTOU mitigation (dial the
+    # policy-approved IP) while letting TLS complete.
+    #
+    # A real-TLS WEBrick spec is the gold standard but heavy + flaky
+    # in this unit suite. The API-contract guard below is what locks
+    # the regression: a future change to +Net::HTTP.new(ip, ...)+
+    # would have no stub matching it, fail with a "no stub"
+    # double-mismatch, and the bug would surface in CI before merge.
+    describe 'TLS hostname verification (regression guard — C2)' do
+      before { stub_policy_accept }
+
+      it 'constructs Net::HTTP with the hostname (NOT the resolved IP) so SNI + cert hostname-check pass' do
+        ack = { 'accepted' => true, 'wtxid' => subject_dtxid }
+        stub_http_response(http_response(status: 200, body: JSON.generate(ack)))
+
+        delivery.deliver(endpoint: endpoint, envelope: envelope, subject_wtxid: subject_wtxid)
+
+        expect(Net::HTTP).to have_received(:new).with(uri.host, 443)
+        expect(Net::HTTP).not_to have_received(:new).with(ip, 443)
+      end
+
+      it 'sets http.ipaddr to the resolved IP (preserves DNS TOCTOU mitigation)' do
+        ack = { 'accepted' => true, 'wtxid' => subject_dtxid }
+        http = stub_http_response(http_response(status: 200, body: JSON.generate(ack)))
+
+        delivery.deliver(endpoint: endpoint, envelope: envelope, subject_wtxid: subject_wtxid)
+
+        # The policy resolved +endpoint+ to +ip+; we dial that exact
+        # IP via +http.ipaddr=+. Net::HTTP's @address stays the
+        # hostname (asserted above) so SNI + hostname verification
+        # still target the original name.
+        expect(http).to have_received(:ipaddr=).with(ip)
+      end
+
+      it 'sets verify_mode to VERIFY_PEER for https endpoints' do
+        ack = { 'accepted' => true, 'wtxid' => subject_dtxid }
+        http = stub_http_response(http_response(status: 200, body: JSON.generate(ack)))
+
+        delivery.deliver(endpoint: endpoint, envelope: envelope, subject_wtxid: subject_wtxid)
+
+        expect(http).to have_received(:verify_mode=).with(OpenSSL::SSL::VERIFY_PEER)
       end
     end
 

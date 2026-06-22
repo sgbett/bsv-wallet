@@ -130,29 +130,33 @@ module BSV
         envelope.merge(beef: envelope[:beef].unpack1('H*'))
       end
 
-      # Dial the IP the policy resolved, not the hostname — closes the
-      # DNS TOCTOU window. Set the +Host+ header to the original host
-      # so TLS SNI and HTTP virtual-host routing still work.
+      # Construct the connection with the *hostname* — +Net::HTTP+ uses
+      # +@address+ for BOTH TLS SNI AND certificate hostname
+      # verification. Dialling +Net::HTTP.new(ip, ...)+ would put the
+      # IP into +@address+, then +VERIFY_PEER+ would compare the
+      # cert's SAN against the IP and fail every legitimate peer.
+      #
+      # +http.ipaddr=+ overrides only the dial address, leaving
+      # +@address+ (and therefore SNI + hostname-verify) as the
+      # original hostname. That preserves the DNS TOCTOU mitigation
+      # (we dial the IP the policy approved) while letting TLS
+      # complete normally. +Host:+ is derived from +@address+ — no
+      # need to set it explicitly.
       def post(validated, body)
         uri = validated[:uri]
         ip = validated[:ip]
         port = uri.port || (uri.scheme == 'https' ? 443 : 80)
         use_ssl = uri.scheme == 'https'
 
-        http = Net::HTTP.new(ip, port)
+        http = Net::HTTP.new(uri.host, port)
+        http.ipaddr = ip if http.respond_to?(:ipaddr=)
         http.use_ssl = use_ssl
-        if use_ssl
-          http.verify_mode = OpenSSL::SSL::VERIFY_PEER
-          # SNI / virtual-host routing: the certificate is for the
-          # original hostname, not the resolved IP.
-          http.ipaddr = ip if http.respond_to?(:ipaddr=)
-        end
+        http.verify_mode = OpenSSL::SSL::VERIFY_PEER if use_ssl
         http.open_timeout = @connect_timeout
         http.read_timeout = @read_timeout
 
         request = Net::HTTP::Post.new(uri.request_uri)
         request['Content-Type'] = 'application/json'
-        request['Host'] = uri.host
         request.body = body
 
         http.start { |conn| conn.request(request) }

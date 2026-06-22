@@ -30,6 +30,15 @@ module BSV
       # +broadcast_intent+ inline/delayed split (ADR-024 / #183
       # inline-equals-delayed robustness).
       class Transmission
+        # BRC-43 canonical counterparty hex: compressed pubkey (02|03
+        # prefix), lowercase. Mirrors the Postgres CHECK in
+        # +db/migrations/003_schema_constraints.rb+ so the engine
+        # boundary rejects the same shapes the schema rejects — closes
+        # the H1 correctness drift where uppercase hex passed the
+        # engine then died as +Sequel::CheckConstraintViolation+ at
+        # DB write time.
+        BRC43_COMPRESSED_LOWERCASE = /\A0[23][0-9a-f]{64}\z/
+
         # Explicit DI — no engine back-reference. Mirrors sibling shape
         # (+Broadcast+, +TxProof+, +Hydrator+, +BeefImporter+).
         #
@@ -307,20 +316,27 @@ module BSV
         #     allows them as +KeyDeriver+ counterparty inputs, but they
         #     are not addressable peers — transmission targets must be
         #     concrete identity keys).
-        #   - non-hex, wrong-length, or wrong-prefix strings
-        #     (via +KeyDeriver.validate_counterparty_hex!+).
+        #   - anything other than a lowercase-hex compressed pubkey
+        #     (66 chars, +02|03+ prefix). Tighter than
+        #     +KeyDeriver.validate_counterparty_hex!+ — that helper
+        #     also accepts uncompressed (+04+) and mixed-case hex,
+        #     which is fine for +KeyDeriver+ (its callers use the
+        #     hex to derive a key) but wrong for the transmission
+        #     boundary: the Postgres CHECK in 003 is
+        #     +^0[23][0-9a-f]{64}$+, so an uppercase or +04+-prefix
+        #     counterparty passed the engine and then died as
+        #     +Sequel::CheckConstraintViolation+ at write time. The
+        #     fix mirrors the schema here so the engine boundary
+        #     rejects exactly what the DB would reject — same shape
+        #     on Postgres + SQLite (SQLite's CHECK is length +
+        #     prefix only; the engine is the canonical validator on
+        #     that backend).
         #
         # Curve-point validity (is this a point on the curve?) is
         # deferred to the +PublicKey.from_hex+ parse on the consumer
         # side; the regex check here covers syntactic shape, which is
         # what the AC's "before any DB write" gate requires for the
         # transmission row.
-        #
-        # The existing +KeyDeriver+ helper accepts uncompressed (04)
-        # prefixes per BRC-43. Transmission v1 leaves that lenient —
-        # BRC-29 / BRC-43 identity keys in this codebase are
-        # compressed-prefix (02|03) by every existing producer, and a
-        # later tightening can layer on without changing this surface.
         def validate_counterparty!(counterparty)
           if %w[self anyone].include?(counterparty)
             raise BSV::Wallet::InvalidParameterError.new(
@@ -330,7 +346,13 @@ module BSV
             )
           end
 
-          KeyDeriver.validate_counterparty_hex!(counterparty)
+          return if counterparty.is_a?(String) && counterparty.match?(BRC43_COMPRESSED_LOWERCASE)
+
+          raise BSV::Wallet::InvalidParameterError.new(
+            'counterparty',
+            'lowercase-hex compressed pubkey (02|03 prefix + 64 hex chars; ' \
+            'matches the Postgres CHECK in db/migrations/003)'
+          )
         end
       end
     end

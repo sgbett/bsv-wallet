@@ -138,13 +138,17 @@ RSpec.describe BSV::Network::EndpointPolicy do
       # One spec per PRIVATE_RANGES class — keeps the surface explicit
       # so a future maintainer can't accidentally remove a guard.
       {
+        'IPv4 wildcard (0.0.0.0 — Linux/macOS routes to loopback)' => '0.0.0.0',
         'IPv4 loopback (127.0.0.1)' => '127.0.0.1',
         'IPv4 loopback range (127.5.6.7)' => '127.5.6.7',
         'RFC1918 10.0.0.0/8' => '10.1.2.3',
         'RFC1918 172.16.0.0/12' => '172.20.5.6',
         'RFC1918 192.168.0.0/16' => '192.168.1.1',
+        'CGNAT 100.64.0.0/10 (RFC 6598)' => '100.64.5.6',
         'link-local 169.254.0.0/16' => '169.254.1.1',
-        'cloud-metadata service (169.254.169.254)' => '169.254.169.254'
+        'cloud-metadata service (169.254.169.254)' => '169.254.169.254',
+        'IPv4 multicast (224.0.0.1)' => '224.0.0.1',
+        'IPv4 limited broadcast (255.255.255.255)' => '255.255.255.255'
       }.each do |label, ip|
         it "rejects #{label}" do
           stub_dns(host: 'peer.example.com', address: ip)
@@ -165,6 +169,53 @@ RSpec.describe BSV::Network::EndpointPolicy do
           expect { policy.validate!('https://peer.example.com/') }
             .to raise_error(described_class::Violation, %r{private/loopback/link-local})
         end
+      end
+    end
+
+    # IPv4-mapped IPv6 (RFC 4291 § 2.5.5.2) is the SSRF bypass class
+    # missed by the v1 ranges-only check: +PRIVATE_RANGES+ contains the
+    # IPv4 +127.0.0.0/8+ + +169.254.0.0/16+ rules, but those never
+    # match a +::ffff:1.2.3.4+ +IPAddr+ — different family. On a
+    # dual-stack Linux/macOS host the kernel routes
+    # +::ffff:127.0.0.1+ to loopback and +::ffff:169.254.169.254+ to
+    # the cloud-metadata IP, so without unwrap an attacker who can
+    # influence DNS (or a typo'd literal endpoint) reaches both.
+    # +EndpointPolicy#validate_ip!+ calls +IPAddr#native+ on any
+    # +ipv4_mapped?+ address before the membership check so the IPv4
+    # rules apply.
+    context 'with IPv4-mapped IPv6 addresses (SSRF bypass class — RFC 4291 § 2.5.5.2)' do
+      {
+        'IPv4-mapped loopback (::ffff:127.0.0.1)' => '::ffff:127.0.0.1',
+        'IPv4-mapped RFC1918 (::ffff:10.0.0.1)' => '::ffff:10.0.0.1',
+        'IPv4-mapped wildcard (::ffff:0.0.0.0)' => '::ffff:0.0.0.0'
+      }.each do |label, ip|
+        it "rejects #{label}" do
+          stub_dns(host: 'peer.example.com', address: ip)
+          expect { policy.validate!('https://peer.example.com/') }
+            .to raise_error(described_class::Violation, %r{private/loopback/link-local})
+        end
+      end
+
+      it 'rejects IPv4-mapped cloud-metadata IP (::ffff:169.254.169.254)' do
+        # The credential-exfiltration end-state for the bypass class.
+        # AWS / GCP / Azure all serve metadata at 169.254.169.254;
+        # routing reaches it via the IPv4-mapped form on dual-stack
+        # hosts. This spec is named explicitly so a future maintainer
+        # can't quietly drop the guard without noticing what they're
+        # opening up.
+        stub_dns(host: 'peer.example.com', address: '::ffff:169.254.169.254')
+        expect { policy.validate!('https://peer.example.com/') }
+          .to raise_error(described_class::Violation, %r{private/loopback/link-local})
+      end
+
+      it 'rejects DNS-rebinding to IPv4-mapped cloud-metadata IP' do
+        # Same attack surface, framed as the DNS-rebinding case: a
+        # public-looking hostname that resolves (now, after the
+        # policy check would otherwise be safe) to the IPv4-mapped
+        # metadata IP.
+        stub_dns(host: 'attacker.example', address: '::ffff:169.254.169.254')
+        expect { policy.validate!('https://attacker.example/transmit') }
+          .to raise_error(described_class::Violation, /private/)
       end
     end
 

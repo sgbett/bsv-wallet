@@ -408,8 +408,36 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
       it_behaves_like 'rejects pre-side-effect'
     end
 
-    context 'with wrong key prefix (not 02|03|04)' do
+    context 'with wrong key prefix (not 02|03)' do
       let(:bad) { "01#{'a' * 64}" }
+
+      it_behaves_like 'rejects pre-side-effect'
+    end
+
+    # Uncompressed (04) is BRC-43-legal for +KeyDeriver+, but the
+    # Postgres CHECK in 003 is compressed-only — same as the
+    # engine-boundary check after H1.
+    context 'with uncompressed (04) pubkey prefix — rejected at the transmission boundary' do
+      let(:bad) { "04#{'a' * 64}" }
+
+      it_behaves_like 'rejects pre-side-effect'
+    end
+
+    # H1 (Copilot security gate): uppercase hex passed
+    # +KeyDeriver.validate_counterparty_hex!+ (which accepts
+    # +[0-9a-fA-F]+), the engine wrote the row, and Postgres rejected
+    # it with +Sequel::CheckConstraintViolation+ — a correctness drift
+    # SQLite (length+prefix only) silently allowed. The engine
+    # boundary now mirrors the Postgres CHECK exactly so the same
+    # rejection shape applies on both backends.
+    context 'with uppercase hex counterparty — H1 schema parity' do
+      let(:bad) { "02#{'A' * 64}" }
+
+      it_behaves_like 'rejects pre-side-effect'
+    end
+
+    context 'with mixed-case hex counterparty — H1 schema parity' do
+      let(:bad) { "02#{'aBcD' * 16}" }
 
       it_behaves_like 'rejects pre-side-effect'
     end
