@@ -1,29 +1,31 @@
 # BSV Wallet
 
-A Ruby implementation of the [BRC-100](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md) BSV wallet interface — transaction management, key derivation, encryption, certificates, and identity verification.
+A [BRC-100](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md) single-key wallet engine and daemon for Ruby. Transaction management, key derivation, encryption, certificates, identity verification — all 28 spec methods surfaced, with porcelain on top for payments, sweeps and peer delivery.
 
-## Overview
+## What this is not
 
-This is a Ruby wallet, not a Ruby port of a TypeScript wallet. The BRC-100 specification defines the external contract; the implementation is idiomatic Ruby throughout.
+A server-side library. No GUI, no seed-phrase recovery flow, no browser extension, no mobile SDK. The wallet is a long-lived process holding a single WIF, designed to be embedded in a Ruby application or run as a daemon (`bin/walletd`).
 
-**Gem:** `bsv-wallet` — core wallet implementing the BRC-100 interface, supporting both SQLite and PostgreSQL backends.
+## At a glance
 
-## Key Design Principles
+| Area | Capability |
+|---|---|
+| Spec | All 28 BRC-100 methods surfaced via `engine.brc100` (4 stubs/unsupported — see capability matrix) |
+| Key derivation | BRC-42/43 (ECDH + invoice-number), not plain BIP-32 |
+| Certificates | BRC-52 selective disclosure, BRC-69 Schnorr key-linkage |
+| Tx interchange | BRC-95 atomic BEEF; BRC-29 envelope for peer delivery |
+| Backends | Postgres-primary, SQLite-augmentation (one schema, two adapters) |
+| Network | ARC broadcast, callback or polling; daemon-side `bin/walletd` |
+| Safety | Limp mode below 50,000 sats spendable; hard floor 10,000 |
+| Fee model | 100 sat/KB default, configurable |
+| Network default | mainnet (`BSV_WALLET_NETWORK=testnet` to switch) |
+| Constraints | One wallet per OS process; Ruby >= 3.3; `pg` in your Gemfile for Postgres |
 
-- **Binary internally** — all binary data stays binary throughout the wallet internals. Hex conversion happens only at external API boundaries where a specification explicitly requires it.
-- **Synchronous interface** — all interface methods are synchronous and return hashes. Async behavior is an infrastructure concern handled by a wrapping service layer.
-- **American English** — matching the BRC-100 spec: `internalize_action`, `randomize_outputs`, and so on throughout.
-- **Ruby idioms** — keyword arguments, guard clauses, symbols for enumerations, YARD for documentation.
+## Where next
 
-## Getting Started
+- **New here** — [Getting Started](getting-started/installation.md): install the gem and run the quickstart.
+- **Doing something specific** — [Guides](guides/sending-payments.md): payments, broadcast lifecycle, operating the daemon, safety rules.
+- **Understanding how it works** — [Concepts](concepts/architecture.md): architecture, action lifecycle, transactions and BEEF, transmission, persistence, events.
+- **Canonical rules** — [Reference](reference/principle-of-state.md): principles, schema, state machines, external specs.
 
-```ruby
-# Gemfile
-gem 'bsv-wallet'
-gem 'pg'  # only if using PostgreSQL (defaults to SQLite)
-```
-
-## Documentation
-
-- [Design](design.md) — architecture, philosophy, and implementation details
-- [Wallet daemon events](wallet-events.md) — structured lifecycle events for walletd background tasks
+See [About these docs](about-these-docs.md) for the four-layer structure and link policy.
