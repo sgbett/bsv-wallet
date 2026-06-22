@@ -18,7 +18,7 @@ A single-user, high-throughput BSV wallet built on the [BSV Ruby SDK](https://gi
 
 ## Acknowledgements
 
-This gem owes a debt to the BSV Association's development team, whose work on the [TypeScript SDK](https://github.com/bsv-blockchain/ts-stack/tree/main/packages/sdk) and wallet-toolkit packages inspired our approach. An earlier Ruby port proved the idea was viable; this gem is a clean-room rebuild that carried those lessons forward.
+This gem owes a debt to the BSV Association's development team, whose work on the [TypeScript SDK](https://github.com/bsv-blockchain/ts-stack/tree/main/packages/sdk) and wallet-toolbox packages inspired our approach. An earlier Ruby port proved the idea was viable; this gem is a clean-room rebuild that carried those lessons forward.
 
 ## Objective
 
