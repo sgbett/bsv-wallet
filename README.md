@@ -3,7 +3,7 @@
 [![CI](https://github.com/sgbett/bsv-wallet/actions/workflows/main.yml/badge.svg)](https://github.com/sgbett/bsv-wallet/actions/workflows/main.yml)
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.3-red)](https://rubygems.org/gems/bsv-wallet)
 
-A single-user, high-throughput BSV wallet built on the [BSV Ruby SDK](https://github.com/sgbett/bsv-ruby-sdk), implementing the [BRC-100](https://github.com/bitcoin-sv/BRCs/blob/master/wallet/0100.md) interface: UTXO lifecycle, transaction construction, broadcasting, and proof management.
+A single-user, high-throughput BSV wallet built on the [BSV Ruby SDK](https://github.com/sgbett/bsv-ruby-sdk), implementing the [BRC-100](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md) interface: UTXO lifecycle, transaction construction, broadcasting, and proof management.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ A single-user, high-throughput BSV wallet built on the [BSV Ruby SDK](https://gi
 
 ## Acknowledgements
 
-This gem owes a debt to the BSV Association's development team, whose work on the [TypeScript SDK](https://github.com/bsv-blockchain/ts-sdk) and wallet-toolkit packages inspired our approach. An earlier Ruby port proved the idea was viable; this gem is a clean-room rebuild that carried those lessons forward.
+This gem owes a debt to the BSV Association's development team, whose work on the [TypeScript SDK](https://github.com/bsv-blockchain/ts-stack/tree/main/packages/sdk) and wallet-toolkit packages inspired our approach. An earlier Ruby port proved the idea was viable; this gem is a clean-room rebuild that carried those lessons forward.
 
 ## Objective
 
@@ -163,7 +163,7 @@ Full documentation is available at **[sgbett.github.io/bsv-wallet](https://sgbet
 - [Design Document](docs/design.md) — architecture, philosophy, implementation approach
 - [Architecture Decision Records](.architecture/decisions/adrs/) — the foundational design decisions and their rationale
 - [API Reference](https://sgbett.github.io/bsv-wallet/reference/) — auto-generated from YARD annotations
-- [BRC-100 Specification](https://github.com/bitcoin-sv/BRCs/blob/master/wallet/0100.md) — the external contract this wallet implements
+- [BRC-100 Specification](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md) — the external contract this wallet implements
 
 **Protocol reference:**
 

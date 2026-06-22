@@ -37,7 +37,7 @@ can also be flat — *N* sibling transactions with no parent/child dependency.
 
 The BSV Hub copy of the BRC-100 spec is the only place in the corpus where
 the concept is named directly (the paragraph is in the hub gloss, not the
-canonical `bitcoin-sv/BRCs` file):
+canonical `bsv-blockchain/BRCs` file):
 
 > In current interoperable implementations, `createAction` is also used for
 > wallet-managed batching and chained-send workflows such as `noSend`,
@@ -103,9 +103,9 @@ are meaningful — verified against the reference implementation's branch:
 ## Reference implementation mechanics
 
 `@bsv/wallet-toolbox` (the BSV Blockchain reference) realises the concept in
-[`src/storage/methods/processAction.ts`](https://github.com/bsv-blockchain/wallet-toolbox/blob/master/src/storage/methods/processAction.ts)
+[`src/storage/methods/processAction.ts`](https://github.com/bsv-blockchain/ts-stack/blob/main/packages/wallet/wallet-toolbox/src/storage/methods/processAction.ts)
 and
-[`src/signer/methods/createAction.ts`](https://github.com/bsv-blockchain/wallet-toolbox/blob/master/src/signer/methods/createAction.ts).
+[`src/signer/methods/createAction.ts`](https://github.com/bsv-blockchain/ts-stack/blob/main/packages/wallet/wallet-toolbox/src/signer/methods/createAction.ts).
 Three things are worth quoting directly:
 
 ### The batch is a persisted entity
@@ -258,7 +258,7 @@ partially-broadcast groups.
 
 ## Sources
 
-- [BRC-100 — canonical](https://github.com/bitcoin-sv/BRCs/blob/master/wallet/0100.md)
+- [BRC-100 — canonical](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md)
 - [BRC-100 — BSV Hub gloss with the "batching and chained-send workflows" paragraph](https://hub.bsvblockchain.org/brc/wallet/0100)
 - [BRC-1 Transaction Creation](https://bsv.brc.dev/wallet/0001)
 - [BRC-62 BEEF](https://bsv.brc.dev/transactions/0062),
@@ -266,6 +266,6 @@ partially-broadcast groups.
   [BRC-96 BEEF V2 Txid-Only](https://bsv.brc.dev/transactions/0096)
 - [BRC-109 IP-to-IP Note Settlement](https://bsv.brc.dev/wallet/0109)
 - [BRC-60 Hash Chains over Dependent Transactions](https://bsv.brc.dev/state-machines/0060)
-- [`@bsv/wallet-toolbox` repository](https://github.com/bsv-blockchain/wallet-toolbox) — reference implementation
-- [wallet-toolbox `processAction.ts`](https://github.com/bsv-blockchain/wallet-toolbox/blob/master/src/storage/methods/processAction.ts) — `shareReqsWithWorld`, batch id assignment
-- [wallet-toolbox `createAction.ts`](https://github.com/bsv-blockchain/wallet-toolbox/blob/master/src/signer/methods/createAction.ts) — `noSendChangeOutputVouts` plumbing
+- [`@bsv/wallet-toolbox` package in the ts-stack monorepo](https://github.com/bsv-blockchain/ts-stack/tree/main/packages/wallet/wallet-toolbox) — reference implementation
+- [wallet-toolbox `processAction.ts`](https://github.com/bsv-blockchain/ts-stack/blob/main/packages/wallet/wallet-toolbox/src/storage/methods/processAction.ts) — `shareReqsWithWorld`, batch id assignment
+- [wallet-toolbox `createAction.ts`](https://github.com/bsv-blockchain/ts-stack/blob/main/packages/wallet/wallet-toolbox/src/signer/methods/createAction.ts) — `noSendChangeOutputVouts` plumbing
