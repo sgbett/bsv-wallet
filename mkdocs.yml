@@ -45,7 +45,27 @@ plugins:
 
 nav:
   - Home: index.md
-  - Design: design.md
+  - About these docs: about-these-docs.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quickstart: getting-started/quickstart.md
+  - Guides:
+    - Sending payments: guides/sending-payments.md
+    - Broadcast lifecycle: guides/broadcast-lifecycle.md
+    - Operating the daemon: guides/operating-the-daemon.md
+    - Safety rules: guides/safety-rules.md
+  - Concepts:
+    - Architecture: concepts/architecture.md
+    - Action lifecycle: concepts/action-lifecycle.md
+    - Transactions & BEEF: concepts/transactions-and-beef.md
+    - Transmission: concepts/transmission.md
+    - Persistence: concepts/persistence.md
+    - Events: concepts/events.md
+    - UTXO management: concepts/utxo-management.md
+    - Keys & cryptography: concepts/keys-and-cryptography.md
+    - Resilience & recovery: concepts/resilience-and-recovery.md
+    - Daemon: concepts/daemon.md
+    - Network: concepts/network.md
   - Reference:
     - API: reference/api/index.md
     - Principle of state: reference/principle-of-state.md
@@ -54,6 +74,7 @@ nav:
     - Schema: reference/schema.md
     - Action lifecycle: reference/action-lifecycle.md
     - Transactions: reference/transactions.md
+    - Events: reference/events.md
     - Raw transactions: reference/raw-tx.md
     - SSE: reference/sse.md
     - External specs:

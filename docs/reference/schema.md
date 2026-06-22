@@ -147,6 +147,7 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | `wtxid IS NOT NULL`, send path, broadcast row exists, no promotions row | sending — broadcast in progress |
 | `wtxid IS NOT NULL`, send path, no broadcast row | unprocessed — broadcast pending |
 
+<!-- generated from gem/bsv-wallet/lib/bsv/wallet/store/models/action.rb#derived_status -->
 ```ruby
 class Wallet::Action < Sequel::Model
   many_to_one :tx_proof
@@ -354,7 +355,7 @@ The new wallet-owned outputs are live in the UTXO set. They're immediately avail
 
 #### Broadcast Failure
 
-If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Engine::Broadcast#handle_submit_terminal` calls `Store#reject_action` — the unified unwind path. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see `docs/wallet-events.md`).
+If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Engine::Broadcast#handle_submit_terminal` calls `Store#reject_action` — the unified unwind path. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see [Events (reference)](events.md)).
 
 `reject_action` covers both regimes in one function:
 

@@ -60,7 +60,7 @@ module BSV
       #      Pool depletion or contention-retry exhaustion ⇒
       #      InsufficientFundsError; the empty action row is aborted.
       #   3. Phase 3 / 4 follow the broadcast intent (send path versus
-      #      internal path); see docs/design.md.
+      #      internal path); see docs/concepts/action-lifecycle.md.
       #
       # Deferred signing (sign_and_process: false, caller-supplied inputs
       # only) skips the funding loop entirely and returns a signable handle.

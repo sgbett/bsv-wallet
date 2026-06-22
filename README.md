@@ -24,7 +24,7 @@ This gem owes a debt to the BSV Association's development team, whose work on th
 
 Run the BRC-100 surface at the throughput BSV is built for, with as little between Ruby and the database as possible.
 
-The design choices follow from that: no heavy dependencies, a light Ruby-native stack, and a clean division of labour — **the wallet validates, the database enforces**. State is derived, never stored; invalid state is structurally impossible. The reasoning is recorded in the [architecture decision records](.architecture/decisions/adrs/) and the [design doc](docs/design.md).
+The design choices follow from that: no heavy dependencies, a light Ruby-native stack, and a clean division of labour — **the wallet validates, the database enforces**. State is derived, never stored; invalid state is structurally impossible. The reasoning is recorded in the [architecture decision records](.architecture/decisions/adrs/) and the [architecture concepts page](docs/concepts/architecture.md).
 
 ### Architecture
 
@@ -158,11 +158,12 @@ result = engine.create_action(
 
 ## Documentation
 
-Full documentation is available at **[sgbett.github.io/bsv-wallet](https://sgbett.github.io/bsv-wallet/)**.
+Full documentation is available at **[sgbett.github.io/bsv-wallet](https://sgbett.github.io/bsv-wallet/)**, layered as Getting Started → Guides → Concepts → Reference. The first three are narrative (read in order from the top, or jump to the layer that answers the question in hand); Reference is canonical (cited from the other layers, not restated).
 
-- [Design Document](docs/design.md) — architecture, philosophy, implementation approach
-- [Architecture Decision Records](.architecture/decisions/adrs/) — the foundational design decisions and their rationale
+- [Getting Started — Quickstart](docs/getting-started/quickstart.md) — install, configure, send your first transaction
+- [Concepts — Architecture](docs/concepts/architecture.md) — the system as a narrative: layers, components, the principles they encode
 - [API Reference](https://sgbett.github.io/bsv-wallet/docs/reference/api/) — auto-generated from YARD annotations
+- [Architecture Decision Records](.architecture/decisions/adrs/) — the foundational design decisions and their rationale
 - [BRC-100 Specification](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md) — the external contract this wallet implements
 
 **Protocol reference:**
