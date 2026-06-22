@@ -44,4 +44,24 @@ If a fact appears in both a Concepts page and a Reference page in two slightly d
 - **`docs/reference/drafts/`** holds outbound BRC drafts authored here but destined for an upstream repo. URL-addressable but **omitted from `nav:`** to avoid presenting drafts as gem behaviour.
 - **`docs/reference/external/`** holds vendored upstream specs (e.g. BRC-100). Each carries an admonition stating where it was vendored from and at which ref.
 
-The broader strategy these decisions sit inside is documented at [`~/.claude/docs/documentation-strategy.md`](https://github.com/sgbett/bsv-wallet/blob/master/CLAUDE.md) for Ruby projects generally. This page is the wallet-specific application.
+The broader strategy these decisions sit inside is documented at `~/.claude/docs/documentation-strategy.md` (the author's dotfiles, applied across Ruby projects). This page is the wallet-specific application.
+
+## Drift policy check
+
+The check the drift policy referenced above codifies, runnable as a shell one-liner from the repo root:
+
+```bash
+for f in docs/concepts/*.md; do
+  base=$(basename $f)
+  ref="docs/reference/$base"
+  if [ -f "$ref" ]; then
+    common=$(comm -12 <(grep '^## ' "$f" | sort -u) <(grep '^## ' "$ref" | sort -u))
+    if [ -n "$common" ]; then
+      echo "DRIFT WARNING in $base:"
+      echo "$common"
+    fi
+  fi
+done
+```
+
+It walks every `docs/concepts/X.md` that has a sibling `docs/reference/X.md` and prints any H2 headings present in *both* — a literal restatement of a canonical section is the structural signature of drift. The expected output is empty, with one allowed exception: a shared `## Related` heading (the "see also" navigation aid at the foot of pages, common to both layers as a convention, not a content restatement). Any other shared heading is a build-failing drift event: the cure is to delete the Concepts copy and link to Reference.

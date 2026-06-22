@@ -93,7 +93,7 @@ using BSV::Wallet::Txid
 result[:txid].to_dtxid   # => 64-char display-order hex
 ```
 
-See the [wtxid/dtxid convention in CLAUDE.md](https://github.com/sgbett/bsv-wallet/blob/master/CLAUDE.md#transaction-id-convention-wtxid--dtxid).
+See the [wtxid / dtxid convention in Transactions & BEEF](../concepts/transactions-and-beef.md#byte-order-wire-vs-display).
 
 ## 6. Run the daemon
 
