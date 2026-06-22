@@ -379,12 +379,67 @@ Sequel.migration do
                                        ))
       end
     end
+
+    # 20. transmissions — wallet→peer BEEF delivery, per (action × counterparty)
+    #     (#385 / ADR-025). The wallet's first per-counterparty persistent state.
+    #     Delivery status is DERIVED, not stored: a present +acked_at+ means the
+    #     peer acknowledged internalisation — no status column (principle of state).
+    #
+    #     The +ack_signature+ column is reserved nullable from day 1: v1 ACK is a
+    #     bare HTTP 200, so it stays NULL; the Phase 2 signed-ACK protocol writes
+    #     into it without a schema migration.
+    create_table(:transmissions) do
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
+      # counterparty: BRC-43 identity pubkey (hex, 66-char compressed) — the
+      # named peer. Identity-shaped pubkeys stay hex (the pubkey-hex carve-out
+      # in CLAUDE.md). Shape CHECK (length + 02/03 prefix + hex body) lives in
+      # 003 alongside description_length, per the established structural-CHECK
+      # location precedent.
+      column :counterparty, :text, null: false
+      column :acked_at, c[:timestamptz]
+      # Phase 2 slot: peer-signed ACK over the wtxid, recorded alongside
+      # +acked_at+ when the signed-ACK protocol lands. NULL means a v1
+      # HTTP-200 ACK (or no ACK yet); see HLR #385 phasing.
+      column :ack_signature, c[:bytea]
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
+
+      # Grain: one row per (action, peer); re-transmit upserts in place.
+      unique %i[action_id counterparty]
+      # Composite index drives the known-set union query (filter on
+      # counterparty, then JOIN transmission_txids by id) without a
+      # sequential scan as the table grows.
+      index %i[counterparty id]
+    end
+
+    # 21. transmission_txids — pure membership: which wtxids each transmission's
+    #     BEEF carried, so a later transmission to the same counterparty trims
+    #     (BeefParty) to only what the peer lacks. The per-counterparty known
+    #     set is the union of these rows across all of that peer's
+    #     transmissions. wtxid stays binary (wire-order), per the
+    #     wtxid/dtxid convention; the length CHECK lives in 003.
+    #
+    #     Two-phase write (HLR #385, Crypto + Security gate): rows are
+    #     populated only in +Store#mark_transmission_acked+, never at
+    #     +record_transmission+ time — recording a wtxid the peer never
+    #     received would over-trim a future BEEF into unverifiability.
+    create_table(:transmission_txids) do
+      column :id, :bigint, primary_key: true, identity: :always if postgres
+      primary_key :id if !postgres
+      foreign_key :transmission_id, :transmissions, type: :bigint, null: false, on_delete: :cascade
+      column :wtxid, c[:bytea], null: false
+
+      unique %i[transmission_id wtxid]
+    end
   end
 
   down do
     postgres = database_type == :postgres
 
-    drop_table :promotions, :sse_cursors, :settings, :certificate_fields, :certificates,
+    drop_table :transmission_txids, :transmissions,
+               :promotions, :sse_cursors, :settings, :certificate_fields, :certificates,
                :output_tags, :tags, :action_labels, :labels, :inputs,
                :output_baskets, :output_details, :spendable, :outputs,
                :baskets, :broadcasts, :actions, :tx_proofs, :blocks

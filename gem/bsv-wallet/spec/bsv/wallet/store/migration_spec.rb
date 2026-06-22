@@ -8,12 +8,12 @@ RSpec.describe 'Schema migration', :store do
       blocks tx_proofs actions broadcasts baskets outputs spendable
       output_details output_baskets inputs labels action_labels
       tags output_tags certificates certificate_fields settings
-      promotions sse_cursors
+      promotions sse_cursors transmissions transmission_txids
     ]
   end
 
   describe 'tables' do
-    it 'creates all 19 tables' do
+    it 'creates all 21 tables' do
       expected_tables.each do |table|
         expect(db.table_exists?(table)).to be(true), "expected table #{table} to exist"
       end

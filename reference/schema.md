@@ -1151,6 +1151,60 @@ end
 
 ---
 
+## 20. Transmissions
+
+Wallet→peer BEEF delivery, at grain `(action_id, counterparty)` — the wallet's first per-counterparty persistent state (#385 / ADR-025). A row records that an action's BEEF was transmitted (or is being transmitted) to a named peer. This is distinct from `broadcasts` (which ships EF to the anonymous miner network): transmission is to a *named* peer (BRC-43 identity key) and ships Atomic BEEF for the peer's SPV. See `reference/transactions.md`.
+
+| col | type | attributes |
+| --- | --- | --- |
+| id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
+| action_id | bigint | NOT NULL, FK → actions(id) ON DELETE CASCADE |
+| counterparty | text | NOT NULL, CHECK shape (PG: regex `^0[23][0-9a-f]{64}$`; SQLite: length + 02/03 prefix) |
+| acked_at | timestamptz | NULL until the peer acknowledges |
+| ack_signature | bytea | NULL — reserved for Phase 2 signed-ACK |
+| created_at | timestamptz | NOT NULL DEFAULT now() |
+| updated_at | timestamptz | NOT NULL DEFAULT now() |
+
+- `UNIQUE (action_id, counterparty)` — the grain. Re-transmitting the same action to the same peer upserts the existing row (idempotent) rather than inserting a duplicate.
+- `INDEX (counterparty, id)` — composite, drives the per-peer known-wtxids query (filter on counterparty, then JOIN to `transmission_txids` by id) without a sequential scan as the table grows.
+
+**`counterparty` is hex, not `bytea`.** It is a BRC-43 identity public key (66-char compressed hex), an identity-shaped pubkey — the deliberate carve-out from the binary-internal principle (see CLAUDE.md "Public Key Convention"). It crosses the BRC boundary as a hex interchange identifier, the same as `outputs.sender_identity_key` and the `certificates` identity fields. The shape CHECK lives in migration 003 alongside `description_length` (structural-CHECK precedent).
+
+**`ack_signature` is reserved nullable from day 1.** v1 ACK is a bare HTTP 200 receipt and leaves this column NULL; the Phase 2 signed-ACK protocol (HLR #385) writes a peer signature over the ack'd wtxid here without a schema migration. Carrying the column reservation now avoids a Phase 2 migration of a table that may already be large.
+
+**No status column — delivery status is derived.** A NULL `acked_at` means "sent, not yet acknowledged"; a present `acked_at` means "delivered (peer internalised)". There is no `status` column to drift (principle of state — `reference/principle-of-state.md`).
+
+**`action_id` CASCADE FK** gives reaper-cleanup parity with the other action-dependent tables: tearing down an action deletes its transmissions (and their `transmission_txids`) in the same statement.
+
+**Upsert path:** `Store#record_transmission` uses `INSERT … ON CONFLICT (action_id, counterparty) DO UPDATE SET updated_at = EXCLUDED.updated_at RETURNING id` so concurrent transmits at the same grain converge on one row without a check-then-insert race.
+
+## 21. Transmission Txids
+
+Pure membership: which wtxids each transmission's BEEF carried. The per-counterparty *known set* — what BeefParty trims a future BEEF against — is the union of these rows across all of that counterparty's transmissions.
+
+| col | type | attributes |
+| --- | --- | --- |
+| id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
+| transmission_id | bigint | NOT NULL, FK → transmissions(id) ON DELETE CASCADE |
+| wtxid | bytea | NOT NULL, CHECK length(wtxid) = 32 |
+
+- `UNIQUE (transmission_id, wtxid)` — a wtxid appears at most once per transmission.
+- `wtxid` is wire-order binary (`bytea`), per the wtxid/dtxid convention — these are structural transaction identifiers, not interchange tokens.
+- No timestamps: like `spendable`, this is a pure membership table, append-only for the lifetime of its parent transmission, and cascades away with it.
+
+**Two-phase write — load-bearing.** Rows are populated only in `Store#mark_transmission_acked`, never at `record_transmission` time. Recording a wtxid the peer never received would over-trim a future BEEF against this peer (BeefParty would drop ancestors the peer cannot verify), so the known-set must reflect what the peer *acknowledged*, not what we attempted to send. The same call atomically updates `transmissions.acked_at` and batch-inserts the new wtxids via `INSERT … ON CONFLICT (transmission_id, wtxid) DO NOTHING`.
+
+The known-set query joins through to `transmissions` and filters on `counterparty`, deduplicating across transmissions:
+
+```sql
+SELECT DISTINCT tt.wtxid
+  FROM transmission_txids tt
+  JOIN transmissions t ON t.id = tt.transmission_id
+ WHERE t.counterparty = $1
+```
+
+---
+
 ## Key Queries
 
 **Spendable outputs in a basket** — the hot path for `createAction`'s funding loop (the `select_inputs` primitive). Enters through `spendable` (the wallet, in memory), PK-joins to `outputs` (the log) for data:
