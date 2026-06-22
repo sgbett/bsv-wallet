@@ -8,6 +8,7 @@ This page draws together the resilience mechanisms that appear throughout the ot
 
 A wallet whose balance falls too low is in a dangerous spot — it may not be able to pay fees, and continuing to spend can leave it stranded with locked inputs and no way out. **Limp mode** is a hard guard against that, owned by `Engine::Policy`:
 
+<!-- generated from gem/bsv-wallet/lib/bsv/wallet/engine.rb#limp_mode? + #headroom -->
 ```ruby
 def limp_mode? = @utxo_pool.balance < @limp_threshold
 def headroom   = [@utxo_pool.balance - @limp_threshold, 0].max
@@ -27,6 +28,7 @@ The hardest moment in a wallet's life is broadcasting: there is a window between
 
 `submit` stamps `broadcast_at` **in a committed transaction before the network POST**:
 
+<!-- generated from gem/bsv-wallet/lib/bsv/wallet/engine/broadcast.rb#submit -->
 ```ruby
 def submit(action_id, action, started_at:)
   @store.mark_broadcast_attempted(action_id: action_id)  # commit broadcast_at

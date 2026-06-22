@@ -101,6 +101,7 @@ No `task.aborted` — proof acquisition has no terminal-rejection mode. A proof 
 
 The most important observer is the daemon's own. The `Scheduler` needs to know when the system is *quiesced* — every dispatched task settled — so that a clean shutdown can wait for in-flight work rather than killing it mid-broadcast. Rather than reach into `Engine::Broadcast` and `Engine::TxProof` internals, it derives this purely from the event stream:
 
+<!-- generated from gem/bsv-wallet/lib/bsv/wallet/scheduler.rb#record_lifecycle -->
 ```ruby
 TERMINAL_EVENTS = %w[task.succeeded task.failed task.aborted task.skipped].freeze
 

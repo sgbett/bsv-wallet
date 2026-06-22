@@ -147,6 +147,7 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | `wtxid IS NOT NULL`, send path, broadcast row exists, no promotions row | sending — broadcast in progress |
 | `wtxid IS NOT NULL`, send path, no broadcast row | unprocessed — broadcast pending |
 
+<!-- generated from gem/bsv-wallet/lib/bsv/wallet/store/models/action.rb#derived_status -->
 ```ruby
 class Wallet::Action < Sequel::Model
   many_to_one :tx_proof

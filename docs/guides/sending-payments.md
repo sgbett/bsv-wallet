@@ -88,7 +88,7 @@ engine.consolidate_step(target_inputs: 20)
 # self-pays with a single change output
 
 engine.sweep(recipient: '02a1b2...')        # one consolidation pass to a recipient
-engine.sweep_to_root(target_inputs: 20)     # loop consolidate_step, then sweep to the root address
+engine.sweep_to_root(target_inputs: 20)     # loop consolidate_step, then sweep to root (recipient defaults to self — the wallet's own identity)
 engine.estimate_sweep_fee(input_count:, recipient_script:) # fee preview
 ```
 

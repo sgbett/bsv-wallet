@@ -20,6 +20,7 @@ Signing produces the `wtxid` and the raw transaction bytes; until that happens t
 
 Every action carries a `broadcast_intent`, chosen by `map_broadcast_intent` from two flags passed in by `BRC100#create_action`:
 
+<!-- generated from gem/bsv-wallet/lib/bsv/wallet/engine.rb#map_broadcast_intent -->
 ```ruby
 def map_broadcast_intent(no_send, accept_delayed_broadcast)
   if no_send then :none
