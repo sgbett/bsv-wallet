@@ -77,13 +77,18 @@ RSpec.describe BSV::Wallet::Store, :store do
     # UNIQUE (action_id, counterparty) — is identical on both; this proves
     # the upsert path eliminates the check-then-insert race on Postgres.
     it 'survives concurrent transmits at the same (action, peer) grain', :postgres do
-      # Read the URL off the live STORE_DB rather than calling
-      # Fixtures.wallet(:test) — fixtures_spec.rb resets the singleton, so the
-      # lookup is unsafe mid-suite; the live db opts always reflect the URL
-      # the shared_context bootstrapped against.
+      # Use a side Sequel pool so the test can write outside the spec's
+      # +around(:store)+ transaction wrapper (rolled-back state on STORE_DB
+      # is invisible to concurrent connections). Drive the inserts via raw
+      # dataset access — NOT via +side_store.record_transmission+ — to
+      # avoid +Store#bind_models!+, which globally rebinds every Sequel
+      # model class's dataset to whichever connection the calling Store
+      # wraps. Calling it here would point every model in the suite at
+      # +side_db+ and, after the +ensure+ disconnect, leave subsequent
+      # specs blocked on a dead pool. The property under test is the
+      # PG-level UNIQUE serialisation of +INSERT … ON CONFLICT+, not the
+      # specific code path through the Store wrapper.
       side_db = Sequel.connect(STORE_DB.opts[:uri] || STORE_DB.opts[:url])
-      side_store = BSV::Wallet::Store::Postgres.new(db: side_db)
-      side_store.send(:bind_models!)
 
       action_id = side_db[:actions].insert(
         description: 'concurrent transmit test',
@@ -95,12 +100,20 @@ RSpec.describe BSV::Wallet::Store, :store do
       errors  = []
       ids     = []
       mutex   = Mutex.new
+      now     = Time.now
 
       threads = Array.new(2) do
         Thread.new do
           barrier.pop
-          id = side_store.record_transmission(action_id: action_id, counterparty: counterparty)
-          mutex.synchronize { ids << id }
+          rows = side_db[:transmissions]
+                 .insert_conflict(
+                   target: %i[action_id counterparty],
+                   update: { updated_at: Sequel[:excluded][:updated_at] }
+                 )
+                 .returning(:id)
+                 .insert(action_id: action_id, counterparty: counterparty,
+                         created_at: now, updated_at: now)
+          mutex.synchronize { ids << rows.first[:id] }
         rescue StandardError => e
           mutex.synchronize { errors << e }
         end
