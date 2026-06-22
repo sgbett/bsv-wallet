@@ -36,7 +36,7 @@ module BSV
       # @param hex [String]
       # @raise [BSV::Wallet::InvalidParameterError]
       def self.validate_counterparty_hex!(hex)
-        return if hex.is_a?(String) && hex.match?(/\A(?:02|03|04)[0-9a-fA-F]{64}\z/)
+        return if hex.is_a?(String) && hex.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
 
         raise BSV::Wallet::InvalidParameterError.new('counterparty',
                                                      '"self", "anyone", or a valid hex public key')
@@ -523,7 +523,7 @@ module BSV
 
       # Normalize a public key to hex string, accepting either hex or binary.
       def normalize_pubkey_to_hex(key)
-        if key.is_a?(String) && key.match?(/\A(?:02|03|04)[0-9a-fA-F]{64}\z/)
+        if key.is_a?(String) && key.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
           key
         elsif key.is_a?(String) && key.bytesize == 33
           key.unpack1('H*')
