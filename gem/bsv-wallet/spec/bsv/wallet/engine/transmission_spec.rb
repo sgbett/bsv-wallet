@@ -3,10 +3,15 @@
 require 'bsv-wallet'
 require 'bsv/wallet/engine/transmission'
 
-# Isolation specs for the Engine::Transmission domain (HLR #385 Task 2 / #387).
-# Mock-pattern, mirroring tx_proof_spec.rb: Transmission's contract footprint
-# is small (validate → hydrator → store record) so the spec drives mocks
-# rather than a real Store, keeping the focus on the engine-boundary contract.
+# Isolation specs for the Engine::Transmission domain (HLR #385 Tasks 2-3,
+# #387 + #388). Mock-pattern, mirroring tx_proof_spec.rb: Transmission's
+# contract footprint is small (validate → fetch known → hydrate → trim →
+# record) so the spec drives mocks rather than a real Store, keeping the
+# focus on the engine-boundary contract.
+#
+# Real +Transaction::Beef+ / +Transaction::BeefParty+ instances are used
+# wherever the trim invariants (#388) are under test; the SDK primitives
+# are not stubbed.
 RSpec.describe BSV::Wallet::Engine::Transmission do
   subject(:transmission) { described_class.new(store: store, hydrator: hydrator) }
 
@@ -17,16 +22,72 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
   let(:other_counterparty) { "03#{'b' * 64}" }
   let(:sender_identity_key) { "02#{'c' * 64}" }
   let(:action_id) { 42 }
-  let(:raw_tx) { "\x01\x00".b }
-  let(:atomic_beef) { "\xef\xbe\xef\xfe".b }
   let(:transmission_id) { 99 }
-  let(:action_hash) do
-    { id: action_id, wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx, tx_proof_id: nil }
-  end
   # BRC-29 envelope shape — what the peer needs to recover locking keys.
   let(:outputs) do
     [{ vout: 0, satoshis: 1_000, derivation_prefix: 'p', derivation_suffix: '1' }]
   end
+  # Hash of (subject_tx, ancestor, beef_binary, raw_tx) — the bits the
+  # mocked +store.find_action+ + +hydrator.build_atomic_beef+ need.
+  let(:built) { build_test_beef }
+  let(:raw_tx) { built[:subject_tx].to_binary }
+  let(:subject_wtxid) { built[:subject_tx].wtxid }
+  let(:ancestor_wtxid) { built[:ancestor].wtxid }
+  let(:atomic_beef_binary) { built[:beef_binary] }
+  let(:action_hash) do
+    { id: action_id, wtxid: subject_wtxid, raw_tx: raw_tx, tx_proof_id: nil }
+  end
+
+  # --- Helpers ---------------------------------------------------------
+
+  # Build a tiny verifiable BEEF (proven ancestor + subject spending it).
+  # Mirrors +beef_importer_spec.rb#build_verifiable_beef+ — kept local to
+  # avoid coupling specs.
+  def build_test_beef(satoshis: 500, ancestor_satoshis: 600)
+    op_true = "\x51".b
+
+    ancestor = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+    ancestor.add_output(BSV::Transaction::TransactionOutput.new(
+                          satoshis: ancestor_satoshis,
+                          locking_script: BSV::Script::Script.from_binary(op_true)
+                        ))
+    ancestor.merkle_path = build_test_merkle_path(ancestor)
+
+    subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+    subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                           prev_wtxid: ancestor.wtxid,
+                           prev_tx_out_index: 0,
+                           sequence: 0xFFFFFFFF,
+                           unlocking_script: BSV::Script::Script.from_binary(op_true)
+                         ))
+    subject_tx.inputs[0].source_transaction = ancestor
+    subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                            satoshis: satoshis,
+                            locking_script: BSV::Script::Script.from_binary(op_true)
+                          ))
+
+    beef = BSV::Transaction::Beef.new
+    beef.merge_transaction(ancestor)
+    beef.merge_transaction(subject_tx)
+    {
+      beef_binary: beef.to_atomic_binary(subject_tx.wtxid),
+      subject_tx: subject_tx,
+      ancestor: ancestor
+    }
+  end
+
+  def build_test_merkle_path(tx)
+    sibling_hash = ([0x42] * 32).pack('C*').b
+    BSV::Transaction::MerklePath.new(
+      block_height: 800_000,
+      path: [[
+        BSV::Transaction::MerklePath::PathElement.new(offset: 2, hash: tx.wtxid, txid: true),
+        BSV::Transaction::MerklePath::PathElement.new(offset: 3, hash: sibling_hash)
+      ]]
+    )
+  end
+
+  # --- Constructor ----------------------------------------------------
 
   describe 'constructor (sibling-shape parity)' do
     it 'mirrors Broadcast/TxProof: explicit DI, no engine back-ref' do
@@ -51,13 +112,25 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
     end
   end
 
-  describe '#transmit (happy path)' do
+  # --- #transmit happy path (cold peer — empty known-set) -------------
+
+  describe '#transmit (happy path — cold peer)' do
     before do
       allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-      allow(hydrator).to receive(:build_atomic_beef).with(raw_tx, action_id).and_return(atomic_beef)
+      allow(store).to receive(:transmission_known_wtxids)
+        .with(counterparty: counterparty).and_return([])
+      allow(hydrator).to receive(:build_atomic_beef)
+        .with(raw_tx, action_id).and_return(atomic_beef_binary)
       allow(store).to receive(:record_transmission).with(
         action_id: action_id, counterparty: counterparty
       ).and_return(transmission_id)
+    end
+
+    it 'pre-fetches the peer known-set exactly once' do
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+      expect(store).to have_received(:transmission_known_wtxids)
+        .with(counterparty: counterparty).once
     end
 
     it 'calls hydrator.build_atomic_beef with the action raw_tx + id' do
@@ -74,25 +147,210 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
       )
     end
 
-    it 'returns +{ transmission_id:, beef:, outputs:, sender_identity_key: }+' do
+    it 'returns transmission_id + beef + sent_wtxids + outputs + sender_identity_key' do
       result = transmission.transmit(counterparty: counterparty, action_id: action_id,
                                      outputs: outputs, sender_identity_key: sender_identity_key)
-      expect(result).to eq(
-        transmission_id: transmission_id,
-        beef: atomic_beef,
-        outputs: outputs,
-        sender_identity_key: sender_identity_key
+      expect(result.keys).to contain_exactly(
+        :transmission_id, :beef, :sent_wtxids, :outputs, :sender_identity_key
+      )
+      expect(result[:transmission_id]).to eq(transmission_id)
+      expect(result[:outputs]).to eq(outputs)
+      expect(result[:sender_identity_key]).to eq(sender_identity_key)
+    end
+
+    it 'returns a valid Atomic BEEF binary the peer can parse' do
+      result = transmission.transmit(counterparty: counterparty, action_id: action_id,
+                                     outputs: outputs, sender_identity_key: sender_identity_key)
+      parsed = BSV::Transaction::Beef.from_binary(result[:beef])
+      expect(parsed.subject_wtxid).to eq(subject_wtxid)
+    end
+
+    it 'cold peer: sent_wtxids carries both subject + ancestor (nothing trimmed)' do
+      result = transmission.transmit(counterparty: counterparty, action_id: action_id,
+                                     outputs: outputs, sender_identity_key: sender_identity_key)
+      expect(result[:sent_wtxids]).to contain_exactly(subject_wtxid, ancestor_wtxid)
+    end
+  end
+
+  # --- #transmit (per-counterparty isolation — #388 AC) ---------------
+
+  describe '#transmit (per-counterparty isolation)' do
+    # AC: Trim against Alice's known-set must NOT affect a subsequent
+    # transmit to Bob. Fresh +BeefParty+ per call is the mechanism;
+    # this spec proves the observable: Bob's BEEF carries everything
+    # Alice's didn't, because Bob's known-set is empty.
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(hydrator).to receive(:build_atomic_beef).and_return(atomic_beef_binary)
+      allow(store).to receive(:record_transmission).and_return(transmission_id, transmission_id + 1)
+      # Alice already holds the ancestor; Bob holds nothing.
+      allow(store).to receive(:transmission_known_wtxids)
+        .with(counterparty: counterparty).and_return([ancestor_wtxid])
+      allow(store).to receive(:transmission_known_wtxids)
+        .with(counterparty: other_counterparty).and_return([])
+    end
+
+    it 'trims for Alice, then sends Bob the full bundle (no cross-peer leakage)' do
+      alice_result = transmission.transmit(counterparty: counterparty, action_id: action_id,
+                                           outputs: outputs, sender_identity_key: sender_identity_key)
+      bob_result   = transmission.transmit(counterparty: other_counterparty, action_id: action_id,
+                                           outputs: outputs, sender_identity_key: sender_identity_key)
+
+      # Alice does NOT receive the ancestor as raw — she already has it.
+      expect(alice_result[:sent_wtxids]).to contain_exactly(subject_wtxid)
+      # Bob receives both — empty known-set, nothing trimmed.
+      expect(bob_result[:sent_wtxids]).to contain_exactly(subject_wtxid, ancestor_wtxid)
+    end
+
+    it 'constructs a fresh BeefParty per #transmit (never reused across counterparties)' do
+      # AC spy: BeefParty constructor called once per call, no instance
+      # leaks across peers. We let the real BeefParty run after the spy.
+      allow(BSV::Transaction::BeefParty).to receive(:new).and_call_original
+
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+      transmission.transmit(counterparty: other_counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+
+      expect(BSV::Transaction::BeefParty).to have_received(:new).with([counterparty])
+      expect(BSV::Transaction::BeefParty).to have_received(:new).with([other_counterparty])
+      expect(BSV::Transaction::BeefParty).to have_received(:new).twice
+    end
+
+    it 'records a distinct row per counterparty' do
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+      transmission.transmit(counterparty: other_counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+
+      expect(store).to have_received(:record_transmission).with(
+        action_id: action_id, counterparty: counterparty
+      )
+      expect(store).to have_received(:record_transmission).with(
+        action_id: action_id, counterparty: other_counterparty
       )
     end
   end
 
+  # --- #transmit (idempotent re-transmit — #388 AC) -------------------
+
+  describe '#transmit (idempotent re-transmit trims to a smaller BEEF)' do
+    # First transmit goes cold (empty known-set); a notional ACK between
+    # the two would add ancestor_wtxid to the peer's known-set. We
+    # simulate that by stubbing the second pre-fetch to return the wtxids
+    # the first BEEF carried — the AC's stated mechanism for re-transmit
+    # idempotency.
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(hydrator).to receive(:build_atomic_beef).and_return(atomic_beef_binary)
+      allow(store).to receive(:record_transmission).and_return(transmission_id)
+      # Second pre-fetch returns only the ancestor — the realistic
+      # post-ACK state. Including the subject here would (correctly)
+      # trip the subject-protection invariant; that case is covered in
+      # its own describe block.
+      allow(store).to receive(:transmission_known_wtxids)
+        .with(counterparty: counterparty)
+        .and_return([], [ancestor_wtxid])
+    end
+
+    it 'second transmit fetches the now-non-empty known set' do
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+      expect(store).to have_received(:transmission_known_wtxids).twice
+    end
+
+    it 'second transmit produces a smaller BEEF (ancestor trimmed)' do
+      first  = transmission.transmit(counterparty: counterparty, action_id: action_id,
+                                     outputs: outputs, sender_identity_key: sender_identity_key)
+      second = transmission.transmit(counterparty: counterparty, action_id: action_id,
+                                     outputs: outputs, sender_identity_key: sender_identity_key)
+
+      # Cold peer carries both; warm peer carries only the subject.
+      expect(first[:sent_wtxids]).to contain_exactly(subject_wtxid, ancestor_wtxid)
+      expect(second[:sent_wtxids]).to contain_exactly(subject_wtxid)
+
+      # Wire-byte proof of the trim — second binary is smaller.
+      expect(second[:beef].bytesize).to be < first[:beef].bytesize
+    end
+  end
+
+  # --- #transmit (subject-protection invariant — #388 AC) -------------
+
+  describe '#transmit (subject-protection: poisoned known-set)' do
+    # AC: when the peer's known-set names the subject's wtxid as
+    # "known", #transmit must raise BEFORE serialising — defence-in-depth
+    # against an over-trimmed BEEF the peer cannot SPV-verify.
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(hydrator).to receive(:build_atomic_beef).and_return(atomic_beef_binary)
+      # Poisoned known-set: subject AND ancestor.
+      allow(store).to receive(:transmission_known_wtxids)
+        .with(counterparty: counterparty).and_return([subject_wtxid, ancestor_wtxid])
+      allow(store).to receive(:record_transmission)
+    end
+
+    it 'raises BSV::Wallet::Error mentioning subject + counterparty' do
+      # When the known-set names the subject, +#transmit+ demotes it to
+      # +TxidOnlyEntry+ alongside the other "known" entries, then the
+      # trim drops it (it is in the known-set). The subject lookup
+      # post-trim finds no entry — the defence-in-depth guard fires
+      # BEFORE serialisation, preventing a BEEF the peer cannot
+      # SPV-verify.
+      expect do
+        transmission.transmit(counterparty: counterparty, action_id: action_id,
+                              outputs: outputs, sender_identity_key: sender_identity_key)
+      end.to raise_error(BSV::Wallet::Error,
+                         /egress trim invariant.*counterparty.*subject/)
+    end
+
+    it 'does not call record_transmission when subject-protection fires' do
+      expect do
+        transmission.transmit(counterparty: counterparty, action_id: action_id,
+                              outputs: outputs, sender_identity_key: sender_identity_key)
+      end.to raise_error(BSV::Wallet::Error)
+
+      expect(store).not_to have_received(:record_transmission)
+    end
+  end
+
+  # --- #transmit (two-phase commit boundary — #388 AC) ----------------
+
+  describe '#transmit (two-phase commit: never marks acked itself)' do
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(hydrator).to receive(:build_atomic_beef).and_return(atomic_beef_binary)
+      allow(store).to receive_messages(transmission_known_wtxids: [], record_transmission: transmission_id)
+      allow(store).to receive(:mark_transmission_acked)
+    end
+
+    it 'does NOT call mark_transmission_acked (Task 5 / #390 owns ACK)' do
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+      expect(store).not_to have_received(:mark_transmission_acked)
+    end
+
+    it 'returns sent_wtxids: the wtxids the eventual ACK handler will record' do
+      result = transmission.transmit(counterparty: counterparty, action_id: action_id,
+                                     outputs: outputs, sender_identity_key: sender_identity_key)
+      # On ACK, #390 will pass these to mark_transmission_acked.
+      expect(result[:sent_wtxids]).to all(be_a(String).and(have_attributes(bytesize: 32)))
+      expect(result[:sent_wtxids]).to include(subject_wtxid)
+    end
+  end
+
+  # --- #transmit validation BEFORE any side effect --------------------
+
   describe '#transmit (validation BEFORE any side effect)' do
     # AC: engine-boundary validation rejects bad counterparties BEFORE any
-    # DB write or BEEF construction (HLR #385 crypto/security gate).
+    # DB write, BEEF construction, OR known-set pre-fetch
+    # (HLR #385 crypto/security gate).
 
     before do
       # Tell mocks they should not be touched on a validation failure.
       allow(store).to receive(:find_action)
+      allow(store).to receive(:transmission_known_wtxids)
       allow(store).to receive(:record_transmission)
       allow(hydrator).to receive(:build_atomic_beef)
     end
@@ -105,12 +363,13 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
         end.to raise_error(BSV::Wallet::InvalidParameterError)
       end
 
-      it 'does not call store or hydrator' do
+      it 'does not call store (find/known/record) or hydrator' do
         expect do
           transmission.transmit(counterparty: bad, action_id: action_id,
                                 outputs: outputs, sender_identity_key: sender_identity_key)
         end.to raise_error(BSV::Wallet::InvalidParameterError)
         expect(store).not_to have_received(:find_action)
+        expect(store).not_to have_received(:transmission_known_wtxids)
         expect(store).not_to have_received(:record_transmission)
         expect(hydrator).not_to have_received(:build_atomic_beef)
       end
@@ -153,6 +412,8 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
     end
   end
 
+  # --- #transmit (action-state errors) --------------------------------
+
   describe '#transmit (action-state errors)' do
     it 'raises when the action is not found' do
       allow(store).to receive(:find_action).with(id: action_id).and_return(nil)
@@ -174,6 +435,8 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
     end
   end
 
+  # --- #transmit (unproven subject — BEEF/SPV core case) --------------
+
   describe '#transmit (unproven subject — BEEF/SPV core case)' do
     # AC refinement: an action whose +tx_proof_id+ is nil but +raw_tx+ is
     # present (pure no_send → immediate transmit) must succeed. BEEF/SPV's
@@ -183,42 +446,15 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
 
     before do
       allow(store).to receive(:find_action).with(id: action_id).and_return(unproven_action)
-      allow(hydrator).to receive(:build_atomic_beef).with(raw_tx, action_id).and_return(atomic_beef)
-      allow(store).to receive(:record_transmission).and_return(transmission_id)
+      allow(hydrator).to receive(:build_atomic_beef).with(raw_tx, action_id).and_return(atomic_beef_binary)
+      allow(store).to receive_messages(transmission_known_wtxids: [], record_transmission: transmission_id)
     end
 
     it 'succeeds and returns the wire payload' do
       result = transmission.transmit(counterparty: counterparty, action_id: action_id,
                                      outputs: outputs, sender_identity_key: sender_identity_key)
       expect(result[:transmission_id]).to eq(transmission_id)
-      expect(result[:beef]).to eq(atomic_beef)
-    end
-  end
-
-  describe '#transmit (per-counterparty isolation)' do
-    # AC: parallel transmits to two peers produce two distinct
-    # +record_transmission+ calls. Mock-level proof of the
-    # per-counterparty grain — the database-level UNIQUE
-    # (action_id, counterparty) idempotency is covered by Task 1's
-    # transmissions_spec.
-    before do
-      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
-      allow(hydrator).to receive(:build_atomic_beef).and_return(atomic_beef)
-      allow(store).to receive(:record_transmission).and_return(transmission_id, transmission_id + 1)
-    end
-
-    it 'records a distinct row per counterparty' do
-      transmission.transmit(counterparty: counterparty, action_id: action_id,
-                            outputs: outputs, sender_identity_key: sender_identity_key)
-      transmission.transmit(counterparty: other_counterparty, action_id: action_id,
-                            outputs: outputs, sender_identity_key: sender_identity_key)
-
-      expect(store).to have_received(:record_transmission).with(
-        action_id: action_id, counterparty: counterparty
-      )
-      expect(store).to have_received(:record_transmission).with(
-        action_id: action_id, counterparty: other_counterparty
-      )
+      expect(BSV::Transaction::Beef.from_binary(result[:beef]).subject_wtxid).to eq(subject_wtxid)
     end
   end
 end
