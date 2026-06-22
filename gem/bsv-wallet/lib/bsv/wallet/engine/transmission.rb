@@ -139,9 +139,13 @@ module BSV
         # the delayed broadcast worker.
         #
         # @param counterparty [String] BRC-43 identity pubkey hex
-        #   (66-char compressed, 02|03 prefix). Engine-boundary
-        #   validation rejects sentinels and malformed hex via
-        #   +KeyDeriver.validate_counterparty_hex!+.
+        #   (66-char compressed, +02+/+03+ prefix, **lowercase**).
+        #   Validated at the engine boundary by
+        #   +Transmission#validate_counterparty!+ — the BRC-43 canonical
+        #   form (+\A0[23][0-9a-f]{64}\z+) which mirrors the Postgres
+        #   CHECK in migration 003 exactly. Rejects +self+/+anyone+
+        #   derivation sentinels, uppercase/mixed-case hex, and any
+        #   non-BRC-43 shape before any DB write.
         # @param action_id [Integer]
         # @param outputs [Array<Hash>] BRC-29 derivation metadata —
         #   +{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }+

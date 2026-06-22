@@ -23,9 +23,15 @@ module BSV
       # +KeyDeriver+ instance (e.g. +Engine::Transmission+) can validate
       # counterparties at the engine boundary before any DB write.
       #
-      # Accepts both compressed (02|03 prefix, 66 chars) and uncompressed
-      # (04 prefix, 130 chars) hex. Callers that need a stricter shape
-      # (e.g. compressed-only) should layer their own check on top.
+      # Accepts a BRC-43 compressed identity pubkey: +02+ / +03+ prefix +
+      # 64 hex chars (66 chars total). Case is tolerated. The +04+
+      # uncompressed shape is **not** accepted — the regex's 64 trailing
+      # hex chars match only the compressed tail; an actual uncompressed
+      # pubkey needs 128 trailing hex chars and so falls through to the
+      # raise. The wallet has no caller that passes uncompressed identity
+      # keys, and BRC-43 mandates compressed. Callers that need stricter
+      # parity with the schema CHECK (lowercase only) layer their own
+      # regex on top — see +Engine::Transmission#validate_counterparty!+.
       #
       # @param hex [String]
       # @raise [BSV::Wallet::InvalidParameterError]
