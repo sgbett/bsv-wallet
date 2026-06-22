@@ -121,6 +121,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
         .with(counterparty: counterparty).and_return([])
       allow(hydrator).to receive(:build_atomic_beef)
         .with(raw_tx, action_id).and_return(atomic_beef_binary)
+      allow(hydrator).to receive(:validate_for_handoff!)
       allow(store).to receive(:record_transmission).with(
         action_id: action_id, counterparty: counterparty
       ).and_return(transmission_id)
@@ -182,6 +183,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
     before do
       allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
       allow(hydrator).to receive(:build_atomic_beef).and_return(atomic_beef_binary)
+      allow(hydrator).to receive(:validate_for_handoff!)
       allow(store).to receive(:record_transmission).and_return(transmission_id, transmission_id + 1)
       # Alice already holds the ancestor; Bob holds nothing.
       allow(store).to receive(:transmission_known_wtxids)
@@ -243,6 +245,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
     before do
       allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
       allow(hydrator).to receive(:build_atomic_beef).and_return(atomic_beef_binary)
+      allow(hydrator).to receive(:validate_for_handoff!)
       allow(store).to receive(:record_transmission).and_return(transmission_id)
       # Second pre-fetch returns only the ancestor — the realistic
       # post-ACK state. Including the subject here would (correctly)
@@ -285,6 +288,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
     before do
       allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
       allow(hydrator).to receive(:build_atomic_beef).and_return(atomic_beef_binary)
+      allow(hydrator).to receive(:validate_for_handoff!)
       # Poisoned known-set: subject AND ancestor.
       allow(store).to receive(:transmission_known_wtxids)
         .with(counterparty: counterparty).and_return([subject_wtxid, ancestor_wtxid])
@@ -321,6 +325,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
     before do
       allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
       allow(hydrator).to receive(:build_atomic_beef).and_return(atomic_beef_binary)
+      allow(hydrator).to receive(:validate_for_handoff!)
       allow(store).to receive_messages(transmission_known_wtxids: [], record_transmission: transmission_id)
       allow(store).to receive(:mark_transmission_acked)
     end
@@ -435,6 +440,90 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
     end
   end
 
+  # --- #transmit (egress validate_for_handoff! — #389 AC) -------------
+
+  describe '#transmit (post-trim validate_for_handoff! — #389)' do
+    # AC: post-trim and pre-record_transmission, the trimmed BEEF bytes
+    # go through Hydrator#validate_for_handoff! with
+    # allow_txid_only:true. A failure must raise (no transmission row
+    # written).
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(store).to receive(:transmission_known_wtxids)
+        .with(counterparty: counterparty).and_return([])
+      allow(hydrator).to receive(:build_atomic_beef)
+        .with(raw_tx, action_id).and_return(atomic_beef_binary)
+      allow(store).to receive(:record_transmission)
+        .and_return(transmission_id)
+      allow(hydrator).to receive(:validate_for_handoff!)
+    end
+
+    it 'calls validate_for_handoff! with the trimmed bytes, subject_wtxid, allow_txid_only:true' do
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+
+      expect(hydrator).to have_received(:validate_for_handoff!).with(
+        an_instance_of(String), subject_wtxid, allow_txid_only: true
+      )
+    end
+
+    it 'passes the SAME bytes returned in result[:beef] (validates wire payload, not in-memory graph)' do
+      result = transmission.transmit(counterparty: counterparty, action_id: action_id,
+                                     outputs: outputs, sender_identity_key: sender_identity_key)
+      expect(hydrator).to have_received(:validate_for_handoff!).with(
+        result[:beef], subject_wtxid, allow_txid_only: true
+      )
+    end
+
+    it 'validates BEFORE record_transmission (call order)' do
+      # If validation runs before the row is written, a validation
+      # failure must not leave a phantom row. Order is enforced by
+      # placing the validate call ahead of record_transmission.
+      call_order = []
+      allow(hydrator).to receive(:validate_for_handoff!) { call_order << :validate }
+      allow(store).to receive(:record_transmission) do
+        call_order << :record
+        transmission_id
+      end
+
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+
+      expect(call_order).to eq(%i[validate record])
+    end
+  end
+
+  describe '#transmit (validate_for_handoff! failure propagation — #389)' do
+    # AC: when validate_for_handoff! raises EgressBeefInvalidError,
+    # #transmit must propagate AND must NOT write a transmissions row.
+    # BEEF-construction failure means there is nothing to transmit.
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(store).to receive(:transmission_known_wtxids)
+        .with(counterparty: counterparty).and_return([])
+      allow(hydrator).to receive(:build_atomic_beef)
+        .with(raw_tx, action_id).and_return(atomic_beef_binary)
+      allow(store).to receive(:record_transmission)
+      allow(hydrator).to receive(:validate_for_handoff!)
+        .and_raise(BSV::Wallet::EgressBeefInvalidError, 'fixture: structurally invalid')
+    end
+
+    it 'propagates EgressBeefInvalidError unchanged' do
+      expect do
+        transmission.transmit(counterparty: counterparty, action_id: action_id,
+                              outputs: outputs, sender_identity_key: sender_identity_key)
+      end.to raise_error(BSV::Wallet::EgressBeefInvalidError, /structurally invalid/)
+    end
+
+    it 'does NOT call record_transmission when validation fails' do
+      expect do
+        transmission.transmit(counterparty: counterparty, action_id: action_id,
+                              outputs: outputs, sender_identity_key: sender_identity_key)
+      end.to raise_error(BSV::Wallet::EgressBeefInvalidError)
+      expect(store).not_to have_received(:record_transmission)
+    end
+  end
+
   # --- #transmit (unproven subject — BEEF/SPV core case) --------------
 
   describe '#transmit (unproven subject — BEEF/SPV core case)' do
@@ -447,6 +536,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
     before do
       allow(store).to receive(:find_action).with(id: action_id).and_return(unproven_action)
       allow(hydrator).to receive(:build_atomic_beef).with(raw_tx, action_id).and_return(atomic_beef_binary)
+      allow(hydrator).to receive(:validate_for_handoff!)
       allow(store).to receive_messages(transmission_known_wtxids: [], record_transmission: transmission_id)
     end
 

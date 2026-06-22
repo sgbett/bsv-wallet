@@ -85,6 +85,14 @@ module BSV
         # missing OR demoted to +TxidOnlyEntry+) and raises
         # +BSV::Wallet::Error+ BEFORE serialisation.
         #
+        # Egress SPV-honesty contract (HLR #385 Task 4 / #389). Post-trim
+        # and BEFORE +record_transmission+, the trimmed bytes go through
+        # +Hydrator#validate_for_handoff!+ with +allow_txid_only: true+ —
+        # trim deliberately produces +TxidOnlyEntry+ records (entries the
+        # peer already holds), so structural verification must tolerate
+        # them. A failure raises +EgressBeefInvalidError+ which propagates
+        # unchanged; no transmission row is written.
+        #
         # Two-phase invariant (HLR #385): this method does NOT write
         # +transmission_txids+. The returned +sent_wtxids+ is what the
         # ACK handler (#390) will pass to +mark_transmission_acked+ once
@@ -145,8 +153,10 @@ module BSV
           # created or proven ancestor is served from memory, not the
           # proof store. Returns Atomic BEEF binary; we round-trip it
           # through +Beef.from_binary+ so the BeefParty layer can operate
-          # on the parsed object. #389 will follow this with
-          # +validate_for_handoff!+ (egress SPV-honesty contract).
+          # on the parsed object. The post-trim
+          # +Hydrator#validate_for_handoff!+ call below (HLR #385 Task 4
+          # / #389) enforces the egress SPV-honesty contract over the
+          # peer-specific wire bytes.
           atomic_beef_binary = @hydrator.build_atomic_beef(action[:raw_tx], action_id)
           full_beef = BSV::Transaction::Beef.from_binary(atomic_beef_binary)
           subject_wtxid = full_beef.subject_wtxid || BSV::Transaction::Tx.from_binary(action[:raw_tx]).wtxid
@@ -192,6 +202,15 @@ module BSV
           sent_wtxids = trimmed_beef.transactions.grep_v(BSV::Transaction::Beef::TxidOnlyEntry).map(&:wtxid)
 
           trimmed_beef_binary = trimmed_beef.to_atomic_binary(subject_wtxid)
+
+          # Egress SPV-honesty contract (HLR #385 Task 4 / #389): refuse
+          # to ship a structurally invalid BEEF. +allow_txid_only: true+
+          # because the trim above deliberately demoted ancestors the
+          # peer already holds to +TxidOnlyEntry+. The check runs on the
+          # serialised bytes so it verifies exactly what the peer
+          # receives. Failure raises +EgressBeefInvalidError+; we let it
+          # propagate without writing a +transmissions+ row.
+          @hydrator.validate_for_handoff!(trimmed_beef_binary, subject_wtxid, allow_txid_only: true)
 
           # Two-phase: parent row only here. +transmission_txids+ writes
           # land in +Store#mark_transmission_acked+ when the peer

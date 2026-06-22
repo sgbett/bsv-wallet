@@ -237,19 +237,64 @@ RSpec.describe BSV::Wallet::Engine::Hydrator do
         .to raise_error(BSV::Wallet::EgressBeefInvalidError, /missing from constructed BEEF/)
     end
 
-    it 'raises EgressBeefInvalidError when an ancestor lacks merkle_path (verify fails)' do
-      # Unconfirmed source (no merkle_path) — verify cannot close the
-      # proof chain so TrustedSelfChainTracker yields a VerificationError
-      # which the validator wraps as EgressBeefInvalidError.
+    it 'raises EgressBeefInvalidError when the bundle contains a TxidOnlyEntry (default allow_txid_only:false)' do
+      # Default rejects: an un-trimmed egress BEEF should never contain a
+      # TxidOnlyEntry. Beef#verify returns false when one is present and
+      # allow_txid_only:false; validate_for_handoff! wraps that as
+      # EgressBeefInvalidError. The "untrimmed BEEF has no TxidOnly" rule
+      # is the structural invariant the build-time callers
+      # (Engine#build_action / #sign_action) depend on.
       source_tx = make_fake_tx(satoshis: 5000)
+      source_tx.merkle_path = make_merkle_path(wtxid: source_tx.wtxid)
       subject_tx = make_fake_tx(satoshis: 4500, inputs: [{ prev_wtxid: source_tx.wtxid }])
       subject_tx.inputs.first.source_transaction = source_tx
 
       beef = BSV::Transaction::Beef.new
       beef.merge_transaction(subject_tx)
+      # Demote the ancestor to TxidOnlyEntry — simulates the structural
+      # shape a peer-trimmed BEEF would have, but at the default call
+      # site where allow_txid_only is false.
+      beef.make_txid_only(source_tx.wtxid)
       atomic_beef = beef.to_atomic_binary(subject_tx.wtxid)
 
       expect { hydrator.validate_for_handoff!(atomic_beef, subject_tx.wtxid) }
+        .to raise_error(BSV::Wallet::EgressBeefInvalidError,
+                        /wallet refuses to ship structurally invalid BEEF/)
+    end
+
+    it 'passes a trimmed BEEF (TxidOnly ancestor) when allow_txid_only:true' do
+      # The Engine::Transmission#transmit egress path. Trim demotes
+      # ancestors the peer already holds to TxidOnlyEntry; the structural
+      # walk must treat them as known terminals (the peer fills them
+      # locally). Beef#verify(..., allow_txid_only:true) accepts the
+      # shape; validate_for_handoff! returns without raising.
+      source_tx = make_fake_tx(satoshis: 5000)
+      source_tx.merkle_path = make_merkle_path(wtxid: source_tx.wtxid)
+      subject_tx = make_fake_tx(satoshis: 4500, inputs: [{ prev_wtxid: source_tx.wtxid }])
+      subject_tx.inputs.first.source_transaction = source_tx
+
+      beef = BSV::Transaction::Beef.new
+      beef.merge_transaction(subject_tx)
+      beef.make_txid_only(source_tx.wtxid)
+      atomic_beef = beef.to_atomic_binary(subject_tx.wtxid)
+
+      expect { hydrator.validate_for_handoff!(atomic_beef, subject_tx.wtxid, allow_txid_only: true) }
+        .not_to raise_error
+    end
+
+    it 'raises when the trimmed BEEF lacks a needed ancestor entirely (even with allow_txid_only:true)' do
+      # Defensive: allow_txid_only:true only forgives ancestors PRESENT as
+      # TxidOnlyEntry. A subject whose prev_wtxid does not appear in the
+      # bundle at all is still structurally broken — the peer cannot fill
+      # an entry that was never named.
+      orphan_wtxid = SecureRandom.random_bytes(32)
+      subject_tx = make_fake_tx(satoshis: 4500, inputs: [{ prev_wtxid: orphan_wtxid }])
+
+      beef = BSV::Transaction::Beef.new
+      beef.merge_transaction(subject_tx)
+      atomic_beef = beef.to_atomic_binary(subject_tx.wtxid)
+
+      expect { hydrator.validate_for_handoff!(atomic_beef, subject_tx.wtxid, allow_txid_only: true) }
         .to raise_error(BSV::Wallet::EgressBeefInvalidError,
                         /wallet refuses to ship structurally invalid BEEF/)
     end

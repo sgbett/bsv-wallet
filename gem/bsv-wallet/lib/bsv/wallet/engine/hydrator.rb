@@ -115,11 +115,21 @@ module BSV
         # validated against a real chain_tracker at proof-arrival time),
         # so a structural-only verify with +TrustedSelfChainTracker+ is
         # sufficient and correct here: pass iff every leaf in the BEEF
-        # terminates at a +merkle_path+ or wires through to one. Failure
-        # means the wallet's state cannot produce a valid handoff BEEF —
-        # almost always an upstream proof-closure gap that should have
-        # been caught at import or +save_beef_proofs+ time.
-        def validate_for_handoff!(atomic_beef, subject_wtxid)
+        # terminates at a +merkle_path+ or wires through to one (or, when
+        # +allow_txid_only:+ is set, at a +TxidOnlyEntry+ the peer will
+        # fill from local state). Failure means the wallet's state cannot
+        # produce a valid handoff BEEF — almost always an upstream
+        # proof-closure gap that should have been caught at import or
+        # +save_beef_proofs+ time.
+        #
+        # +Beef#verify+ (vs +Tx#verify+) is the deliberate primitive:
+        # +Tx#verify+ does not accept +allow_txid_only:+, so a trimmed
+        # BEEF (HLR #385, Task 3 / #388) would always reject. +Beef#verify+
+        # returns a Boolean; coarser than the +VerificationError#code+ the
+        # previous implementation surfaced. Callers wanting richer
+        # diagnostics should log around the call site (the trade-off is
+        # accepted in #385 Task 4 / #389).
+        def validate_for_handoff!(atomic_beef, subject_wtxid, allow_txid_only: false)
           # Deliberate: re-parse the serialised bytes rather than verifying
           # the in-memory tx build_atomic_beef already wired. This checks
           # exactly what a peer receives over the wire — the SPV-honesty
@@ -135,13 +145,17 @@ module BSV
                   'missing from constructed BEEF (internal inconsistency)'
           end
 
-          subject_entry.transaction.verify(chain_tracker: BSV::Wallet::TrustedSelfChainTracker.new)
-        rescue BSV::Transaction::VerificationError => e
+          return if beef.verify(BSV::Wallet::TrustedSelfChainTracker.new,
+                                allow_txid_only: allow_txid_only)
+
           raise BSV::Wallet::EgressBeefInvalidError,
-                'wallet refuses to ship structurally invalid BEEF: ' \
-                "#{e.code} — #{e.message}. Upstream proof closure is incomplete " \
-                '(likely an ancestor missing merkle_path); investigate import / ' \
-                'save_beef_proofs path.'
+                'wallet refuses to ship structurally invalid BEEF for subject ' \
+                "dtxid=#{subject_wtxid.to_dtxid} (allow_txid_only=#{allow_txid_only}). " \
+                'Beef#verify returned false: upstream proof closure is incomplete ' \
+                '(likely an ancestor missing merkle_path, or — with ' \
+                'allow_txid_only:true — a trimmed entry whose ancestor is not ' \
+                'resolvable from the bundle); investigate import / ' \
+                'save_beef_proofs path or the trim step that produced this BEEF.'
         end
 
         private
