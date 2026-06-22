@@ -10,7 +10,7 @@ A server-side library. No GUI, no seed-phrase recovery flow, no browser extensio
 
 | Area | Capability |
 |---|---|
-| Spec | All 28 BRC-100 methods surfaced via `engine.brc100` (4 stubs/unsupported — see capability matrix) |
+| Spec | All 28 BRC-100 methods surfaced via `engine.brc100` (a handful remain stubs — `BSV::Wallet::BRC100` is the authoritative source) |
 | Key derivation | BRC-42/43 (ECDH + invoice-number), not plain BIP-32 |
 | Certificates | BRC-52 selective disclosure, BRC-69 Schnorr key-linkage |
 | Tx interchange | BRC-95 atomic BEEF; BRC-29 envelope for peer delivery |

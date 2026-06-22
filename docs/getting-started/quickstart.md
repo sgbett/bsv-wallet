@@ -72,9 +72,9 @@ result = engine.send_payment(
 )
 
 # result => {
-#   txid:                "...",   # wire-order wtxid (binary, 32 bytes)
-#   beef:                "...",   # atomic BEEF (binary)
-#   sender_identity_key: "...",   # 66-char compressed hex
+#   txid:                <32-byte binary>,   # wire-order wtxid — convert via to_dtxid for display
+#   beef:                <binary>,           # atomic BEEF
+#   sender_identity_key: "<66-char hex>",    # compressed pubkey, hex per identity carve-out
 #   outputs: [{ vout: 0, satoshis: 5_000, derivation_prefix: "...", derivation_suffix: "1" }]
 # }
 ```

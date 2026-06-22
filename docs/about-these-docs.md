@@ -30,7 +30,7 @@ The rule prevents the docs from becoming a circular graph where any change rever
 
 > Reference is canonical. Concepts may link to Reference for normative claims but never restates them.
 
-If a fact appears in both a Concepts page and a Reference page in two slightly different forms, one of them is wrong and they will drift further over time. The cure is to delete the Concepts copy and replace it with a link to Reference, not to keep them in sync by hand. A CI grep-check (Task 7 in #414) fails the build if a section heading is duplicated between sibling Concepts and Reference pages.
+If a fact appears in both a Concepts page and a Reference page in two slightly different forms, one of them is wrong and they will drift further over time. The cure is to delete the Concepts copy and replace it with a link to Reference, not to keep them in sync by hand. A runnable grep-check (documented below) reports any section heading duplicated between sibling Concepts and Reference pages; promoting it to a CI gate is a follow-up.
 
 ## Cross-link policy
 
