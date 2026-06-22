@@ -1,6 +1,8 @@
-# Wallet Daemon Events
+# Events — wire format and taxonomy
 
-walletd emits structured lifecycle events for every background task it processes. Events are written to `BSV.logger` at `:info` level in a grep-friendly `key=value` format.
+> Canonical reference for the wallet's structured-event emission. The line format, the payload conventions, and the taxonomy below are normative — specs cite this page, and operator tooling parses against it.
+>
+> For the narrative shape — why a bus, what the failed/aborted/skipped distinction means, how the events form a daemon-shutdown control plane — see [Events (concepts)](../concepts/events.md).
 
 ## Emit API
 
@@ -14,17 +16,25 @@ Writes a single line:
 [event] <name> key=value key=value ...
 ```
 
-No-op when `BSV.logger` is nil. See `lib/bsv/wallet/events.rb` for the helper implementation.
+The implementation lives in `gem/bsv-wallet/lib/bsv/wallet/events.rb`. The emit short-circuits when no sink and no observer are registered.
 
 ### Payload conventions
 
 - **No secrets.** Never include WIFs, raw transaction bytes, BEEF blobs, or any cryptographic material.
 - **No binary.** All values must be human-readable strings or numbers.
-- **No spaces in values.** Use underscored identifiers (`action_not_found`, not `action not found`). The helper quotes values containing whitespace as a safety net, but callers should normalize.
+- **No spaces in values.** Use underscored identifiers (`action_not_found`, not `action not found`). The helper quotes values containing whitespace as a safety net, but callers must normalise.
 - **Nil values are omitted.** A nil payload value produces no `key=` field in the output.
 - **Symbols stringify.** `outcome: :accepted` renders as `outcome=accepted`.
 
-## Event Taxonomy
+### Sinks
+
+Three destinations fan out from one emit:
+
+- **`BSV.logger`** — SDK-level logger; event lines interleave with `[Store]` / `[Engine]` / `[Protocol]` debug output.
+- **`BSV::Wallet.event_log`** — opt-in wallet-scoped sink; `EVENT_LOG_FORMATTER` strips the standard Logger prefix and emits a clean `<ISO-8601> [event] name key=value` line.
+- **Observer registry** — in-process callables registered with `on_event`, removed with `off_event`. Observers run synchronously on the emitting fibre; an observer that raises is caught at `:warn` and the remaining observers still run.
+
+## Taxonomy
 
 Ten canonical events across three layers.
 
@@ -32,18 +42,19 @@ Ten canonical events across three layers.
 
 | Event | Payload | When |
 |---|---|---|
-| `daemon.started` | `wallet` `network` | End of `Daemon#run!` setup, after all fibers are scheduled |
+| `daemon.started` | `wallet` `network` | End of `Daemon#run!` setup, after all fibres are scheduled |
 | `daemon.stopped` | `reason` | Start of `Daemon#stop!`, before the reactor halts |
 
 `reason` values: `signal` (SIGINT/SIGTERM).
 
-### Fiber lifecycle (1 event)
+### Fibre lifecycle (1 event)
 
 | Event | Payload | When |
 |---|---|---|
-| `fiber.crashed` | `task` `error` | Unrecoverable `StandardError` escapes a fiber — bind failure or processing error |
+| `fiber.crashed` | `task` `error` | Unrecoverable `StandardError` escapes a fibre — bind failure or processing error |
 
 `error` is the first line of the exception message (newlines stripped). Emitted by:
+
 - **OMQ bind failures** — `bind_or_die` in `Engine::Broadcast#pull!`, `#reply!`, and `Engine::TxProof#pull!` (via `OmqSupport` module). Fires when the inproc endpoint is already bound.
 - **Scheduler discovery loops** — on unhandled exceptions during discovery or enqueue.
 - **TxProof PULL handler** — on unhandled exceptions during message processing.
@@ -66,11 +77,11 @@ Ten canonical events across three layers.
 - `broadcast_push` — poll-discovery loop (Scheduler) and the broadcast processing engine (`Engine::Broadcast#process`, both push and poll paths). Emitted on all task lifecycle events for broadcasts.
 - `proof_acquisition` — proof discovery loop and the proof engine (`Engine::TxProof#process`). Emitted on all task lifecycle events for proofs.
 
-Operators tracing one broadcast through the daemon will see `task=broadcast_push_submission` on the discovery line and `task=broadcast_push` on the dispatch/outcome lines. See [Discovery streams](#discovery-streams) below.
+Operators tracing one broadcast through the daemon will see `task=broadcast_push_submission` on the discovery line and `task=broadcast_push` on the dispatch/outcome lines.
 
 `latency_ms` measures work duration only (dispatched to completion), not queue wait.
 
-## Failed vs Aborted vs Skipped
+## Failed vs aborted vs skipped
 
 This distinction is load-bearing for operators:
 
@@ -89,9 +100,9 @@ This distinction is load-bearing for operators:
 | `no_wtxid` | both | The action has no `wtxid` — broadcast poll path cannot derive a txid for ARC; proof path cannot identify the transaction |
 | `already_proven` | `proof_acquisition` | A proof was linked between discovery and dispatch (race window) |
 
-## ARC Response Categorization
+## ARC response categorisation
 
-`Engine::Broadcast` categorizes ARC responses into reason buckets via `categorize_reason`:
+`Engine::Broadcast` categorises ARC responses into reason buckets via `categorize_reason`:
 
 | Reason | Trigger | Terminal? |
 |---|---|---|
@@ -103,13 +114,13 @@ This distinction is load-bearing for operators:
 | `:policy_violation` | `txStatus: REJECTED` or ORPHAN marker | Yes |
 | `:unknown` | Data present but no pattern matched | No |
 
-The `:unknown` bucket is the escape hatch — transient, not terminal. Any ARC response shape not yet classified lands here. The daemon re-discovers the broadcast and retries rather than aborting an action for a response we don't understand. When `:unknown` appears in production logs, it signals a categorization gap — inspect the response and add a specific reason.
+The `:unknown` bucket is the escape hatch — transient, not terminal. Any ARC response shape not yet classified lands here. The daemon re-discovers the broadcast and retries rather than aborting an action for a response we don't understand. When `:unknown` appears in production logs, it signals a categorisation gap — inspect the response and add a specific reason.
 
 ### Stale-block is transient
 
 `MINED_IN_STALE_BLOCK` emits `task.failed reason=stale_beef`, **not** `task.aborted`. This is deliberate:
 
-The transaction itself is valid — it was mined, just on a chain branch that lost the race. The underlying transaction is not rejected; it is a chain-side timing artifact. The daemon will re-discover the broadcast on the next Scheduler cycle, and ARC will accept it once the proof refreshes onto the active chain.
+The transaction itself is valid — it was mined, just on a chain branch that lost the race. The underlying transaction is not rejected; it is a chain-side timing artefact. The daemon will re-discover the broadcast on the next Scheduler cycle, and ARC will accept it once the proof refreshes onto the active chain.
 
 `REJECTED_STATUSES` (which drive `task.aborted`) explicitly excludes `MINED_IN_STALE_BLOCK`. The constant is defined in `Engine::Broadcast`:
 
@@ -129,16 +140,16 @@ On `response.http_success?`, `categorize_outcome` classifies the `txStatus`:
 | `:rejected` | `REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED` (unlikely on success path) |
 | `:pending` | Any other intermediate status (`QUEUED`, `RECEIVED`, etc.) |
 
-## Emit Points by Component
+## Emit points by component
 
 ### Daemon (`daemon.rb`)
 
-- `daemon.started` — after all fibers are scheduled in `run!`
+- `daemon.started` — after all fibres are scheduled in `run!`
 - `daemon.stopped` — on `stop!` before halting the reactor
 
 ### Scheduler (`scheduler.rb`)
 
-Runs three independent discovery loops as Async fibers. Each polls the Store on its own interval, enqueues action IDs onto an OMQ inproc PUSH socket, and emits:
+Runs three independent discovery loops as Async fibres. Each polls the Store on its own interval, enqueues action IDs onto an OMQ inproc PUSH socket, and emits:
 
 - `task.discovered` — once per cycle when pending items exist
 - `task.enqueued` — once per item pushed to the OMQ socket
@@ -204,7 +215,7 @@ Per `#process(action_id)` call:
 
 No `task.aborted` — proof acquisition has no terminal-rejection mode. A proof either exists or doesn't yet.
 
-## Example Log Output
+## Example log output
 
 A delayed broadcast (push discovery → submit → succeed), an in-flight broadcast picked up by the poll loop (poll discovery → poll_status → succeed), and a proof acquisition:
 
@@ -244,3 +255,9 @@ grep "task=broadcast_push " walletd.log | grep -v "task.dispatched"
 # All discoveries from the push-discovery loop only (newly queued broadcasts)
 grep "task=broadcast_push_submission" walletd.log
 ```
+
+## Related
+
+- [Events (concepts)](../concepts/events.md) — the narrative shape, why the bus exists, the drain-counter control plane.
+- [Schema](schema.md) — the `broadcasts.tx_status` column and ARC status ENUM that drive the categorisation table.
+- [Action lifecycle](action-lifecycle.md) — how each task event maps onto the action's lifecycle progress.

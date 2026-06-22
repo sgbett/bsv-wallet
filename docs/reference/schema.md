@@ -354,7 +354,7 @@ The new wallet-owned outputs are live in the UTXO set. They're immediately avail
 
 #### Broadcast Failure
 
-If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Engine::Broadcast#handle_submit_terminal` calls `Store#reject_action` — the unified unwind path. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see `docs/wallet-events.md`).
+If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Engine::Broadcast#handle_submit_terminal` calls `Store#reject_action` — the unified unwind path. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see [Events (reference)](events.md)).
 
 `reject_action` covers both regimes in one function:
 

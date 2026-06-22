@@ -152,7 +152,7 @@ A "no" to any of these is the principle leaking. Sometimes the leak is deliberat
 - [`state-representations.md`](state-representations.md) — the living conformance register: a per-element classification of every state representation in the schema against this principle, with the conscious exceptions named.
 - `schema.md` — the schema design that operationalises this principle. Principle #11 ("the database is the last line of defense") is the schema-side restatement.
 - `.architecture/decisions/adrs/20260505_ADR-009-postgres-native-primitives.md` — why the schema chose Postgres-native primitives rather than portable subsets.
-- `docs/design.md` §6 (Cross-Cutting Concerns) — high-level summary that defers to this document for detail.
+- [`../concepts/architecture.md`](../concepts/architecture.md) — narrative summary of the layered architecture that defers to this document for the canonical principle statement.
 - #183 — the HLR that restored the strict 4-phase design after drift.
 - #192 — the HLR that will reintroduce batched sending under this principle.
 - #296 Phase B (PR #297) — the egress-validity work; the strict-import contract is an example of the principle being progressively applied.

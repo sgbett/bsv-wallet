@@ -41,7 +41,7 @@ RSpec.describe BSV::Wallet::ArcStatus do
 
     # MINED_IN_STALE_BLOCK is transient: the tx is valid but on a fork, and
     # must continue to be re-polled until it lands on the main chain.
-    # See docs/wallet-events.md and HLR #182.
+    # See docs/reference/events.md and HLR #182.
     it 'excludes MINED_IN_STALE_BLOCK so stale-block rows keep being polled' do
       expect(described_class::TERMINAL).not_to include('MINED_IN_STALE_BLOCK')
     end
