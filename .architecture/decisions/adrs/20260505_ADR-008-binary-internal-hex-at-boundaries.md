@@ -83,7 +83,7 @@ This carve-out was later **lost** and then **rediscovered** in an audit (HLR #30
 * HLR #300 / PR #303 — the audit that recovered (b) and added `identity_key_bytes`.
 * `gem/bsv-wallet/lib/bsv/wallet/key_deriver.rb:51-92` — `identity_key` (hex), `identity_key_bytes` (binary), `derive_public_key` (binary).
 * `gem/bsv-wallet/db/migrations/001_create_schema.rb:150, 264-269, 285-286` — `sender_identity_key` and the certificate fields as `:text`.
-* `reference/schema.md`.
+* `docs/reference/schema.md`.
 
 ## Unverified claims
 

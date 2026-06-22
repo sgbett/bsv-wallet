@@ -81,7 +81,7 @@ This is a correction, not a feature: the wallet duplicated a walk the SDK alread
 * `BSV::Network::ChainTracker` inherits `BSV::Transaction::ChainTracker` and implements `valid_root_for_height?` (DB-first, network-miss, persist, fail-closed) and `current_height` (`gem/bsv-wallet/lib/bsv/network/chain_tracker.rb:15,29,63`).
 * `resolve_ancestor`, `collect_input_ancestry`, `validate_beef!`, `validate_fee_adequacy!` are absent from the codebase; ancestry attach is `wire_ancestor` (ProofStore-only, `gem/bsv-wallet/lib/bsv/wallet/engine/action.rb:624`).
 * Incoming verification calls `subject_tx.verify(chain_tracker: @engine.chain_tracker)` and raises when no tracker is configured (`gem/bsv-wallet/lib/bsv/wallet/engine/action.rb:1093-1096`).
-* The miss path persists via `Store#record_block_header` (`gem/bsv-wallet/lib/bsv/network/chain_tracker.rb:75`); reads hit `Store#find_block` / `Store#max_block_height` (`:36,:67`); the `blocks` table is `bytea` merkle_root / block_hash (`reference/schema.md`).
+* The miss path persists via `Store#record_block_header` (`gem/bsv-wallet/lib/bsv/network/chain_tracker.rb:75`); reads hit `Store#find_block` / `Store#max_block_height` (`:36,:67`); the `blocks` table is `bytea` merkle_root / block_hash (`docs/reference/schema.md`).
 
 ## References
 
@@ -92,7 +92,7 @@ This is a correction, not a feature: the wallet duplicated a walk the SDK alread
 * ADR-015 (egress-BEEF validation) — the later, separate egress decision (`TrustedSelfChainTracker` / `validate_for_handoff!`); the trust asymmetry between incoming and own-egress data is settled there, not here.
 * HLR #95 (chain-tracker pivot), PR #100 (`feat/95-chain-tracker-pivot`); builds on #79/#80 (`blocks` normalisation), #83 (Services routing).
 * `.architecture/reviews/20260513_chain-tracker-pivot.md` — multi-perspective review (assessment: Strong).
-* `gem/bsv-wallet/lib/bsv/network/chain_tracker.rb`; `gem/bsv-wallet/lib/bsv/wallet/engine/action.rb`; `reference/schema.md`; `bsv-sdk` `lib/bsv/transaction/tx.rb` (`#verify`), `lib/bsv/transaction/chain_tracker.rb`.
+* `gem/bsv-wallet/lib/bsv/network/chain_tracker.rb`; `gem/bsv-wallet/lib/bsv/wallet/engine/action.rb`; `docs/reference/schema.md`; `bsv-sdk` `lib/bsv/transaction/tx.rb` (`#verify`), `lib/bsv/transaction/chain_tracker.rb`.
 
 ## Unverified claims
 

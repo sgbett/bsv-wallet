@@ -46,7 +46,7 @@ Spendability is pure set membership in a dedicated `spendable` table: an output 
 This is the concrete decision for the spendable set specifically. (The broader principle — "represent state as the presence of a FK row" generally — was generalised out of this later and is recorded in its own ADR; it is *not* this decision.)
 
 * `spendable` table — `gem/bsv-wallet/db/migrations/001_create_schema.rb:158-162`: `output_id` FK `null: false, unique: true` at `:161`; no data columns.
-* Spendability-as-set-membership (no boolean) is stated in ADR-003 (`ADR-003-schema-as-canonical-state.md:29`, `:45-49`) and in `reference/principle-of-state.md`.
+* Spendability-as-set-membership (no boolean) is stated in ADR-003 (`ADR-003-schema-as-canonical-state.md:29`, `:45-49`) and in `docs/reference/principle-of-state.md`.
 
 ## Alternatives Considered
 
@@ -94,8 +94,8 @@ The partition (a) is justified by the hot path (ADR-002): at small scale a wide 
 * ADR-002 — the scale target that makes the hot-path partition worth it.
 * ADR-010 — derivation on `outputs`; keeping data off `spendable`.
 * ADR-011 — outputs as the immutable log this partition produces.
-* `reference/principle-of-state.md` — the living statement of derived state and set-membership spendability.
-* `reference/schema.md` — the table-by-table reference for `outputs`, `spendable`, and `promotions`.
+* `docs/reference/principle-of-state.md` — the living statement of derived state and set-membership spendability.
+* `docs/reference/schema.md` — the table-by-table reference for `outputs`, `spendable`, and `promotions`.
 * `gem/bsv-wallet/db/migrations/001_create_schema.rb` — the `outputs`, `spendable`, and `inputs` tables.
 
 ## Unverified claims

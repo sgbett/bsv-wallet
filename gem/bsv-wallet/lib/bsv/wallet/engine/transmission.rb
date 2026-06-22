@@ -8,7 +8,7 @@ module BSV
       # Wallet-to-peer BEEF delivery domain — sibling to +Engine::Broadcast+
       # and +Engine::TxProof+ over the shared +Engine::Hydrator+ substrate.
       # Tracked by HLR #385; design recorded in ADR-025 and
-      # +reference/transactions.md+.
+      # +docs/reference/transactions.md+.
       #
       # Background-worker sibling shape: no +Interface::Transmission+
       # module (only shape-extracted services consumed cross-sibling, e.g.

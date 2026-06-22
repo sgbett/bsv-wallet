@@ -65,7 +65,7 @@ Make strict import refuse proof-less UTXOs and assume that suffices.
 ### Negative
 
 * `TrustedSelfChainTracker` is a footgun if misused: applied to incoming data it would accept forged proofs. Mitigated by the class comment's explicit prohibition and the separate `verify_incoming_transaction!` path, which hard-requires the network-backed tracker.
-* The egress invariant is enforced in application code (`validate_for_handoff!`), not in the schema — the database does not natively express "every emitted BEEF's ancestry closes". This is a conscious, flagged deviation from ADR-003's database-enforcement principle (see `reference/principle-of-state.md`, "Where it leaks today"). Tightening would mean encoding the closure invariant into the schema; flagged as #296 Phase D / future work.
+* The egress invariant is enforced in application code (`validate_for_handoff!`), not in the schema — the database does not natively express "every emitted BEEF's ancestry closes". This is a conscious, flagged deviation from ADR-003's database-enforcement principle (see `docs/reference/principle-of-state.md`, "Where it leaks today"). Tightening would mean encoding the closure invariant into the schema; flagged as #296 Phase D / future work.
 * Strict import refuses UTXOs whose proof material is momentarily unavailable (e.g. WoC flake), where the old path silently no-opped. This is intended — an unforwardable UTXO is worse than a refused import — but makes import sensitive to provider availability at import time.
 
 ## Pragmatic Enforcer Analysis
@@ -85,7 +85,7 @@ This is a correction to an observed, reproduced fault — the wallet shipping in
 ## References
 
 * ADR-015 (chain-tracker pivot) — the prior, separate decision this mirrors on the egress side; the network-backed `ChainTracker` and incoming `verify_incoming_transaction!` live there.
-* ADR-003 — schema as canonical state; the egress invariant is a flagged application-layer deviation (`reference/principle-of-state.md`, "Where it leaks today"), tracked for schema encoding as #296 Phase D.
+* ADR-003 — schema as canonical state; the egress invariant is a flagged application-layer deviation (`docs/reference/principle-of-state.md`, "Where it leaks today"), tracked for schema encoding as #296 Phase D.
 * ADR-008 — binary internally; the subject is matched on its wire-order wtxid, with the dtxid surfaced only in error prose.
 * ADR-018 — stateless SDK / stateful wallet; `Transaction::Tx#verify` is the stateless operation, the persisted proofs the egress check trusts are the wallet's state.
 * HLR #296 (BEEF chain integrity), PR #297 (#296 Phase A diagnostic + Phase B fix). `.claude/plans/20260609-beef-hydration.md` — full architectural reasoning (Phases A–D).

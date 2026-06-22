@@ -70,8 +70,8 @@ Cosmetic. Tells the UI "this output was change from a transaction you sent." Nev
 | `postgres/output_spec.rb` | Move output_type to Output creation |
 | `postgres/migration_spec.rb` | Update enum location expectations |
 | `wallet/engine_spec.rb` | Move derivation fields in fund_wallet helpers and output specs |
-| `reference/schema.md` | Reconcile with schema-constraints.md |
-| `reference/schema-constraints.md` | Merge into schema.md, then delete |
+| `docs/reference/schema.md` | Reconcile with schema-constraints.md |
+| `docs/reference/schema-constraints.md` | Merge into schema.md, then delete |
 
 ## Implementation steps
 

@@ -37,7 +37,7 @@ module BSV
       # The cache is a pure projection over the proof store: each value
       # mirrors a +tx_proofs+ row. Drop the cache and rebuild from the DB
       # and behaviour is identical — correctness rides on the DB,
-      # performance rides on the cache. See +reference/principle-of-state.md+.
+      # performance rides on the cache. See +docs/reference/principle-of-state.md+.
       #
       # Implementation: Ruby's +Hash+ preserves insertion order (MRI 1.9+),
       # so +#delete+-then-+#[]=+ moves an entry to the MRU end; LRU eviction

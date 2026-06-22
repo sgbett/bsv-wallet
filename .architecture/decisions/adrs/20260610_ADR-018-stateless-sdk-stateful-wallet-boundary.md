@@ -4,7 +4,7 @@
 
 Accepted.
 
-**Decided:** 2026-06-10 (commit `2854d2b`, "docs(reference): add principle-of-state + state-boundaries; retire broadcast-boundary ADR"; HLR #302) — the boundary was promoted to a first-class load-bearing principle in `reference/state-boundaries.md`, retiring the predecessor broadcast-network-boundary ADR; the underlying placements (#250 broadcast affinity, #251 SSE push) had already settled on the wallet side.
+**Decided:** 2026-06-10 (commit `2854d2b`, "docs(reference): add principle-of-state + state-boundaries; retire broadcast-boundary ADR"; HLR #302) — the boundary was promoted to a first-class load-bearing principle in `docs/reference/state-boundaries.md`, retiring the predecessor broadcast-network-boundary ADR; the underlying placements (#250 broadcast affinity, #251 SSE push) had already settled on the wallet side.
 
 ## Context
 
@@ -12,7 +12,7 @@ The wallet is built on the BSV Ruby SDK and ships as a separate gem from it. Two
 
 The wallet is a persistent process — a wallet node (ADR-002) — with a database that is always in a valid state (ADR-003), a reactor, long-lived connections, and a schema-enforced "valid state" invariant. The SDK is a library: pure operations, each call complete in itself. That asymmetry is not a stylistic difference; it is what each gem can structurally support. The SDK has nowhere a process-shaped concern can hang — no database, no daemon, no clock-spanning state, no connection that outlives a call.
 
-This ADR records the decision that fixes the boundary. The living statement of the principle — its consequences, manifestations, and the worked broadcast-resolution example — lives in `reference/state-boundaries.md`; this record fixes the *decision* and what was weighed, the way ADR-003 sits alongside `reference/principle-of-state.md`.
+This ADR records the decision that fixes the boundary. The living statement of the principle — its consequences, manifestations, and the worked broadcast-resolution example — lives in `docs/reference/state-boundaries.md`; this record fixes the *decision* and what was weighed, the way ADR-003 sits alongside `docs/reference/principle-of-state.md`.
 
 ## Decision Drivers
 
@@ -87,7 +87,7 @@ This is a classification rule, not new machinery — it adds no code, only a tes
 
 ## Validation
 
-Acceptance criteria — each a checkable consequence of the decision (the standing compliance test lives in `reference/state-boundaries.md`):
+Acceptance criteria — each a checkable consequence of the decision (the standing compliance test lives in `docs/reference/state-boundaries.md`):
 
 * Nothing in the SDK persists state across calls or depends on a caller-supplied store to function — every SDK surface is a complete-in-itself operation.
 * Provider selection and affinity (`broadcasts.provider`, recorded via the Store) live wallet-side in `BSV::Network::Broadcaster`; protocol-named commands (`:arc` / `:arcade`) and per-call protocol overrides are rejected at the SDK Provider edge.
@@ -96,12 +96,12 @@ Acceptance criteria — each a checkable consequence of the decision (the standi
 
 ## References
 
-* `reference/state-boundaries.md` — the living statement (canonical wording, structural rationale, broadcast-resolution worked example, test for new surface area).
+* `docs/reference/state-boundaries.md` — the living statement (canonical wording, structural rationale, broadcast-resolution worked example, test for new surface area).
 * ADR-003 — schema as canonical state; the sibling load-bearing principle (*what* the wallet maintains; this ADR is *where* it lives).
 * ADR-002 — design for scale, the wallet-node model; the temporal framing of the same SDK-is-operations / wallet-is-processes split.
 * ADR-006 — single relational store; the wallet's state lives in one ACID boundary, and the SDK has none.
 * ADR-013 — auto-fund; fee/change computation as a stateless SDK operation (a worked instance of the boundary).
 * ADR-015 — chain tracker; the SDK's `Transaction::Tx#verify` is stateless, `ChainTracker` is the wallet-side stateful bridge (a worked instance of the boundary).
 * `.architecture/reviews/20260513_chain-tracker-pivot.md` — the `ChainTracker` write-through bridge in full.
-* HLR #302 — promoted both load-bearing principles to first-class reference docs; retired the broadcast-network-boundary ADR into `reference/state-boundaries.md`.
+* HLR #302 — promoted both load-bearing principles to first-class reference docs; retired the broadcast-network-boundary ADR into `docs/reference/state-boundaries.md`.
 * #250 — `BSV::Network::Broadcaster` + persisted broadcast affinity (stateful broadcast orchestration, wallet-side). #251 — Arcade SSE push resolution (stateful push consumer, wallet-side).

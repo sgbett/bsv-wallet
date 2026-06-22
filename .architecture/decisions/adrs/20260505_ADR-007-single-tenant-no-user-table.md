@@ -49,4 +49,4 @@ Carrying `user_id` "in case we host multiple wallets" is the textbook speculativ
 
 * ADR-002 — the dedicated high-throughput wallet this single-tenant stance serves.
 * ADR-001 — schema designed from the domain, not inherited from the reference's hosting model.
-* `reference/schema.md`.
+* `docs/reference/schema.md`.

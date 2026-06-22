@@ -108,9 +108,9 @@ Method goes away in this PR. Callers from inside the engine — none; only `crea
 
 ### Schema-intent.md / docs
 
-`reference/schema-intent.md` is freshly untracked. It currently describes the Phase 2 split between auto-fund and caller-inputs in passing (e.g. "**Send path** writes outputs at Phase 2 with `promoted = false`"). It does **not** describe the change-generation primitive or the unified flow. Add a short section under the `outputs` table description noting that change rows are written by the change-generation primitive at Phase 2b regardless of input source.
+`docs/reference/schema-intent.md` is freshly untracked. It currently describes the Phase 2 split between auto-fund and caller-inputs in passing (e.g. "**Send path** writes outputs at Phase 2 with `promoted = false`"). It does **not** describe the change-generation primitive or the unified flow. Add a short section under the `outputs` table description noting that change rows are written by the change-generation primitive at Phase 2b regardless of input source.
 
-`reference/schema.md` and `docs/design.md` mention `auto_fund_action` and the two-path model — update to describe the unified Phase 2 composition. Drop references to the removed method.
+`docs/reference/schema.md` and `docs/design.md` mention `auto_fund_action` and the two-path model — update to describe the unified Phase 2 composition. Drop references to the removed method.
 
 ## Files to modify
 
@@ -121,8 +121,8 @@ Method goes away in this PR. Callers from inside the engine — none; only `crea
 | `gem/bsv-wallet/lib/bsv/wallet/store.rb` | Implement `lock_inputs` (extract from existing Phase 1 input-insert logic in `create_action`) |
 | `gem/bsv-wallet/spec/bsv/wallet/engine/porcelain_spec.rb` | Update "caller-provided inputs still work unchanged" (line 207) — now expects a change output; add new specs for surplus-with-change and deficit-raises |
 | `gem/bsv-wallet/spec/bsv/wallet/engine_spec.rb` | Audit `build_transaction` unit tests — that method may stay (deferred path) or merge into the new flow |
-| `reference/schema-intent.md` | Note unified Phase 2 in §3 (outputs) and §4 (spendable) |
-| `reference/schema.md` | Drop the auto-fund/caller-inputs split language; describe unified Phase 2 |
+| `docs/reference/schema-intent.md` | Note unified Phase 2 in §3 (outputs) and §4 (spendable) |
+| `docs/reference/schema.md` | Drop the auto-fund/caller-inputs split language; describe unified Phase 2 |
 | `docs/design.md` | Same — update Phase 2 narrative |
 
 One Store change needed: a `Store#lock_inputs(action_id:, inputs:)` operation to append additional input rows to an existing action mid-flow (for the top-up branch). This is the same `INSERT ... ON CONFLICT (output_id) DO NOTHING RETURNING output_id` shape Phase 1 uses today, just without the surrounding `actions` INSERT. `Store#sign_action` already takes `change_outputs:` (added in #61); the caller-inputs path just starts passing it.
@@ -145,7 +145,7 @@ One Store change needed: a `Store#lock_inputs(action_id:, inputs:)` operation to
    - auto-fund where initial selection misses fee by < 1k sats → top-up locks one more UTXO
    - auto-fund specs unchanged (regression check on behaviour)
 
-6. **Update reference/schema-intent.md, reference/schema.md, docs/design.md** to describe the unified Phase 2 composition and the funding loop.
+6. **Update docs/reference/schema-intent.md, docs/reference/schema.md, docs/design.md** to describe the unified Phase 2 composition and the funding loop.
 
 7. **Run the full suite**: `bundle exec rspec spec/bsv spec/bin` + integration if the wallet env vars are set.
 

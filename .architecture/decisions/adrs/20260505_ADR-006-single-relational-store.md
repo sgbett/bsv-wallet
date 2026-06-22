@@ -60,4 +60,4 @@ Splitting stores is the speculative-flexibility trap: it buys a separation the w
 * ADR-003 — atomic transitions in one transaction.
 * ADR-011 — `completed` derived from `tx_proof_id`; the proof co-location this enables.
 * ADR-012 — store abstraction (which relational engine backs the one ACID boundary).
-* `reference/schema.md`.
+* `docs/reference/schema.md`.

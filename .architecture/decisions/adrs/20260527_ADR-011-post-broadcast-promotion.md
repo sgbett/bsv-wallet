@@ -8,7 +8,7 @@
 
 ## Context
 
-The `outputs` table is the immutable, append-only log (ADR-004). Immutability is not an end in itself — its purpose is scalability (ADR-002): an INSERT-only table generates no dead tuples, so the hot, partitioned `outputs` table stays free of vacuum pressure and cold partitions remain detachable and archivable (`reference/principle-of-state.md`, "A note on scale"). The *deletion* deviation is recorded separately (ADR-011, failure-bounded delete of unpromoted outputs); this ADR records only the *update* deviation.
+The `outputs` table is the immutable, append-only log (ADR-004). Immutability is not an end in itself — its purpose is scalability (ADR-002): an INSERT-only table generates no dead tuples, so the hot, partitioned `outputs` table stays free of vacuum pressure and cold partitions remain detachable and archivable (`docs/reference/principle-of-state.md`, "A note on scale"). The *deletion* deviation is recorded separately (ADR-011, failure-bounded delete of unpromoted outputs); this ADR records only the *update* deviation.
 
 An action moves through four phases — lock, sign, broadcast, promote (HLR #183). Outputs become part of the canonical UTXO set only at Phase 4, once the broadcast is accepted, so that the existence of a *promoted* output implies its action reached the network — which keeps the derived action status honest and makes cascade-fail-with-descendants the rare path. But the send path must persist the caller's output metadata (basket, tags, derivation) at sign time, before acceptance, because the BRC-100 `signAction` call does not carry the outputs array. A send-path output is therefore written early as `promoted = false` and must later be marked canonical. An internal-path action (`broadcast_intent = 'none'`) has no broadcast and is born `promoted = true`.
 
@@ -90,7 +90,7 @@ The UPDATE deviation is appropriate, not erosion: it is measured against the onl
 * ADR-003 — the principle of state (the database enforces valid state; an app-only invariant with no backstop breaks it).
 * ADR-002 — the scale target the immutability rests on.
 * ADR-011 (failure-bounded delete) — the sibling deviation (the DELETE of unpromoted outputs).
-* `reference/principle-of-state.md` — "A note on scale" (the two vacuum-neutral deviations).
+* `docs/reference/principle-of-state.md` — "A note on scale" (the two vacuum-neutral deviations).
 * HLR #183 (four-phase lifecycle), #194 (`promoted` column, Phase-4 promotion), #221 (FK chosen over trigger; ~10k tx/s ceiling), #240 (`reject_action` compensation), **#307 (the open promote-authorisation defect)**.
 * `gem/bsv-wallet/lib/bsv/wallet/store.rb` — `record_broadcast_result`, `promote_action_outputs`; `gem/bsv-wallet/lib/bsv/wallet/arc_status.rb`; `gem/bsv-wallet/db/migrations/005_outputs_promoted.rb`.
 

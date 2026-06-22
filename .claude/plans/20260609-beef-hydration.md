@@ -234,7 +234,7 @@ A/B/C close the bug. D produces the durable architecture that prevents the next 
 - [ ] `Engine::TxProof#process` notifies the Hydrator on new proof.
 - [ ] Cache's memory bound is configurable; default raised to handle stress-cascade depth.
 - [ ] #290's Phase 2 design includes the Hydrator extraction as a tracked collaborator (cross-link).
-- [ ] CLAUDE.md / `reference/` documents the hydration discipline as one of the wallet's architectural patterns.
+- [ ] CLAUDE.md / `docs/reference/` documents the hydration discipline as one of the wallet's architectural patterns.
 
 ## Out of scope
 

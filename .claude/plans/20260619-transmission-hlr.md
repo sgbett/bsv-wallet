@@ -17,7 +17,7 @@ This asymmetry is the historical root of a recurring class of bug: because
 (→ peer, ships BEEF) was treated as incidental, fixes aimed at one wire shape
 repeatedly broke the other. The two are different *processes* — different
 recipient, format, outcome taxonomy, and state — and belong in different domains.
-See `reference/transactions.md`.
+See `docs/reference/transactions.md`.
 
 A secondary symptom: the egress-trim logic (`replace_known_ancestors!` /
 `known_txids`) currently lives in `Engine::BeefImporter` (ingress), where
@@ -69,7 +69,7 @@ It owns, per (action × counterparty):
       `Engine::BeefImporter`.
 - [ ] Caller-supplied-endpoint, synchronous HTTP-ACK delivery; outcome persisted.
 - [ ] CLI surface to transmit (e.g. `bin/transmit`).
-- [ ] `reference/transactions.md` updated from "not yet built" to implemented state.
+- [ ] `docs/reference/transactions.md` updated from "not yet built" to implemented state.
 - [ ] Specs: per-peer trim correctness; idempotent re-transmit; delivery-failure
       handling; derived-status (principle-of-state); round-trip against
       `BeefImporter` (transmit → internalize) deterministic.
@@ -84,7 +84,7 @@ It owns, per (action × counterparty):
 
 ## Context & dependencies
 
-- `reference/transactions.md` — broadcast vs transmit framing (this session).
+- `docs/reference/transactions.md` — broadcast vs transmit framing (this session).
 - #296 — shared `Engine::Hydrator` substrate. Phase D (wtxid-keyed cache out of
   Broadcast) is the *enabler* but **not a blocker**: Transmission v1 can call
   `Hydrator#build_atomic_beef` as-is (store-backed). Phase C's egress completeness

@@ -80,7 +80,7 @@ The derived-state principle is appropriate engineering for a concrete, *already-
 
 ## Validation
 
-Acceptance criteria — each a checkable invariant restating one element of the decision (the standing compliance tests live in `reference/principle-of-state.md`):
+Acceptance criteria — each a checkable invariant restating one element of the decision (the standing compliance tests live in `docs/reference/principle-of-state.md`):
 
 * Every invariant the application cares about is expressible as a database constraint, or is consciously flagged where it is not (e.g. `validate_for_handoff!`) — the *constraints-as-enforcement* element.
 * Every multi-write operation is a single transaction — the *atomic-transitions* element.
@@ -89,8 +89,8 @@ Acceptance criteria — each a checkable invariant restating one element of the 
 
 ## References
 
-* `reference/principle-of-state.md` — the living statement (canonical wording, manifestations, current leaks).
-* `reference/state-boundaries.md` — sibling load-bearing principle (stateless SDK / stateful wallet).
+* `docs/reference/principle-of-state.md` — the living statement (canonical wording, manifestations, current leaks).
+* `docs/reference/state-boundaries.md` — sibling load-bearing principle (stateless SDK / stateful wallet).
 * ADR-001 — clean-room, schema-first (why the schema is designed, not translated).
 * ADR-004 — outputs / spendable partition and inputs-as-lock.
 * ADR-005 — accounting ledger, not transaction DAG.

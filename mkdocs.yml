@@ -46,4 +46,16 @@ plugins:
 nav:
   - Home: index.md
   - Design: design.md
-  - API Reference: reference/index.md
+  - Reference:
+    - API: reference/index.md
+    - Principle of state: reference/principle-of-state.md
+    - State boundaries: reference/state-boundaries.md
+    - State representations: reference/state-representations.md
+    - Schema: reference/schema.md
+    - Action lifecycle: reference/action-lifecycle.md
+    - Transactions: reference/transactions.md
+    - Raw transactions: reference/raw-tx.md
+    - SSE: reference/sse.md
+    - send / noSend / sendWith: reference/send_or_nosend.md
+    - External specs:
+      - BRC-100: reference/external/BRC100.md

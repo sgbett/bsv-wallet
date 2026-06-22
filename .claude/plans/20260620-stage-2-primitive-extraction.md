@@ -424,7 +424,7 @@ The transient state across commits 3–5 (Engine returning BRC100-shaped hash wh
 - Delete `Engine#determine_broadcast` (superseded by `map_broadcast_intent`).
 - Fold `Engine#publish_beef_hint` body into `dispatch_broadcast` as inline; delete the standalone method.
 - Audit specs for `engine.send(:_)` calls — any test still poking the old internals is testing implementation detail and should rewrite against the public primitive.
-- Update `reference/principle-of-state.md` collaborator list to reflect Policy.
+- Update `docs/reference/principle-of-state.md` collaborator list to reflect Policy.
 
 **Acceptance gate (commit 6):** Full suite + integration green; Rubocop green; grep for `engine.send(:` returns zero hits in `lib/` and only test-shaped hits (if any) in `spec/`.
 

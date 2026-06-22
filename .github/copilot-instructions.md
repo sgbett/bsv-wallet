@@ -13,22 +13,22 @@ bsv-wallet is a Ruby BRC-100 wallet: it manages UTXO lifecycle, transaction cons
 Measure each PR against the project's own stated truth, in this order:
 
 1. **Anchor on [`.architecture/principles.md`](../.architecture/principles.md).** Read the principles there — they are the yardstick the codebase is built on — and judge the change against them. (Don't rely on a copy here; this file deliberately doesn't restate them.)
-2. **Consult the [`reference/`](../reference) doc that covers the subsystem the PR touches** — read the relevant one rather than guessing:
-   - [`principle-of-state.md`](../reference/principle-of-state.md) — state is *read*, not stored (no status columns; derived status).
-   - [`state-representations.md`](../reference/state-representations.md) — the per-element A–F conformance register (e.g. promotion is a `promotions` *row*, not an `outputs.promoted` flag).
-   - [`state-boundaries.md`](../reference/state-boundaries.md) — stateless SDK / stateful wallet.
-   - [`action-lifecycle.md`](../reference/action-lifecycle.md) — the action state machine: every multi-step flow's atomic transitions and their crash-recovery owners.
-   - [`schema.md`](../reference/schema.md) — the table-by-table reference: columns, constraints, FKs, lifecycle SQL, and the load-bearing design questions. Per-decision rationale lives in the ADR raft (`.architecture/decisions/adrs/`).
-   - [`raw-tx.md`](../reference/raw-tx.md), [`send_or_nosend.md`](../reference/send_or_nosend.md), [`transactions.md`](../reference/transactions.md) — wire format, no-send/batching, transaction handling.
+2. **Consult the [`docs/reference/`](../reference) doc that covers the subsystem the PR touches** — read the relevant one rather than guessing:
+   - [`principle-of-state.md`](../docs/reference/principle-of-state.md) — state is *read*, not stored (no status columns; derived status).
+   - [`state-representations.md`](../docs/reference/state-representations.md) — the per-element A–F conformance register (e.g. promotion is a `promotions` *row*, not an `outputs.promoted` flag).
+   - [`state-boundaries.md`](../docs/reference/state-boundaries.md) — stateless SDK / stateful wallet.
+   - [`action-lifecycle.md`](../docs/reference/action-lifecycle.md) — the action state machine: every multi-step flow's atomic transitions and their crash-recovery owners.
+   - [`schema.md`](../docs/reference/schema.md) — the table-by-table reference: columns, constraints, FKs, lifecycle SQL, and the load-bearing design questions. Per-decision rationale lives in the ADR raft (`.architecture/decisions/adrs/`).
+   - [`raw-tx.md`](../docs/reference/raw-tx.md), [`send_or_nosend.md`](../docs/reference/send_or_nosend.md), [`transactions.md`](../docs/reference/transactions.md) — wire format, no-send/batching, transaction handling.
 3. **Conventions live in [`CLAUDE.md`](../CLAUDE.md)** — language (American identifiers / author's-voice prose), the `wtxid`/`dtxid` binary-vs-display byte-order discipline, `Transaction::Tx`-in-prose, and the identity-hex / derived-binary public-key rule. Flag violations against CLAUDE.md; don't restate its rules here.
 
 ## Flag inconsistencies — don't presume the code is right
 
-When code contradicts a principle or a reference doc, that contradiction **is the finding**. Flag it and pose the load-bearing question: **is the code wrong, or is the principle/doc wrong?** Neither is assumed correct — surface it so a human resolves it deliberately rather than silently bending one to the other. The same applies when code disagrees with a `reference/` doc, or when two docs disagree.
+When code contradicts a principle or a reference doc, that contradiction **is the finding**. Flag it and pose the load-bearing question: **is the code wrong, or is the principle/doc wrong?** Neither is assumed correct — surface it so a human resolves it deliberately rather than silently bending one to the other. The same applies when code disagrees with a `docs/reference/` doc, or when two docs disagree.
 
 ## Self-check this file
 
-When a PR changes `gem/bsv-wallet/lib/`, `reference/`, `.architecture/`, or `CLAUDE.md`, also check whether *these instructions* have gone stale: a class or method named here no longer exists, a canonical doc or convention file this links to was renamed or moved, or a load-bearing concept changed (the migration set, the promotion mechanism, a lifecycle phase, the layer split). If so, flag it — keep this file honest as part of normal review, not via a separate audit.
+When a PR changes `gem/bsv-wallet/lib/`, `docs/reference/`, `.architecture/`, or `CLAUDE.md`, also check whether *these instructions* have gone stale: a class or method named here no longer exists, a canonical doc or convention file this links to was renamed or moved, or a load-bearing concept changed (the migration set, the promotion mechanism, a lifecycle phase, the layer split). If so, flag it — keep this file honest as part of normal review, not via a separate audit.
 
 ## What NOT to flag (avoid these false positives)
 

@@ -2,7 +2,7 @@
 
 ## Context
 
-The current WBIKD implementation (#102) derives addresses from `encode_int64(action.id)` and `encode_int64(output.id)` — database integer primary keys. This couples recovery to the PostgreSQL schema's sequential integer PKs. Issue #108 redesigns derivation to use on-chain data (slot txid + vout) and adds OP_RETURN recovery markers, matching the draft BRC at `reference/brc-draft-wbikd.md`.
+The current WBIKD implementation (#102) derives addresses from `encode_int64(action.id)` and `encode_int64(output.id)` — database integer primary keys. This couples recovery to the PostgreSQL schema's sequential integer PKs. Issue #108 redesigns derivation to use on-chain data (slot txid + vout) and adds OP_RETURN recovery markers, matching the draft BRC at `docs/reference/drafts/brc-draft-wbikd.md`.
 
 No backward compatibility needed — clean replacement.
 
@@ -216,7 +216,7 @@ Key changes:
 | `gem/bsv-wallet/lib/bsv/wallet/engine.rb` | Update `find_or_create_wbikd_slot` (OP_RETURN + return shape), `generate_receive_address` (on-chain derivation), `list_receive_addresses` (source txid lookup), add `compute_wbikd_marker`, remove `encode_int64` |
 | `gem/bsv-wallet/lib/bsv/wallet/key_deriver.rb` | Add `raw_private_key_bytes` accessor |
 | `gem/bsv-wallet/spec/bsv/wallet/engine/wbikd_spec.rb` | Update all derivation assertions + add OP_RETURN/HMAC tests |
-| `reference/brc-draft-wbikd.md` | Update to reflect final implementation |
+| `docs/reference/drafts/brc-draft-wbikd.md` | Update to reflect final implementation |
 
 ---
 

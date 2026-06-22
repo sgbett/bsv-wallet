@@ -3,7 +3,7 @@
 - **Date:** 2026-06-03
 - **Status:** ready for implementation (analyst phase to break down)
 - **Issue:** sgbett/bsv-wallet#251
-- **Parent:** #249 (umbrella). Boundary rationale lifted from the retired ADR into [`reference/state-boundaries.md`](../../reference/state-boundaries.md).
+- **Parent:** #249 (umbrella). Boundary rationale lifted from the retired ADR into [`docs/reference/state-boundaries.md`](../../docs/reference/state-boundaries.md).
 - **Sibling already shipped:** #250 (Broadcaster + persisted affinity)
 
 ## TL;DR
@@ -201,6 +201,6 @@ E4 should land first among the e2e tests because if it fails, everything downstr
 - ADR §5 open item on "Arcade SSE event coverage + resumption" updated to "verified live" with the captured evidence from E8.
 - `Engine::Broadcast` constructor accepts (or constructs) the SSE listener as a peer; daemon wiring in `Daemon` runs the listener as one of its Async tasks.
 - Documentation updated:
-  - `reference/schema.md` Phase 3: soften "Set-once invariant" framing to "state flag" (per §4.4); add `sse_cursors` to the schema reference.
+  - `docs/reference/schema.md` Phase 3: soften "Set-once invariant" framing to "state flag" (per §4.4); add `sse_cursors` to the schema reference.
   - Store comment on `mark_broadcast_attempted` updated to describe null-on-503 path.
   - Rename of `broadcast_spec.rb` → `e2e_workload_spec.rb` reflected anywhere it's referenced.

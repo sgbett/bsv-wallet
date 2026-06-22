@@ -140,7 +140,7 @@ module BSV
         # only invoked when a caller passes +endpoint:+ to
         # +#transmit+ — the deferred caller-driven path (return BEEF,
         # let the operator shuttle it) still works. See ADR-025 / HLR
-        # #385 / reference/transactions.md.
+        # #385 / docs/reference/transactions.md.
         @transmission = Transmission.new(
           store: @store, hydrator: @hydrator, delivery: Network::PeerDelivery.new
         )
@@ -269,7 +269,7 @@ module BSV
         # through FundingStrategy against this row's +action_id+; an
         # input-less action row is already routine (the deferred path
         # and the no-output path both produce one). See option (a) in
-        # `reference/action-lifecycle.md`.
+        # `docs/reference/action-lifecycle.md`.
         action = Engine::Action.create(
           engine: self, description: description, intent: intent,
           input_beef: input_beef, labels: labels
@@ -1123,7 +1123,7 @@ module BSV
         # The output spec omits +derivation_prefix+ / +sender_identity_key+:
         # those would make the wallet treat the sweep target as its own
         # BRC-42 owned output (output_type NULL + derivation = ownership
-        # marker per reference/schema.md §6 Outputs). For an outbound
+        # marker per docs/reference/schema.md §6 Outputs). For an outbound
         # payment we want +output_type = 'outbound'+ so the wallet doesn't
         # insert a +spendable+ row for it. send_payment follows the same
         # convention.

@@ -39,7 +39,7 @@ BSV::Wallet::Store::
 ```
 gem/bsv-wallet/
   db/migrations/
-    001_create_schema.rb              # SQLite schema from reference/schema.md
+    001_create_schema.rb              # SQLite schema from docs/reference/schema.md
   lib/bsv/wallet/
     store.rb                          # Module entry point + autoloads
     store/

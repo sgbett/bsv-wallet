@@ -55,7 +55,7 @@ recursive ancestry walks short-circuit on cached merkle-proven terminals.
 - Owned by `Hydrator`; one instance per process, injected into `Broadcast`
   (EF reads + hint writes) and reachable by `TxProof` (via the Hydrator).
 - Principle-of-state clean: the value mirrors a `tx_proofs` row; drop the cache
-  and rebuild from DB → identical behaviour. (`reference/principle-of-state.md`)
+  and rebuild from DB → identical behaviour. (`docs/reference/principle-of-state.md`)
 
 ## Wiring design
 
@@ -128,7 +128,7 @@ recursive ancestry walks short-circuit on cached merkle-proven terminals.
 - Reverse the "Not the Hydrator's concern" note in `interface/hydrator.rb`
   (the EF cache now IS the Hydrator's concern).
 - Rewrite the `HydratedTxCache` class doc (monotonic / wtxid / LRU-only).
-- Hydration-discipline note in `reference/` + CLAUDE.md pointer (per AC).
+- Hydration-discipline note in `docs/reference/` + CLAUDE.md pointer (per AC).
 - Cross-link #290 Phase 2 (Hydrator as tracked collaborator) — comment only.
 
 ## Risks
@@ -149,7 +149,7 @@ recursive ancestry walks short-circuit on cached merkle-proven terminals.
 - [ ] Cache memory bound configurable; default raised for stress-cascade depth.
 - [ ] `wire_ancestor` / `build_atomic_beef` cache-warmed (collapse already done
       in #343; this wires the cache through them).
-- [ ] #290 Phase 2 cross-link; CLAUDE.md / `reference/` hydration discipline.
+- [ ] #290 Phase 2 cross-link; CLAUDE.md / `docs/reference/` hydration discipline.
 
 ## Out of scope
 

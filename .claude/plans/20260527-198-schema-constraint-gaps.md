@@ -20,7 +20,7 @@
 - A must land first (FK target requires `UNIQUE(id, broadcast_intent)`).
 - B, C, F orthogonal — can interleave anywhere.
 - D and E share the broadcasts table layout; ordering of changes matters within migration 001.
-- Each task: amend migration + update code + update `reference/schema.md` + run both backends.
+- Each task: amend migration + update code + update `docs/reference/schema.md` + run both backends.
 
 ## Verification gate per task
 

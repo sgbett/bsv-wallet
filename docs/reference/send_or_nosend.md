@@ -208,7 +208,7 @@ supports multi-transaction graphs:
 > `Engine#process_send_with` helper has been removed. The `no_send`
 > parameter is retained but its semantics narrowed: it now marks an
 > action as a synchronous internal non-network action rather than a
-> parked candidate for `sendWith` (see `reference/schema.md`). The
+> parked candidate for `sendWith` (see `schema.md`). The
 > `Action#derived_status` for those actions is `:internal`, not
 > `:nosend`. The notes below are kept as the design study that will
 > inform issue #192.

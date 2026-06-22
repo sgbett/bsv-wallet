@@ -162,7 +162,7 @@ Full documentation is available at **[sgbett.github.io/bsv-wallet](https://sgbet
 
 - [Design Document](docs/design.md) — architecture, philosophy, implementation approach
 - [Architecture Decision Records](.architecture/decisions/adrs/) — the foundational design decisions and their rationale
-- [API Reference](https://sgbett.github.io/bsv-wallet/reference/) — auto-generated from YARD annotations
+- [API Reference](https://sgbett.github.io/bsv-wallet/docs/reference/) — auto-generated from YARD annotations
 - [BRC-100 Specification](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md) — the external contract this wallet implements
 
 **Protocol reference:**

@@ -476,8 +476,8 @@ The schema's spendable table (~28 bytes/row, fits in buffer cache) gives tier 1 
 
 Two principles shape this codebase from the outside in. The downstream subsections in this chapter — error translation, derived status, concurrency — flow from them.
 
-- **Principle of state** — the database schema is the canonical source of truth for what is valid. State transitions are atomic; invalid state is structurally impossible. Full statement in [`reference/principle-of-state.md`](https://github.com/sgbett/bsv-wallet/blob/master/reference/principle-of-state.md).
-- **Stateless vs stateful (SDK / wallet)** — stateless behaviour belongs in the SDK; stateful behaviour belongs in the wallet. SDK is operations, wallet is processes. Full statement in [`reference/state-boundaries.md`](https://github.com/sgbett/bsv-wallet/blob/master/reference/state-boundaries.md).
+- **Principle of state** — the database schema is the canonical source of truth for what is valid. State transitions are atomic; invalid state is structurally impossible. Full statement in [`docs/reference/principle-of-state.md`](https://github.com/sgbett/bsv-wallet/blob/master/docs/reference/principle-of-state.md).
+- **Stateless vs stateful (SDK / wallet)** — stateless behaviour belongs in the SDK; stateful behaviour belongs in the wallet. SDK is operations, wallet is processes. Full statement in [`docs/reference/state-boundaries.md`](https://github.com/sgbett/bsv-wallet/blob/master/docs/reference/state-boundaries.md).
 
 ### Binary-First Data Flow
 
@@ -503,7 +503,7 @@ A UNIQUE constraint violation in Layer 1 becomes an `InsufficientFundsError` in 
 
 ### State Derivation
 
-Status is never stored — it is computed from structural state at read time. Full derivation table in [`reference/principle-of-state.md`](https://github.com/sgbett/bsv-wallet/blob/master/reference/principle-of-state.md). `:internal` replaces the previous `:nosend` label — the new name disambiguates from BRC-100's chained-send concept (deferred to #192).
+Status is never stored — it is computed from structural state at read time. Full derivation table in [`docs/reference/principle-of-state.md`](https://github.com/sgbett/bsv-wallet/blob/master/docs/reference/principle-of-state.md). `:internal` replaces the previous `:nosend` label — the new name disambiguates from BRC-100's chained-send concept (deferred to #192).
 
 ### Concurrency
 
