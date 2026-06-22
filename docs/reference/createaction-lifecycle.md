@@ -1,36 +1,18 @@
 # The action lifecycle — state-machine reference
 
-> Canonical reference for the wallet's **action model**: the states an action
-> can occupy, the legal atomic transitions between them, who is responsible for
-> each, and what enforces each invariant. It is the **dynamic** complement to
-> [`state-representations.md`](state-representations.md) (the *static*
-> per-schema-element conformance register, #348): that document grades each
-> column/row's representation class; this one traces how an action *moves*
-> through states over time. Both are concrete implementations of
-> [`principle-of-state.md`](principle-of-state.md). Maintained under #350.
+> Canonical reference for the wallet's **action model**: the states an action can occupy, the legal atomic transitions between them, who is responsible for each, and what enforces each invariant. It is the **dynamic** complement to [`state-representations.md`](state-representations.md) (the *static* per-schema-element conformance register, #348): that document grades each column/row's representation class; this one traces how an action *moves* through states over time. Both are concrete implementations of [`principle-of-state.md`](principle-of-state.md). Maintained under #350.
 >
-> (Filename is historical — `createAction` is the dominant entry point, but the
-> machine spans the whole action lifecycle: `createAction` / `signAction` /
-> `internalizeAction` / broadcast / promote / reject / abort / reap.)
+> (Filename is historical — `createAction` is the dominant entry point, but the machine spans the whole action lifecycle: `createAction` / `signAction` / `internalizeAction` / broadcast / promote / reject / abort / reap.)
 
-**Verified against** migrations `001`–`003` and `lib/` on 2026-06-17. The
-schema is consolidated: the pre-production practice is to edit migrations
-directly and wipe-and-re-migrate, so the former `001`–`012` history is folded
-into `001_create_schema.rb` (tables + the `promotions` gate), `002_action_id_cascade.rb`
-(denormalised `action_id` FKs + `spendable→promotions`), and `003_schema_constraints.rb`
-(CHECKs + the two triggers).
+**Verified against** migrations `001`–`003` and `lib/` on 2026-06-17. The schema is consolidated: the pre-production practice is to edit migrations directly and wipe-and-re-migrate, so the former `001`–`012` history is folded into `001_create_schema.rb` (tables + the `promotions` gate), `002_action_id_cascade.rb` (denormalised `action_id` FKs + `spendable→promotions`), and `003_schema_constraints.rb` (CHECKs + the two triggers).
 
-**The wallet derives lifecycle state; it never stores it.** There is no
-`status` column anywhere (the only one the schema ever had, `tx_reqs.status`,
-was deleted). This is stricter than the BRC-100 reference SDKs, which persist
-tx/output status as columns — see `project_brc100_reference_stores_status`.
+**The wallet derives lifecycle state; it never stores it.** There is no `status` column anywhere (the only one the schema ever had, `tx_reqs.status`, was deleted). This is stricter than the BRC-100 reference SDKs, which persist tx/output status as columns — see `project_brc100_reference_stores_status`.
 
 ---
 
 ## 1. States — each a structural predicate
 
-A state is *read* from structure, never stored. The class column links to
-`state-representations.md`'s A–F taxonomy.
+A state is *read* from structure, never stored. The class column links to `state-representations.md`'s A–F taxonomy.
 
 | State | Predicate (how it is read) | Class |
 |-------|----------------------------|-------|
@@ -45,16 +27,13 @@ A state is *read* from structure, never stored. The class column links to
 | **aborted** | `actions` row deleted (cascades `inputs` / `outputs` / `spendable`) | — |
 | **reaped** | a stale *signed-but-unpromoted* action deleted by the reaper | — |
 
-Canonical queries: *spent?* → `NOT EXISTS(inputs WHERE output_id)`; *promoted?*
-→ `EXISTS(promotions)`; *signed?* → `wtxid IS NOT NULL`; *proven?* →
-`tx_proof_id` join. Status is always a membership test or a join, never a column.
+Canonical queries: *spent?* → `NOT EXISTS(inputs WHERE output_id)`; *promoted?* → `EXISTS(promotions)`; *signed?* → `wtxid IS NOT NULL`; *proven?* → `tx_proof_id` join. Status is always a membership test or a join, never a column.
 
 ---
 
 ## 2. The atomic units
 
-The lifecycle advances **only** through these `Store` methods, each its own
-`@db.transaction` (so each is one valid→valid transition):
+The lifecycle advances **only** through these `Store` methods, each its own `@db.transaction` (so each is one valid→valid transition):
 
 | Unit | Writes (one transaction) |
 |------|--------------------------|
@@ -76,48 +55,30 @@ The lifecycle advances **only** through these `Store` methods, each its own
 
 ## 3. The four lifecycle paths
 
-Ordered atomic units per path (the non-atomic gaps between them are where
-crash-recovery matters — see §5):
+Ordered atomic units per path (the non-atomic gaps between them are where crash-recovery matters — see §5):
 
-1. **Deferred / signable** (`sign_and_process: false`): `create_action` →
-   `lock_inputs` (caller inputs) → `stage_action` → `save_proof` → return
-   signable handle. Promotion deferred to a later `signAction`.
-2. **Internal `no_send`** (`broadcast_intent = none`): `create_action` → funding
-   loop (`lock_inputs ×N`) → `sign_action` → `save_proof` → `promote_action` →
-   `promote_change_to_spendable`. Promotes synchronously; never broadcasts.
-3. **Broadcast-inline**: …→ `sign_action` (writes `broadcasts`, `broadcast_at` NULL)
-   → `save_proof` → broadcast worker `submit` → on 202, `record_broadcast_result`
-   (status **+ atomic promotion**).
-4. **Broadcast-delayed**: identical through `save_proof`; the daemon's
-   `pending_submissions` loop then drives `submit` → resolve → atomic promotion.
-   The post-`sign_action` `broadcasts` row *is* the designed steady state.
+1. **Deferred / signable** (`sign_and_process: false`): `create_action` → `lock_inputs` (caller inputs) → `stage_action` → `save_proof` → return signable handle. Promotion deferred to a later `signAction`.
+2. **Internal `no_send`** (`broadcast_intent = none`): `create_action` → funding loop (`lock_inputs ×N`) → `sign_action` → `save_proof` → `promote_action` → `promote_change_to_spendable`. Promotes synchronously; never broadcasts.
+3. **Broadcast-inline**: …→ `sign_action` (writes `broadcasts`, `broadcast_at` NULL) → `save_proof` → broadcast worker `submit` → on 202, `record_broadcast_result` (status **+ atomic promotion**).
+4. **Broadcast-delayed**: identical through `save_proof`; the daemon's `pending_submissions` loop then drives `submit` → resolve → atomic promotion. The post-`sign_action` `broadcasts` row *is* the designed steady state.
 
 ---
 
 ## 4. Responsibility (post-#291 decomposition)
 
-`Engine::Action` owns the **sequence**; the machinery lives in collaborators
-(ADR-024; extractions #323/#336/#343):
+`Engine::Action` owns the **sequence**; the machinery lives in collaborators (ADR-024; extractions #323/#336/#343):
 
 - **`FundingStrategy`** — input acquisition (select + the retried `lock_inputs`).
-- **`TxBuilder`** — construction, fee fixpoint, change derivation, signing
-  (`build` / `build_change` / `apply_spends`); store-free.
-- **`Hydrator`** — egress BEEF assembly + handoff validation (`build_atomic_beef`,
-  `wire_ancestor`, `validate_for_handoff!`); store-reading.
-- **`Broadcast`** worker + `Scheduler` loops — `submit` / resolve / the atomic
-  promote-on-accept; the daemon's discovery loops.
-- **`Store`** — *every* atomic mutation above. Application code orchestrates;
-  the Store (and the schema) enforce.
+- **`TxBuilder`** — construction, fee fixpoint, change derivation, signing (`build` / `build_change` / `apply_spends`); store-free.
+- **`Hydrator`** — egress BEEF assembly + handoff validation (`build_atomic_beef`, `wire_ancestor`, `validate_for_handoff!`); store-reading.
+- **`Broadcast`** worker + `Scheduler` loops — `submit` / resolve / the atomic promote-on-accept; the daemon's discovery loops.
+- **`Store`** — *every* atomic mutation above. Application code orchestrates; the Store (and the schema) enforce.
 
 ---
 
 ## 5. The validation matrix — invariant → enforcement
 
-The heart of the model. Each invariant is classified **✓ DB-constrained** /
-**⚠ app-enforced (justified)** / **✗ unguarded (tracked)** — mirroring
-`state-representations.md`'s "zero class-F" discipline. The target is **zero
-*unnamed* gaps**: every ⚠ a conscious, justified exception; every ✗ closed or
-ticketed.
+The heart of the model. Each invariant is classified **✓ DB-constrained** / **⚠ app-enforced (justified)** / **✗ unguarded (tracked)** — mirroring `state-representations.md`'s "zero class-F" discipline. The target is **zero *unnamed* gaps**: every ⚠ a conscious, justified exception; every ✗ closed or ticketed.
 
 | Invariant | Enforcement | Class | Ref |
 |-----------|-------------|-------|-----|
@@ -139,29 +100,18 @@ ticketed.
 | Internal `no_send` signed-but-unpromoted gets completed/reclaimed | none (reaper excludes `intent='none'`; no broadcast row ⇒ no discovery) | **✗** | #327 |
 | Internal `no_send` caller-outputs-and-change promote atomically | `promote_action` + `promote_change_to_spendable` are separate transactions | ⚠/✗ | #328 |
 
-The ✓ rows are the load-bearing result: the lifecycle's correctness invariants
-are overwhelmingly schema-enforced. The residue is the **liveness/cleanup**
-class (the ✗ rows), all tracked under #324 — see §6.
+The ✓ rows are the load-bearing result: the lifecycle's correctness invariants are overwhelmingly schema-enforced. The residue is the **liveness/cleanup** class (the ✗ rows), all tracked under #324 — see §6.
 
 ---
 
 ## 6. Crash-recovery / liveness
 
-Correctness (no *invalid* state) is DB-constrained per §5; the open work is
-**liveness** — that a crash mid-sequence leaves a *valid* state something
-eventually completes or reclaims. Summary:
+Correctness (no *invalid* state) is DB-constrained per §5; the open work is **liveness** — that a crash mid-sequence leaves a *valid* state something eventually completes or reclaims. Summary:
 
-- **Send paths (3, 4) are well-covered post-sign**: the `broadcasts` +
-  `broadcast_at` + `tx_status` state machine plus the *atomic*
-  `record_broadcast_result` promotion form a correct, re-entrant recovery chain.
-- **Exposure** concentrates in (a) the **pre-sign window** (`wtxid IS NULL`,
-  inputs locked — across all paths) and (b) the **internal `no_send`**
-  synchronous promotion (no asynchronous backstop).
+- **Send paths (3, 4) are well-covered post-sign**: the `broadcasts` + `broadcast_at` + `tx_status` state machine plus the *atomic* `record_broadcast_result` promotion form a correct, re-entrant recovery chain.
+- **Exposure** concentrates in (a) the **pre-sign window** (`wtxid IS NULL`, inputs locked — across all paths) and (b) the **internal `no_send`** synchronous promotion (no asynchronous backstop).
 
-Full per-gap analysis and remediation live in umbrella **#324** (#325 wire the
-reaper · #326 pre-sign reclaim · #327 internal backstop · #328 partial-promotion
-atomicity · #329 audit the remaining flows). Those issues are the convergence
-work that turns the ✗ rows above into ✓.
+Full per-gap analysis and remediation live in umbrella **#324** (#325 wire the reaper · #326 pre-sign reclaim · #327 internal backstop · #328 partial-promotion atomicity · #329 audit the remaining flows). Those issues are the convergence work that turns the ✗ rows above into ✓.
 
 ---
 
@@ -178,14 +128,7 @@ work that turns the ✗ rows above into ✓.
 
 ## 8. Open items (for #350)
 
-- **Completeness check** (probe): confirm every `store.rb` `@db.transaction`
-  appears as a transition here, and every lifecycle-touching element in
-  `state-representations.md` is reflected — so the matrix is provably exhaustive,
-  not silently partial.
-- **`actions.outgoing`** is being dropped (#349, migration `013`, in flight on
-  the #348 branch). When it lands, it leaves the model entirely (it was never
-  lifecycle state — a query-filter attribute).
-- **Filename**: historical `createaction-lifecycle.md`; an `action-lifecycle.md`
-  rename would match the broadened scope (optional, low priority).
-- The ✗ rows are not yet closed — they are tracked, not resolved. This doc is
-  the *target*; #324 is the path.
+- **Completeness check** (probe): confirm every `store.rb` `@db.transaction` appears as a transition here, and every lifecycle-touching element in `state-representations.md` is reflected — so the matrix is provably exhaustive, not silently partial.
+- **`actions.outgoing`** is being dropped (#349, migration `013`, in flight on the #348 branch). When it lands, it leaves the model entirely (it was never lifecycle state — a query-filter attribute).
+- **Filename**: historical `createaction-lifecycle.md`; an `action-lifecycle.md` rename would match the broadened scope (optional, low priority).
+- The ✗ rows are not yet closed — they are tracked, not resolved. This doc is the *target*; #324 is the path.
