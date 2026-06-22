@@ -30,7 +30,7 @@ module BSV
       end
     end
 
-    # Raised by Engine::Action#validate_for_handoff! when the wallet's
+    # Raised by Engine::Hydrator#validate_for_handoff! when the wallet's
     # just-built outgoing BEEF would not verify against a peer's view.
     # Distinct from {InvalidBeefError} (incoming peer data) — this one
     # means the wallet's *own* state cannot produce a valid BEEF, almost
