@@ -133,11 +133,17 @@ module BSV
           store: @store, chain_tracker: @chain_tracker, hydrator: @hydrator
         )
         # Transmission — wallet-to-peer BEEF delivery domain, sibling to
-        # Broadcast/TxProof over the shared Hydrator substrate. v1 has
-        # no transport injected (+delivery:+ nil); #390 wires
-        # +Network::PeerDelivery+ here. See ADR-025 / HLR #385 /
-        # reference/transactions.md.
-        @transmission = Transmission.new(store: @store, hydrator: @hydrator)
+        # Broadcast/TxProof over the shared Hydrator substrate. The
+        # +delivery:+ slot is wired with +Network::PeerDelivery+ here
+        # (#390): SSRF gate via +EndpointPolicy+, ACK validation with
+        # wtxid binding, bounded HTTP timeouts. The HTTP transport is
+        # only invoked when a caller passes +endpoint:+ to
+        # +#transmit+ — the deferred caller-driven path (return BEEF,
+        # let the operator shuttle it) still works. See ADR-025 / HLR
+        # #385 / reference/transactions.md.
+        @transmission = Transmission.new(
+          store: @store, hydrator: @hydrator, delivery: Network::PeerDelivery.new
+        )
       end
 
       # Is the wallet in limp mode? When true, all outbound operations

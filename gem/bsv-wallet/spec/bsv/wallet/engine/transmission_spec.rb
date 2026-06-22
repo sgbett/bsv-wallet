@@ -148,15 +148,19 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
       )
     end
 
-    it 'returns transmission_id + beef + sent_wtxids + outputs + sender_identity_key' do
+    it 'returns transmission_id + beef + sent_wtxids + outputs + sender_identity_key + delivery' do
       result = transmission.transmit(counterparty: counterparty, action_id: action_id,
                                      outputs: outputs, sender_identity_key: sender_identity_key)
+      # +:delivery+ is nil here (no +endpoint:+ supplied and no
+      # transport wired in this isolation spec); the key is still
+      # present so callers can rely on the result-hash shape.
       expect(result.keys).to contain_exactly(
-        :transmission_id, :beef, :sent_wtxids, :outputs, :sender_identity_key
+        :transmission_id, :beef, :sent_wtxids, :outputs, :sender_identity_key, :delivery
       )
       expect(result[:transmission_id]).to eq(transmission_id)
       expect(result[:outputs]).to eq(outputs)
       expect(result[:sender_identity_key]).to eq(sender_identity_key)
+      expect(result[:delivery]).to be_nil
     end
 
     it 'returns a valid Atomic BEEF binary the peer can parse' do
@@ -521,6 +525,172 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
                               outputs: outputs, sender_identity_key: sender_identity_key)
       end.to raise_error(BSV::Wallet::EgressBeefInvalidError)
       expect(store).not_to have_received(:record_transmission)
+    end
+  end
+
+  # --- #transmit (delivery integration — Task 5 / #390) ----------------
+
+  describe '#transmit (delivery integration — #390)' do
+    # AC: when an +endpoint:+ is supplied and a delivery transport is
+    # wired, +#transmit+ POSTs the trimmed BEEF via +@delivery+ AFTER
+    # +record_transmission+ but BEFORE returning. ACK success drives
+    # +mark_transmission_acked+ — the two-phase write boundary is
+    # preserved (txid known-set persists only on confirmed delivery).
+    subject(:transmission) do
+      described_class.new(store: store, hydrator: hydrator, delivery: delivery)
+    end
+
+    let(:delivery) { instance_double(BSV::Network::PeerDelivery) }
+    let(:endpoint) { 'https://peer.example.com/transmit' }
+    let(:delivered) do
+      BSV::Network::PeerDelivery::Result.new(
+        outcome: :delivered, wtxid: subject_wtxid.reverse.unpack1('H*'), http_status: 200
+      )
+    end
+    let(:failed_result) do
+      BSV::Network::PeerDelivery::Result.new(
+        outcome: :timeout, error_message: 'read timeout'
+      )
+    end
+
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(store).to receive(:transmission_known_wtxids)
+        .with(counterparty: counterparty).and_return([])
+      allow(hydrator).to receive(:build_atomic_beef)
+        .with(raw_tx, action_id).and_return(atomic_beef_binary)
+      allow(hydrator).to receive(:validate_for_handoff!)
+      allow(store).to receive(:record_transmission).with(
+        action_id: action_id, counterparty: counterparty
+      ).and_return(transmission_id)
+      allow(store).to receive(:mark_transmission_acked)
+    end
+
+    it 'calls @delivery.deliver with the wire envelope (beef, outputs, sender_identity_key, protocol_version: 1)' do
+      allow(delivery).to receive(:deliver).and_return(delivered)
+
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key,
+                            endpoint: endpoint)
+
+      expect(delivery).to have_received(:deliver) do |args|
+        expect(args[:endpoint]).to eq(endpoint)
+        expect(args[:subject_wtxid]).to eq(subject_wtxid)
+        env = args[:envelope]
+        expect(env).to be_a(Hash)
+        expect(env.keys).to include(:beef, :outputs, :sender_identity_key, :protocol_version)
+        expect(env[:outputs]).to eq(outputs)
+        expect(env[:sender_identity_key]).to eq(sender_identity_key)
+        expect(env[:protocol_version]).to eq(1)
+        # +beef+ at this layer is still binary — PeerDelivery hex-encodes for wire.
+        expect(env[:beef]).to be_a(String)
+      end
+    end
+
+    it 'on delivered ACK fires mark_transmission_acked with the sent_wtxids' do
+      allow(delivery).to receive(:deliver).and_return(delivered)
+
+      result = transmission.transmit(counterparty: counterparty, action_id: action_id,
+                                     outputs: outputs, sender_identity_key: sender_identity_key,
+                                     endpoint: endpoint)
+
+      expect(store).to have_received(:mark_transmission_acked).with(
+        action_id: action_id, counterparty: counterparty, wtxids: result[:sent_wtxids]
+      )
+    end
+
+    it 'on failed delivery does NOT fire mark_transmission_acked' do
+      allow(delivery).to receive(:deliver).and_return(failed_result)
+
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key,
+                            endpoint: endpoint)
+
+      expect(store).not_to have_received(:mark_transmission_acked)
+    end
+
+    it 'on wrong_acked_wtxid does NOT fire mark_transmission_acked (crypto gate)' do
+      wrong = BSV::Network::PeerDelivery::Result.new(
+        outcome: :wrong_acked_wtxid, http_status: 200, wtxid: 'dead' * 16
+      )
+      allow(delivery).to receive(:deliver).and_return(wrong)
+
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key,
+                            endpoint: endpoint)
+
+      expect(store).not_to have_received(:mark_transmission_acked)
+    end
+
+    it 'returns the delivery Result alongside the transmission row + BEEF' do
+      allow(delivery).to receive(:deliver).and_return(delivered)
+
+      result = transmission.transmit(counterparty: counterparty, action_id: action_id,
+                                     outputs: outputs, sender_identity_key: sender_identity_key,
+                                     endpoint: endpoint)
+
+      expect(result.keys).to include(:transmission_id, :beef, :sent_wtxids,
+                                     :outputs, :sender_identity_key, :delivery)
+      expect(result[:delivery]).to be(delivered)
+    end
+
+    it 'delivers AFTER record_transmission (row written before POST)' do
+      call_order = []
+      allow(store).to receive(:record_transmission) do
+        call_order << :record
+        transmission_id
+      end
+      allow(delivery).to receive(:deliver) do
+        call_order << :deliver
+        delivered
+      end
+      allow(store).to receive(:mark_transmission_acked) { call_order << :ack }
+
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key,
+                            endpoint: endpoint)
+
+      expect(call_order).to eq(%i[record deliver ack])
+    end
+
+    it 'with endpoint nil (caller-driven delivery) does not invoke @delivery' do
+      # Stub the spy before asserting +not_to have_received+ so the
+      # double has the method to inspect even if it goes uncalled.
+      allow(delivery).to receive(:deliver)
+
+      transmission.transmit(counterparty: counterparty, action_id: action_id,
+                            outputs: outputs, sender_identity_key: sender_identity_key)
+
+      expect(delivery).not_to have_received(:deliver)
+      expect(store).not_to have_received(:mark_transmission_acked)
+    end
+  end
+
+  describe '#transmit (no delivery wired — backward-compat unit path)' do
+    # When the engine constructs Transmission with delivery: nil (e.g.
+    # historical unit-spec wiring), an endpoint: kwarg is allowed but
+    # silently skipped — the row is still written; the caller takes
+    # responsibility for moving bytes. Keeps the seam optional for the
+    # unit tier without forcing every spec to wire a PeerDelivery.
+    subject(:transmission) { described_class.new(store: store, hydrator: hydrator) }
+
+    before do
+      allow(store).to receive(:find_action).with(id: action_id).and_return(action_hash)
+      allow(store).to receive(:transmission_known_wtxids)
+        .with(counterparty: counterparty).and_return([])
+      allow(hydrator).to receive(:build_atomic_beef).and_return(atomic_beef_binary)
+      allow(hydrator).to receive(:validate_for_handoff!)
+      allow(store).to receive(:record_transmission).and_return(transmission_id)
+      allow(store).to receive(:mark_transmission_acked)
+    end
+
+    it 'returns delivery: nil and does not fire mark_transmission_acked' do
+      result = transmission.transmit(counterparty: counterparty, action_id: action_id,
+                                     outputs: outputs, sender_identity_key: sender_identity_key,
+                                     endpoint: 'https://peer.example.com/')
+
+      expect(result[:delivery]).to be_nil
+      expect(store).not_to have_received(:mark_transmission_acked)
     end
   end
 

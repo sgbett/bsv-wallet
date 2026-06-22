@@ -65,6 +65,11 @@ module BSV
     require_relative 'network/chain_tracker'
     require_relative 'network/broadcaster'
     require_relative 'network/sse_listener'
+    # Wallet→peer BEEF delivery (#385 Task 5, #390). EndpointPolicy is
+    # the SSRF gate composed by PeerDelivery — require it first so the
+    # default-arg evaluation in PeerDelivery#initialize finds it.
+    require_relative 'network/endpoint_policy'
+    require_relative 'network/peer_delivery'
 
     # Default store (SQLite-backed persistence)
     autoload :Store, 'bsv/wallet/store'

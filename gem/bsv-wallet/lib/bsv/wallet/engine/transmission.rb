@@ -118,6 +118,17 @@ module BSV
         #   - +sender_identity_key+ — BRC-29 sender identity; same
         #     passthrough role in #390's envelope.
         #
+        # Phase-1 delivery (#390). When an +endpoint:+ is supplied,
+        # the trimmed BEEF is POSTed via +@delivery+ AFTER the row is
+        # written. ACK success drives +mark_transmission_acked+ — the
+        # two-phase boundary stays intact: +transmission_txids+ are
+        # only ever written on confirmed delivery, so a future BEEF
+        # can never over-trim against a stale knowledge claim. When
+        # +endpoint:+ is nil (deferred-by-caller path), the row is
+        # recorded and the caller decides how/when to deliver — same
+        # shape as +Engine::Broadcast+ which separates +submit+ from
+        # the delayed broadcast worker.
+        #
         # @param counterparty [String] BRC-43 identity pubkey hex
         #   (66-char compressed, 02|03 prefix). Engine-boundary
         #   validation rejects sentinels and malformed hex via
@@ -129,11 +140,19 @@ module BSV
         #   each output's locking key.
         # @param sender_identity_key [String] this wallet's identity key
         #   hex; the BRC-29 envelope's +sender_identity_key+.
-        # @return [Hash] +{ transmission_id:, beef:, sent_wtxids:, outputs:, sender_identity_key: }+
+        # @param endpoint [String, nil] absolute HTTPS URI of the peer's
+        #   delivery endpoint. When supplied, +@delivery+ POSTs the
+        #   trimmed BEEF and a successful ACK fires
+        #   +Store#mark_transmission_acked+. When nil, the caller takes
+        #   responsibility for delivery and ACK-recording.
+        # @return [Hash] +{ transmission_id:, beef:, sent_wtxids:,
+        #   outputs:, sender_identity_key:, delivery: }+ — +delivery+ is
+        #   the +PeerDelivery::Result+ when an endpoint was supplied,
+        #   +nil+ otherwise.
         # @raise [BSV::Wallet::InvalidParameterError] counterparty shape
         # @raise [BSV::Wallet::Error] action missing or unsigned, or
         #   subject-protection invariant violated by the trim
-        def transmit(counterparty:, action_id:, outputs:, sender_identity_key:)
+        def transmit(counterparty:, action_id:, outputs:, sender_identity_key:, endpoint: nil)
           validate_counterparty!(counterparty)
 
           action = @store.find_action(id: action_id)
@@ -219,16 +238,69 @@ module BSV
             action_id: action_id, counterparty: counterparty
           )
 
+          # #390: when an endpoint is supplied and a delivery transport
+          # is wired, POST the trimmed BEEF and validate the ACK. The
+          # known-set (+transmission_txids+) is recorded only on a
+          # delivered ACK (wtxid-bound) — never on transport failure or
+          # 200-without-wtxid, both of which would over-trim the next
+          # BEEF to this counterparty into unverifiability.
+          delivery_result = deliver_envelope(
+            endpoint: endpoint,
+            counterparty: counterparty,
+            outputs: outputs,
+            sender_identity_key: sender_identity_key,
+            trimmed_beef_binary: trimmed_beef_binary,
+            subject_wtxid: subject_wtxid
+          )
+
+          if delivery_result&.delivered?
+            @store.mark_transmission_acked(
+              action_id: action_id, counterparty: counterparty, wtxids: sent_wtxids
+            )
+          end
+
           {
             transmission_id: transmission_id,
             beef: trimmed_beef_binary,
             sent_wtxids: sent_wtxids,
             outputs: outputs,
-            sender_identity_key: sender_identity_key
+            sender_identity_key: sender_identity_key,
+            delivery: delivery_result
           }
         end
 
         private
+
+        # Build the Phase-1 wire envelope and hand it to +@delivery+.
+        # Returns the +PeerDelivery::Result+, or nil when no endpoint
+        # was supplied (deferred caller-driven delivery) or no delivery
+        # transport was wired (unit-spec contexts). The envelope shape
+        # is the BRC-29-aligned superset of the +bin/create+ →
+        # +bin/receive+ stdin/stdout JSON: +beef+ (binary; the
+        # +PeerDelivery+ hex-encodes for wire), +outputs+, and
+        # +sender_identity_key+, plus an explicit +protocol_version: 1+
+        # so Phase-2 additions (signed ACK, certificates, etc.) can be
+        # negotiated.
+        def deliver_envelope(endpoint:, counterparty:, outputs:, sender_identity_key:,
+                             trimmed_beef_binary:, subject_wtxid:)
+          return nil if endpoint.nil?
+          return nil unless @delivery
+
+          envelope = {
+            beef: trimmed_beef_binary,
+            outputs: outputs,
+            sender_identity_key: sender_identity_key,
+            protocol_version: 1
+          }
+          result = @delivery.deliver(
+            endpoint: endpoint, envelope: envelope, subject_wtxid: subject_wtxid
+          )
+          BSV.logger&.debug do
+            "[Engine::Transmission] deliver counterparty=#{counterparty[0, 8]}… " \
+              "subject=#{subject_wtxid.to_dtxid[0, 8]}… outcome=#{result.outcome}"
+          end
+          result
+        end
 
         # Engine-boundary validation. Rejects:
         #   - the +'self'+ / +'anyone'+ derivation sentinels (BRC-43
