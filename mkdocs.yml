@@ -47,7 +47,7 @@ nav:
   - Home: index.md
   - Design: design.md
   - Reference:
-    - API: reference/index.md
+    - API: reference/api/index.md
     - Principle of state: reference/principle-of-state.md
     - State boundaries: reference/state-boundaries.md
     - State representations: reference/state-representations.md
