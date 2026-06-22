@@ -42,6 +42,14 @@ plugins:
   - search
   - minify:
       minify_html: true
+  - redirects:
+      redirect_maps:
+        # Pages removed in the docs/410 reshape — redirect old URLs to
+        # their closest sensible new home so external bookmarks and
+        # search results don't 404. Source paths are relative to docs/.
+        'design.md': 'concepts/architecture.md'
+        'wallet-events.md': 'reference/events.md'
+        'reference/createaction-lifecycle.md': 'concepts/action-lifecycle.md'
 
 nav:
   - Home: index.md
