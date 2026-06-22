@@ -19,7 +19,7 @@ Measure each PR against the project's own stated truth, in this order:
    - [`state-boundaries.md`](../docs/reference/state-boundaries.md) — stateless SDK / stateful wallet.
    - [`action-lifecycle.md`](../docs/reference/action-lifecycle.md) — the action state machine: every multi-step flow's atomic transitions and their crash-recovery owners.
    - [`schema.md`](../docs/reference/schema.md) — the table-by-table reference: columns, constraints, FKs, lifecycle SQL, and the load-bearing design questions. Per-decision rationale lives in the ADR raft (`.architecture/decisions/adrs/`).
-   - [`raw-tx.md`](../docs/reference/raw-tx.md), [`send_or_nosend.md`](../docs/reference/send_or_nosend.md), [`transactions.md`](../docs/reference/transactions.md) — wire format, no-send/batching, transaction handling.
+   - [`raw-tx.md`](../docs/reference/raw-tx.md), [`transactions.md`](../docs/reference/transactions.md) — wire format and transaction handling. (Deferred chained-send/batching is analysed in [`.architecture/reviews/20260619_noSend-sendWith-design-notes.md`](../.architecture/reviews/20260619_noSend-sendWith-design-notes.md) — not part of the base wallet's behaviour.)
 3. **Conventions live in [`CLAUDE.md`](../CLAUDE.md)** — language (American identifiers / author's-voice prose), the `wtxid`/`dtxid` binary-vs-display byte-order discipline, `Transaction::Tx`-in-prose, and the identity-hex / derived-binary public-key rule. Flag violations against CLAUDE.md; don't restate its rules here.
 
 ## Flag inconsistencies — don't presume the code is right

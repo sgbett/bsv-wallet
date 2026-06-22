@@ -1308,4 +1308,4 @@ LIMIT ? OFFSET ?;
 
 **Tags vs Labels:** Labels categorize actions (used with `listActions`). Tags categorize outputs (used with `listOutputs`). Both are purely organizational.
 
-**Chained-send / batching:** The BRC-100 `noSend` / `sendWith` / `noSendChange` / `knownTxids` primitives are not implemented in this base wallet. They are deferred to issue #192 as a separate subsystem. See `send_or_nosend.md` for the historical research notes.
+**Chained-send / batching:** The BRC-100 `noSend` / `sendWith` / `noSendChange` / `knownTxids` primitives are not implemented in this base wallet. They are deferred to issue #192 as a separate subsystem. See [`.architecture/reviews/20260619_noSend-sendWith-design-notes.md`](../../.architecture/reviews/20260619_noSend-sendWith-design-notes.md) for the design analysis.

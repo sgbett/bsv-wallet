@@ -56,6 +56,5 @@ nav:
     - Transactions: reference/transactions.md
     - Raw transactions: reference/raw-tx.md
     - SSE: reference/sse.md
-    - send / noSend / sendWith: reference/send_or_nosend.md
     - External specs:
       - BRC-100: reference/external/BRC100.md

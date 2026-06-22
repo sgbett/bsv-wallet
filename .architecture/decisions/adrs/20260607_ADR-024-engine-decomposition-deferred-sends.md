@@ -82,7 +82,7 @@ The refactor earns its place not as generic monolith-cleanup but as the precondi
 * #192 — the deferred `noSend` / `sendWith` chained-send and batching subsystem (the restoration this refactor enables).
 * ADR-011 — post-broadcast promotion; the four-phase lifecycle the cut secured.
 * ADR-018 — stateless SDK / stateful wallet; the boundary the collaborators respect.
-* `docs/reference/send_or_nosend.md` — the design rationale for the cut; `docs/reference/state-boundaries.md`.
+* `.architecture/reviews/20260619_noSend-sendWith-design-notes.md` — the design analysis for the cut; `docs/reference/state-boundaries.md`.
 
 ## Implementation evolution
 
