@@ -42,6 +42,7 @@ module BSV
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
       autoload :Hydrator,              'bsv/wallet/engine/hydrator'
       autoload :Reaper,                'bsv/wallet/engine/reaper'
+      autoload :Transmission,          'bsv/wallet/engine/transmission'
       autoload :TxBuilder,             'bsv/wallet/engine/tx_builder'
       autoload :TxProof,               'bsv/wallet/engine/tx_proof'
       autoload :OmqSupport,            'bsv/wallet/engine/omq_support'
@@ -60,7 +61,8 @@ module BSV
       RETRYABLE_IMPORT_BACKOFF_BASE_S = 1.0
 
       attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker,
-                  :funding_strategy, :tx_builder, :hydrator, :beef_importer
+                  :funding_strategy, :tx_builder, :hydrator, :beef_importer,
+                  :transmission
 
       # Engine collaborator surface exposed for Engine::Action use.
       # Not public API — these are internal handles for in-process logical models.
@@ -130,6 +132,12 @@ module BSV
         @beef_importer = BeefImporter.new(
           store: @store, chain_tracker: @chain_tracker, hydrator: @hydrator
         )
+        # Transmission — wallet-to-peer BEEF delivery domain, sibling to
+        # Broadcast/TxProof over the shared Hydrator substrate. v1 has
+        # no transport injected (+delivery:+ nil); #390 wires
+        # +Network::PeerDelivery+ here. See ADR-025 / HLR #385 /
+        # reference/transactions.md.
+        @transmission = Transmission.new(store: @store, hydrator: @hydrator)
       end
 
       # Is the wallet in limp mode? When true, all outbound operations
