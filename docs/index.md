@@ -1,6 +1,6 @@
 # BSV Wallet
 
-A Ruby implementation of the [BRC-100](https://github.com/bitcoin-sv/BRCs/blob/master/wallet/0100.md) BSV wallet interface — transaction management, key derivation, encryption, certificates, and identity verification.
+A Ruby implementation of the [BRC-100](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md) BSV wallet interface — transaction management, key derivation, encryption, certificates, and identity verification.
 
 ## Overview
 
