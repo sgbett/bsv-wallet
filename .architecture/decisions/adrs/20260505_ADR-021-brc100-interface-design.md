@@ -8,14 +8,14 @@ Accepted.
 
 ## Context
 
-BRC-100 defines a wallet-to-application interface: 28 methods spanning transaction creation, signing, encryption, certificates, key linkage, and chain queries (`reference/BRC100.md`). The wallet must present that interface. The question is what shape it takes in Ruby.
+BRC-100 defines a wallet-to-application interface: 28 methods spanning transaction creation, signing, encryption, certificates, key linkage, and chain queries (`docs/reference/external/BRC100.md`). The wallet must present that interface. The question is what shape it takes in Ruby.
 
 The specification is written against a TypeScript reference, where the interface arrives as a type system — interfaces, type aliases, and the class hierarchy that carries them. Ruby is not statically typed, and the rebuild is clean-room from the spec, not a port (ADR-001). So the spec's *behaviour* is the requirement; the spec's *encoding* in another language's type system is not. A second question rides alongside: several BRC-100 methods describe long-running work (broadcast, proof acquisition, authentication waits), and the spec's reference models some of it asynchronously. Whether that asynchrony belongs *in the interface* or *underneath it* shapes every signature.
 
 ## Decision Drivers
 
 * **Idiomatic Ruby, designed from the spec.** Ruby expresses an abstract contract as a module of methods with keyword arguments and hash returns. There is no need to reconstruct a foreign type system to satisfy a behavioural specification.
-* **The schema is canon; the interface is presentation (ADR-003).** BRC-100 is the RPC skin over the canonical database. It orchestrates the components that read and write the schema; it is not itself a source of truth. This is the Layer-3 role in the SOA (`docs/design.md`).
+* **The schema is canon; the interface is presentation (ADR-003).** BRC-100 is the RPC skin over the canonical database. It orchestrates the components that read and write the schema; it is not itself a source of truth. This is the Layer-3 role in the SOA (`docs/concepts/architecture.md`).
 * **Asynchrony is an infrastructure property, not a method property (ADR-018).** Stateful, clock-spanning work belongs to the wallet's runtime (the daemon), not to the interface contract. A method that returns a value is simpler to reason about and to test than one that returns a promise.
 * **One conversion edge (ADR-008).** Hex ↔ binary conversion happens at this boundary and nowhere inside it, so the interface is where the spec's hex strings meet the wallet's internal binary.
 
@@ -89,10 +89,10 @@ A plain Ruby module is the minimum that satisfies a behavioural specification in
 * ADR-007 — single-tenant engine; identity is a construction parameter, not an interface concern.
 * ADR-008 — binary internally, hex at the boundary; this interface is that boundary.
 * ADR-018 — stateless SDK / stateful wallet; synchronous methods, asynchrony as infrastructure.
-* `reference/BRC100.md` — the 28-method specification.
+* `docs/reference/external/BRC100.md` — the 28-method specification.
 * `gem/bsv-wallet/lib/bsv/wallet/engine.rb` — the Layer-3 realisation; `gem/bsv-wallet/lib/bsv/wallet/daemon.rb` — the Async runtime.
 * `bsv-sdk` (`~> 0.24`) `lib/bsv/wallet/interface/brc100.rb` — the contract module.
-* `docs/design.md` — four-layer SOA; BRC-100 is Layer 3 (business-process orchestration).
+* `docs/concepts/architecture.md` — narrative layered shape; BRC-100 is Layer 3 (business-process orchestration).
 * HLR/issue trail for the deferred name/calling-convention pass (interface move to the SDK), not asserted complete here.
 
 ## Implementation evolution

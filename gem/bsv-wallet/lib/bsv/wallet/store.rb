@@ -853,7 +853,7 @@ module BSV
           # companion +clear_broadcast_attempted+ nulls the stamp on a 503
           # response so the row re-enters the queued state for clean retry.
           # After a 503 + retry, +broadcast_at+ reflects the retry timestamp
-          # rather than the first attempt. See reference/schema.md (Phase 3).
+          # rather than the first attempt. See docs/reference/schema.md (Phase 3).
           models::Broadcast
             .where(action_id: action_id, broadcast_at: nil)
             .update(broadcast_at: Time.now)

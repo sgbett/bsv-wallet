@@ -108,7 +108,7 @@ This ADR names a pattern already in the schema rather than introducing new mecha
 * ADR-004 — sub-decision (c) spendable-as-a-FK-row (the seed), (b) inputs-as-the-lock, (a) the partition that keeps the set tiny.
 * ADR-002 — the scale target that rewards keys-only membership.
 * ADR-010 — keep data off `spendable`; the inference ban (the standing guard on the pure form).
-* `reference/principle-of-state.md` — "Pure set membership. The presence of the row IS the state" (where the general statement first appears).
+* `docs/reference/principle-of-state.md` — "Pure set membership. The presence of the row IS the state" (where the general statement first appears).
 * `gem/bsv-wallet/db/migrations/001_create_schema.rb` — `spendable` (`:158-162`), `inputs` (`:192-205`), `broadcasts` (`:96-125`).
 * `gem/bsv-wallet/db/migrations/003_schema_constraints.rb` — `spendable.action_id` NOT NULL (`:104`).
 

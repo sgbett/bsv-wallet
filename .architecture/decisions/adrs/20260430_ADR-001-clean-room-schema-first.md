@@ -75,5 +75,5 @@ The dependency runs one way and the cadences diverge; the slot, its history, and
 ## References
 
 * ADR-003 — the principle of state, which this decision makes possible (schema as the canonical source of truth).
-* `reference/schema.md` — the schema this redesign produces.
+* `docs/reference/schema.md` — the schema this redesign produces.
 * BRC-100 — the specification the data model is derived from.

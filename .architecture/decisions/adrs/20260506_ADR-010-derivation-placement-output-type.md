@@ -86,7 +86,7 @@ The rejected alternative is not hypothetical — derivation-on-`spendable` was i
 * HLR #60 — "wallet decides, constraints enforce" — the open requirement to eliminate the inference sites.
 * `gem/bsv-wallet/db/migrations/001_create_schema.rb` — `outputs` derivation columns, keys-only `spendable`.
 * `gem/bsv-wallet/db/migrations/003_schema_constraints.rb` — the typed-vs-derived CHECK pairs.
-* `reference/schema.md`.
+* `docs/reference/schema.md`.
 
 ## Unverified claims
 

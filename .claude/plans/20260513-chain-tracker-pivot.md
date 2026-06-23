@@ -256,7 +256,7 @@ Public API contract unchanged: callers catch `InvalidBeefError`.
 | `gem/bsv-wallet/lib/bsv/wallet/engine.rb` | Add `wire_ancestor`, `verify_incoming_transaction!`; rewrite `build_atomic_beef`; add ProofStore save at sign time; delete `resolve_ancestor`, `collect_input_ancestry`, `validate_beef!`, `validate_fee_adequacy!` |
 | `gem/bsv-wallet/spec/bsv/network/chain_tracker_spec.rb` | **New** — tests |
 | `gem/bsv-wallet/spec/bsv/wallet/engine_spec.rb` | Update verification and BEEF tests |
-| `reference/schema.md` | Update to note chain_tracker role of blocks table |
+| `docs/reference/schema.md` | Update to note chain_tracker role of blocks table |
 
 ---
 

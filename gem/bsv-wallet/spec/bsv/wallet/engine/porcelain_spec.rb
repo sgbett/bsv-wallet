@@ -299,9 +299,10 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       end
 
       it 'honors caller-supplied unlocking_script on the synchronous path' do
-        # Regression for the synchronous caller-inputs path: generate_change
-        # must forward caller_inputs to build_inputs so any caller-provided
-        # unlocking_script overrides the wallet's P2PKH signing.
+        # Regression for the synchronous caller-inputs path:
+        # TxBuilder#build_change must forward caller_inputs to
+        # TxBuilder#build_inputs so any caller-provided unlocking_script
+        # overrides the wallet's P2PKH signing.
         # Caller_script is a stub that wouldn't satisfy P2PKH — strict
         # validate_for_handoff! (#296 Phase B) is stubbed because the
         # assertion is about script forwarding, not BEEF validity.
@@ -382,8 +383,8 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     context 'auto-fund top-up' do
       it 'locks an additional UTXO when initial selection misses fee' do
         # Two UTXOs: the larger exactly meets the output target, leaving
-        # nothing for fees. The funding loop's first generate_change call
-        # returns a shortfall; the engine then top-ups via select_inputs
+        # nothing for fees. The funding loop's first TxBuilder#build_change
+        # call returns a shortfall; the engine then top-ups via select_inputs
         # with the larger UTXO excluded, locking the smaller one.
         #
         # find_spendable orders by satoshis DESC and accumulates greedily:

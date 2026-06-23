@@ -205,9 +205,9 @@ The change is too big for a single PR (engine_spec.rb alone is 3,326 LOC and mos
 - Audit `engine_spec.rb` for the ~15 `send(:run_funding_loop|generate_change|build_atomic_beef|apply_spends|...)` private-method reaches identified by the analyst. Migrate those tests to `action_spec.rb`, calling the methods directly on the `Action` instance.
 - **Documentation updates** (these are not optional — factually wrong docs are bugs):
   - `docs/design.md:192` — replace the procedural `generate_change` reference with `Action#generate_change` (private) framing.
-  - `reference/schema-intent.md:241`, `:279`, `:593` — update references to engine internals that have moved to `Action`.
+  - `docs/reference/schema-intent.md:241`, `:279`, `:593` — update references to engine internals that have moved to `Action`.
   - Add a short "trio is complete" framing paragraph naming `Engine::Action` alongside `Engine::Broadcast` and `Engine::TxProof`, since the logical-model pattern now covers the full lifecycle.
-- Update `CLAUDE.md` / `reference/` notes that name procedural methods now gone.
+- Update `CLAUDE.md` / `docs/reference/` notes that name procedural methods now gone.
 - Final LOC: Engine target ~1,200–1,400 (depends on what porcelain looks like); `Action` ~700–900.
 
 #### Umbrella PR onto master

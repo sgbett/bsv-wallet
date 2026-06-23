@@ -136,7 +136,7 @@ end
 **2. Doc cross-references**:
 - `.architecture/decisions/adrs/20260619_ADR-026-engine-primitive-granularity.md` — the "Stage 2 naming scaffold" implementation note changes from forward-looking to past-tense recording: "Stage 3 reverted the `do_` prefix in PR #<this>".
 - `.claude/plans/20260620-stage-2-primitive-extraction.md` — add a one-line footer pointing forward to Stage 3 completion.
-- `reference/principle-of-state.md` — collaborator list mentions BRC100. Verify wording still applies post-composition (likely fine; BRC100 is still a collaborator, just now composed not mixed-in).
+- `docs/reference/principle-of-state.md` — collaborator list mentions BRC100. Verify wording still applies post-composition (likely fine; BRC100 is still a collaborator, just now composed not mixed-in).
 
 ## Acceptance gate at every commit
 

@@ -4,16 +4,16 @@ Purpose: identify the architectural decisions made during the clean-room redesig
 the sessions that followed, so the reasoning is extracted into ADRs rather than left
 buried in transcripts. Source: nine schema/design transcripts (mined 2026-06-12), the
 GitHub HLR/PR record, this session's findings, the `/tmp` distillations, and the
-`reference/` docs.
+`docs/reference/` docs.
 
 Filtering rule (don't overegg): an ADR is warranted when the decision is **stable**,
 **non-obvious**, and has **its own alternatives**. Being already written in CLAUDE.md or
-`reference/` is **not** grounds to skip — `reference/` (esp. `schema-intent.md`) became a
+`docs/reference/` is **not** grounds to skip — `docs/reference/` (esp. `schema-intent.md`) became a
 stopgap home for decisions, written as *what was done* rather than *what was decided, why,
 and against which alternatives*; the ADR **supersedes/absorbs** that material. Genuine
 **SKIP** is only for trivial decisions; **FOLD** rolls a sub-decision into a parent ADR.
 Exception: genuinely *normative living* docs (`principle-of-state.md`, `state-boundaries.md`)
-keep a `reference/` home *alongside* their ADR — the ADR is the frozen decision, the
+keep a `docs/reference/` home *alongside* their ADR — the ADR is the frozen decision, the
 reference doc the living statement (the ADR-003 split). `schema-intent.md` is
 decisions-as-description and is to be **absorbed** across the raft.
 
@@ -21,7 +21,7 @@ ADR numbers follow rough decision/dependency order — roots first — not stric
 
 ## Reference docs disposition (2026-06-13)
 
-`reference/` is not one thing. Only the decision-as-description doc gets absorbed; the rest stay.
+`docs/reference/` is not one thing. Only the decision-as-description doc gets absorbed; the rest stay.
 - **Plain reference — stays, no ADR:** `schema.md` (living schema description), `BRC100.md` (replicates the online spec), `sse.md` (Arcade SSE explainer), `transactions.md` (WIP), `raw-tx.md` (pure reference), `brc-draft-wbikd.md` (draft BRC proposal), `arcade-api-1.json` (API spec).
 - **Normative living principle — reference home *plus* ADR (the ADR-003 split):** `principle-of-state.md` (↔ ADR-003), `state-boundaries.md` (↔ ADR-018).
 - **Decision-as-description — absorb into ADRs:** `schema-intent.md`. `send_or_nosend.md` — category TBD (likely decision-flavoured; relates to noSend/#192).
@@ -62,7 +62,7 @@ ADR numbers follow rough decision/dependency order — roots first — not stric
 | C3 | **Single relational store / one ACID boundary** — proofs not split to a separate backend (FK can't span stores; BEEF needs them; proofs assembled in place) | KEEP | `clean-room` :838-871; this session (proof co-location) |
 | C4 | **Single-tenant engine / no user table** — identity is a construction parameter; multi-tenancy is a layer above | KEEP | `clean-room` :1427-1563; `schema-constraints` :114-211 |
 | C5 | **Binary-internal / hex-at-boundaries** (+ pubkey-hex carve-out) | KEEP — supersedes the CLAUDE.md convention | The *intent*: binary is the internal form, hex only where a spec mandates it; identity-pubkey hex is the carve-out. CLAUDE.md keeps the terse rule. `clean-room` :1049-1174; HLR #44/#52/#300 |
-| C6 | **Postgres-native primitives over a portable subset** | KEEP — **absorbs `schema-intent.md`** | bytea / ENUM / CHECK / partial indexes / `ON CONFLICT` / partitioning chosen deliberately, not a portable subset. `reference/schema-intent.md`'s decision content folds in here over the raft |
+| C6 | **Postgres-native primitives over a portable subset** | KEEP — **absorbs `schema-intent.md`** | bytea / ENUM / CHECK / partial indexes / `ON CONFLICT` / partitioning chosen deliberately, not a portable subset. `docs/reference/schema-intent.md`'s decision content folds in here over the raft |
 | — | `actions`/`tx_proofs` naming; UUIDv7 `reference`; nullability/anti-denormalisation | SKIP/FOLD | Minor; fold into C1 or `schema-intent.md` |
 | — | default = absence-of-a-row (baskets) | FOLD → 001 | Same absence-encodes-default pattern as derived-state |
 

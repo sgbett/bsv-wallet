@@ -138,7 +138,7 @@ Fold in, relative to current 001:
 - **Grep to confirm clean** before finishing: no remaining references to a migration
   number, and no app/spec use of `promoted`, `tx_reqs`, `actions.outgoing`,
   `actions.satoshis`, `actions.nlocktime`, `actions.version`, or `deleted_at`.
-- **`reference/schema.md` / `reference/schema-intent.md`**: key off issue numbers, not
+- **`docs/reference/schema.md` / `docs/reference/schema-intent.md`**: key off issue numbers, not
   migration numbers — expected no change; grep `migration` to confirm.
 
 ## Critical correctness risk: constraint names

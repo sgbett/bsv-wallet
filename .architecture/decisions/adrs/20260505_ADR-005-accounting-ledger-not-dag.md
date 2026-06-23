@@ -54,4 +54,4 @@ Modelling the DAG would be over-engineering for a wallet — solving a node's pr
 
 * ADR-004 — outputs as the primary entity (the ledger entries).
 * ADR-003 — derived state.
-* `reference/schema.md`.
+* `docs/reference/schema.md`.

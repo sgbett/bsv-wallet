@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft — the capability is implemented against the *draft* WBIKD BRC (`reference/brc-draft-wbikd.md`, not yet a ratified standard); daemon automation of address scanning (HLR #114) is still pending.
+Draft — the capability is implemented against the *draft* WBIKD BRC (`docs/reference/drafts/brc-draft-wbikd.md`, not yet a ratified standard); daemon automation of address scanning (HLR #114) is still pending.
 
 **Decided:** 2026-05-14 (commit `b2fba01`, PR #109 — "feat: on-chain derivation params and OP_RETURN recovery markers (#108)"; HLR #108, WBIKD store-agnostic redesign) — the store-agnostic redesign that derives from on-chain txid/vout (not database integer IDs) and recovers via OP_RETURN markers, the design recorded here, superseding the original DB-ID derivation (HLR #102).
 
@@ -10,7 +10,7 @@ Draft — the capability is implemented against the *draft* WBIKD BRC (`referenc
 
 BRC-29 payments require both parties to run a BRC-100 wallet: the sender performs BRC-42 derivation, builds the transaction, and delivers BEEF directly. Many BSV participants — exchanges, legacy wallets, automated systems — cannot do any of that. They have only a plain P2PKH address string. To accept funds from them the wallet must generate a receive address, watch it for incoming UTXOs, and internalize what arrives.
 
-The draft BRC `reference/brc-draft-wbikd.md` (Wallet Basket Identity Key Derivation, "WBIKD") specifies how to do this using only BRC-100 primitives: a slot UTXO in a protocol-reserved basket, a zero-output locking action that reserves an address, BRC-42 derivation with `counterparty = "self"`, and an on-chain OP_RETURN marker for recovery. The question this ADR answers is how the wallet implements that capability — and, specifically, what the derivation parameters are made from, because that choice fixes whether funds can be recovered without the wallet's database.
+The draft BRC `docs/reference/drafts/brc-draft-wbikd.md` (Wallet Basket Identity Key Derivation, "WBIKD") specifies how to do this using only BRC-100 primitives: a slot UTXO in a protocol-reserved basket, a zero-output locking action that reserves an address, BRC-42 derivation with `counterparty = "self"`, and an on-chain OP_RETURN marker for recovery. The question this ADR answers is how the wallet implements that capability — and, specifically, what the derivation parameters are made from, because that choice fixes whether funds can be recovered without the wallet's database.
 
 This capability is **implemented** in `gem/bsv-wallet/lib/bsv/wallet/engine.rb` (`generate_receive_address`, `list_receive_addresses`, `scan_receive_addresses`, and the private `find_or_create_wbikd_slot`, `compute_wbikd_marker`, `internalize_wbikd_utxo`), covered by `spec/bsv/wallet/engine/wbikd_spec.rb`. The BRC it implements is a **draft**, authored here, not yet a ratified standard.
 
@@ -89,7 +89,7 @@ The feature reuses canonical machinery rather than standing up a parallel subsys
 
 ## References
 
-* `reference/brc-draft-wbikd.md` — the draft BRC this implements (slot, locking action, OP_RETURN recovery marker, sweep).
+* `docs/reference/drafts/brc-draft-wbikd.md` — the draft BRC this implements (slot, locking action, OP_RETURN recovery marker, sweep).
 * `gem/bsv-wallet/lib/bsv/wallet/engine.rb` — `generate_receive_address`, `list_receive_addresses`, `scan_receive_addresses`, `find_or_create_wbikd_slot`, `compute_wbikd_marker`, `internalize_wbikd_utxo`.
 * `gem/bsv-wallet/spec/bsv/wallet/engine/wbikd_spec.rb` — behavioural coverage.
 * `gem/bsv-wallet/db/migrations/008_prevent_internal_action_delete.rb` — the WBIKD-lock carve-out in the delete-guard trigger.

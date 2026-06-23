@@ -1848,7 +1848,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     # MINED_IN_STALE_BLOCK is intentionally transient -- the tx is on a fork
     # but valid; the poll loop must continue checking until it lands on the
-    # main chain (see docs/wallet-events.md and HLR #182).
+    # main chain (see docs/reference/events.md and HLR #182).
     it 'includes MINED_IN_STALE_BLOCK rows (transient, not terminal)' do
       BSV::Wallet::Store::Models::Broadcast.create(
         action_id: action.id, intent: 'delayed',

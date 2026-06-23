@@ -147,6 +147,7 @@ A BRC-100 Action — a Bitcoin transaction throughout its lifecycle from concept
 | `wtxid IS NOT NULL`, send path, broadcast row exists, no promotions row | sending — broadcast in progress |
 | `wtxid IS NOT NULL`, send path, no broadcast row | unprocessed — broadcast pending |
 
+<!-- generated from gem/bsv-wallet/lib/bsv/wallet/store/models/action.rb#derived_status -->
 ```ruby
 class Wallet::Action < Sequel::Model
   many_to_one :tx_proof
@@ -354,7 +355,7 @@ The new wallet-owned outputs are live in the UTXO set. They're immediately avail
 
 #### Broadcast Failure
 
-If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Engine::Broadcast#handle_submit_terminal` calls `Store#reject_action` — the unified unwind path. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see `docs/wallet-events.md`).
+If ARC returns a terminal rejection (`REJECTED`, `DOUBLE_SPEND_ATTEMPTED`, `MALFORMED`), `Engine::Broadcast#handle_submit_terminal` calls `Store#reject_action` — the unified unwind path. `MINED_IN_STALE_BLOCK` is **not** terminal — it emits `task.failed reason=stale_beef` and is re-discovered on the next scheduler tick (see [Events (reference)](events.md)).
 
 `reject_action` covers both regimes in one function:
 
@@ -1153,7 +1154,7 @@ end
 
 ## 20. Transmissions
 
-Wallet→peer BEEF delivery, at grain `(action_id, counterparty)` — the wallet's first per-counterparty persistent state (#385 / ADR-025). A row records that an action's BEEF was transmitted (or is being transmitted) to a named peer. This is distinct from `broadcasts` (which ships EF to the anonymous miner network): transmission is to a *named* peer (BRC-43 identity key) and ships Atomic BEEF for the peer's SPV. See `reference/transactions.md`.
+Wallet→peer BEEF delivery, at grain `(action_id, counterparty)` — the wallet's first per-counterparty persistent state (#385 / ADR-025). A row records that an action's BEEF was transmitted (or is being transmitted) to a named peer. This is distinct from `broadcasts` (which ships EF to the anonymous miner network): transmission is to a *named* peer (BRC-43 identity key) and ships Atomic BEEF for the peer's SPV. See `transactions.md`.
 
 | col | type | attributes |
 | --- | --- | --- |
@@ -1172,7 +1173,7 @@ Wallet→peer BEEF delivery, at grain `(action_id, counterparty)` — the wallet
 
 **`ack_signature` is reserved nullable from day 1.** v1 ACK is a bare HTTP 200 receipt and leaves this column NULL; the Phase 2 signed-ACK protocol (HLR #385) writes a peer signature over the ack'd wtxid here without a schema migration. Carrying the column reservation now avoids a Phase 2 migration of a table that may already be large.
 
-**No status column — delivery status is derived.** A NULL `acked_at` means "sent, not yet acknowledged"; a present `acked_at` means "delivered (peer internalised)". There is no `status` column to drift (principle of state — `reference/principle-of-state.md`).
+**No status column — delivery status is derived.** A NULL `acked_at` means "sent, not yet acknowledged"; a present `acked_at` means "delivered (peer internalised)". There is no `status` column to drift (principle of state — `principle-of-state.md`).
 
 **`action_id` CASCADE FK** gives reaper-cleanup parity with the other action-dependent tables: tearing down an action deletes its transmissions (and their `transmission_txids`) in the same statement.
 
@@ -1308,4 +1309,4 @@ LIMIT ? OFFSET ?;
 
 **Tags vs Labels:** Labels categorize actions (used with `listActions`). Tags categorize outputs (used with `listOutputs`). Both are purely organizational.
 
-**Chained-send / batching:** The BRC-100 `noSend` / `sendWith` / `noSendChange` / `knownTxids` primitives are not implemented in this base wallet. They are deferred to issue #192 as a separate subsystem. See `reference/send_or_nosend.md` for the historical research notes.
+**Chained-send / batching:** The BRC-100 `noSend` / `sendWith` / `noSendChange` / `knownTxids` primitives are not implemented in this base wallet. They are deferred to issue #192 as a separate subsystem. See [`.architecture/reviews/20260619_noSend-sendWith-design-notes.md`](../../.architecture/reviews/20260619_noSend-sendWith-design-notes.md) for the design analysis.

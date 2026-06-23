@@ -71,7 +71,7 @@ Each HLR gets a GitHub issue and an implementation plan in `.claude/plans/`. The
 
 ```
 DESIGN.md
-reference/
+docs/reference/
   BRC100.md
   arcade-api-1.json
   sse.md

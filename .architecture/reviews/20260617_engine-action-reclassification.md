@@ -1,6 +1,6 @@
 # Engine::Action Re-classification — Record of the #291 Decomposition
 
-> **Type:** Historical record of a refactor (AC1 of #290). **Not** a load-bearing design contract — durable principles live in `reference/` and `.architecture/decisions/`. This captures *what moved where* during the #291 "Monolith to Manageable" roadmap so the classification isn't lost once the work is merged. The *why* is **ADR-024**; the umbrella is **#291**; the design that scheduled this is **#290**.
+> **Type:** Historical record of a refactor (AC1 of #290). **Not** a load-bearing design contract — durable principles live in `docs/reference/` and `.architecture/decisions/`. This captures *what moved where* during the #291 "Monolith to Manageable" roadmap so the classification isn't lost once the work is merged. The *why* is **ADR-024**; the umbrella is **#291**; the design that scheduled this is **#290**.
 
 ## Context
 

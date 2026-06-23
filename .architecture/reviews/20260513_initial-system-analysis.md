@@ -101,7 +101,7 @@ Overall, the architecture is well-designed for its maturity stage. The interface
 ├── .claude/                           # AI assistant configuration
 ├── .github/workflows/                 # CI configuration
 ├── DESIGN.md                          # Architecture and design document
-└── reference/                         # BRC-100 spec reference
+└── docs/reference/                         # BRC-100 spec reference
 ```
 
 **Key Observations**:

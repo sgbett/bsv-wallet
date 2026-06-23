@@ -140,7 +140,7 @@ module BSV
         # only invoked when a caller passes +endpoint:+ to
         # +#transmit+ — the deferred caller-driven path (return BEEF,
         # let the operator shuttle it) still works. See ADR-025 / HLR
-        # #385 / reference/transactions.md.
+        # #385 / docs/reference/transactions.md.
         @transmission = Transmission.new(
           store: @store, hydrator: @hydrator, delivery: Network::PeerDelivery.new
         )
@@ -238,8 +238,8 @@ module BSV
         end
 
         # key_deriver is required only when the wallet must derive BRC-42
-        # change keys (generate_change). Deferred signing defers to
-        # signAction; explicit zero-input transactions skip change
+        # change keys (TxBuilder#build_change). Deferred signing defers
+        # to signAction; explicit zero-input transactions skip change
         # generation. Both paths can run without a key deriver here.
         skip_change = caller_supplied_inputs && inputs.empty?
         require_key_deriver! unless deferred || skip_change
@@ -249,7 +249,7 @@ module BSV
 
         # Output total drives the initial selection target and the cheap
         # pre-flight headroom check. The exact post-loop headroom check
-        # (sum(outputs) + actual_fee) runs after generate_change converges.
+        # (sum(outputs) + actual_fee) runs after build_change converges.
         # pre_lock_balance / change_count are captured before Phase 1
         # locking shrinks the spendable set; both headroom checks use the
         # pre-lock balance, and the funding loop uses the pre-lock change
@@ -268,8 +268,9 @@ module BSV
         # Phase 1a: create the empty action row. Input acquisition runs
         # through FundingStrategy against this row's +action_id+; an
         # input-less action row is already routine (the deferred path
-        # and the no-output path both produce one). See option (a) in
-        # `reference/action-lifecycle.md`.
+        # and the no-output path both produce one). The createAction
+        # flow's per-phase audit lives in
+        # +docs/reference/action-lifecycle.md+.
         action = Engine::Action.create(
           engine: self, description: description, intent: intent,
           input_beef: input_beef, labels: labels
@@ -410,7 +411,8 @@ module BSV
       # 24 thin wrappers — the indivisible domain operations BRC100 maps
       # one-to-one to BRC-100 spec methods. Engine returns raw values
       # (wallet vocab); BRC100 wraps in spec-shaped hashes (BRC-100 vocab).
-      # Same +do_+ prefix scaffold as the write-side; Stage 3 reverts.
+      # Same +do_+-prefix-then-revert history as the write-side (extracted
+      # in #402 Stage 2, prefix dropped in #405 Stage 3).
       #
       # +require_key_deriver!+ lives per-primitive (operation invariant per
       # ADR-026 decision 6), not at the BRC100 layer — non-BRC100 callers
@@ -749,11 +751,11 @@ module BSV
         # Phase 2: Self-payment to a BRC-42-derived address.
         #
         # We delegate change derivation to the funding loop with
-        # +change_count: 1+ and +outputs: []+: +generate_change+ picks a
-        # fresh BRC-42 self-key, computes the exact fee from the templated
-        # tx, and writes a single +sum(inputs) - fee+ output. Bootstrap
-        # bypasses limp mode + headroom since this is how the wallet gets
-        # funded in the first place.
+        # +change_count: 1+ and +outputs: []+: +TxBuilder#build_change+
+        # picks a fresh BRC-42 self-key, computes the exact fee from the
+        # templated tx, and writes a single +sum(inputs) - fee+ output.
+        # Bootstrap bypasses limp mode + headroom since this is how the
+        # wallet gets funded in the first place.
         @bypass_limp_mode = true
         begin
           brc100.create_action(
@@ -1003,8 +1005,8 @@ module BSV
         ).to_binary
 
         # randomize_outputs: false guarantees the payment output stays at
-        # index 0. Change outputs from generate_change are appended after
-        # caller outputs.
+        # index 0. Change outputs from TxBuilder#build_change are
+        # appended after caller outputs.
         result = brc100.create_action(
           description: "send #{satoshis} sats",
           outputs: [{ satoshis: satoshis, locking_script: locking_script }],
@@ -1074,7 +1076,7 @@ module BSV
       # bare key can reclaim them (e.g. so the receiving wallet's DB can be
       # wiped and re-imported by scanning the root address). Any rounding
       # surplus against the actual fee is dropped (zero-survival on the single
-      # change-key slot the funding loop derives, since +generate_change+
+      # change-key slot the funding loop derives, since +TxBuilder#build_change+
       # requires +change_count >= 1+).
       #
       # @param recipient [String] 66-char compressed pubkey hex (02/03)
@@ -1105,10 +1107,10 @@ module BSV
         ).to_binary
 
         # Compute the fee with the same FeeModel + templated-tx shape
-        # +generate_change+ uses, so the funding loop's exact-fee check
-        # finds zero or near-zero surplus and InsufficientFundsError can't
-        # fire after Phase 1 lock. Mirrors the input count, caller output,
-        # and one change-key output the funding loop will produce.
+        # +TxBuilder#build_change+ uses, so the funding loop's exact-fee
+        # check finds zero or near-zero surplus and InsufficientFundsError
+        # can't fire after Phase 1 lock. Mirrors the input count, caller
+        # output, and one change-key output the funding loop will produce.
         fee = estimate_sweep_fee(input_count: all_spendable.length, recipient_script: locking_script)
 
         # Dust-only wallet: the fee exceeds the available sats. Fail fast
@@ -1123,7 +1125,7 @@ module BSV
         # The output spec omits +derivation_prefix+ / +sender_identity_key+:
         # those would make the wallet treat the sweep target as its own
         # BRC-42 owned output (output_type NULL + derivation = ownership
-        # marker per reference/schema.md §6 Outputs). For an outbound
+        # marker per docs/reference/schema.md §6 Outputs). For an outbound
         # payment we want +output_type = 'outbound'+ so the wallet doesn't
         # insert a +spendable+ row for it. send_payment follows the same
         # convention.
@@ -1183,11 +1185,12 @@ module BSV
         { consolidation_steps: consolidation_steps, sweep: sweep_result }
       end
 
-      # Build a templated skeleton tx with the same shape +generate_change+
-      # will produce (N P2PKH-templated inputs + 1 caller output + 1 change
-      # output) and run +compute_fee+ against it. Inputs are sourceless
-      # stand-ins — only the unlocking-script template size matters for
-      # fee estimation; +source_satoshis+ does not enter the size formula.
+      # Build a templated skeleton tx with the same shape
+      # +TxBuilder#build_change+ will produce (N P2PKH-templated inputs
+      # + 1 caller output + 1 change output) and run +compute_fee+
+      # against it. Inputs are sourceless stand-ins — only the
+      # unlocking-script template size matters for fee estimation;
+      # +source_satoshis+ does not enter the size formula.
       def estimate_sweep_fee(input_count:, recipient_script:)
         skeleton = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
 
@@ -1204,8 +1207,8 @@ module BSV
         skeleton.add_output(
           BSV::Transaction::TransactionOutput.new(satoshis: 0, locking_script: recipient_script_obj)
         )
-        # +generate_change+ adds a change-key output even though sweep
-        # expects it to be dust-dropped. Mirror that for size parity.
+        # +TxBuilder#build_change+ adds a change-key output even though
+        # sweep expects it to be dust-dropped. Mirror that for size parity.
         skeleton.add_output(
           BSV::Transaction::TransactionOutput.new(
             satoshis: 0, locking_script: recipient_script_obj, change: true

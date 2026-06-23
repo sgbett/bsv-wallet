@@ -37,7 +37,7 @@ module BSV
 
         # Wallet-vocab action query — returns +{ total:, actions: }+,
         # matching the shape +Store#query_actions+ produces and the
-        # other +do_list_*+ collection primitives use. BRC100 re-keys
+        # other +list_*+ collection primitives use. BRC100 re-keys
         # +:total+ → +:total_actions+ at the wrap layer.
         # Called from +Engine#list_actions+; +originator:+ stops at
         # the wrap layer per ADR-026 decision 7 and is not accepted here.

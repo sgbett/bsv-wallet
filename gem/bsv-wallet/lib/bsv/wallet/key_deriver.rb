@@ -16,30 +16,31 @@ module BSV
       ANYONE_PRIVATE_KEY = BSV::Primitives::PrivateKey.new(OpenSSL::BN.new(1))
       ANYONE_PUBLIC_KEY = ANYONE_PRIVATE_KEY.public_key
 
-      # Validate that +hex+ is a syntactically well-formed compressed or
-      # uncompressed public key hex string (BRC-43 counterparty shape).
-      # Class method — a pure regex check with no instance state, hoisted
-      # out of the private instance-method form so callers without a
-      # +KeyDeriver+ instance (e.g. +Engine::Transmission+) can validate
-      # counterparties at the engine boundary before any DB write.
+      # Validate that +hex+ is a syntactically well-formed compressed
+      # BRC-43 counterparty pubkey hex string (33-byte, +02+/+03+ prefix,
+      # 66 hex chars total; case-tolerant). Class method — a pure regex
+      # check with no instance state, hoisted out of the private
+      # instance-method form so callers without a +KeyDeriver+ instance
+      # (e.g. +Engine::Transmission+) can validate counterparties at the
+      # engine boundary before any DB write.
       #
-      # Accepts a BRC-43 compressed identity pubkey: +02+ / +03+ prefix +
-      # 64 hex chars (66 chars total). Case is tolerated. The +04+
-      # uncompressed shape is **not** accepted — the regex's 64 trailing
-      # hex chars match only the compressed tail; an actual uncompressed
-      # pubkey needs 128 trailing hex chars and so falls through to the
-      # raise. The wallet has no caller that passes uncompressed identity
-      # keys, and BRC-43 mandates compressed. Callers that need stricter
-      # parity with the schema CHECK (lowercase only) layer their own
-      # regex on top — see +Engine::Transmission#validate_counterparty!+.
+      # The +04+ uncompressed shape is **not** accepted — the regex's 64
+      # trailing hex chars match only the compressed tail; an actual
+      # uncompressed pubkey needs 128 trailing hex chars and so falls
+      # through to the raise. The wallet has no caller that passes
+      # uncompressed identity keys, and BRC-43 mandates compressed.
+      # Callers that need stricter parity with the schema CHECK
+      # (lowercase only) layer their own regex on top — see
+      # +Engine::Transmission#validate_counterparty!+.
       #
       # @param hex [String]
       # @raise [BSV::Wallet::InvalidParameterError]
       def self.validate_counterparty_hex!(hex)
-        return if hex.is_a?(String) && hex.match?(/\A(?:02|03|04)[0-9a-fA-F]{64}\z/)
+        return if hex.is_a?(String) && hex.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
 
-        raise BSV::Wallet::InvalidParameterError.new('counterparty',
-                                                     '"self", "anyone", or a valid hex public key')
+        message = '"self", "anyone", or a 66-char compressed pubkey hex ' \
+                  '(02/03 prefix); 04-uncompressed is not accepted'
+        raise BSV::Wallet::InvalidParameterError.new('counterparty', message)
       end
 
       # @param private_key [BSV::Primitives::PrivateKey] everyday root key
@@ -523,7 +524,7 @@ module BSV
 
       # Normalize a public key to hex string, accepting either hex or binary.
       def normalize_pubkey_to_hex(key)
-        if key.is_a?(String) && key.match?(/\A(?:02|03|04)[0-9a-fA-F]{64}\z/)
+        if key.is_a?(String) && key.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
           key
         elsif key.is_a?(String) && key.bytesize == 33
           key.unpack1('H*')

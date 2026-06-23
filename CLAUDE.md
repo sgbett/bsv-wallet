@@ -6,7 +6,7 @@
 
 Examples: `internalize`, `randomize`, `behavior`, `color`, `organization`, `optimize`, `summarize`, `favor`, `center`.
 
-**Free prose** — author's voice (British for this author, per the global preference). CLAUDE.md, `reference/`, READMEs, HLR bodies, PR descriptions, commit message bodies, RSpec `it` descriptions, RDoc/YARD comments, code comments. No translation required. Visual jar between a British comment and an American identifier in the same file is acceptable.
+**Free prose** — author's voice (British for this author, per the global preference). CLAUDE.md, `docs/reference/`, READMEs, HLR bodies, PR descriptions, commit message bodies, RSpec `it` descriptions, RDoc/YARD comments, code comments. No translation required. Visual jar between a British comment and an American identifier in the same file is acceptable.
 
 This narrows an earlier rule that demanded American everywhere. The identifier rationale (spec consistency) still holds; extending it to prose was a friction cost without a corresponding benefit.
 
@@ -100,7 +100,7 @@ The reasoning is recorded in `project_pubkey_hex_exception` (memory). The decisi
 
 ## Load-bearing Principles
 
-Two design principles shape the wallet from the outside in. Both are documented in `reference/`; the canonical wording lives there, this section is the at-a-glance summary for coding sessions. New behaviour that contradicts either is almost certainly wrong.
+Two design principles shape the wallet from the outside in. Both are documented in `docs/reference/`; the canonical wording lives there, this section is the at-a-glance summary for coding sessions. New behaviour that contradicts either is almost certainly wrong.
 
 ### Principle of state
 
@@ -113,7 +113,7 @@ Practical consequences when working on this codebase:
 - **Status is never stored.** Derived properties (action status, output spendability) are computed from structural state at read time. There is no `status` column to drift.
 - **Caches are projections over canonical state, never beside it.** If deleting the cache and rebuilding from DB doesn't reproduce identical behaviour, the cache holds state that should be in the database.
 
-Full statement, manifestations, and follow-ups: `reference/principle-of-state.md`.
+Full statement, manifestations, and follow-ups: `docs/reference/principle-of-state.md`.
 
 ### Stateless vs stateful (SDK / wallet)
 
@@ -125,13 +125,13 @@ Practical consequences when designing new surface area:
 - **The SDK has no database, no daemon, no clock-spanning state.** A stateful "feature" added there either secretly relies on the caller to persist (caller is the wallet) or silently loses information on restart.
 - **The boundary is bidirectional and reviewable.** Surface area has moved both ways during the rebuild (BRC-100 interface + ProtoWallet ceded SDK → wallet). Future moves pass the same test in either direction.
 
-Full statement and worked examples: `reference/state-boundaries.md`.
+Full statement and worked examples: `docs/reference/state-boundaries.md`.
 
 ## Database & Wallet Configuration
 
 This is a **Postgres-based** wallet. SQLite exists as a convenience for fast logic-only specs that don't depend on DB invariants — it is not the production target.
 
-The schema chooses Postgres-native features deliberately: `bytea` for everything hash-shaped, native `uuid` for `actions.reference`, ENUM types (`broadcast_intent`), CHECK constraints, RESTRICT FK semantics. See `reference/schema.md` for the table-by-table reference, and `.architecture/decisions/adrs/20260505_ADR-009-postgres-native-primitives.md` for the per-primitive rationale.
+The schema chooses Postgres-native features deliberately: `bytea` for everything hash-shaped, native `uuid` for `actions.reference`, ENUM types (`broadcast_intent`), CHECK constraints, RESTRICT FK semantics. See `docs/reference/schema.md` for the table-by-table reference, and `.architecture/decisions/adrs/20260505_ADR-009-postgres-native-primitives.md` for the per-primitive rationale.
 
 ### Configuration model — no mystery
 

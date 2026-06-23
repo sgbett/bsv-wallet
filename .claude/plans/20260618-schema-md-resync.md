@@ -1,6 +1,6 @@
 # schema.md re-sync to promotion-as-a-row (#378)
 
-Closes HLR #378. Follow-up to PR #320 (#307 / ADR-023) — the migration, store code, and models all reflect promotion-as-a-row, but `reference/schema.md` still describes the pre-#307 `outputs.promoted` flag throughout. This plan brings the doc back in line with the merged code.
+Closes HLR #378. Follow-up to PR #320 (#307 / ADR-023) — the migration, store code, and models all reflect promotion-as-a-row, but `docs/reference/schema.md` still describes the pre-#307 `outputs.promoted` flag throughout. This plan brings the doc back in line with the merged code.
 
 ## Context
 
@@ -31,8 +31,8 @@ Closes HLR #378. Follow-up to PR #320 (#307 / ADR-023) — the migration, store 
 
 ## Documents touched
 
-1. `reference/schema.md` — primary target.
-2. After landing, grep `reference/` for stray `promoted` refs (state-boundaries.md, principle-of-state.md) — out of scope here, raise as follow-up if any.
+1. `docs/reference/schema.md` — primary target.
+2. After landing, grep `docs/reference/` for stray `promoted` refs (state-boundaries.md, principle-of-state.md) — out of scope here, raise as follow-up if any.
 
 ## Edit list (with line refs into the current schema.md)
 
@@ -117,11 +117,11 @@ Closes HLR #378. Follow-up to PR #320 (#307 / ADR-023) — the migration, store 
 
 ## Sequencing
 
-Single editing pass over schema.md, working top-to-bottom so that the renumbering at §8+ happens once after the §7 insertion lands. Verify with `grep -c promoted reference/schema.md` (target: 0). Then run `grep -rn promoted reference/` to surface any other-file follow-ups.
+Single editing pass over schema.md, working top-to-bottom so that the renumbering at §8+ happens once after the §7 insertion lands. Verify with `grep -c promoted docs/reference/schema.md` (target: 0). Then run `grep -rn promoted docs/reference/` to surface any other-file follow-ups.
 
 ## Acceptance (matches HLR #378)
 
-- [ ] No `outputs.promoted` references anywhere in `reference/schema.md`.
+- [ ] No `outputs.promoted` references anywhere in `docs/reference/schema.md`.
 - [ ] New `## 7. Promotions` section matches migration 001 lines 324–381 (Postgres + SQLite both).
 - [ ] derived_status keys off promotions row existence.
 - [ ] All Phase SQL snippets reflect actual `store.rb` paths.

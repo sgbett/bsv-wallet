@@ -74,7 +74,7 @@ The deletion is not erosion of immutability — it is measured against the only 
 * ADR-003 — the principle of state.
 * ADR-002 — the scale target the immutability (and thus this deviation's vacuum-neutrality test) rests on.
 * ADR-011 (post-broadcast promotion) — the sibling deviation (the `promoted` UPDATE flip).
-* `reference/principle-of-state.md` — "A note on scale" (the two vacuum-neutral deviations).
+* `docs/reference/principle-of-state.md` — "A note on scale" (the two vacuum-neutral deviations).
 * HLR #183 (restored strict 4-phase, the rollback), #189 (`outputs.action_id` RESTRICT), #240 (`reject_action` cascade + lifted speculative-promotion guard, the re-agreement); PR #134 (restored cascade FKs), #243 (`reject_action`).
 * `gem/bsv-wallet/lib/bsv/wallet/store.rb` — `abort_action`, `reap_stale_actions`, `reject_action`, `do_reject`.
 * `gem/bsv-wallet/db/migrations/002_action_id_cascade.rb`, `006_outputs_restrict_action_id.rb`, `008_prevent_internal_action_delete.rb`.

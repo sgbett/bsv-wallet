@@ -147,7 +147,7 @@ The `output_type` ENUM is the minimal vocabulary that lets the schema name its n
 * `gem/bsv-wallet/lib/bsv/wallet/engine/action.rb` — `Action.internalize`, `resolve_internalize_output`.
 * `gem/bsv-wallet/lib/bsv/wallet/store.rb` — `promote_action`, `save_proof`, `link_proof`.
 * `gem/bsv-wallet/db/migrations/003_schema_constraints.rb` — the `output_type` ENUM, the typed-vs-derived CHECK pairs, and the `prevent_outbound_spendable` trigger.
-* `reference/schema.md` — `output_type` profiles (`root` = "imported UTXOs, transitional shim"); `tx_proof_id` as settlement receipt.
+* `docs/reference/schema.md` — `output_type` profiles (`root` = "imported UTXOs, transitional shim"); `tx_proof_id` as settlement receipt.
 * HLR / PR (this ADR's decisions): #55 (introduced the `output_type` ENUM + `root`), #65 (added `outbound`, restored spendable purity), #37 (two-phase import self-pay).
 * Cross-reference (separate decision, ADR-015): #296 / #297 — strict-import enforcement (proof obtained before state) + egress-BEEF validity.
 

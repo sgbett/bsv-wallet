@@ -1884,8 +1884,9 @@ RSpec.describe BSV::Wallet::Engine do
     # in spec/bsv/wallet/engine/broadcast_spec.rb.
     #
     # Private-method tests for verify_incoming_transaction!, parse_beef,
-    # and replace_known_ancestors! moved to action_spec.rb in #288 — those
-    # helpers live on Engine::Action and are exercised there directly.
+    # and replace_known_ancestors! live in beef_importer_spec.rb — those
+    # helpers were extracted from Engine::Action to Engine::BeefImporter
+    # in #340 and are exercised there directly.
   end
 
   describe '#list_outputs' do
@@ -2305,20 +2306,25 @@ RSpec.describe BSV::Wallet::Engine do
   end
 
   # --- Output Construction and Randomization (#21) ---
-  # Direct tests for #build_outputs moved to action_spec.rb in #288.
+  # Direct tests for #build_outputs live in engine/tx_builder_spec.rb
+  # (lifted from Engine::Action to Engine::TxBuilder in #340).
 
   # --- Input Selection Primitive (#208) ---
-  # Direct tests for input selection moved to engine/funding_strategy_spec.rb
-  # in #323; selection now lives on Engine::FundingStrategy.
+  # Direct tests for input selection live in engine/funding_strategy_spec.rb
+  # (#323; selection lives on Engine::FundingStrategy).
 
-  # --- generate_change: explicit fee detection + shortfall reporting (#209) ---
-  # Direct tests for #generate_change moved to action_spec.rb in #288.
+  # --- Change generation: explicit fee detection + shortfall reporting (#209) ---
+  # Direct tests for TxBuilder#build_change live in engine/tx_builder_spec.rb
+  # (renamed from #generate_change and lifted to Engine::TxBuilder in #340).
 
   # --- Input Resolution and P2PKH Signing (#22) ---
-  # Direct tests for #build_inputs moved to action_spec.rb in #288.
+  # Direct tests for #build_inputs live in engine/tx_builder_spec.rb
+  # (lifted from Engine::Action to Engine::TxBuilder in #340).
 
   # --- Transaction Assembly, Serialization, and Txid (#23) ---
-  # Direct tests for #build_transaction moved to action_spec.rb in #288.
+  # No standalone #build_transaction primitive — transaction assembly is
+  # composed inside TxBuilder#build_change (see engine/tx_builder_spec.rb)
+  # and the action lifecycle covers end-to-end assembly in action_spec.rb.
 
   # --- End-to-End Integration Tests (#25) ---
 
@@ -2646,7 +2652,8 @@ RSpec.describe BSV::Wallet::Engine do
   end
 
   # --- wire_ancestor / BEEF construction (#98) ---
-  # Direct tests for #wire_ancestor moved to action_spec.rb in #288.
+  # Direct tests for #wire_ancestor live in engine/hydrator_spec.rb
+  # (lives on Engine::Hydrator).
 
   # --- Auto-fund createAction (#61) ---
 

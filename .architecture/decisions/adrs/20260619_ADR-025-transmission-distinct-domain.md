@@ -14,7 +14,7 @@ This ADR records *why the missing half is its own domain* rather than a method o
 
 The two paths look like one thing with a different recipient. They are not. **Broadcast** ships Extended Format (EF) to the miner network for consensus validation; **transmit** ships Atomic BEEF to a named peer for SPV. Because broadcast (→ miner) accreted all the process machinery — OMQ sockets, SSE resolution, crash-recovery — and transmit (→ peer) was treated as incidental, fixes aimed at one wire shape repeatedly broke the other (the EF-vs-raw daemon work and the BEEF-egress work kept colliding). The flip-flop is a symptom of an unnamed boundary.
 
-`reference/transactions.md` carries the full technical framing (EF vs BEEF as projections of one hydrated transaction, trimming as an orthogonal axis). This ADR records the decision and the load-bearing reason.
+`docs/reference/transactions.md` carries the full technical framing (EF vs BEEF as projections of one hydrated transaction, trimming as an orthogonal axis). This ADR records the decision and the load-bearing reason.
 
 ## Decision Drivers
 
@@ -95,7 +95,7 @@ BRC-100 specifies the *interface* — `createAction` returns the BEEF, `internal
 
 ## References
 
-* `reference/transactions.md` — broadcast vs transmit technical framing (the EF/BEEF distinction, trimming axis, two-domains-over-one-substrate).
+* `docs/reference/transactions.md` — broadcast vs transmit technical framing (the EF/BEEF distinction, trimming axis, two-domains-over-one-substrate).
 * Transmission HLR — #385 (v1 scope, phasing, open forks); draft `.claude/plans/20260619-transmission-hlr.md`.
 * ADR-018 — stateless SDK / stateful wallet; the axis this decision applies (broadcast stateless-about-who, transmission stateful-about-who).
 * ADR-015 — egress BEEF validation; `validate_for_handoff!`, which relocates to Transmission as its precondition.

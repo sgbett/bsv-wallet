@@ -25,11 +25,15 @@ namespace :wallet do
 end
 
 namespace :docs do
-  desc 'Generate YARD markdown into docs/reference/'
+  desc 'Generate YARD markdown into docs/reference/api/'
   task :generate do
     require 'fileutils'
     project_root = File.expand_path('../..', __dir__)
-    output_dir = File.join(project_root, 'docs/reference')
+    # YARD output lives in its own +api/+ sub-dir per the documentation
+    # strategy. Authored content (schema, principle-of-state, etc.) sits
+    # at +docs/reference/+ as siblings; isolating YARD's nuclear cleanup
+    # to +api/+ keeps the authored docs out of the rm_rf line of fire.
+    output_dir = File.join(project_root, 'docs/reference/api')
     FileUtils.rm_rf(output_dir)
     FileUtils.mkdir_p(output_dir)
     sh "bundle exec yardoc --plugin markdown --format markdown --output-dir #{output_dir} lib/**/*.rb"
