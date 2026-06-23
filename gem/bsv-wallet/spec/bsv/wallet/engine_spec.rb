@@ -2101,7 +2101,7 @@ RSpec.describe BSV::Wallet::Engine do
   describe '#acquire_certificate' do
     it 'acquires a certificate directly' do
       result = engine_with_keys.brc100.acquire_certificate(
-        type: 'identity', certifier: 'certifier_key',
+        type: 'identity', certifier: "02#{'c' * 64}",
         acquisition_protocol: :direct,
         fields: { 'name' => 'Alice', 'email' => 'alice@test.com' },
         serial_number: 'sn001', signature: 'sig_hex'
@@ -2114,7 +2114,7 @@ RSpec.describe BSV::Wallet::Engine do
     it 'raises for issuance protocol (not yet supported)' do
       expect do
         engine_with_keys.brc100.acquire_certificate(
-          type: 'identity', certifier: 'c1',
+          type: 'identity', certifier: "02#{'1' * 64}",
           acquisition_protocol: :issuance,
           fields: {}, certifier_url: 'https://cert.example.com'
         )
@@ -2125,17 +2125,17 @@ RSpec.describe BSV::Wallet::Engine do
   describe '#list_certificates' do
     before do
       engine_with_keys.brc100.acquire_certificate(
-        type: 'id', certifier: 'c1', acquisition_protocol: :direct,
+        type: 'id', certifier: "02#{'1' * 64}", acquisition_protocol: :direct,
         fields: { 'name' => 'Alice' }, serial_number: 'sn1', signature: 's1'
       )
       engine_with_keys.brc100.acquire_certificate(
-        type: 'id', certifier: 'c2', acquisition_protocol: :direct,
+        type: 'id', certifier: "02#{'2' * 64}", acquisition_protocol: :direct,
         fields: { 'name' => 'Bob' }, serial_number: 'sn2', signature: 's2'
       )
     end
 
     it 'lists certificates filtered by certifier and type' do
-      result = engine_with_keys.brc100.list_certificates(certifiers: ['c1'], types: ['id'])
+      result = engine_with_keys.brc100.list_certificates(certifiers: ["02#{'1' * 64}"], types: ['id'])
       expect(result[:total_certificates]).to eq(1)
       expect(result[:certificates].first[:fields]['name']).to eq('Alice')
     end
@@ -2183,16 +2183,16 @@ RSpec.describe BSV::Wallet::Engine do
   describe '#relinquish_certificate' do
     it 'soft-deletes a certificate' do
       engine_with_keys.brc100.acquire_certificate(
-        type: 'id', certifier: 'c1', acquisition_protocol: :direct,
+        type: 'id', certifier: "02#{'1' * 64}", acquisition_protocol: :direct,
         fields: { 'name' => 'Alice' }, serial_number: 'sn1', signature: 's1'
       )
 
       result = engine_with_keys.brc100.relinquish_certificate(
-        type: 'id', serial_number: 'sn1', certifier: 'c1'
+        type: 'id', serial_number: 'sn1', certifier: "02#{'1' * 64}"
       )
       expect(result).to eq({ relinquished: true })
 
-      listed = engine_with_keys.brc100.list_certificates(certifiers: ['c1'], types: ['id'])
+      listed = engine_with_keys.brc100.list_certificates(certifiers: ["02#{'1' * 64}"], types: ['id'])
       expect(listed[:total_certificates]).to eq(0)
     end
   end

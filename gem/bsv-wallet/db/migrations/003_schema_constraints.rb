@@ -37,6 +37,10 @@ Sequel.migration do
       add_constraint(:wtxid_length, 'wtxid IS NULL OR length(wtxid) = 32')
       add_constraint(:description_length, 'length(description) BETWEEN 5 AND 50')
       add_constraint(:wtxid_raw_tx_parity, '(wtxid IS NULL) = (raw_tx IS NULL)')
+      # Parallel to tx_proofs.raw_tx_min_length above (#380 gap 2).
+      # NULL-permissive — the wtxid_raw_tx_parity rule allows both unset
+      # for not-yet-signed actions.
+      add_constraint(:raw_tx_min_length, 'raw_tx IS NULL OR length(raw_tx) >= 20')
       add_constraint(:broadcast_intent_values, "broadcast_intent IN ('delayed', 'inline', 'none')") if !postgres
     end
 
@@ -52,6 +56,17 @@ Sequel.migration do
     alter_table(:broadcasts) do
       add_constraint(:block_hash_length, 'block_hash IS NULL OR length(block_hash) = 32')
       add_constraint(:block_height_range, 'block_height IS NULL OR block_height >= 0')
+      # Path-requires-block (#380 gap 1): a merkle_path is unverifiable
+      # without block context, so if it's set the block fields must be
+      # too. The reverse (block_hash/height set, merkle_path NULL) is
+      # the legitimate "confirmed but unproven" intermediate state when
+      # ARC reports MINED with blockHeight ahead of the path — see the
+      # parallel tx_proofs.path_requires_block constraint and the
+      # discussion in docs/reference/schema.md.
+      add_constraint(
+        :path_requires_block,
+        'merkle_path IS NULL OR (block_hash IS NOT NULL AND block_height IS NOT NULL)'
+      )
       # Postgres uses the tx_status ENUM; SQLite gets an equivalent CHECK
       # to keep parity. List mirrors arc_tx_statuses in 001 (ARC's metamorph
       # Status enum plus IMMUTABLE, #198/#220).
@@ -191,6 +206,42 @@ Sequel.migration do
       add_constraint(:tag_length, 'length(tag) BETWEEN 1 AND 300')
     end
 
+    # --- 15. certificates ---
+    # +subject+, +certifier+, +verifier+ are BRC-52 identity pubkeys
+    # (compressed hex, 66 chars). +verifier+ is nullable for self-issued
+    # certificates. Same Postgres-regex / SQLite-fallback split as
+    # transmissions.counterparty_shape below (#380 gap 3).
+    alter_table(:certificates) do
+      if postgres
+        add_constraint(
+          :subject_pubkey_shape,
+          Sequel.lit("length(subject) = 66 AND subject ~ '^0[23][0-9a-f]{64}$'")
+        )
+        add_constraint(
+          :certifier_pubkey_shape,
+          Sequel.lit("length(certifier) = 66 AND certifier ~ '^0[23][0-9a-f]{64}$'")
+        )
+        add_constraint(
+          :verifier_pubkey_shape,
+          Sequel.lit("verifier IS NULL OR (length(verifier) = 66 AND verifier ~ '^0[23][0-9a-f]{64}$')")
+        )
+      else
+        add_constraint(
+          :subject_pubkey_shape,
+          "length(subject) = 66 AND (substr(subject, 1, 2) = '02' OR substr(subject, 1, 2) = '03')"
+        )
+        add_constraint(
+          :certifier_pubkey_shape,
+          "length(certifier) = 66 AND (substr(certifier, 1, 2) = '02' OR substr(certifier, 1, 2) = '03')"
+        )
+        add_constraint(
+          :verifier_pubkey_shape,
+          'verifier IS NULL OR (length(verifier) = 66 AND ' \
+          "(substr(verifier, 1, 2) = '02' OR substr(verifier, 1, 2) = '03'))"
+        )
+      end
+    end
+
     # --- 20. transmissions ---
     # +counterparty+ is a BRC-43 identity pubkey (hex, 66-char compressed).
     # Postgres gets the full regex; SQLite gets a length + 02/03-prefix check
@@ -226,6 +277,13 @@ Sequel.migration do
     # --- 20. transmissions ---
     alter_table(:transmissions) do
       drop_constraint :counterparty_shape
+    end
+
+    # --- 15. certificates ---
+    alter_table(:certificates) do
+      drop_constraint :subject_pubkey_shape
+      drop_constraint :certifier_pubkey_shape
+      drop_constraint :verifier_pubkey_shape
     end
 
     # --- 13. tags ---
@@ -300,6 +358,7 @@ Sequel.migration do
     alter_table(:broadcasts) do
       drop_constraint :block_hash_length
       drop_constraint :block_height_range
+      drop_constraint :path_requires_block
       drop_constraint :tx_status_values if !postgres
     end
 
@@ -315,6 +374,7 @@ Sequel.migration do
       drop_constraint :wtxid_length
       drop_constraint :description_length
       drop_constraint :wtxid_raw_tx_parity
+      drop_constraint :raw_tx_min_length
       drop_constraint :broadcast_intent_values if !postgres
       set_column_allow_null :description
     end
