@@ -17,9 +17,9 @@ module BSV
       # inputs from the pool, externalises the lease via input rows so
       # concurrent actions don't claim the same UTXO, and releases the
       # lease (via action cleanup) on failure. The build collaborator
-      # (today +Engine::Action#generate_change+, tomorrow +TxBuilder+) is
-      # the *scribe* — it works in pure scratch, attempting a build at the
-      # current input set.
+      # (+TxBuilder#build_change+, lifted out of +Engine::Action+ in
+      # #336) is the *scribe* — it works in pure scratch, attempting a
+      # build at the current input set.
       #
       # ## The build seam (one-way, by value)
       #
@@ -36,15 +36,15 @@ module BSV
       # A build attempt returns one of:
       #
       # * Success — +{ wtxid:, raw_tx:, tx:, vout_mapping:, change_outputs: }+
-      #   exactly as today's +generate_change+ returns it. +tx+ is the live
+      #   exactly as +TxBuilder#build_change+ returns it. +tx+ is the live
       #   +BSV::Transaction::Tx+ instance with +source_satoshis+ /
       #   +source_locking_script+ wired on every input.
       # * Shortfall — +{ shortfall: N }+, where +N+ is the positive deficit
       #   in satoshis (+required_fee - surplus+) needing to be covered by
       #   a top-up.
       #
-      # The shape is the existing +generate_change+ contract; the strategy
-      # documents it, it does not invent it.
+      # The shape is the existing +TxBuilder#build_change+ contract; the
+      # strategy documents it, it does not invent it.
       #
       # ## Acquisition ownership (option a)
       #

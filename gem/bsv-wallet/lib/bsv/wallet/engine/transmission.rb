@@ -323,12 +323,11 @@ module BSV
         #   - anything other than a lowercase-hex compressed pubkey
         #     (66 chars, +02|03+ prefix). Tighter than
         #     +KeyDeriver.validate_counterparty_hex!+ — that helper
-        #     also accepts uncompressed (+04+) and mixed-case hex,
-        #     which is fine for +KeyDeriver+ (its callers use the
-        #     hex to derive a key) but wrong for the transmission
-        #     boundary: the Postgres CHECK in 003 is
-        #     +^0[23][0-9a-f]{64}$+, so an uppercase or +04+-prefix
-        #     counterparty passed the engine and then died as
+        #     tolerates mixed-case hex, which is fine for +KeyDeriver+
+        #     (its callers use the hex to derive a key) but wrong for
+        #     the transmission boundary: the Postgres CHECK in 003 is
+        #     +^0[23][0-9a-f]{64}$+, so an uppercase counterparty
+        #     passed the engine and then died as
         #     +Sequel::CheckConstraintViolation+ at write time. The
         #     fix mirrors the schema here so the engine boundary
         #     rejects exactly what the DB would reject — same shape

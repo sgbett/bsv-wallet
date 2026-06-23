@@ -47,15 +47,15 @@ module BSV
       # Create a BRC-100 action (Phases 1, 2, optionally 3, optionally 4).
       #
       # Composes the funding primitives:
-      #   1. Phase 1a creates an empty action row (inputs: []) — option (a)
-      #      seam, so initial and top-up locks share one retried path.
+      #   1. Phase 1a creates an empty action row (inputs: []) — the
+      #      initial-and-top-up locks share one retried path off this seam.
       #   2. Phase 1b acquires inputs via Engine::FundingStrategy:
       #      - inputs: nil  → selects to cover sum(outputs); fixpoint loop
       #        tops up on shortfall (#213 bounded retry on contention).
       #      - inputs: [...] → locked as-is once; shortfall raises
       #        InsufficientFundsError immediately (no top-up).
-      #      generate_change is invoked through a one-way build seam
-      #      and returns the finished {wtxid, raw_tx, vout_mapping,
+      #      TxBuilder#build_change is invoked through a one-way build
+      #      seam and returns the finished {wtxid, raw_tx, vout_mapping,
       #      change_outputs, tx} on convergence.
       #      Pool depletion or contention-retry exhaustion ⇒
       #      InsufficientFundsError; the empty action row is aborted.

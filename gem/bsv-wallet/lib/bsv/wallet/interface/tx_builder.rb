@@ -27,7 +27,7 @@ module BSV
       # call +store.resolve_inputs_for_signing+ — that responsibility
       # sits with the caller (today: +FundingStrategy#acquire+ inside
       # the fixpoint loop after each lock, and the
-      # deferred / +skip_change+ branches of +do_create_action+ inline).
+      # deferred / +skip_change+ branches of +Engine#build_action+ inline).
       # This keeps the builder a pure function and preserves the "≤1
       # resolve per build attempt" property the funding seam was cut to
       # enable.

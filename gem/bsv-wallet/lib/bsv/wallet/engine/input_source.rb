@@ -4,11 +4,11 @@ module BSV
   module Wallet
     class Engine
       # Single point of truth for wiring source-output data onto a
-      # TransactionInput. Used by Engine#build_inputs (inline construction
-      # path, before signing) and Engine::Broadcast#hydrated_transaction_for
-      # (daemon path, after parsing raw_tx). Both paths converge here so
-      # the SDK can serialize the transaction to Extended Format on the
-      # wire.
+      # TransactionInput. Used by Engine::TxBuilder#build_inputs (inline
+      # construction path, before signing) and
+      # Engine::Broadcast#hydrated_transaction_for (daemon path, after
+      # parsing raw_tx). Both paths converge here so the SDK can
+      # serialize the transaction to Extended Format on the wire.
       module InputSource
         module_function
 

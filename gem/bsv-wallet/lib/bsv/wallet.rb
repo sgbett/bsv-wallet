@@ -80,11 +80,11 @@ module BSV
     # Engine (Layer 3 — orchestration)
     autoload :Engine, 'bsv/wallet/engine'
 
-    # BRC-100 interface (Stage 1 of #396 relocates this from Engine::BRC100
-    # to a sibling here; still a mixin into Engine at Stage 1, becomes a
-    # composition over Engine primitives at Stage 3). The autoload is the
-    # canonical entry path; +engine.rb+ also eager-requires it because
-    # +include+ runs at class-definition time before autoload could fire.
+    # BRC-100 interface — sibling of Engine, composed over an Engine
+    # instance via +Engine#brc100+. History: relocated from
+    # +Engine::BRC100+ to here in Stage 1 of #396, promoted from mixin
+    # to a class composed over Engine primitives in Stage 3 of #396
+    # (#405). Engine no longer includes BRC100 in its ancestry.
     autoload :BRC100, 'bsv/wallet/brc100'
 
     # Daemon (walletd runtime — Async reactor host)
