@@ -9,10 +9,22 @@ on:
       - 'mkdocs.yml'
       - '.yardopts'
       - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'gem/**/lib/**'
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - '.yardopts'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 permissions:
   contents: write
+
+env:
+  # Suppresses the noisy "MkDocs 2 is coming" banner so the carve-out gate
+  # below operates on real content warnings only.
+  DISABLE_MKDOCS_2_WARNING: 'true'
 
 jobs:
   deploy:
@@ -42,5 +54,26 @@ jobs:
       - name: Install MkDocs dependencies
         run: pip install -r docs/requirements.txt
 
+      - name: Build with carve-out gate
+        # The documented carve-out (see docs/about-these-docs.md): vendored
+        # upstream BRC pages link to siblings we haven't vendored, and
+        # selected docs/concepts/ and docs/reference/ pages cite
+        # ../../.architecture/ ADRs/reviews — both render correctly on
+        # GitHub but generate mkdocs link warnings. The gate fails only on
+        # warnings outside those known patterns, so a NEW genuine broken
+        # link surfaces instead of hiding in the noise.
+        run: |
+          set -e
+          log=$(mkdocs build 2>&1)
+          echo "$log"
+          unexpected=$(echo "$log" | grep WARNING | grep -vE 'reference/external|reference/drafts|/\.architecture/' || true)
+          if [ -n "$unexpected" ]; then
+            echo ""
+            echo "::error::Unexpected mkdocs warnings (outside documented carve-out):"
+            echo "$unexpected"
+            exit 1
+          fi
+
       - name: Deploy to GitHub Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         run: mkdocs gh-deploy --force
