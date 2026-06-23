@@ -18,8 +18,11 @@ on:
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
+# Default to read; only the deploy job (master push) escalates to write.
+# Per-job permissions confine `contents: write` to the gh-deploy step,
+# so a PR-modified workflow cannot push to the repo on a PR run.
 permissions:
-  contents: write
+  contents: read
 
 env:
   # Suppresses the noisy "MkDocs 2 is coming" banner so the carve-out gate
@@ -27,7 +30,7 @@ env:
   DISABLE_MKDOCS_2_WARNING: 'true'
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -74,6 +77,37 @@ jobs:
             exit 1
           fi
 
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      # gh-deploy commits to the gh-pages branch.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true
+          working-directory: gem/bsv-wallet
+
+      - name: Generate YARD markdown
+        run: bundle exec rake docs:generate
+        working-directory: gem/bsv-wallet
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: Install MkDocs dependencies
+        run: pip install -r docs/requirements.txt
+
       - name: Deploy to GitHub Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         run: mkdocs gh-deploy --force

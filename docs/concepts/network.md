@@ -1,6 +1,6 @@
 # Network Layer
 
-The wallet talks to the outside world through three concrete services in the `BSV::Network::*` namespace, plus a long-lived SSE consumer. They divide cleanly by purpose: chain queries (`Services`), broadcast (`Broadcaster`), block headers (`ChainTracker`), and status push (`SseListener`). Each is its own seam; the wallet never mixes the responsibilities.
+The wallet talks to the outside world through three concrete services in the `BSV::Network::*` namespace, plus a long-lived SSE consumer. They divide cleanly by purpose: chain queries (`Services`), broadcast (`Broadcaster`), block headers (`ChainTracker`), and status push (`SSEListener`). Each is its own seam; the wallet never mixes the responsibilities.
 
 Peer delivery and the SSRF gate live in their own domain — `Engine::Transmission` plus `Network::PeerDelivery` and `Network::EndpointPolicy`. The full story is in [Transmission](transmission.md); this page does not duplicate it.
 
@@ -84,9 +84,9 @@ It **fails closed**: a header lookup that errors returns `false` (root invalid) 
 
 For *egress* validation only, the wallet uses `TrustedSelfChainTracker` — a tracker that returns `true` for all lookups, since the wallet's own proofs were validated against the real chain at import time.
 
-## `Network::SseListener` — Arcade status push
+## `Network::SSEListener` — Arcade status push
 
-ARC providers can push transaction-status changes via Server-Sent Events rather than waiting for the wallet to poll. `SseListener` is the long-lived connection that consumes that stream:
+ARC providers can push transaction-status changes via Server-Sent Events rather than waiting for the wallet to poll. `SSEListener` is the long-lived connection that consumes that stream:
 
 - Connects to `https://arcade.gorillapool.io/events?callbackToken=<token>` using the callback token the daemon's submissions also carry in their `X-CallbackToken` header.
 - Decodes each frame from the Arcade wire shape into the wallet's internal event hash.

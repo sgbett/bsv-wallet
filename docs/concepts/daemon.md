@@ -62,7 +62,7 @@ The daemon is structured as a classic **producer/consumer** split, communicating
   └─────────────────────┘              └────────────────────────────────────┘
                               ▲
                               │  Marshal-encoded events
-   Network::SseListener ──────┘
+   Network::SSEListener ──────┘
    (Arcade SSE stream)
 ```
 
@@ -87,7 +87,7 @@ Both broadcast loops feed the **same** `broadcasts.pull` socket. `Engine::Broadc
 
 `Engine::Broadcast` is where the [crash-recovery invariant](resilience-and-recovery.md) lives: `submit` stamps `broadcast_at` in a committed transaction *before* the network POST through `Network::Broadcaster`, and `record_broadcast_result` writes the `promotions` row atomically with recording an accepted status. Resolution polls `Broadcaster#get_tx_status` and, on a terminal rejection, calls `reject_action` to cascade-unwind. The ARC status vocabulary (`ACCEPTED_STATUSES`, `REJECTED_STATUSES`) is centralised in `BSV::Wallet::ArcStatus`, the single source of truth across the wallet.
 
-Polling is the default, but ARC providers can also *push*. When a daemon is configured with a `callback_token`, `Network::SseListener` is started as a peer fibre and subscribes to the live Arcade event stream. Each event is Marshal-encoded and PUSHed onto `inproc://statuses.pull`, where `Engine::Broadcast#statuses_pull!` consumes it through the same `Store::EventApplicator` the polling path uses. Cursor state lives in the `sse_cursors` table; on reconnect the listener sends `Last-Event-ID` and resumes without loss or duplication.
+Polling is the default, but ARC providers can also *push*. When a daemon is configured with a `callback_token`, `Network::SSEListener` is started as a peer fibre and subscribes to the live Arcade event stream. Each event is Marshal-encoded and PUSHed onto `inproc://statuses.pull`, where `Engine::Broadcast#statuses_pull!` consumes it through the same `Store::EventApplicator` the polling path uses. Cursor state lives in the `sse_cursors` table; on reconnect the listener sends `Last-Event-ID` and resumes without loss or duplication.
 
 Alongside the fire-and-forget PULL queue, `Engine::Broadcast` also binds a **REP** socket (`broadcasts.rep`). This is the synchronous path: an `:inline` action gets broadcast within the originating call rather than handed to the discovery loop — same `process` method, reached request/reply instead of queue.
 

@@ -34,7 +34,7 @@ This page is the narrative shape of the system. For canonical principle statemen
                  ┌─────────────────────────────────────────────┐
     runtime      │   Daemon · Scheduler · Engine::Broadcast     │
                  │   Engine::TxProof · Engine::Reaper           │
-                 │   Network::SseListener (Arcade push)         │
+                 │   Network::SSEListener (Arcade push)         │
                  └─────────────────────────────────────────────┘
 ```
 
