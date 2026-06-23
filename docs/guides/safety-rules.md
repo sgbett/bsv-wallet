@@ -162,10 +162,10 @@ never had to know about.
 
 The wrong framing is "no descendant of a `no_send` parent". The right
 framing is **"no descendant of an un-promoted parent"** — an action that
-has not had its outputs flipped to `promoted = true`. A `no_send: true`
-caller-facing action is one such case; an aborted or reaped action is
-another. Internal `:none` actions are *not* such a case, and they can be
-spent by broadcast children.
+does not yet have a `promotions` row (promotion-as-a-row, ADR-023). A
+`no_send: true` caller-facing action is one such case; an aborted or
+reaped action is another. Internal `:none` actions *are* promoted (a row
+is written on creation) and they can be spent by broadcast children.
 
 Keep the broadcast intent consistent across a dependent sequence when the
 intent crosses the network boundary; the internal-vs-broadcast boundary

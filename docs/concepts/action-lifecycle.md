@@ -32,7 +32,7 @@ end
 
 | Intent | Triggered by | What happens | Phase 4 timing |
 |--------|--------------|--------------|----------------|
-| **`:none`** (internal) | `no_send: true` | The transaction is never sent to ARC. It produces canonical wallet state directly — used by incoming BEEF, imported UTXOs, WBIKD locks, and the `send_payment` porcelain. | **Synchronous**, inside `build_action`. |
+| **`:none`** (internal) | `no_send: true` | The transaction is never sent to ARC. It produces canonical wallet state directly. Always `:none`: incoming BEEF (`internalize_action`), WBIKD pre-fund locks. Opt-in `:none` (when the caller passes `no_send: true`): `send_payment`, `import_utxo`, `import_wallet` — typically for peer-to-peer handoff instead of broadcast. | **Synchronous**, inside `build_action`. |
 | **`:delayed`** | `no_send: false`, `accept_delayed_broadcast: true` (the default send path) | The action is queued. The daemon discovers it (`broadcast_at IS NULL`), broadcasts it via `Network::Broadcaster`, and later resolves its status. | Deferred, on broadcast acceptance. |
 | **`:inline`** | `no_send: false`, `accept_delayed_broadcast: false` | The transaction is broadcast synchronously within the call (the same `Engine::Broadcast` worker, reached via the REP socket), then promoted. | Synchronous, after the broadcast returns. |
 

@@ -35,7 +35,7 @@ If a fact appears in both a Concepts page and a Reference page in two slightly d
 ## Cross-link policy
 
 - **Sibling-relative paths** inside `docs/`: `[Phases](../reference/action-lifecycle.md#phases)`. Not absolute, not site-root, not `mkdocs`-flavoured `[Phases](/reference/action-lifecycle/)`.
-- **No `.md` URL extensions in prose** when the link is rendered by mkdocs — mkdocs strips them, and a verbatim `.md` link breaks in the rendered site. The exception is the `mkdocs.yml` `nav:` entries themselves, which *do* carry the `.md`.
+- **Keep `.md` URL extensions in prose** — both GitHub render and mkdocs handle them; mkdocs's default `use_directory_urls: true` auto-translates `foo.md` to `foo/` at build time. Bare paths like `[X](foo)` work on neither.
 - **Absolute GitHub URLs only in `README.md`** — badges and external project links. The site itself is internal; consumers reach pages via the sidebar or in-doc links.
 
 ## Repo-specific carve-outs

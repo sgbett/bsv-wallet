@@ -28,8 +28,9 @@ lock inputs   ->   fund        ->   broadcast   ->   promote outputs
    `InsufficientFundsError` immediately.
 3. **Broadcast.** Either inline (synchronous) or queued for the daemon — see
    below.
-4. **Promote outputs.** Flip each owned output's `promoted` flag false ->
-   true and insert `spendable` rows, gating on the ARC response.
+4. **Promote outputs.** Insert a `promotions` row for the action (gated on
+   the ARC response) and insert `spendable` rows for its owned outputs.
+   Promotion is a row, not a flag (ADR-023, promotion-as-a-row).
 
 ## Funding: fees and change
 
