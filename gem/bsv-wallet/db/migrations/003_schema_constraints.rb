@@ -226,25 +226,24 @@ Sequel.migration do
           Sequel.lit("verifier IS NULL OR (length(verifier) = 66 AND verifier ~ '^0[23][0-9a-f]{64}$')")
         )
       else
-        # SQLite has no regex in CHECKs; use GLOB for hex-tail enforcement
-        # so '02ZZ...' is rejected (length + prefix alone would let it
-        # through). `NOT GLOB '*[!0-9a-f]*'` means "no characters outside
-        # 0-9a-f anywhere in the substring".
+        # SQLite gets length + 02/03-prefix only (mirroring the existing
+        # transmissions.counterparty_shape SQLite fallback below). GLOB
+        # negation syntax ([!...] vs [^...]) varies across SQLite
+        # versions and reliably rejecting non-hex content there isn't
+        # portable. Postgres is canonical; SQLite under-enforces hex
+        # content as documented in project_sqlite_schema_under_enforces.
         add_constraint(
           :subject_pubkey_shape,
-          "length(subject) = 66 AND substr(subject, 1, 2) IN ('02', '03') " \
-          "AND substr(subject, 3) NOT GLOB '*[!0-9a-f]*'"
+          "length(subject) = 66 AND (substr(subject, 1, 2) = '02' OR substr(subject, 1, 2) = '03')"
         )
         add_constraint(
           :certifier_pubkey_shape,
-          "length(certifier) = 66 AND substr(certifier, 1, 2) IN ('02', '03') " \
-          "AND substr(certifier, 3) NOT GLOB '*[!0-9a-f]*'"
+          "length(certifier) = 66 AND (substr(certifier, 1, 2) = '02' OR substr(certifier, 1, 2) = '03')"
         )
         add_constraint(
           :verifier_pubkey_shape,
           'verifier IS NULL OR (length(verifier) = 66 AND ' \
-          "substr(verifier, 1, 2) IN ('02', '03') AND " \
-          "substr(verifier, 3) NOT GLOB '*[!0-9a-f]*')"
+          "(substr(verifier, 1, 2) = '02' OR substr(verifier, 1, 2) = '03'))"
         )
       end
     end

@@ -274,7 +274,10 @@ RSpec.describe 'Schema migration', :store do
         end.not_to raise_error
       end
 
-      it 'rejects raw_tx < 20 bytes' do
+      # Postgres-only: subsequent alter_table on actions (NOT-NULL reference)
+      # forces a SQLite table rebuild that drops this CHECK
+      # (project_sqlite_schema_under_enforces).
+      it 'rejects raw_tx < 20 bytes', :postgres do
         expect do
           db.transaction(savepoint: true) do
             insert_action(description: 'raw_tx 19-byte test',
@@ -318,7 +321,10 @@ RSpec.describe 'Schema migration', :store do
         end.to raise_error(Sequel::CheckConstraintViolation)
       end
 
-      it 'rejects verifier with non-hex content' do
+      # Postgres-only: SQLite fallback uses length + 02/03-prefix only
+      # (GLOB negation syntax varies across SQLite versions and isn't
+      # portable); hex-content enforcement is canonical only on Postgres.
+      it 'rejects verifier with non-hex content', :postgres do
         expect do
           db.transaction(savepoint: true) do
             db[:certificates].insert(type: 'test', serial_number: 'sn-nonhex',
