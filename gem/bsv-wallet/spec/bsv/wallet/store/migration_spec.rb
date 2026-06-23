@@ -183,7 +183,8 @@ RSpec.describe 'Schema migration', :store do
     end
 
     it 'CASCADE deletes certificate_fields when certificate is deleted' do
-      cert_id = db[:certificates].insert(type: 'test', serial_number: 'sn1', certifier: 'c1')
+      certifier_hex = "02#{'a' * 64}"
+      cert_id = db[:certificates].insert(type: 'test', serial_number: 'sn1', certifier: certifier_hex)
       db[:certificate_fields].insert(certificate_id: cert_id, name: 'email', value: 'encrypted')
 
       expect(db[:certificate_fields].where(certificate_id: cert_id).count).to eq(1)
@@ -200,6 +201,138 @@ RSpec.describe 'Schema migration', :store do
       action_id = insert_action(description: 'broadcast test 1')
       row = db[:actions].where(id: action_id).first
       expect(row[:broadcast_intent]).to eq('delayed')
+    end
+  end
+
+  describe '#380 CHECK constraints' do
+    let(:subject_pubkey)   { "02#{'a' * 64}" }
+    let(:certifier_pubkey) { "03#{'b' * 64}" }
+    let(:verifier_pubkey)  { "02#{'c' * 64}" }
+
+    describe 'broadcasts.path_requires_block' do
+      let(:proof_fields) do
+        {
+          block_hash: Sequel.blob('h' * 32),
+          block_height: 100,
+          merkle_path: Sequel.blob('m' * 50)
+        }
+      end
+
+      it 'accepts all-NULL (pre-mining state)' do
+        action_id = insert_action(description: 'parity null test')
+        expect do
+          db[:broadcasts].insert(action_id: action_id, intent: 'delayed')
+        end.not_to raise_error
+      end
+
+      it 'accepts all-set (post-mining state)' do
+        action_id = insert_action(description: 'parity set test')
+        expect do
+          db[:broadcasts].insert(action_id: action_id, intent: 'delayed', **proof_fields)
+        end.not_to raise_error
+      end
+
+      it 'accepts block context without merkle_path (confirmed-but-unproven intermediate)' do
+        action_id = insert_action(description: 'confirmed unproven test')
+        expect do
+          db[:broadcasts].insert(action_id: action_id, intent: 'delayed',
+                                 block_hash: Sequel.blob('h' * 32), block_height: 100)
+        end.not_to raise_error
+      end
+
+      it 'rejects merkle_path without block_hash' do
+        action_id = insert_action(description: 'parity mp test')
+        expect do
+          db.transaction(savepoint: true) do
+            db[:broadcasts].insert(action_id: action_id, intent: 'delayed',
+                                   merkle_path: Sequel.blob('m' * 50), block_height: 100)
+          end
+        end.to raise_error(Sequel::CheckConstraintViolation)
+      end
+
+      it 'rejects merkle_path without block_height' do
+        action_id = insert_action(description: 'parity bh-no-height test')
+        expect do
+          db.transaction(savepoint: true) do
+            db[:broadcasts].insert(action_id: action_id, intent: 'delayed',
+                                   merkle_path: Sequel.blob('m' * 50),
+                                   block_hash: Sequel.blob('h' * 32))
+          end
+        end.to raise_error(Sequel::CheckConstraintViolation)
+      end
+    end
+
+    describe 'actions.raw_tx_min_length' do
+      it 'accepts NULL raw_tx (per wtxid_raw_tx_parity rule)' do
+        expect { insert_action(description: 'raw_tx null test') }.not_to raise_error
+      end
+
+      it 'accepts raw_tx >= 20 bytes' do
+        expect do
+          insert_action(description: 'raw_tx 20-byte test',
+                        wtxid: Sequel.blob('w' * 32), raw_tx: Sequel.blob('x' * 20))
+        end.not_to raise_error
+      end
+
+      # Postgres-only: subsequent alter_table on actions (NOT-NULL reference)
+      # forces a SQLite table rebuild that drops this CHECK
+      # (project_sqlite_schema_under_enforces).
+      it 'rejects raw_tx < 20 bytes', :postgres do
+        expect do
+          db.transaction(savepoint: true) do
+            insert_action(description: 'raw_tx 19-byte test',
+                          wtxid: Sequel.blob('w' * 32), raw_tx: Sequel.blob('x' * 19))
+          end
+        end.to raise_error(Sequel::CheckConstraintViolation)
+      end
+    end
+
+    describe 'certificates pubkey-shape CHECKs' do
+      it 'accepts valid 66-char compressed-hex pubkeys' do
+        expect do
+          db[:certificates].insert(type: 'test', serial_number: 'sn-ok',
+                                   subject: subject_pubkey, certifier: certifier_pubkey,
+                                   verifier: verifier_pubkey)
+        end.not_to raise_error
+      end
+
+      it 'accepts NULL verifier (self-issued certificates)' do
+        expect do
+          db[:certificates].insert(type: 'test', serial_number: 'sn-no-verifier',
+                                   subject: subject_pubkey, certifier: certifier_pubkey)
+        end.not_to raise_error
+      end
+
+      it 'rejects subject with wrong prefix (04-uncompressed)' do
+        expect do
+          db.transaction(savepoint: true) do
+            db[:certificates].insert(type: 'test', serial_number: 'sn-04',
+                                     subject: "04#{'a' * 64}", certifier: subject_pubkey)
+          end
+        end.to raise_error(Sequel::CheckConstraintViolation)
+      end
+
+      it 'rejects certifier with wrong length' do
+        expect do
+          db.transaction(savepoint: true) do
+            db[:certificates].insert(type: 'test', serial_number: 'sn-short',
+                                     subject: subject_pubkey, certifier: '02deadbeef')
+          end
+        end.to raise_error(Sequel::CheckConstraintViolation)
+      end
+
+      # Postgres-only: SQLite fallback uses length + 02/03-prefix only
+      # (GLOB negation syntax varies across SQLite versions and isn't
+      # portable); hex-content enforcement is canonical only on Postgres.
+      it 'rejects verifier with non-hex content', :postgres do
+        expect do
+          db.transaction(savepoint: true) do
+            db[:certificates].insert(type: 'test', serial_number: 'sn-nonhex',
+                                     subject: subject_pubkey, certifier: certifier_pubkey,
+                                     verifier: "02#{'Z' * 64}")
+          end
+        end.to raise_error(Sequel::CheckConstraintViolation)
+      end
     end
   end
 

@@ -995,16 +995,21 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(found[:nlocktime]).to eq(500)
     end
 
-    it 'tolerates an actions.raw_tx too short to slice (no min-length CHECK there)' do
-      # actions.raw_tx has no min-length constraint (unlike tx_proofs.raw_tx),
-      # so action_to_hash must guard the version/nlocktime byte slices.
-      action = BSV::Wallet::Store::Models::Action.create(
-        description: 'short raw_tx', wtxid: SecureRandom.random_bytes(32),
-        raw_tx: Sequel.blob("\x01\x02".b)
-      )
-      found = store.find_action(id: action.id)
-      expect(found[:version]).to be_nil
-      expect(found[:nlocktime]).to be_nil
+    it 'rejects actions.raw_tx shorter than 20 bytes at schema level (#380)', :postgres do
+      # actions.raw_tx has a 20-byte minimum CHECK (parallel to
+      # tx_proofs.raw_tx_min_length). action_to_hash's defensive
+      # version/nlocktime slicing remains as belt-and-braces but the
+      # short-raw_tx path is now unreachable from a valid insert on
+      # Postgres. Tagged :postgres because SQLite under-enforces CHECKs
+      # added via alter_table rebuild (project_sqlite_schema_under_enforces).
+      expect do
+        db.transaction(savepoint: true) do
+          BSV::Wallet::Store::Models::Action.create(
+            description: 'short raw_tx test', wtxid: SecureRandom.random_bytes(32),
+            raw_tx: Sequel.blob("\x01\x02".b)
+          )
+        end
+      end.to raise_error(Sequel::CheckConstraintViolation)
     end
   end
 
@@ -1159,8 +1164,8 @@ RSpec.describe BSV::Wallet::Store, :store do
   describe '#save_certificate' do
     it 'persists a certificate with fields' do
       cert = store.save_certificate(
-        type: 'identity', certifier: 'certifier_key', serial_number: 'sn001',
-        subject: 'subject_key', signature: 'sig_hex',
+        type: 'identity', certifier: "02#{'c' * 64}", serial_number: 'sn001',
+        subject: "02#{'5' * 64}", signature: 'sig_hex',
         fields: { 'name' => 'Alice', 'email' => 'alice@example.com' }
       )
 
@@ -1171,16 +1176,16 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#query_certificates' do
     before do
-      store.save_certificate(type: 'id', certifier: 'c1', serial_number: 'sn1',
+      store.save_certificate(type: 'id', certifier: "02#{'1' * 64}", serial_number: 'sn1',
                              fields: { 'name' => 'Alice' })
-      store.save_certificate(type: 'id', certifier: 'c2', serial_number: 'sn2',
+      store.save_certificate(type: 'id', certifier: "02#{'2' * 64}", serial_number: 'sn2',
                              fields: { 'name' => 'Bob' })
-      store.save_certificate(type: 'email', certifier: 'c1', serial_number: 'sn3',
+      store.save_certificate(type: 'email', certifier: "02#{'1' * 64}", serial_number: 'sn3',
                              fields: { 'email' => 'a@b.com' })
     end
 
     it 'filters by certifiers and types' do
-      result = store.query_certificates(certifiers: ['c1'], types: ['id'])
+      result = store.query_certificates(certifiers: ["02#{'1' * 64}"], types: ['id'])
       expect(result[:total]).to eq(1)
       expect(result[:certificates].first[:fields]['name']).to eq('Alice')
     end
@@ -1188,11 +1193,11 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   describe '#delete_certificate' do
     it 'soft-deletes a certificate' do
-      store.save_certificate(type: 'id', certifier: 'c1', serial_number: 'sn1',
+      store.save_certificate(type: 'id', certifier: "02#{'1' * 64}", serial_number: 'sn1',
                              fields: { 'name' => 'Alice' })
-      store.delete_certificate(type: 'id', serial_number: 'sn1', certifier: 'c1')
+      store.delete_certificate(type: 'id', serial_number: 'sn1', certifier: "02#{'1' * 64}")
 
-      result = store.query_certificates(certifiers: ['c1'], types: ['id'])
+      result = store.query_certificates(certifiers: ["02#{'1' * 64}"], types: ['id'])
       expect(result[:total]).to eq(0)
     end
   end
@@ -1692,7 +1697,7 @@ RSpec.describe BSV::Wallet::Store, :store do
 
       result = store.record_broadcast_result(
         action_id: action.id, tx_status: 'MINED',
-        block_hash: block_hash_hex, merkle_path: merkle_path_hex
+        block_hash: block_hash_hex, block_height: 800_000, merkle_path: merkle_path_hex
       )
 
       expect(result[:block_hash]).to eq([block_hash_hex].pack('H*'))

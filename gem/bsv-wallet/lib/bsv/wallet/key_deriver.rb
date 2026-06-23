@@ -43,6 +43,26 @@ module BSV
         raise BSV::Wallet::InvalidParameterError.new('counterparty', message)
       end
 
+      # Strict variant of +validate_counterparty_hex!+ — lowercase hex only,
+      # mirroring the certificates pubkey-shape CHECK in migration 003
+      # (subject/certifier/verifier) and Engine::Transmission's
+      # BRC43_COMPRESSED_LOWERCASE constant. Use this when the value is
+      # destined for a column that has a lowercase-only CHECK; the looser
+      # counterparty variant accepts mixed-case for derivation use.
+      #
+      # @param hex [String]
+      # @param param_name [String] field name for the error message
+      # @raise [BSV::Wallet::InvalidParameterError]
+      def self.validate_identity_pubkey_hex!(hex, param_name: 'identity_key')
+        return if hex.is_a?(String) && hex.match?(/\A0[23][0-9a-f]{64}\z/)
+
+        raise BSV::Wallet::InvalidParameterError.new(
+          param_name,
+          'lowercase-hex compressed pubkey (02|03 prefix + 64 hex chars; ' \
+          'matches the certificates schema CHECK in db/migrations/003)'
+        )
+      end
+
       # @param private_key [BSV::Primitives::PrivateKey] everyday root key
       # @param privileged_key [BSV::Primitives::PrivateKey, nil] optional privileged root key
       def initialize(private_key:, privileged_key: nil)

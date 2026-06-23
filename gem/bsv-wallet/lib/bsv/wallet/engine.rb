@@ -517,6 +517,7 @@ module BSV
       def acquire_certificate(type:, certifier:, fields:,
                               serial_number: nil, revocation_outpoint: nil,
                               signature: nil, keyring_for_subject: nil)
+        KeyDeriver.validate_identity_pubkey_hex!(certifier, param_name: 'certifier')
         @store.save_certificate(
           type: type, certifier: certifier, fields: fields,
           serial_number: serial_number, revocation_outpoint: revocation_outpoint,
@@ -534,6 +535,7 @@ module BSV
 
       def prove_certificate(certificate:, fields_to_reveal:, verifier:, privileged: false)
         require_key_deriver!
+        KeyDeriver.validate_identity_pubkey_hex!(verifier, param_name: 'verifier')
         @key_deriver.derive_revelation_keyring(
           certificate: certificate,
           fields_to_reveal: fields_to_reveal,
@@ -542,6 +544,7 @@ module BSV
       end
 
       def relinquish_certificate(type:, serial_number:, certifier:)
+        KeyDeriver.validate_identity_pubkey_hex!(certifier, param_name: 'certifier')
         @store.delete_certificate(type: type, serial_number: serial_number, certifier: certifier)
       end
 
