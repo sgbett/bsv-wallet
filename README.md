@@ -36,7 +36,7 @@ Four-layer SOA — each layer has a single responsibility:
 │  (your application — hex conversion, API formatting)    │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 3: Business Process (BRC-100)                    │
-│  Engine — 28 spec-mandated methods, pure orchestration  │
+│  Engine — orchestration; 28 BRC-100 methods via brc100  │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 2: Services                                      │
 │  Store, UTXOPool, Broadcaster, Services                 │
@@ -46,7 +46,7 @@ Four-layer SOA — each layer has a single responsibility:
 └─────────────────────────────────────────────────────────┘
 ```
 
-The Engine contains no SQL, no ARC calls, no thread management. It receives Layer 2 components at construction and orchestrates them. Swap implementations by passing different objects — same interface, different backend.
+The Engine contains no SQL, no ARC calls, no thread management. It receives Layer 2 components at construction and orchestrates them. Swap implementations by passing different objects — same interface, different backend. For the engineering decomposition behind this customer-facing shape (the contract/concrete collaborator split, the runtime fibres, the structural-state principle), see [docs/concepts/architecture.md](docs/concepts/architecture.md).
 
 ### Configuration
 

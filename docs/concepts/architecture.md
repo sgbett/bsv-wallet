@@ -12,7 +12,7 @@ This page is the narrative shape of the system. For canonical principle statemen
   orchestration  │   wallet-vocab primitives + composed         │
                  │   collaborators (no SQL · no I/O · no threads)│
                  └───────────────┬─────────────────────────────-┘
-                                 │ depends on (injected / composed)
+                                 │ depends on (via Interface::*)
         ┌────────────┬───────────┴────────┬─────────────┬──────────────┐
         ▼            ▼                    ▼             ▼              ▼
   ┌───────────┐ ┌────────────┐  ┌────────────────┐ ┌──────────┐ ┌──────────┐
