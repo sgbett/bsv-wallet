@@ -13,7 +13,7 @@ bsv-wallet is a Ruby BRC-100 wallet: it manages UTXO lifecycle, transaction cons
 Measure each PR against the project's own stated truth, in this order:
 
 1. **Anchor on [`.architecture/principles.md`](../.architecture/principles.md).** Read the principles there — they are the yardstick the codebase is built on — and judge the change against them. (Don't rely on a copy here; this file deliberately doesn't restate them.)
-2. **Consult the [`docs/reference/`](../reference) doc that covers the subsystem the PR touches** — read the relevant one rather than guessing:
+2. **Consult the [`docs/reference/`](../docs/reference/) doc that covers the subsystem the PR touches** — read the relevant one rather than guessing:
    - [`principle-of-state.md`](../docs/reference/principle-of-state.md) — state is *read*, not stored (no status columns; derived status).
    - [`state-representations.md`](../docs/reference/state-representations.md) — the per-element A–F conformance register (e.g. promotion is a `promotions` *row*, not an `outputs.promoted` flag).
    - [`state-boundaries.md`](../docs/reference/state-boundaries.md) — stateless SDK / stateful wallet.
