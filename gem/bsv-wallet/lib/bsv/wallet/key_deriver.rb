@@ -39,7 +39,7 @@ module BSV
         return if hex.is_a?(String) && hex.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
 
         raise BSV::Wallet::InvalidParameterError.new('counterparty',
-                                                     '"self", "anyone", or a valid hex public key')
+                                                     '"self", "anyone", or a 66-char compressed pubkey hex (02/03 prefix); 04-uncompressed is not accepted')
       end
 
       # @param private_key [BSV::Primitives::PrivateKey] everyday root key

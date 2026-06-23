@@ -55,7 +55,8 @@ for f in docs/concepts/*.md; do
   base=$(basename $f)
   ref="docs/reference/$base"
   if [ -f "$ref" ]; then
-    common=$(comm -12 <(grep '^## ' "$f" | sort -u) <(grep '^## ' "$ref" | sort -u))
+    common=$(comm -12 <(grep '^## ' "$f" | sort -u) <(grep '^## ' "$ref" | sort -u) \
+               | grep -v '^## Related$')
     if [ -n "$common" ]; then
       echo "DRIFT WARNING in $base:"
       echo "$common"
