@@ -204,7 +204,7 @@ RSpec.describe 'Schema migration', :store do
     end
   end
 
-  describe '#380 CHECK constraints', :postgres do
+  describe '#380 CHECK constraints' do
     let(:subject_pubkey)   { "02#{'a' * 64}" }
     let(:certifier_pubkey) { "03#{'b' * 64}" }
     let(:verifier_pubkey)  { "02#{'c' * 64}" }
