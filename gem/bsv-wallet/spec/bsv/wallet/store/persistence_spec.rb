@@ -995,11 +995,13 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(found[:nlocktime]).to eq(500)
     end
 
-    it 'rejects actions.raw_tx shorter than 20 bytes at schema level (#380)' do
-      # actions.raw_tx now has a 20-byte minimum CHECK (parallel to
+    it 'rejects actions.raw_tx shorter than 20 bytes at schema level (#380)', :postgres do
+      # actions.raw_tx has a 20-byte minimum CHECK (parallel to
       # tx_proofs.raw_tx_min_length). action_to_hash's defensive
       # version/nlocktime slicing remains as belt-and-braces but the
-      # short-raw_tx path is now unreachable from a valid insert.
+      # short-raw_tx path is now unreachable from a valid insert on
+      # Postgres. Tagged :postgres because SQLite under-enforces CHECKs
+      # added via alter_table rebuild (project_sqlite_schema_under_enforces).
       expect do
         db.transaction(savepoint: true) do
           BSV::Wallet::Store::Models::Action.create(
