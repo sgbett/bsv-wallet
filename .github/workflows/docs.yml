@@ -67,8 +67,16 @@ jobs:
         # link surfaces instead of hiding in the noise.
         run: |
           set -e
+          # `set -e` does NOT propagate failure through `log=$(...)` — capture
+          # the exit status explicitly so a failing build doesn't fall through
+          # to the warning check and falsely pass.
           log=$(mkdocs build 2>&1)
+          build_status=$?
           echo "$log"
+          if [ $build_status -ne 0 ]; then
+            echo "::error::mkdocs build failed (exit $build_status)"
+            exit $build_status
+          fi
           unexpected=$(echo "$log" | grep WARNING | grep -vE 'reference/external|reference/drafts|/\.architecture/' || true)
           if [ -n "$unexpected" ]; then
             echo ""

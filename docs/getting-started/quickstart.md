@@ -30,8 +30,8 @@ environmental detail lives in
 ## 2. Set your key
 
 ```sh
-export WIF=<your-wif-private-key>
-# Or, for a named wallet:  export BSV_WALLET_WIF_ALICE=<wif>
+export BSV_WALLET_WIF_ALICE=<your-wif-private-key>
+# Or, for an unnamed wallet: export WIF=<wif> and omit wallet_name: in step 3.
 ```
 
 Env-var resolution and named-wallet precedence are covered in
