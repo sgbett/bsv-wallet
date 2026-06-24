@@ -1552,17 +1552,17 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'returns candidates ordered by satoshis descending' do
-      candidates = store.find_spendable(satoshis: 600, basket: 'default')
+      candidates = store.find_spendable(satoshis: 600, basket: nil)
       expect(candidates.map { |c| c[:satoshis] }).to eq([1000])
     end
 
     it 'returns multiple candidates when needed' do
-      candidates = store.find_spendable(satoshis: 1200, basket: 'default')
+      candidates = store.find_spendable(satoshis: 1200, basket: nil)
       expect(candidates.map { |c| c[:satoshis] }).to eq([1000, 500])
     end
 
     it 'stops scanning once target is reached' do
-      candidates = store.find_spendable(satoshis: 1, basket: 'default')
+      candidates = store.find_spendable(satoshis: 1, basket: nil)
       expect(candidates.size).to eq(1)
     end
 
@@ -1573,10 +1573,10 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'excludes specified output IDs' do
-      all = store.find_spendable(satoshis: 99_999, basket: 'default')
+      all = store.find_spendable(satoshis: 99_999, basket: nil)
       biggest_id = all.first[:id]
 
-      filtered = store.find_spendable(satoshis: 99_999, basket: 'default', exclude: [biggest_id])
+      filtered = store.find_spendable(satoshis: 99_999, basket: nil, exclude: [biggest_id])
       expect(filtered.map { |c| c[:id] }).not_to include(biggest_id)
     end
 
@@ -1585,7 +1585,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       lock_action = BSV::Wallet::Store::Models::Action.create(description: 'test action')
       BSV::Wallet::Store::Models::Input.create(action_id: lock_action.id, output_id: output.id, vin: 0)
 
-      candidates = store.find_spendable(satoshis: 9999, basket: 'default')
+      candidates = store.find_spendable(satoshis: 9999, basket: nil)
       expect(candidates.map { |c| c[:id] }).not_to include(output.id)
     end
   end
@@ -2275,13 +2275,13 @@ RSpec.describe BSV::Wallet::Store, :store do
                                    inputs: [{ output_id: output.id, vin: 0 }])
 
       # Locked: not selectable while the inputs row exists.
-      locked = store.find_spendable(satoshis: 99_999, basket: 'default').map { |o| o[:id] }
+      locked = store.find_spendable(satoshis: 99_999, basket: nil).map { |o| o[:id] }
       expect(locked).not_to include(output.id)
 
       expect(store.reap_action(action_id: result[:id])).to be(true)
 
       # Reclaimed: the inputs CASCADE released the lock; the source is selectable again.
-      freed = store.find_spendable(satoshis: 99_999, basket: 'default').map { |o| o[:id] }
+      freed = store.find_spendable(satoshis: 99_999, basket: nil).map { |o| o[:id] }
       expect(freed).to include(output.id)
       expect(BSV::Wallet::Store::Models::Input.where(action_id: result[:id]).count).to eq(0)
     end
@@ -2294,7 +2294,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.reap_action(action_id: result[:id])).to be(true)
       expect(BSV::Wallet::Store::Models::Action[result[:id]]).to be_nil
 
-      freed = store.find_spendable(satoshis: 99_999, basket: 'default').map { |o| o[:id] }
+      freed = store.find_spendable(satoshis: 99_999, basket: nil).map { |o| o[:id] }
       expect(freed).to include(output.id)
     end
 

@@ -31,7 +31,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       {
         satoshis: satoshis, vout: i,
         locking_script: script.to_binary,
-        basket: 'default',
+        basket: nil,
         derivation_prefix: prefix,
         derivation_suffix: out_suffix,
         sender_identity_key: 'self'
@@ -206,7 +206,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       it 'receive change for surplus' do
         fund_wallet_for_auto(satoshis: 100_000, count: 2)
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
         payment_script = SecureRandom.random_bytes(25)
 
@@ -281,7 +281,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
       it 'no_send: true with surplus surfaces change in no_send_change' do
         fund_wallet_for_auto(satoshis: 100_000, count: 2)
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
 
         result = engine_with_keys.brc100.create_action(
@@ -309,7 +309,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         allow_any_instance_of(BSV::Wallet::Engine::Hydrator).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet_for_auto(satoshis: 100_000, count: 2)
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
         caller_script = "\x51\x52\x53".b # OP_1 OP_2 OP_3 — distinctive sentinel
 
@@ -403,10 +403,10 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         register_funded_outputs(
           [
             { satoshis: big_sats, vout: 0, locking_script: p2pkh_locking_script_for(big_key).to_binary,
-              basket: 'default', derivation_prefix: 'topup prefix', derivation_suffix: 'big',
+              basket: nil, derivation_prefix: 'topup prefix', derivation_suffix: 'big',
               sender_identity_key: 'self' },
             { satoshis: small_sats, vout: 1, locking_script: p2pkh_locking_script_for(small_key).to_binary,
-              basket: 'default', derivation_prefix: 'topup prefix', derivation_suffix: 'small',
+              basket: nil, derivation_prefix: 'topup prefix', derivation_suffix: 'small',
               sender_identity_key: 'self' }
           ],
           description: 'topup funding'

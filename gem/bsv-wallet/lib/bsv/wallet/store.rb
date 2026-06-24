@@ -445,12 +445,31 @@ module BSV
         { total: total, actions: actions }
       end
 
-      def query_outputs(basket:, tags: nil, tag_query_mode: :any,
+      # Sentinel for "basket filter not applied". Distinct from +nil+, which
+      # means "outputs with no basket row" (the spec's unbasketed-outputs
+      # semantics). Distinct from any String, which names a basket.
+      BASKET_UNSPECIFIED = Object.new.freeze
+      private_constant :BASKET_UNSPECIFIED
+
+      # Query spendable outputs with optional filters and aggregation.
+      #
+      # @param basket [String, Array<String>, nil, omitted]
+      #   - omitted (default) → no basket filter; all spendable outputs match.
+      #   - +String+           → outputs in that named basket.
+      #   - +Array<String>+    → outputs in any of the named baskets.
+      #   - +nil+              → outputs with no +output_baskets+ row (unbasketed).
+      # @param aggregate [:sum, :count, nil]
+      #   - +nil+ (default) → returns +{ total:, outputs: }+ (paginated rows + match count).
+      #   - +:sum+          → returns Integer (sum of +satoshis+ over matched outputs).
+      #   - +:count+        → returns Integer (count of matched outputs).
+      def query_outputs(basket: BASKET_UNSPECIFIED, tags: nil, tag_query_mode: :any,
+                        aggregate: nil,
                         limit: 10, offset: 0,
                         include_locking_scripts: false,
                         include_custom_instructions: false,
                         include_tags: false, include_labels: false)
-        base = models::Output.spendable.in_basket(basket)
+        base = models::Output.spendable
+        base = base.in_basket(basket) unless basket.equal?(BASKET_UNSPECIFIED)
 
         if tags&.any?
           tag_ids = models::Tag.where(tag: tags).select_map(:id)
@@ -471,6 +490,17 @@ module BSV
                      base.where(tag_ds.exists)
                    end
           end
+        end
+
+        case aggregate
+        when :sum
+          return (base.sum(:satoshis) || 0).to_i
+        when :count
+          return base.count
+        when nil
+          # fall through to the paginated rows-and-total return
+        else
+          raise ArgumentError, "unknown aggregate: #{aggregate.inspect} (expected :sum, :count, or nil)"
         end
 
         total = base.count
@@ -736,9 +766,14 @@ module BSV
         end
       end
 
-      def find_spendable(satoshis:, basket: nil, exclude: [])
+      # +basket+ accepts the same vocabulary as +query_outputs+:
+      #   - omitted (default) → all spendable outputs.
+      #   - +nil+              → unbasketed outputs only (no +output_baskets+ row).
+      #   - +String+           → outputs in that named basket.
+      #   - +Array<String>+    → outputs in any listed basket.
+      def find_spendable(satoshis:, basket: BASKET_UNSPECIFIED, exclude: [])
         ds = models::Output.spendable
-        ds = ds.in_basket(basket) if basket
+        ds = ds.in_basket(basket) unless basket.equal?(BASKET_UNSPECIFIED)
         ds = ds.exclude(Sequel[:outputs][:id] => exclude) if exclude.any?
         ds = ds.order(Sequel.desc(:satoshis))
 
@@ -1181,7 +1216,7 @@ module BSV
       # for wrapping in a transaction. The spendable row is not handled here —
       # callers decide when an output joins the canonical UTXO set.
       def write_output_associations(output:, action_id:, spec:)
-        if spec[:basket] && spec[:basket] != 'default'
+        if spec[:basket]
           basket_id = find_or_create_basket(name: spec[:basket])
           models::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: action_id)
         end

@@ -1,40 +1,62 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Show wallet balance and spendable outputs.
+# Show wallet balance — total satoshis across spendable outputs.
 #
 # Usage:
-#   bin/balance [wallet] [--basket <name>]
+#   bin/balance [wallet] [--basket <name>|none]
 #
 # Prints total satoshis to stdout (machine-readable).
 # Prints detail to stderr (human-readable).
+#
+# Basket filter semantics (wallet vocab, not BRC-100):
+#   no --basket flag → all spendable outputs (default)
+#   --basket none    → unbasketed outputs only
+#   --basket <name>  → outputs in the named basket
+#
+# Routes through +Engine#spendable_outputs+ rather than +BRC100#list_outputs+
+# (operator tool, not application; per core-vs-conformance principle).
 
 require_relative '../lib/bsv/wallet/cli'
 require 'optparse'
 
 wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
 
-options = { basket: 'default' }
+options = {}
 OptionParser.new do |opts|
-  opts.banner = 'Usage: bin/balance [wallet] [--basket <name>]'
-  opts.on('--basket NAME', 'Basket to query (default: default)') { |v| options[:basket] = v }
+  opts.banner = 'Usage: bin/balance [wallet] [--basket <name>|none]'
+  opts.on('--basket NAME', 'Basket to query (omit for all; "none" for unbasketed)') do |v|
+    options[:basket] = v == 'none' ? nil : v
+    options[:basket_given] = true
+  end
 end.parse!(args)
 
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 engine = ctx[:engine]
 
-listed = engine.brc100.list_outputs(basket: options[:basket], limit: 10_000)
-total = listed[:outputs].sum { |o| o[:satoshis] }
+agg_args = { aggregate: :sum }
+agg_args[:basket] = options[:basket] if options[:basket_given]
+total = engine.spendable_outputs(**agg_args)
+
+count_args = { aggregate: :count }
+count_args[:basket] = options[:basket] if options[:basket_given]
+count = engine.spendable_outputs(**count_args)
 
 # Machine-readable to stdout
 $stdout.puts total
 
+basket_label =
+  if !options[:basket_given]
+    '(all)'
+  elsif options[:basket].nil?
+    '(unbasketed)'
+  else
+    options[:basket]
+  end
+
 # Human-readable to stderr
 warn "wallet:   #{wallet_name || '(default)'}"
 warn "identity: #{ctx[:identity_key]}"
-warn "basket:   #{options[:basket]}"
-warn "outputs:  #{listed[:total_outputs]}"
+warn "basket:   #{basket_label}"
+warn "outputs:  #{count}"
 warn "balance:  #{total} sats"
-listed[:outputs].each_with_index do |o, i|
-  warn "  [#{i}] #{o[:satoshis]} sats (id: #{o[:id]})"
-end

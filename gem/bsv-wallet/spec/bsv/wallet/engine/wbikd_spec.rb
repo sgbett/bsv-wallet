@@ -155,7 +155,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         expect(result[:found]).to eq(1)
       end
 
-      it 'the internalized output is spendable in the default basket' do
+      it 'the internalized output is spendable as an unbasketed output' do
         addr_result = engine_net.generate_receive_address
         prefix = addr_result[:derivation_prefix]
         suffix = addr_result[:derivation_suffix]
@@ -187,8 +187,8 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         engine_net.scan_receive_addresses
 
-        # The internalized output should be spendable in default basket
-        outputs = engine_net.brc100.list_outputs(basket: 'default')
+        # The internalized output should be spendable as an unbasketed output
+        outputs = engine_net.spendable_outputs(basket: nil)
         internalized = outputs[:outputs].find { |o| o[:satoshis] == 25_000 }
         expect(internalized).not_to be_nil
       end

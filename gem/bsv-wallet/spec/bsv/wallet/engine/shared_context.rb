@@ -102,7 +102,7 @@ RSpec.shared_context 'engine setup' do
      '1f74f82377b33b17b68f7a016188acd3740e00'].pack('H*')
   end
 
-  def fund_wallet(satoshis: 1000, count: 1, basket: 'default',
+  def fund_wallet(satoshis: 1000, count: 1, basket: nil,
                   prefix: 'wallet payment', suffix: 'suffix',
                   sender_identity_key: 'self')
     # Pre-compute output specs so we can build a real source tx whose

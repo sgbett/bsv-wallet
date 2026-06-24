@@ -664,7 +664,7 @@ RSpec.describe BSV::Wallet::Engine do
         {
           satoshis: satoshis, vout: i,
           locking_script: script_binary,
-          basket: 'default',
+          basket: nil,
           derivation_prefix: prefix,
           derivation_suffix: out_suffix,
           sender_identity_key: sender_identity_key
@@ -679,7 +679,7 @@ RSpec.describe BSV::Wallet::Engine do
         output_script = p2pkh_locking_script_for(derive_key).to_binary
 
         # Get the funded output ID
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
 
         # Create a deferred action with an input
@@ -725,7 +725,7 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet_with_keys(satoshis: 1000)
         output_script = OP_TRUE
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
 
         # engine_with_keys is needed because build_transaction (now called
@@ -762,7 +762,7 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet_with_keys(satoshis: 1000, count: 2)
         output_script = OP_TRUE
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_ids = listed[:outputs].map { |o| o[:id] }
 
         create_result = engine_with_keys.brc100.create_action(
@@ -802,7 +802,7 @@ RSpec.describe BSV::Wallet::Engine do
         # for the egress-validity contract on the caller-supplied path.
         fund_wallet_with_keys(satoshis: 1000)
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
 
         create_result = engine_with_keys.brc100.create_action(
@@ -939,7 +939,7 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet_with_keys(satoshis: 1000)
         output_script = OP_TRUE
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
 
         create_result = engine_with_keys.brc100.create_action(
@@ -1024,7 +1024,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'returns { wtxid:, atomic_beef:, change_outpoints: } on the no_send path' do
-      fund_wallet(satoshis: 100_000, basket: 'default', suffix: 'do_build_no_send')
+      fund_wallet(satoshis: 100_000, basket: nil, suffix: 'do_build_no_send')
       result = engine_with_keys.build_action(
         description: 'no_send primitive',
         outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
@@ -1174,15 +1174,8 @@ RSpec.describe BSV::Wallet::Engine do
   # collaborator), so this block focuses on the surface invariants that
   # transitive coverage can't catch:
   # - All 24 +do_+ primitives are defined.
-  # - None accepts +originator:+ (BRC-100 vocab — stays at the wrap layer).
-  #
-  # TODO (post-#429): once +Engine#list_outputs+ is renamed to
-  # +#spendable_outputs+ and the +seek_permission:+ kwarg is removed,
-  # extend the per-primitive loop below to also assert
-  # +expect(params).not_to include(:seek_permission)+ — locking the
-  # same conformance-vocab rule structurally across all 24 read-side
-  # primitives. Currently blocked because +Engine#list_outputs+ still
-  # carries the kwarg pending #429.
+  # - None accepts +originator:+ or +seek_permission:+ (BRC-100 vocab —
+  #   stays at the wrap layer per ADR-026 decision 7).
   describe 'read-side primitive surface' do
     READ_SIDE_PRIMITIVES = %i[
       encrypt decrypt create_hmac verify_hmac
@@ -1190,7 +1183,7 @@ RSpec.describe BSV::Wallet::Engine do
       get_public_key reveal_counterparty_key_linkage reveal_specific_key_linkage
       acquire_certificate list_certificates prove_certificate
       relinquish_certificate discover_by_identity_key discover_by_attributes
-      list_actions list_outputs relinquish_output
+      list_actions spendable_outputs relinquish_output
       authenticated? wait_for_authentication
       get_height get_header_for_height get_network get_version
     ].freeze
@@ -1204,16 +1197,19 @@ RSpec.describe BSV::Wallet::Engine do
         expect(engine).to respond_to(name)
       end
 
-      it "##{name} does not accept +originator:+ (ADR-026 decision 7)" do
+      it "##{name} does not accept +originator:+ or +seek_permission:+ (ADR-026 decision 7)" do
         params = engine.method(name).parameters.map { |_kind, pname| pname }
         expect(params).not_to include(:originator),
                               "expected #{name} signature to exclude :originator, got #{params.inspect}"
+        expect(params).not_to include(:seek_permission),
+                              "expected #{name} signature to exclude :seek_permission, got #{params.inspect}"
       end
 
       it "##{name} has an explicit keyword signature (no anonymous **kwargs)" do
         # Anonymous +**+ forwarding would silently accept arbitrary
-        # kwargs including +originator:+, defeating the previous test.
-        # Explicit signatures are the structural guarantee.
+        # kwargs including +originator:+ and +seek_permission:+,
+        # defeating the previous test. Explicit signatures are the
+        # structural guarantee.
         forwards = engine.method(name).parameters.any? { |kind, _| kind == :keyrest }
         expect(forwards).to be(false),
                             "expected #{name} to declare its keywords explicitly, found anonymous **kwargs"
@@ -1957,6 +1953,63 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
+  describe '#spendable_outputs (wallet-vocab primitive)', :skip_reserve do
+    # Build the fixture against +Store+ directly so the limp-mode guard
+    # (which depends on the spendable-balance projection) doesn't get in
+    # the way; the unit under test is the read-side primitive, not the
+    # write path. Three baskets: 'wallet' (100+200), 'other' (400),
+    # unbasketed (800).
+    before do
+      fund_wallet(satoshis: 100, basket: 'wallet', suffix: 'a')
+      fund_wallet(satoshis: 200, basket: 'wallet', suffix: 'b')
+      fund_wallet(satoshis: 400, basket: 'other', suffix: 'c')
+      fund_wallet(satoshis: 800, basket: nil,     suffix: 'd')
+    end
+
+    it 'returns all spendable outputs when no basket filter is applied' do
+      result = engine.spendable_outputs
+      expect(result[:total]).to eq(4)
+    end
+
+    it 'filters to a single named basket' do
+      result = engine.spendable_outputs(basket: 'wallet')
+      expect(result[:total]).to eq(2)
+    end
+
+    it 'filters to multiple baskets when an Array is supplied' do
+      result = engine.spendable_outputs(basket: %w[wallet other])
+      expect(result[:total]).to eq(3)
+    end
+
+    it 'returns unbasketed outputs when basket: nil' do
+      result = engine.spendable_outputs(basket: nil)
+      expect(result[:total]).to eq(1)
+      expect(result[:outputs].first[:satoshis]).to eq(800)
+    end
+
+    it 'aggregates :sum across all spendable when no basket filter' do
+      expect(engine.spendable_outputs(aggregate: :sum)).to eq(100 + 200 + 400 + 800)
+    end
+
+    it 'aggregates :sum within a named basket' do
+      expect(engine.spendable_outputs(basket: 'wallet', aggregate: :sum)).to eq(300)
+    end
+
+    it 'aggregates :sum across unbasketed outputs when basket: nil' do
+      expect(engine.spendable_outputs(basket: nil, aggregate: :sum)).to eq(800)
+    end
+
+    it 'aggregates :count' do
+      expect(engine.spendable_outputs(aggregate: :count)).to eq(4)
+      expect(engine.spendable_outputs(basket: 'wallet', aggregate: :count)).to eq(2)
+    end
+
+    it 'raises on unknown aggregate' do
+      expect { engine.spendable_outputs(aggregate: :median) }
+        .to raise_error(ArgumentError, /unknown aggregate/)
+    end
+  end
+
   describe '#relinquish_output' do
     it 'removes output from tracking' do
       engine.brc100.create_action(
@@ -2382,7 +2435,7 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet(satoshis: 100_000, prefix: 'reserve', suffix: 'reserve', basket: 'reserve')
         fund_wallet(satoshis: 1000)
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
 
         output_key = derive_key
@@ -2443,7 +2496,7 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet(satoshis: 500, suffix: 'multi1')
         fund_wallet(satoshis: 500, suffix: 'multi2')
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         outputs_by_id = listed[:outputs].sort_by { |o| o[:id] }
         expect(outputs_by_id.length).to eq(3)
 
@@ -2490,7 +2543,7 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet(satoshis: 100_000, prefix: 'reserve', suffix: 'reserve', basket: 'reserve')
         fund_wallet(satoshis: 2000)
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
 
         key1 = derive_key(suffix: 'out1')
@@ -2541,7 +2594,7 @@ RSpec.describe BSV::Wallet::Engine do
       it 'returns transaction data without broadcasting' do
         fund_wallet(satoshis: 1000)
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
         output_script = p2pkh_locking_script_for(derive_key).to_binary
 
@@ -2571,7 +2624,7 @@ RSpec.describe BSV::Wallet::Engine do
       it 'creates unsigned then signs via sign_action' do
         fund_wallet(satoshis: 1000)
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
         output_script = p2pkh_locking_script_for(derive_key).to_binary
 
@@ -2624,7 +2677,7 @@ RSpec.describe BSV::Wallet::Engine do
         allow_any_instance_of(BSV::Wallet::Engine::Hydrator).to receive(:validate_for_handoff!) # rubocop:disable RSpec/AnyInstance
         fund_wallet(satoshis: 1000)
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
         output_script = p2pkh_locking_script_for(derive_key).to_binary
 
@@ -2661,7 +2714,7 @@ RSpec.describe BSV::Wallet::Engine do
       it 'stores a wtxid that matches the actual transaction hash' do
         fund_wallet(satoshis: 1000)
 
-        listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+        listed = engine_with_keys.spendable_outputs(basket: nil)
         output_id = listed[:outputs].first[:id]
         output_script = p2pkh_locking_script_for(derive_key).to_binary
 

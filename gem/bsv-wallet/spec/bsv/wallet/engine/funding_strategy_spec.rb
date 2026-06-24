@@ -86,7 +86,7 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
       outputs: [{
         satoshis: satoshis, vout: 0, locking_script: SecureRandom.random_bytes(25),
         derivation_prefix: 'p', derivation_suffix: 's',
-        sender_identity_key: 'self', basket: 'default'
+        sender_identity_key: 'self', basket: nil
       }]
     )
     BSV::Wallet::Store::Models::Output.where(action_id: funding[:id]).first.id

@@ -98,9 +98,9 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
   def total_spendable(wallet)
     # bin/list_outputs's JSON envelope uses :total (not :total_outputs),
     # so accept either to stay forward-compatible.
-    default = list_outputs(wallet, basket: 'default')
+    unbasketed = list_outputs(wallet, basket: 'none')
     received = list_outputs(wallet, basket: 'received')
-    (default[:total_outputs] || default[:total] || 0) +
+    (unbasketed[:total_outputs] || unbasketed[:total] || 0) +
       (received[:total_outputs] || received[:total] || 0)
   end
 
@@ -124,8 +124,8 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
   end
 
   it 'consolidates and sweeps every wallet to zero spendable' do
-    # Phase 1: import funding UTXOs. The default-basket balance after
-    # import is the imported root UTXO's value (~1m sats) minus the
+    # Phase 1: import funding UTXOs. The post-import unbasketed-output
+    # balance is the imported root UTXO's value (~1m sats) minus the
     # bootstrap self-payment's network fee (a few dozen sats). Allow a
     # 1000-sat margin to absorb fee variance across SDK version bumps.
     wallet_names.each do |wallet|

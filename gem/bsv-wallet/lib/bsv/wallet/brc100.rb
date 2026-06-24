@@ -164,12 +164,27 @@ module BSV
                        include_custom_instructions: false, include_tags: false,
                        include_labels: false, limit: 10, offset: 0,
                        seek_permission: true, originator: nil)
-        result = @engine.list_outputs(
+        # Normalise on ingress per BRC-100 §"Logical Validation
+        # Procedures" — the spec notes interoperable SDK validation
+        # "trims ... these identifiers before enforcing length limits".
+        # Trim handles whitespace-only inputs (rejected below) AND
+        # incidental edge whitespace (silently normalised). Lowercasing
+        # and the full validation rule-set land with HLR #428 across
+        # all four basket-accepting wrappers; trim is here today to
+        # close the obvious gap.
+        basket = basket.to_s.strip
+        raise ArgumentError, 'basket: required (BRC-100 spec)' if basket.empty?
+
+        # +seek_permission:+ and +originator:+ accepted as part of the
+        # BRC-100 contract but not forwarded — conformance vocabulary
+        # stops here (ADR-026 decision 7), matching the pattern on
+        # +#list_actions+ and +#internalize_action+.
+        result = @engine.spendable_outputs(
           basket: basket, tags: tags, tag_query_mode: tag_query_mode,
           include: include,
           include_custom_instructions: include_custom_instructions,
           include_tags: include_tags, include_labels: include_labels,
-          limit: limit, offset: offset, seek_permission: seek_permission
+          limit: limit, offset: offset
         )
         { total_outputs: result[:total], outputs: result[:outputs] }
       end

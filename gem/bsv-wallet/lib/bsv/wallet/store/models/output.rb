@@ -28,19 +28,25 @@ module BSV
               where(spendable_ds.exists).exclude(input_ds.exists)
             end
 
-            # Filter outputs belonging to a named basket.
-            # 'default' is implicit — outputs with no output_baskets row.
-            def in_basket(name)
-              if name == 'default'
+            # Filter outputs by basket membership. Every accepted value
+            # applies a real filter — to apply *no* basket filter, omit
+            # the call entirely and chain off +#spendable+ directly.
+            #
+            # - +nil+              → outputs with no +output_baskets+ row (unbasketed).
+            # - +String+           → outputs in the named basket.
+            # - +Array<String>+    → outputs in any of the named baskets.
+            def in_basket(name_or_names)
+              if name_or_names.nil?
                 basket_ds = BSV::Wallet::Store::Models::OutputBasket.dataset
                                                                     .where(Sequel[:output_baskets][:output_id] => Sequel[:outputs][:id])
                                                                     .select(1)
                 exclude(basket_ds.exists)
               else
+                names = Array(name_or_names)
                 basket_ds = BSV::Wallet::Store::Models::OutputBasket.dataset
                                                                     .join(:baskets, id: :basket_id)
                                                                     .where(Sequel[:output_baskets][:output_id] => Sequel[:outputs][:id])
-                                                                    .where(Sequel[:baskets][:name] => name)
+                                                                    .where(Sequel[:baskets][:name] => names)
                                                                     .select(1)
                 where(basket_ds.exists)
               end

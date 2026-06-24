@@ -7,16 +7,29 @@
 #   bin/list_outputs [wallet] [--basket <name>] [--limit <n>] [--scripts]
 #
 # Prints JSON to stdout, summary to stderr.
+#
+# Basket filter semantics (wallet vocab, not BRC-100):
+#   no --basket flag        → all spendable outputs (default)
+#   --basket none           → unbasketed outputs only
+#   --basket <name>         → outputs in the named basket
+#
+# This binary routes directly through +Engine#spendable_outputs+ rather than
+# +BRC100#list_outputs+: it is an operator tool, not an application client,
+# and the per-+core-vs-conformance+ principle is that core vocabulary belongs
+# in core consumers.
 
 require_relative '../lib/bsv/wallet/cli'
 require 'optparse'
 
 wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
 
-options = { basket: 'default', limit: 100 }
+options = { limit: 100 }
 OptionParser.new do |opts|
-  opts.banner = 'Usage: bin/list_outputs [wallet] [--basket <name>] [--limit <n>] [--scripts]'
-  opts.on('--basket NAME', 'Basket to query (default: default)') { |v| options[:basket] = v }
+  opts.banner = 'Usage: bin/list_outputs [wallet] [--basket <name>|none] [--limit <n>] [--scripts]'
+  opts.on('--basket NAME', 'Basket to query (omit for all; "none" for unbasketed)') do |v|
+    options[:basket] = v == 'none' ? nil : v
+    options[:basket_given] = true
+  end
   opts.on('--limit N', Integer, 'Max outputs to return (default: 100)') { |v| options[:limit] = v }
   opts.on('--scripts', 'Include locking scripts in output') { options[:scripts] = true }
 end.parse!(args)
@@ -24,11 +37,13 @@ end.parse!(args)
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 engine = ctx[:engine]
 
-listed = engine.brc100.list_outputs(
-  basket: options[:basket],
+query_args = {
   limit: options[:limit],
   include: options[:scripts] ? :locking_scripts : nil
-)
+}
+query_args[:basket] = options[:basket] if options[:basket_given]
+
+listed = engine.spendable_outputs(**query_args)
 
 outputs = listed[:outputs].map do |o|
   entry = { id: o[:id], satoshis: o[:satoshis], vout: o[:vout] }
@@ -37,10 +52,19 @@ outputs = listed[:outputs].map do |o|
 end
 
 BSV::Wallet::CLI::Output.write_json(
-  { total: listed[:total_outputs], outputs: outputs }
+  { total: listed[:total], outputs: outputs }
 )
 
+basket_label =
+  if !options[:basket_given]
+    '(all)'
+  elsif options[:basket].nil?
+    '(unbasketed)'
+  else
+    options[:basket]
+  end
+
 warn "wallet:  #{wallet_name || '(default)'}"
-warn "basket:  #{options[:basket]}"
-warn "outputs: #{listed[:total_outputs]}"
+warn "basket:  #{basket_label}"
+warn "outputs: #{listed[:total]}"
 warn "total:   #{outputs.sum { |o| o[:satoshis] }} sats"
