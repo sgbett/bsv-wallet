@@ -14,51 +14,71 @@ This document is intended to be edited as positions move between categories. A c
 
 ## Cryptographic operations
 
-| Method | Stance | Notes |
-|---|---|---|
-| `encrypt` / `decrypt` | Implemented (core) | Engine primitives over `@key_deriver` (AES-GCM symmetric, BRC-2). |
-| `createHmac` / `verifyHmac` | Implemented (core) | Engine primitives over `@key_deriver` (BRC-56). |
-| `createSignature` / `verifySignature` | Implemented (core) | Engine primitives over `@key_deriver` (BRC-3). |
+| BRC-100 method | Engine primitive | Stance | Notes |
+|---|---|---|---|
+| `encrypt` / `decrypt` | `engine.encrypt` / `engine.decrypt` | Implemented (core) | Over `@key_deriver` (AES-GCM symmetric, BRC-2). |
+| `createHmac` / `verifyHmac` | `engine.create_hmac` / `engine.verify_hmac` | Implemented (core) | Over `@key_deriver` (BRC-56). |
+| `createSignature` / `verifySignature` | `engine.create_signature` / `engine.verify_signature` | Implemented (core) | Over `@key_deriver` (BRC-3). |
 
 These are the indivisible-verb 1:1 primitives ratified by ADR-026. Conformance wraps each in BRC-100 hash-vocabulary shape; the Engine speaks wallet vocab.
 
 ## Public keys and identity
 
-| Method / param | Stance | Notes |
-|---|---|---|
-| `getPublicKey` | Implemented (core) | Engine `#get_public_key`. Identity-shaped pubkeys returned as hex (ADR-008); derived pubkeys returned as binary. |
-| `protocolID` / `keyID` | Implemented (core) | BRC-43 derivation parameters. Pass through to `@key_deriver`. |
-| `counterparty` (self / anyone / hex) | Implemented (core) | BRC-43 counterparty rules. Identity-shaped pubkey hex carve-out preserves the spec's wire form. |
-| `forSelf` | Implemented (core) | Self-derivation flag. |
-| `privileged` / `privilegedReason` | Deferred | Accepted at the boundary, no privilege escalation machinery (no permission UI to escalate through). When BRC-116 lands, becomes a permission check. |
+| BRC-100 method / param | Engine primitive | Stance | Notes |
+|---|---|---|---|
+| `getPublicKey` | `engine.get_public_key` | Implemented (core) | Identity-shaped pubkeys returned as hex (ADR-008); derived pubkeys returned as binary. |
+| `protocolID` / `keyID` | — (kwargs) | Implemented (core) | BRC-43 derivation parameters. Pass through to `@key_deriver`. |
+| `counterparty` (self / anyone / hex) | — (kwarg) | Implemented (core) | BRC-43 counterparty rules. Identity-shaped pubkey hex carve-out preserves the spec's wire form. |
+| `forSelf` | — (kwarg) | Implemented (core) | Self-derivation flag. |
+| `privileged` / `privilegedReason` | — (kwarg) | Deferred | Accepted at the boundary, no privilege escalation machinery (no permission UI to escalate through). When BRC-116 lands, becomes a permission check. |
 
 ## Certificates
 
-| Method | Stance | Notes |
-|---|---|---|
-| `acquireCertificate` / `listCertificates` | Implemented (core) | Engine primitives; `certificates` and `certificate_fields` tables canonical (BRC-52 interchange in hex per ADR-008's identity-pubkey carve-out rationale). |
-| `proveCertificate` | Implemented (core) | Engine primitive; selective field disclosure via BRC-52. |
-| `relinquishCertificate` | Implemented (core) | Removes certificate from wallet's tracked set. |
-| `discoverByIdentityKey` / `discoverByAttributes` | Implemented (core) | Engine primitives; remote certificate discovery via configured network services. |
+| BRC-100 method | Engine primitive | Stance | Notes |
+|---|---|---|---|
+| `acquireCertificate` | `engine.acquire_certificate` | Implemented (core) | `certificates` / `certificate_fields` tables canonical (BRC-52 interchange in hex per ADR-008's identity-pubkey carve-out rationale). |
+| `listCertificates` | `engine.list_certificates` | Implemented (core) | Same. |
+| `proveCertificate` | `engine.prove_certificate` | Implemented (core) | Selective field disclosure via BRC-52. |
+| `relinquishCertificate` | `engine.relinquish_certificate` | Implemented (core) | Removes certificate from wallet's tracked set. |
+| `discoverByIdentityKey` | `engine.discover_by_identity_key` | Implemented (core) | Remote certificate discovery via configured network services. |
+| `discoverByAttributes` | `engine.discover_by_attributes` | Implemented (core) | Same. |
 
 ## Key linkage revelation
 
-| Method | Stance | Notes |
-|---|---|---|
-| `revealCounterpartyKeyLinkage` | Implemented (core) | BRC-69 method 1, BRC-72 protection. Engine primitive. |
-| `revealSpecificKeyLinkage` | Implemented (core) | BRC-69 method 2, BRC-72 protection. Engine primitive. Includes BRC-97 proof-type for future ZKP schemes. |
+| BRC-100 method | Engine primitive | Stance | Notes |
+|---|---|---|---|
+| `revealCounterpartyKeyLinkage` | `engine.reveal_counterparty_key_linkage` | Implemented (core) | BRC-69 method 1, BRC-72 protection. |
+| `revealSpecificKeyLinkage` | `engine.reveal_specific_key_linkage` | Implemented (core) | BRC-69 method 2, BRC-72 protection. Includes BRC-97 proof-type for future ZKP schemes. |
 
 ## Action lifecycle
 
-| Method | Stance | Notes |
+| BRC-100 method | Engine primitive | Stance | Notes |
+|---|---|---|---|
+| `createAction` | **`engine.build_action`** | Implemented (core) | Naming divergence — see ["Engine primitive naming"](#engine-primitive-naming) below. Funding strategy, fee model, change generation (ADR-013). Returns `signableTransaction` for deferred-sign path (ADR-024 forward direction). |
+| `signAction` | `engine.sign_action` | Implemented (core) | Spec-aligned. |
+| `internalizeAction` | **`engine.import_beef`** | Implemented (core) | Naming divergence — see below. Both `wallet payment` (BRC-29) and `basket insertion` protocols. |
+| `abortAction` | `engine.abort_action` | Implemented (core) | Failure-bounded delete of unpromoted outputs (ADR-011 delete). |
+| `listActions` | `engine.list_actions` | Implemented (core) | Status derived from structural state per principle-of-state. |
+| `listOutputs` | **`engine.spendable_outputs`** | Implemented (core) | Naming divergence — see below. Basket-scoped query at the wrapper; Engine primitive accepts basket-optional with `nil` = unbasketed. *(Rename in flight — see PR #429; until it merges, master still carries `engine.list_outputs`.)* |
+| `relinquishOutput` | `engine.relinquish_output` | Implemented (core) | Removes from `spendable`; output row preserved. |
+
+### Engine primitive naming
+
+The default is: **Engine primitive == snake_case of the BRC-100 camelCase spec name** (`signAction` → `sign_action`, `getPublicKey` → `get_public_key`, etc.). 25 of the 28 primitives follow this rule directly. The three exceptions all share one rationale:
+
+> **When the BRC-100 method name names a procedural verb or a metaphor, and the wallet's actual operation has a more direct name, the Engine primitive takes the direct name.**
+
+The three divergences:
+
+| BRC-100 | Engine | Rationale |
 |---|---|---|
-| `createAction` | Implemented (core) | Engine `#build_action`. Funding strategy, fee model, change generation (ADR-013). Returns `signableTransaction` for deferred-sign path (ADR-024 forward direction). |
-| `signAction` | Implemented (core) | Engine `#sign_action`. |
-| `internalizeAction` | Implemented (core) | Engine `#internalize_action`. Both `wallet payment` (BRC-29) and `basket insertion` protocols. |
-| `abortAction` | Implemented (core) | Failure-bounded delete of unpromoted outputs (ADR-011 delete). |
-| `listActions` | Implemented (core) | Engine `#list_actions`. Status derived from structural state per principle-of-state. |
-| `listOutputs` | Implemented (core) | Engine `#list_outputs`. Basket-scoped query, BRC-100 contract honoured at the wire (untracked outputs not surfaced). |
-| `relinquishOutput` | Implemented (core) | Removes from `spendable`; output row preserved. |
+| `createAction` | `build_action` | "build" names what the wallet does — assemble a transaction with funding, fees, change. "create" is BRC-100 metaphor for "the action lifecycle entry point". |
+| `internalizeAction` | `import_beef` | "import_beef" names the concrete operation — take a BEEF envelope, incorporate its outputs into the wallet. "internalize" is BRC-100 metaphor for "take this thing and consider it mine". |
+| `listOutputs` | `spendable_outputs` | "spendable_outputs" IS the query — the UTXO set, optionally basket-filtered. "list" is BRC-100 procedural verb-stacking that has no parallel meaning in the wallet's vocabulary. |
+
+The conformance layer (`BSV::Wallet::BRC100`) wraps each Engine primitive under the BRC-100 spec name and shape. Callers using BRC-100 see no divergence; consumers using Engine primitives directly (Engine::Batch, future #223 HTTP wrapper, future Engine::Transmission) see the wallet's own language.
+
+This is ADR-026's "Engine speaks wallet vocab, BRC-100 wraps" principle applied at the *method-name* axis specifically — and ADR-026's primitive-surface decisions are the foundation; this register is the per-method record over time. The three divergences are recorded here, not in ADR-026, because they may grow or contract over time and ADRs are point-in-time decisions.
 
 ### Action lifecycle parameters
 
@@ -87,21 +107,21 @@ This is a divergence in internal semantics with full external conformance.
 
 ## Chain queries
 
-| Method | Stance | Notes |
-|---|---|---|
-| `getHeight` | Implemented (core) | Via configured chain tracker (ADR-015 pivot). |
-| `getHeaderForHeight` | Implemented (core) | Same. |
-| `getNetwork` | Implemented (core) | `'mainnet'` / `'testnet'` from wallet configuration. |
-| `getVersion` | Implemented (core) | Wallet version reporting. |
+| BRC-100 method | Engine primitive | Stance | Notes |
+|---|---|---|---|
+| `getHeight` | `engine.get_height` | Implemented (core) | Via configured chain tracker (ADR-015 pivot). |
+| `getHeaderForHeight` | `engine.get_header_for_height` | Implemented (core) | Same. |
+| `getNetwork` | `engine.get_network` | Implemented (core) | `'mainnet'` / `'testnet'` from wallet configuration. |
+| `getVersion` | `engine.get_version` | Implemented (core) | Wallet version reporting. |
 
 ## Authentication
 
-| Method | Stance | Notes |
-|---|---|---|
-| `isAuthenticated` | Implemented (core), trivially | Always `true` for a constructed Engine — having the WIF is being authenticated. |
-| `waitForAuthentication` | Implemented (core), trivially | Returns immediately. The BRC-100 reference assumes an authentication step where the wallet is unlocked by user action; we have no lock state, so the wait is a no-op. |
+| BRC-100 method | Engine primitive | Stance | Notes |
+|---|---|---|---|
+| `isAuthenticated` | `engine.authenticated?` | Implemented (core), trivially | Ruby predicate convention (`?`-suffixed boolean) rather than `is_*` naming. Always `true` for a constructed Engine — having the WIF is being authenticated. |
+| `waitForAuthentication` | `engine.wait_for_authentication` | Implemented (core), trivially | Returns immediately. The BRC-100 reference assumes an authentication step where the wallet is unlocked by user action; we have no lock state, so the wait is a no-op. |
 
-The spec's authentication model presupposes a lock-screen / unlock UI. We replace it with WIF-at-construction: if you constructed the Engine, you authenticated.
+The spec's authentication model presupposes a lock-screen / unlock UI. We replace it with WIF-at-construction: if you constructed the Engine, you authenticated. The `is_authenticated` → `authenticated?` shift is Ruby predicate idiom, not a vocabulary divergence — `is_` prefixes are foreign to Ruby in the same way that `_t` type suffixes are foreign to C++.
 
 ## Cross-cutting parameters
 
@@ -176,3 +196,4 @@ When a deferred concept becomes load-bearing, move the entry to its new stance, 
 ## Change log
 
 - *2026-06-24* — Initial register. All categorisations recorded against the wallet's state at this date; subsequent moves between stances will be logged here.
+- *2026-06-24* — Added "Engine primitive" column to the method tables. Recorded the three current name divergences (`createAction` → `build_action`, `internalizeAction` → `import_beef`, `listOutputs` → `spendable_outputs`) and the naming policy under which future divergences are evaluated. The `spendable_outputs` rename is in flight under PR #429 — until it merges, master carries `engine.list_outputs`; the doc reflects design-forward state. Same-day with the initial register because the divergences and the principle that explains them are co-discovered.
