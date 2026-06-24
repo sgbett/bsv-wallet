@@ -47,7 +47,7 @@ The shape:
 
 5. **Permission lookup is a single basket query.** Given `(originator, requested-resource)`, the conformance layer queries the appropriate admin basket via the existing `list_outputs` machinery, filtering on tag or script content. This is the same hot-path machinery the rest of the wallet uses; no new query infrastructure.
 
-6. **`seekPermission: false` remains the only honoured BRC-100 prompting flag.** When `seekPermission: true` is requested and no token is found, the conformance layer raises an authorisation error. If a host UI ever wraps the wallet (a future BRC-100 daemon with a paired UI), the host wires its own prompt mechanism around the `seekPermission` return path and grants the token via the normal create-action flow. The wallet itself does not own a prompt UI.
+6. **`seekPermission` semantics under DBAP.** When `seekPermission: false` is supplied and no token is found, the conformance layer raises an immediate authorisation error — the caller has signalled that prompting is off the table, so the wallet's response is the rejection. When `seekPermission: true` is supplied and no token is found, the conformance layer raises an "authorisation needed" error that a host UI can catch and translate into a prompt; the host then grants the token via the normal create-action flow and the caller retries. The wallet itself does not own a prompt UI — the `seekPermission` return path is the seam where a host UI plugs in.
 
 7. **Single-user deployments accept originator without effect** until BRC-116 is implemented. The conformance layer accepts and drops `originator` as today; the admin baskets are reserved but empty; existing callers continue to work. Originator support, when implemented, is additive — no breaking change.
 
@@ -121,7 +121,7 @@ The deferral is validated continuously by the wallet's structure:
 
 * `BSV::Wallet::Engine` and its primitive surface contain no `originator` parameter.
 * The Store schema contains no `originator` column on any table.
-* `BSV::Wallet::BRC100` is the only source file that names `originator`, and currently drops it.
+* `BSV::Wallet::BRC100` is the conformance-boundary entry point where the BRC-100 `originator` kwarg is accepted from callers; it does not propagate to the Engine. Other Ruby files may *mention* `originator` (interface contracts, tests, docs), but only the conformance wrapper acts on it.
 
 The forward direction will be validated when the implementation lands:
 

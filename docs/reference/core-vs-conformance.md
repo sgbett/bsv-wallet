@@ -116,7 +116,7 @@ The core/conformance boundary isn't only a tidiness principle. It directly serve
 - **Permission overlay tables kill throughput.** Every BRC-100 call hitting a `permissions(originator, basket)` join before reaching the Engine adds latency to the hot path. Deferring the overlay (and, when we add it, keeping it out of the data path) preserves the budget.
 - **Conformance is millimetres thin.** When BRC-100 is a wrapper class translating vocabulary, not a layer that maintains state, the cost of conformance is one method call per request. The Engine speaks wallet vocab; the conformance layer is the only place that knows BRC-100 exists.
 
-The throughput target (millions of tx/s, see `feedback_fee_rate.md` and ADR-002) is reachable because the core is *just* a Bitcoin wallet. Adding BRC-100-shaped state to the core — users, originators, permissions — would not break correctness, but it would foreclose the throughput goal.
+The throughput target (millions of tx/s — see ADR-002) is reachable because the core is *just* a Bitcoin wallet. Adding BRC-100-shaped state to the core — users, originators, permissions — would not break correctness, but it would foreclose the throughput goal.
 
 ## Tests for compliance
 

@@ -105,7 +105,7 @@ Naming a principle that has already governed seven months of design decisions is
 
 * The Engine's public surface (the 28 primitives ratified under ADR-026) carries no BRC-100 vocabulary in any parameter name or return key.
 * The Store schema contains no `users`, no `originator`, no per-application permission tables.
-* `BSV::Wallet::BRC100` is the unique source file in which BRC-100 spec vocabulary (`originator`, `seekPermission`, BRC-100 hash-shape keys) appears at the conformance/core boundary.
+* `BSV::Wallet::BRC100` is the source file at the conformance/core boundary where BRC-100 spec vocabulary (`originator`, `seekPermission`, BRC-100 hash-shape keys) is *interpreted*. Other Ruby files (interface contracts, tests, docs) may name these terms, but only the conformance wrapper acts on them; Engine primitives below it speak wallet vocabulary.
 * The conformance register at [`docs/reference/brc100-conformance.md`](../../../docs/reference/brc100-conformance.md) classifies every BRC-100 concept against this principle.
 
 ## References
