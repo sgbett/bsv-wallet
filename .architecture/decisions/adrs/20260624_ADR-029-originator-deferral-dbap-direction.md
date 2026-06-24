@@ -35,7 +35,7 @@ The shape:
 
 1. **`BSV::Wallet::BRC100` (the conformance layer) becomes a permissions-aware wrapper.** It receives `originator` on every method, looks up the permission token for `(originator, requested-resource)` in the appropriate admin basket, and either proceeds, prompts (if a UI is wired up), or returns an authorisation error. The Engine remains originator-naive; the conformance layer interposes the check.
 
-2. **Admin baskets are reserved by BRC-99 and enforced at the conformance boundary today.** The reserved-name validation (basket-name HLR on this branch) already prevents application callers from claiming `admin basket-access`, `admin protocol-permission`, `admin certificate-access`, or `admin spending-authorization`. The names are protected forward-compatibly so this ADR's direction can land without a collision migration.
+2. **Admin baskets are reserved by BRC-99; conformance-layer enforcement is tracked under HLR #428.** When the reserved-name validation lands, it will prevent application callers from claiming `admin basket-access`, `admin protocol-permission`, `admin certificate-access`, or `admin spending-authorization`. The schema CHECK on `baskets.name` already rejects the literal `'default'`; the comprehensive reserved-name enforcement (full pattern set, conformance-layer + DB) is HLR #428's scope. The names are reserved forward-compatibly so this ADR's direction can land without a collision migration once enforcement is in place.
 
 3. **Permission tokens are PushDrop outputs.** Granting a permission is a wallet operation that creates a 1-sat output in the appropriate admin basket with a PushDrop script encoding the permission fields (originator, basketName for DBAP; originator+protocol for DPACP; etc., per BRC-116). Revoking is spending the output. Expiry is enforced at lookup time against an `expiry` field in the script.
 
@@ -126,7 +126,7 @@ The deferral is validated continuously by the wallet's structure:
 The forward direction will be validated when the implementation lands:
 
 * Permission tokens reside in admin baskets via `Engine#build_action` (no special create path).
-* Permission lookup is implemented via `Engine#list_outputs` against admin baskets (no separate query layer).
+* Permission lookup is implemented via `Engine#spendable_outputs` against admin baskets (no separate query layer).
 * The Engine's primitive surface does not grow an `originator` parameter as part of the implementation work.
 
 ## Implementation notes
@@ -134,7 +134,7 @@ The forward direction will be validated when the implementation lands:
 This ADR adds no code. When the implementation work is scheduled:
 
 1. **HLR raises the work** with PushDrop SDK dependency verification as the gating step.
-2. **`BSV::Wallet::BRC100` grows a `PermissionsCheck` collaborator** that resolves `(originator, resource)` against the appropriate admin basket via `engine.list_outputs(basket: 'admin basket-access', ...)`.
+2. **`BSV::Wallet::BRC100` grows a `PermissionsCheck` collaborator** that resolves `(originator, resource)` against the appropriate admin basket via `engine.spendable_outputs(basket: 'admin basket-access', ...)`.
 3. **Grant/revoke operations are surface added to the conformance layer** (BRC-100 spec does not name them explicitly, but `WalletPermissionsManager` in wallet-toolbox provides the precedent surface).
 4. **`seekPermission`** semantics become live: `false` returns an authorisation error on missing token; `true` returns an "authorization needed" error that a host UI can catch and translate into a prompt.
 
@@ -150,8 +150,8 @@ The wallet-toolbox source (`WalletPermissionsManager.ts`, `BASKET_MAP` constants
 * ADR-028 — per-user databases; complementary multi-user direction (users), where originator and user are kept orthogonal.
 * `docs/reference/core-vs-conformance.md` — the principle this ADR defers to.
 * `docs/reference/brc100-conformance.md` — the per-concept register; "originator" entry refers here.
-* BRC-99 — reserved basket names (admin, default, p prefix); enforced today, used by this ADR's direction.
-* BRC-98 — reserved protocol IDs (admin, p prefix); enforced today.
+* BRC-99 — reserved basket names (admin, default, p prefix); conformance-layer enforcement tracked by HLR #428 (schema CHECK on `baskets.name` already rejects `'default'`); used by this ADR's direction.
+* BRC-98 — reserved protocol IDs (admin, p prefix); enforcement tracked by HLR #428's protocol-IDs follow-up.
 * BRC-116 — the permission framework whose implementation direction this ADR commits.
 * Wallet-toolbox `WalletPermissionsManager.ts` — the reference implementation of DBAP / DPACP / DCAP / DSAP tokens in admin baskets.
 * HLR (this branch) — basket-name validation; reserves the namespace this ADR's direction uses.

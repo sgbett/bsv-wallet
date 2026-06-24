@@ -86,7 +86,7 @@ These BRC-100 concepts do not appear in our wallet at all, because they have no 
 
 A small number of BRC-100 concepts we implement, but with semantics tuned to a single-tenant deployment:
 
-- **Basket as user categorisation, not app sandbox.** The spec's "no basket = untracked" semantics were designed for a per-app permission model where untracked-means-orphaned-across-apps. We keep the spec contract (no basket → not surfaced by `listOutputs`) but, internally, all outputs are recorded; basket is a categorisation column, not a tenancy axis.
+- **Basket as user categorisation, not app sandbox.** The spec's "no basket = untracked" semantics were designed for a per-app permission model where untracked-means-orphaned-across-apps. We keep the spec contract (no basket → not surfaced by `listOutputs`) but, internally, all outputs are recorded; basket membership (stored via the `output_baskets` JOIN, not as a column on `outputs`) is a categorisation axis, not a tenancy axis.
 
 The full enumeration is the living register at [`brc100-conformance.md`](brc100-conformance.md).
 

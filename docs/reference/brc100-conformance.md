@@ -101,7 +101,7 @@ This is ADR-026's "Engine speaks wallet vocab, BRC-100 wraps" principle applied 
 
 ### Basket semantics — the divergence
 
-The spec contract says: outputs created without `basket` are not surfaced by `listOutputs`. We honour this at the wire. Internally, however, every output is recorded in the `outputs` table; the `basket` column is a categorisation axis, not a tenancy axis. Multi-tenant wallets in the reference implementation use `basket` as a per-app sandbox key (with `userId` as the per-user partition). We have neither. For us, basket is what the application chose to name its outputs by, and the "untracked" behaviour is enforced as a query-time filter at the conformance layer, not as an absence in the storage layer.
+The spec contract says: outputs created without `basket` are not surfaced by `listOutputs`. We honour this at the wire. Internally, however, every output is recorded in the `outputs` table; basket membership (via the `output_baskets` JOIN, not as a column on `outputs`) is a categorisation axis, not a tenancy axis. Multi-tenant wallets in the reference implementation use `basket` as a per-app sandbox key (with `userId` as the per-user partition). We have neither. For us, basket is what the application chose to name its outputs by, and the "untracked" behaviour is enforced as a query-time filter at the conformance layer, not as an absence in the storage layer.
 
 This is a divergence in internal semantics with full external conformance.
 
@@ -131,12 +131,12 @@ The spec's authentication model presupposes a lock-screen / unlock UI. We replac
 | `seekPermission` | Boundary-only | Accepted, no-op'd. We have no permission UI to seek from. Will become meaningful when BRC-116 lands. |
 | `OriginatorDomainNameString` validation | Boundary-only | Format validation at the conformance layer (FQDN shape) where present; no behavioural use. |
 | Hash-vocabulary return shapes (`{ txid:, tx: }` etc.) | Boundary-only | Conformance translates wallet vocab returns into BRC-100 hash shapes. ADR-026 codifies this. |
-| Spec-shape input validation | Boundary-only | Length limits, format constraints, reserved-name checks all enforced at the conformance layer. Engine assumes valid input. |
+| Spec-shape input validation | Tracked under HLR #428 | Length limits, format constraints, and reserved-name checks: conformance-layer enforcement is tracked by HLR #428 — not yet implemented. The DB-level CHECK on `baskets.name` currently rejects the literal `'default'` (the only reserved name with active CHECK coverage). Engine continues to assume valid input. |
 | `userId` (implied) | Amputated | No `users` table, no `user_id` column anywhere. Identity is the WIF (ADR-007). Forward direction: per-user databases (per-user-databases ADR). |
 
 ## Reserved names
 
-BRC-100 reserves several name patterns. We enforce them at the conformance layer to prevent forward-incompatible adoption by application callers, even where we don't implement the corresponding machinery.
+BRC-100 reserves several name patterns. We intend to enforce them at the conformance layer (tracked under HLR #428) so application callers cannot forward-incompatibly adopt the reserved namespace, even where the corresponding machinery isn't built yet. The schema-level CHECK on `baskets.name` already rejects the literal `'default'`; the comprehensive enforcement (the full table below, conformance-layer + schema) is HLR #428's scope.
 
 | Pattern | Concern | Stance |
 |---|---|---|
