@@ -166,6 +166,10 @@ module BSV
                        seek_permission: true, originator: nil)
         raise ArgumentError, 'basket: required (BRC-100 spec)' if basket.nil? || basket.to_s.empty?
 
+        # +seek_permission:+ and +originator:+ accepted as part of the
+        # BRC-100 contract but not forwarded — conformance vocabulary
+        # stops here (ADR-026 decision 7), matching the pattern on
+        # +#list_actions+ and +#internalize_action+.
         result = @engine.spendable_outputs(
           basket: basket, tags: tags, tag_query_mode: tag_query_mode,
           include: include,

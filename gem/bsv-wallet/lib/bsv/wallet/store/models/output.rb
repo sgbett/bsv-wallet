@@ -28,13 +28,13 @@ module BSV
               where(spendable_ds.exists).exclude(input_ds.exists)
             end
 
-            # Filter outputs by basket membership.
+            # Filter outputs by basket membership. Every accepted value
+            # applies a real filter — to apply *no* basket filter, omit
+            # the call entirely and chain off +#spendable+ directly.
             #
             # - +nil+              → outputs with no +output_baskets+ row (unbasketed).
             # - +String+           → outputs in the named basket.
             # - +Array<String>+    → outputs in any of the named baskets.
-            # - +:any+ / +nil+ arg → caller-side default; pass +nil+ for unbasketed,
-            #   or skip the call entirely to apply no basket filter.
             def in_basket(name_or_names)
               if name_or_names.nil?
                 basket_ds = BSV::Wallet::Store::Models::OutputBasket.dataset

@@ -585,10 +585,12 @@ module BSV
         )
       end
 
-      # Sentinel for "basket filter not applied". Mirrors +Store::BASKET_UNSPECIFIED+;
-      # exposed at this layer so callers can construct calls with or without a
-      # basket filter at compile time. Distinct from +nil+ (which means
-      # "outputs with no +output_baskets+ row").
+      # Internal sentinel for "basket filter not applied" — distinct from
+      # +nil+ (which means "outputs with no +output_baskets+ row"). The
+      # constant is private; external callers achieve "no filter" by
+      # *omitting* the +basket:+ kwarg, not by passing this constant.
+      # Mirrors +Store::BASKET_UNSPECIFIED+; both live within the
+      # wallet's implementation, never in the public method contract.
       BASKET_UNSPECIFIED = Object.new.freeze
       private_constant :BASKET_UNSPECIFIED
 
