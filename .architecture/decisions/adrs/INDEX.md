@@ -40,3 +40,6 @@ Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 | 26 | [ADR-023](20260615_ADR-023-promotion-as-a-row.md) | 2026-06-15 | Accepted | Promotion is a row, not a column (supersedes ADR-011 promotion) |
 | 27 | [ADR-025](20260619_ADR-025-transmission-distinct-domain.md) | 2026-06-19 | Accepted | Transmission is a distinct domain from Broadcast (transmit→peer vs submit→miner) |
 | 28 | [ADR-026](20260619_ADR-026-engine-primitive-granularity.md) | 2026-06-19 | Accepted | Engine primitive surface — per-domain-operation granularity, thin wrappers admissible (#397 Stage 2a of #396) |
+| 29 | [ADR-027](20260624_ADR-027-core-vs-brc100-conformance.md) | 2026-06-24 | Accepted | Core wallet vs BRC-100 conformance — naming the boundary between Bitcoin operations and application-interface conventions |
+| 30 | [ADR-028](20260624_ADR-028-per-user-databases-multi-user-primitive.md) | 2026-06-24 | Accepted | Per-user databases as the multi-user isolation primitive (forward direction; ADR-007 complement) |
+| 31 | [ADR-029](20260624_ADR-029-originator-deferral-dbap-direction.md) | 2026-06-24 | Accepted | Originator deferral and DBAP direction — PushDrop permission tokens in admin baskets when implemented |
