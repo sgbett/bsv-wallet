@@ -107,4 +107,29 @@ RSpec.describe BSV::Wallet::BRC100 do
       expect(brc100.get_network).to eq(network: :mainnet)
     end
   end
+
+  # The wrappers continue to ACCEPT +seek_permission:+ from BRC-100
+  # callers (it's part of the BRC-100 method contract), even though
+  # they no longer forward it to Engine. If a future "cleanup" removed
+  # the kwarg from the wrapper signatures thinking it was unused, an
+  # external caller passing +seek_permission: true+ would hit
+  # +ArgumentError+. These tests lock the wrapper-side acceptance in.
+  describe 'BRC-100 contract: wrappers still accept seek_permission:' do
+    let(:fake_engine) { instance_double(BSV::Wallet::Engine) }
+    let(:brc100) { described_class.new(fake_engine) }
+
+    it '#list_actions accepts seek_permission: without raising' do
+      allow(fake_engine).to receive(:list_actions).and_return(total: 0, actions: [])
+      expect { brc100.list_actions(labels: [], seek_permission: false) }.not_to raise_error
+    end
+
+    it '#internalize_action accepts seek_permission: without raising' do
+      allow(fake_engine).to receive(:import_beef).and_return(accepted: true)
+      expect do
+        brc100.internalize_action(tx: 'beef'.b, outputs: [],
+                                  description: 'internalize smoke',
+                                  seek_permission: false)
+      end.not_to raise_error
+    end
+  end
 end

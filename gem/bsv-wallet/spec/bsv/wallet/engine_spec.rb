@@ -1131,14 +1131,39 @@ RSpec.describe BSV::Wallet::Engine do
   end
 
   describe '#import_beef (wallet-vocab primitive)' do
-    it 'delegates to Engine::BeefImporter#import and forwards the kwargs' do
-      # Smoke: build a minimal incoming-BEEF scenario indirectly via the
-      # BRC-100 wrapper, asserting the primitive does NOT consume
-      # +originator:+ (which BRC100 swallows per ADR-026 decision 7).
-      params = engine.method(:import_beef).parameters.map { |_kind, name| name }
-      expect(params).not_to include(:originator)
-      expect(params).to include(:tx, :outputs, :description, :labels, :trust_self,
-                                :known_txids, :seek_permission)
+    it 'does not consume conformance-only BRC-100 vocabulary' do
+      # ADR-026 decision 7 — +originator:+ and +seek_permission:+
+      # belong at the BRC100 wrap layer, not on Engine primitives.
+      method = engine.method(:import_beef)
+      params = method.parameters.map { |_kind, name| name }
+      expect(params).not_to include(:originator, :seek_permission)
+
+      # Anonymous +**kwargs+ (+:keyrest+) would defeat the name check
+      # above by silently accepting +:originator+ / +:seek_permission+
+      # at runtime — explicit signature is the structural guarantee.
+      forwards = method.parameters.any? { |kind, _| kind == :keyrest }
+      expect(forwards).to be(false)
+
+      expect(params).to include(:tx, :outputs, :description, :labels,
+                                :trust_self, :known_txids)
+    end
+  end
+
+  describe '#list_actions (wallet-vocab primitive)' do
+    it 'does not consume conformance-only BRC-100 vocabulary' do
+      # Mirror of the #import_beef invariant: ADR-026 decision 7 keeps
+      # +originator:+ and +seek_permission:+ at the BRC100 wrap layer.
+      # Locked in here so a future contributor doesn't restore them
+      # "for symmetry" with read-side BRC100 wrapper signatures.
+      method = engine.method(:list_actions)
+      params = method.parameters.map { |_kind, name| name }
+      expect(params).not_to include(:originator, :seek_permission)
+
+      # +:keyrest+ guard mirrors the read-side primitive surface loop —
+      # explicit signature is the structural guarantee against silent
+      # acceptance of conformance kwargs through anonymous +**kwargs+.
+      forwards = method.parameters.any? { |kind, _| kind == :keyrest }
+      expect(forwards).to be(false)
     end
   end
 
@@ -1150,6 +1175,14 @@ RSpec.describe BSV::Wallet::Engine do
   # transitive coverage can't catch:
   # - All 24 +do_+ primitives are defined.
   # - None accepts +originator:+ (BRC-100 vocab — stays at the wrap layer).
+  #
+  # TODO (post-#429): once +Engine#list_outputs+ is renamed to
+  # +#spendable_outputs+ and the +seek_permission:+ kwarg is removed,
+  # extend the per-primitive loop below to also assert
+  # +expect(params).not_to include(:seek_permission)+ — locking the
+  # same conformance-vocab rule structurally across all 24 read-side
+  # primitives. Currently blocked because +Engine#list_outputs+ still
+  # carries the kwarg pending #429.
   describe 'read-side primitive surface' do
     READ_SIDE_PRIMITIVES = %i[
       encrypt decrypt create_hmac verify_hmac

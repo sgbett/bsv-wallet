@@ -129,6 +129,9 @@ module BSV
                        include_outputs: false, include_output_locking_scripts: false,
                        limit: 10, offset: 0, seek_permission: true,
                        originator: nil)
+        # +seek_permission:+ accepted as part of the BRC-100 contract
+        # but not forwarded — it is conformance vocabulary that does not
+        # propagate into Engine (ADR-026 decision 7).
         result = @engine.list_actions(
           labels: labels, label_query_mode: label_query_mode,
           include_labels: include_labels, include_inputs: include_inputs,
@@ -136,7 +139,7 @@ module BSV
           include_input_unlocking_scripts: include_input_unlocking_scripts,
           include_outputs: include_outputs,
           include_output_locking_scripts: include_output_locking_scripts,
-          limit: limit, offset: offset, seek_permission: seek_permission
+          limit: limit, offset: offset
         )
         { total_actions: result[:total], actions: result[:actions] }
       end
@@ -148,10 +151,12 @@ module BSV
         # known_txids is the BRC-100 spec param name; values are wire-order wtxids
         known_txids&.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'known_txids entry') }
 
+        # +seek_permission:+ accepted as part of the BRC-100 contract
+        # but not forwarded — conformance vocabulary stops here
+        # (ADR-026 decision 7).
         @engine.import_beef(
           tx: tx, outputs: outputs, description: description,
-          labels: labels, trust_self: trust_self, known_txids: known_txids,
-          seek_permission: seek_permission
+          labels: labels, trust_self: trust_self, known_txids: known_txids
         )
       end
 

@@ -39,14 +39,15 @@ module BSV
         # matching the shape +Store#query_actions+ produces and the
         # other +list_*+ collection primitives use. BRC100 re-keys
         # +:total+ → +:total_actions+ at the wrap layer.
-        # Called from +Engine#list_actions+; +originator:+ stops at
-        # the wrap layer per ADR-026 decision 7 and is not accepted here.
+        # Called from +Engine#list_actions+; +originator:+ and
+        # +seek_permission:+ stop at the wrap layer per ADR-026
+        # decision 7 and are not accepted here.
         def self.list(engine:, labels:, label_query_mode: :any,
                       include_labels: false, include_inputs: false,
                       include_input_source_locking_scripts: false,
                       include_input_unlocking_scripts: false,
                       include_outputs: false, include_output_locking_scripts: false,
-                      limit: 10, offset: 0, seek_permission: true)
+                      limit: 10, offset: 0)
           engine.store.query_actions(
             labels: labels, label_query_mode: label_query_mode,
             limit: [limit, 10_000].min, offset: offset,

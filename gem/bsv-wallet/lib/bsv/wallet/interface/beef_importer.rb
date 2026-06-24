@@ -94,18 +94,18 @@ module BSV
         # @param known_txids [Array<String>, nil] wire-order wtxids the
         #   sender asserts we hold proofs for; trimmed back to TXID-only
         #   after save (BRC-100 spec name; values are wire-order)
-        # @param seek_permission [Boolean] BRC-100 permission gate;
-        #   currently a passthrough
-        # @param originator [String, nil] BRC-100 originator FQDN
         # @return [Hash] +{ accepted: true }+ — the BRC-100
         #   +internalizeAction+ response
         # @raise [BSV::Wallet::InvalidBeefError] BEEF is malformed,
         #   missing its subject, lacking a chain tracker, or fails SPV
         # @raise [BSV::Wallet::InvalidParameterError] a caller output
         #   names a non-existent vout or declares a satoshi mismatch
+        #
+        # +seek_permission:+ and +originator:+ are BRC-100 vocabulary;
+        # they stop at the BRC100 wrap layer (ADR-026 decision 7) and
+        # do not appear on this Engine-internal contract.
         def import(tx:, outputs:, description:, labels: nil,
-                   trust_self: nil, known_txids: nil,
-                   seek_permission: true, originator: nil)
+                   trust_self: nil, known_txids: nil)
           raise NotImplementedError
         end
       end
