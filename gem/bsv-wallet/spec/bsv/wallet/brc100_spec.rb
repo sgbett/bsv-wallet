@@ -147,11 +147,27 @@ RSpec.describe BSV::Wallet::BRC100 do
         .to raise_error(ArgumentError, /basket: required/)
     end
 
+    it 'raises ArgumentError when basket is whitespace-only' do
+      expect { brc100.list_outputs(basket: '   ') }
+        .to raise_error(ArgumentError, /basket: required/)
+    end
+
     it 'delegates to engine.spendable_outputs when basket is supplied' do
       allow(fake_engine).to receive(:spendable_outputs)
         .with(hash_including(basket: 'wallet'))
         .and_return(total: 0, outputs: [])
       expect(brc100.list_outputs(basket: 'wallet')).to eq(total_outputs: 0, outputs: [])
+    end
+
+    it 'trims leading/trailing whitespace before delegating to engine' do
+      # Per BRC-100 §"Logical Validation Procedures" — interoperable SDK
+      # validation trims identifiers before enforcing length limits.
+      allow(fake_engine).to receive(:spendable_outputs)
+        .with(hash_including(basket: 'wallet'))
+        .and_return(total: 0, outputs: [])
+      brc100.list_outputs(basket: '  wallet  ')
+      expect(fake_engine).to have_received(:spendable_outputs)
+        .with(hash_including(basket: 'wallet'))
     end
   end
 end

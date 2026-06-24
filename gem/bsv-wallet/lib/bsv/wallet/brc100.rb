@@ -164,7 +164,16 @@ module BSV
                        include_custom_instructions: false, include_tags: false,
                        include_labels: false, limit: 10, offset: 0,
                        seek_permission: true, originator: nil)
-        raise ArgumentError, 'basket: required (BRC-100 spec)' if basket.nil? || basket.to_s.empty?
+        # Normalise on ingress per BRC-100 §"Logical Validation
+        # Procedures" — the spec notes interoperable SDK validation
+        # "trims ... these identifiers before enforcing length limits".
+        # Trim handles whitespace-only inputs (rejected below) AND
+        # incidental edge whitespace (silently normalised). Lowercasing
+        # and the full validation rule-set land with HLR #428 across
+        # all four basket-accepting wrappers; trim is here today to
+        # close the obvious gap.
+        basket = basket.to_s.strip
+        raise ArgumentError, 'basket: required (BRC-100 spec)' if basket.empty?
 
         # +seek_permission:+ and +originator:+ accepted as part of the
         # BRC-100 contract but not forwarded — conformance vocabulary
