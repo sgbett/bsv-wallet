@@ -10,8 +10,8 @@
 ## What this captures (and why it isn't a new mechanism)
 
 A unified `brc100 <method> <json>` CLI is **not** a new design — it is the CLI transport of an
-architecture already in flight. Reviewing the work landed since the idea was first sketched
-(`6d5193e..HEAD`, ~250 commits) showed the wallet already reserves space for exactly this.
+architecture already in flight. Reviewing the work landed since the session-start commit `6d5193e`
+(~250 commits) showed the wallet already reserves space for exactly this.
 
 **Engine movement.** The Engine was decomposed into single-responsibility collaborators behind
 `interface/` ports — `Hydrator` (egress BEEF assembly + wtxid cache), `TxBuilder`, `FundingStrategy`,
@@ -21,10 +21,12 @@ with `BSV::Wallet::BRC100` promoted module→class as the conformance wrap reach
 (#365→#400→#402→#405; ADR-026). `reference/*` relocated to **`docs/reference/*`**;
 `seek_permission` dropped from primitives.
 
-None of that closed the JSON conversion edge — confirmed: no serializer/presenter in
-`gem/bsv-wallet/lib`, `engine.brc100` still emits binary (`txid: result[:wtxid]`, `tx: atomic_beef` —
-`brc100.rb:99–117`), `bin/` scripts still hand-roll hex (`bin/create_action:93`). But *how* that edge
-closes is no longer an open question — it's specified by #180/#223.
+None of that closed the JSON conversion edge — confirmed: no BRC-100 *value* serializer (binary
+`wtxid`/`atomic_beef` → JSON hex) in `gem/bsv-wallet/lib`, only the generic `CLI::Output.write_json`
+writer (it JSON-encodes whatever hash it is handed, without converting values). `engine.brc100` still
+emits binary (`txid: result[:wtxid]`, `tx: atomic_beef` — `brc100.rb:99–117`), and `bin/` scripts
+still hand-roll hex (`bin/create_action:93`). But *how* that edge closes is no longer an open
+question — it's specified by #180/#223.
 
 ---
 
