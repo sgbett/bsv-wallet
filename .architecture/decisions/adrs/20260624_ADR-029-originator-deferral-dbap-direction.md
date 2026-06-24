@@ -136,7 +136,7 @@ This ADR adds no code. When the implementation work is scheduled:
 1. **HLR raises the work** with PushDrop SDK dependency verification as the gating step.
 2. **`BSV::Wallet::BRC100` grows a `PermissionsCheck` collaborator** that resolves `(originator, resource)` against the appropriate admin basket via `engine.spendable_outputs(basket: 'admin basket-access', ...)`.
 3. **Grant/revoke operations are surface added to the conformance layer** (BRC-100 spec does not name them explicitly, but `WalletPermissionsManager` in wallet-toolbox provides the precedent surface).
-4. **`seekPermission`** semantics become live: `false` returns an authorisation error on missing token; `true` returns an "authorization needed" error that a host UI can catch and translate into a prompt.
+4. **`seekPermission`** semantics become live: `false` returns an authorisation error on missing token; `true` returns an "authorisation needed" error that a host UI can catch and translate into a prompt.
 
 The wallet-toolbox source (`WalletPermissionsManager.ts`, `BASKET_MAP` constants) is the reference for the field encoding in each PushDrop script type (`DBAP`, `DPACP`, `DCAP`, `DSAP`). BRC-116 is the specification.
 

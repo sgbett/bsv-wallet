@@ -64,7 +64,7 @@ These are the indivisible-verb 1:1 primitives ratified by ADR-026. Conformance w
 
 ### Engine primitive naming
 
-The default is: **Engine primitive == snake_case of the BRC-100 camelCase spec name** (`signAction` → `sign_action`, `getPublicKey` → `get_public_key`, etc.). 25 of the 28 primitives follow this rule directly. The three exceptions all share one rationale:
+The default is: **Engine primitive == the Ruby-idiomatic snake_case of the BRC-100 camelCase spec name** — straightforward snake_case for verb-shaped names (`signAction` → `sign_action`, `getPublicKey` → `get_public_key`), and Ruby's predicate convention for `is_*`-shaped booleans (`isAuthenticated` → `authenticated?`, per the Authentication section below). 25 of the 28 primitives follow this rule directly. The three exceptions all share one rationale:
 
 > **When the BRC-100 method name names a procedural verb or a metaphor, and the wallet's actual operation has a more direct name, the Engine primitive takes the direct name.**
 
