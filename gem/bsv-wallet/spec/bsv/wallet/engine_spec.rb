@@ -1143,6 +1143,18 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
+  describe '#list_actions (wallet-vocab primitive)' do
+    it 'does not consume conformance-only BRC-100 vocabulary' do
+      # Mirror of the #import_beef invariant: ADR-026 decision 7 keeps
+      # +originator:+ and +seek_permission:+ at the BRC100 wrap layer.
+      # Locked in here so a future contributor doesn't restore them
+      # "for symmetry" with read-side BRC100 wrapper signatures.
+      params = engine.method(:list_actions).parameters.map { |_kind, name| name }
+      expect(params).not_to include(:originator)
+      expect(params).not_to include(:seek_permission)
+    end
+  end
+
   # Wallet-vocab read-side primitive surface (#402 Stage 2 PR 2).
   #
   # Behaviour is exercised by the existing per-BRC-100-method describe
@@ -1151,6 +1163,14 @@ RSpec.describe BSV::Wallet::Engine do
   # transitive coverage can't catch:
   # - All 24 +do_+ primitives are defined.
   # - None accepts +originator:+ (BRC-100 vocab — stays at the wrap layer).
+  #
+  # TODO (post-#429): once +Engine#list_outputs+ is renamed to
+  # +#spendable_outputs+ and the +seek_permission:+ kwarg is removed,
+  # extend the per-primitive loop below to also assert
+  # +expect(params).not_to include(:seek_permission)+ — locking the
+  # same conformance-vocab rule structurally across all 24 read-side
+  # primitives. Currently blocked because +Engine#list_outputs+ still
+  # carries the kwarg pending #429.
   describe 'read-side primitive surface' do
     READ_SIDE_PRIMITIVES = %i[
       encrypt decrypt create_hmac verify_hmac
