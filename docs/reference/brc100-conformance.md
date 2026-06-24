@@ -59,7 +59,7 @@ These are the indivisible-verb 1:1 primitives ratified by ADR-026. Conformance w
 | `internalizeAction` | **`engine.import_beef`** | Implemented (core) | Naming divergence — see below. Both `wallet payment` (BRC-29) and `basket insertion` protocols. |
 | `abortAction` | `engine.abort_action` | Implemented (core) | Failure-bounded delete of unpromoted outputs (ADR-011 delete). |
 | `listActions` | `engine.list_actions` | Implemented (core) | Status derived from structural state per principle-of-state. |
-| `listOutputs` | **`engine.spendable_outputs`** | Implemented (core) | Naming divergence — see below. Basket-scoped query at the wrapper; Engine primitive accepts basket-optional with `nil` = unbasketed. *(Rename in flight — see PR #429; until it merges, master still carries `engine.list_outputs`.)* |
+| `listOutputs` | **`engine.spendable_outputs`** | Implemented (core) | Naming divergence — see below. Basket-scoped query at the wrapper; Engine primitive accepts basket-optional with `nil` = unbasketed. |
 | `relinquishOutput` | `engine.relinquish_output` | Implemented (core) | Removes from `spendable`; output row preserved. |
 
 ### Engine primitive naming
@@ -196,4 +196,4 @@ When a deferred concept becomes load-bearing, move the entry to its new stance, 
 ## Change log
 
 - *2026-06-24* — Initial register. All categorisations recorded against the wallet's state at this date; subsequent moves between stances will be logged here.
-- *2026-06-24* — Added "Engine primitive" column to the method tables. Recorded the three current name divergences (`createAction` → `build_action`, `internalizeAction` → `import_beef`, `listOutputs` → `spendable_outputs`) and the naming policy under which future divergences are evaluated. The `spendable_outputs` rename is in flight under PR #429 — until it merges, master carries `engine.list_outputs`; the doc reflects design-forward state. Same-day with the initial register because the divergences and the principle that explains them are co-discovered.
+- *2026-06-24* — Added "Engine primitive" column to the method tables. Recorded the three current name divergences (`createAction` → `build_action`, `internalizeAction` → `import_beef`, `listOutputs` → `spendable_outputs`) and the naming policy under which future divergences are evaluated. Same-day with the initial register because the divergences and the principle that explains them are co-discovered. (PRs #429 and #430 landed the prerequisite Engine surface changes — the `spendable_outputs` rename and `seek_permission:` residue removal respectively.)
