@@ -95,29 +95,31 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
     [stdout, stderr, status]
   end
 
-  def balance(wallet, basket: 'default')
+  def balance(wallet, basket: 'none')
     stdout, _, status = run_cli('balance', wallet, '--basket', basket)
     expect(status).to be_success, "balance #{wallet} (#{basket}) failed"
     stdout.strip.to_i
   end
 
-  def list_outputs(wallet, basket: 'default', limit: 10_000)
+  def list_outputs(wallet, basket: 'none', limit: 10_000)
     stdout, _, status = run_cli('list_outputs', wallet, '--basket', basket, '--limit', limit.to_s)
     expect(status).to be_success, "list_outputs #{wallet} (#{basket}) failed"
     JSON.parse(stdout, symbolize_names: true)
   end
 
-  # Total spendable across both baskets touched by the cascade — 'default'
-  # holds the wallet's own change, 'received' holds inbound payments.
+  # Total spendable across both partitions touched by the cascade —
+  # unbasketed outputs hold the wallet's own change, 'received' holds inbound
+  # payments. ('none' is the bin/balance / bin/list_outputs flag value that
+  # filters to unbasketed outputs.)
   def total_spendable(wallet)
-    default_outputs = list_outputs(wallet, basket: 'default')
+    unbasketed = list_outputs(wallet, basket: 'none')
     received_outputs = list_outputs(wallet, basket: 'received')
-    (default_outputs[:total_outputs] || default_outputs[:total] || 0) +
+    (unbasketed[:total_outputs] || unbasketed[:total] || 0) +
       (received_outputs[:total_outputs] || received_outputs[:total] || 0)
   end
 
   def total_balance(wallet)
-    balance(wallet, basket: 'default') + balance(wallet, basket: 'received')
+    balance(wallet, basket: 'none') + balance(wallet, basket: 'received')
   end
 
   # Action counts are the deterministic measure of cascade progress.
@@ -141,7 +143,7 @@ RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/Desc
   it 'cascades no_send payments across all wallets' do
     # Phase 1 — Import: scan each wallet's root address for the 1m-sat seed
     # UTXO. import_utxo's Phase 2 self-payment pays a small network fee for
-    # the derived output, so the post-import default-basket balance is ~1m
+    # the derived output, so the post-import unbasketed-output balance is ~1m
     # sats minus a few dozen sats. Allow a 1000-sat margin to absorb fee
     # variance across SDK version bumps.
     wallet_names.each do |wallet|

@@ -132,4 +132,26 @@ RSpec.describe BSV::Wallet::BRC100 do
       end.not_to raise_error
     end
   end
+
+  describe '#list_outputs basket required (BRC-100 spec contract)' do
+    let(:fake_engine) { instance_double(BSV::Wallet::Engine) }
+    let(:brc100) { described_class.new(fake_engine) }
+
+    it 'raises ArgumentError when basket is nil' do
+      expect { brc100.list_outputs(basket: nil) }
+        .to raise_error(ArgumentError, /basket: required/)
+    end
+
+    it 'raises ArgumentError when basket is empty string' do
+      expect { brc100.list_outputs(basket: '') }
+        .to raise_error(ArgumentError, /basket: required/)
+    end
+
+    it 'delegates to engine.spendable_outputs when basket is supplied' do
+      allow(fake_engine).to receive(:spendable_outputs)
+        .with(hash_including(basket: 'wallet'))
+        .and_return(total: 0, outputs: [])
+      expect(brc100.list_outputs(basket: 'wallet')).to eq(total_outputs: 0, outputs: [])
+    end
+  end
 end

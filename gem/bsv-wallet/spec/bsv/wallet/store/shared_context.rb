@@ -75,7 +75,7 @@ RSpec.shared_context 'store setup' do
     BSV::Wallet::Store::Models::Promotion.create(action_id: action.id, intent: 'none', authorising_status: nil)
     BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: action.id)
 
-    if basket && basket != 'default'
+    if basket
       b = BSV::Wallet::Store::Models::Basket.first(name: basket) || BSV::Wallet::Store::Models::Basket.create(name: basket)
       BSV::Wallet::Store::Models::OutputBasket.create(output_id: output.id, basket_id: b.id, action_id: action.id)
     end

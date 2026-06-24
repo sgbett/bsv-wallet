@@ -28,7 +28,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       {
         satoshis: satoshis + i, vout: i,
         locking_script: script.to_binary,
-        basket: 'default',
+        basket: nil,
         derivation_prefix: prefix,
         derivation_suffix: '1',
         sender_identity_key: 'self'

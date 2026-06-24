@@ -164,12 +164,14 @@ module BSV
                        include_custom_instructions: false, include_tags: false,
                        include_labels: false, limit: 10, offset: 0,
                        seek_permission: true, originator: nil)
-        result = @engine.list_outputs(
+        raise ArgumentError, 'basket: required (BRC-100 spec)' if basket.nil? || basket.to_s.empty?
+
+        result = @engine.spendable_outputs(
           basket: basket, tags: tags, tag_query_mode: tag_query_mode,
           include: include,
           include_custom_instructions: include_custom_instructions,
           include_tags: include_tags, include_labels: include_labels,
-          limit: limit, offset: offset, seek_permission: seek_permission
+          limit: limit, offset: offset
         )
         { total_outputs: result[:total], outputs: result[:outputs] }
       end

@@ -17,7 +17,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     )
     outputs = count.times.map do |i|
       { satoshis: satoshis, vout: i, locking_script: script.to_binary,
-        basket: 'default', derivation_prefix: 'limp test',
+        basket: nil, derivation_prefix: 'limp test',
         derivation_suffix: count > 1 ? "fund#{i}" : 'fund',
         sender_identity_key: 'self' }
     end
@@ -96,7 +96,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
     it 'blocks caller-provided-inputs createAction when in limp mode' do
       fund_wallet_limp(satoshis: 30_000)
-      listed = engine_with_keys.brc100.list_outputs(basket: 'default')
+      listed = engine_with_keys.spendable_outputs(basket: nil)
       output_id = listed[:outputs].first[:id]
 
       expect do
@@ -117,7 +117,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect do
         engine_with_keys.brc100.internalize_action(
           tx: 'invalid', description: 'limp receive',
-          outputs: [{ vout: 0, basket: 'default' }]
+          outputs: [{ vout: 0, basket: 'received' }]
         )
       end.to raise_error(BSV::Wallet::InvalidBeefError)
     end

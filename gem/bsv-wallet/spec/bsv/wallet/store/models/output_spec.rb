@@ -127,14 +127,26 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
       expect(described_class.in_basket('other').count).to eq(0)
     end
 
-    it 'treats outputs without basket rows as default basket' do
+    it 'matches outputs with no basket row when called with nil' do
       basket = BSV::Wallet::Store::Models::Basket.create(name: 'payments')
       output = create_spendable_output(vout: 0)
-      create_spendable_output(vout: 1) # not in any basket — implicit default
+      create_spendable_output(vout: 1) # no basket row — unbasketed
 
       BSV::Wallet::Store::Models::OutputBasket.create(output_id: output.id, basket_id: basket.id, action_id: action.id)
 
-      expect(described_class.in_basket('default').count).to eq(1)
+      expect(described_class.in_basket(nil).count).to eq(1)
+    end
+
+    it 'matches outputs in any of a list of baskets' do
+      a = BSV::Wallet::Store::Models::Basket.create(name: 'a-basket')
+      b = BSV::Wallet::Store::Models::Basket.create(name: 'b-basket')
+      o_a = create_spendable_output(vout: 0)
+      o_b = create_spendable_output(vout: 1)
+      create_spendable_output(vout: 2) # unbasketed
+      BSV::Wallet::Store::Models::OutputBasket.create(output_id: o_a.id, basket_id: a.id, action_id: action.id)
+      BSV::Wallet::Store::Models::OutputBasket.create(output_id: o_b.id, basket_id: b.id, action_id: action.id)
+
+      expect(described_class.in_basket(%w[a-basket b-basket]).count).to eq(2)
     end
   end
 

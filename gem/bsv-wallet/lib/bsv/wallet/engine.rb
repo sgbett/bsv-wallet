@@ -585,17 +585,44 @@ module BSV
         )
       end
 
-      def list_outputs(basket:, tags: nil, tag_query_mode: :any, include: nil,
-                       include_custom_instructions: false, include_tags: false,
-                       include_labels: false, limit: 10, offset: 0,
-                       seek_permission: true)
-        @store.query_outputs(
-          basket: basket, tags: tags, tag_query_mode: tag_query_mode,
+      # Sentinel for "basket filter not applied". Mirrors +Store::BASKET_UNSPECIFIED+;
+      # exposed at this layer so callers can construct calls with or without a
+      # basket filter at compile time. Distinct from +nil+ (which means
+      # "outputs with no +output_baskets+ row").
+      BASKET_UNSPECIFIED = Object.new.freeze
+      private_constant :BASKET_UNSPECIFIED
+
+      # The wallet's canonical "spendable outputs" query, in wallet vocabulary.
+      # Wraps +Store#query_outputs+ with the BRC-100-pagination upper bound
+      # preserved (limit clamps to 10_000); +BSV::Wallet::BRC100#list_outputs+
+      # wraps *this* to translate into BRC-100 hash-shape vocabulary.
+      #
+      # @param basket [String, Array<String>, nil, omitted]
+      #   - omitted (default) → no basket filter; all spendable outputs match.
+      #   - +String+           → outputs in that named basket.
+      #   - +Array<String>+    → outputs in any of the named baskets.
+      #   - +nil+              → outputs with no +output_baskets+ row (unbasketed).
+      # @param aggregate [:sum, :count, nil]
+      #   - +nil+ (default) → returns +{ total:, outputs: }+.
+      #   - +:sum+          → returns Integer satoshi sum.
+      #   - +:count+        → returns Integer count.
+      def spendable_outputs(basket: BASKET_UNSPECIFIED,
+                            tags: nil, tag_query_mode: :any,
+                            aggregate: nil, include: nil,
+                            include_custom_instructions: false,
+                            include_tags: false, include_labels: false,
+                            limit: 10, offset: 0)
+        store_args = {
+          tags: tags, tag_query_mode: tag_query_mode,
+          aggregate: aggregate,
           limit: [limit, 10_000].min, offset: offset,
           include_locking_scripts: [:locking_scripts, 'locking scripts'].include?(include),
           include_custom_instructions: include_custom_instructions,
           include_tags: include_tags, include_labels: include_labels
-        )
+        }
+        store_args[:basket] = basket unless basket.equal?(BASKET_UNSPECIFIED)
+
+        @store.query_outputs(**store_args)
       end
 
       def relinquish_output(output_id:)

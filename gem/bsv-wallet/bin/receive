@@ -18,10 +18,10 @@ require 'json'
 
 wallet_name, args = BSV::Wallet::CLI.extract_wallet_name(ARGV)
 
-options = { basket: 'default' }
+options = { basket: 'received' }
 OptionParser.new do |opts|
   opts.banner = 'Usage: bin/receive [wallet] [--basket <name>]'
-  opts.on('--basket NAME', 'Basket for received outputs (default: default)') { |v| options[:basket] = v }
+  opts.on('--basket NAME', 'Basket for received outputs (default: received)') { |v| options[:basket] = v }
 end.parse!(args)
 
 # Read JSON envelope from stdin
