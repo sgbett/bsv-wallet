@@ -1132,13 +1132,14 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#import_beef (wallet-vocab primitive)' do
     it 'delegates to Engine::BeefImporter#import and forwards the kwargs' do
-      # Smoke: build a minimal incoming-BEEF scenario indirectly via the
-      # BRC-100 wrapper, asserting the primitive does NOT consume
-      # +originator:+ (which BRC100 swallows per ADR-026 decision 7).
+      # Smoke: assert the primitive does NOT consume conformance-only
+      # BRC-100 vocabulary (+originator:+, +seek_permission:+) — both
+      # swallowed at the BRC100 wrap layer per ADR-026 decision 7.
       params = engine.method(:import_beef).parameters.map { |_kind, name| name }
       expect(params).not_to include(:originator)
+      expect(params).not_to include(:seek_permission)
       expect(params).to include(:tx, :outputs, :description, :labels, :trust_self,
-                                :known_txids, :seek_permission)
+                                :known_txids)
     end
   end
 

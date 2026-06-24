@@ -398,11 +398,10 @@ module BSV
       end
 
       def import_beef(tx:, outputs:, description:, labels: nil,
-                      trust_self: nil, known_txids: nil, seek_permission: true)
+                      trust_self: nil, known_txids: nil)
         @beef_importer.import(
           tx: tx, outputs: outputs, description: description,
-          labels: labels, trust_self: trust_self, known_txids: known_txids,
-          seek_permission: seek_permission
+          labels: labels, trust_self: trust_self, known_txids: known_txids
         )
       end
 
@@ -574,7 +573,7 @@ module BSV
                        include_input_source_locking_scripts: false,
                        include_input_unlocking_scripts: false,
                        include_outputs: false, include_output_locking_scripts: false,
-                       limit: 10, offset: 0, seek_permission: true)
+                       limit: 10, offset: 0)
         Engine::Action.list(
           engine: self, labels: labels, label_query_mode: label_query_mode,
           include_labels: include_labels, include_inputs: include_inputs,
@@ -582,7 +581,7 @@ module BSV
           include_input_unlocking_scripts: include_input_unlocking_scripts,
           include_outputs: include_outputs,
           include_output_locking_scripts: include_output_locking_scripts,
-          limit: limit, offset: offset, seek_permission: seek_permission
+          limit: limit, offset: offset
         )
       end
 

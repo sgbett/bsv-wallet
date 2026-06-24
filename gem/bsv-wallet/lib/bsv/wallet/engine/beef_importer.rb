@@ -41,8 +41,7 @@ module BSV
 
         # See +Interface::BeefImporter#import+.
         def import(tx:, outputs:, description:, labels: nil,
-                   trust_self: nil, known_txids: nil,
-                   seek_permission: true, originator: nil)
+                   trust_self: nil, known_txids: nil)
           # Parse tx: as Atomic BEEF (BRC-95)
           beef, subject_tx = parse_beef(tx)
 
