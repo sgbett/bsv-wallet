@@ -36,6 +36,44 @@ RSpec.describe BSV::Wallet::Store::UTXOPool, :store do
       candidates = pool.select(satoshis: 1, exclude: [biggest_id])
       expect(candidates.map { |c| c[:id] }).not_to include(biggest_id)
     end
+
+    context 'basket-aware selection (HLR #435)' do
+      # Auto-funding draws from the wallet's pool only — unbasketed
+      # outputs (change + explicitly-untracked). Application-basketed
+      # outputs are off-limits.
+
+      it 'excludes outputs in a named basket even when they would satisfy the target' do
+        # Add a large basketed output. Even though it alone could fund a
+        # 600-sat target, +select+ must ignore it and draw from the
+        # unbasketed pool (500 + 300 + 200 = 1_000 sats available).
+        basketed = create_funded_output(satoshis: 100_000, basket: 'todos')
+
+        candidates = pool.select(satoshis: 600)
+
+        expect(candidates.map { |c| c[:id] }).not_to include(basketed.id)
+        # Sanity: the selected total never reaches into the basketed 100_000.
+        expect(candidates.sum { |c| c[:satoshis] }).to be < 1_500
+      end
+
+      it 'raises PoolDepletedError when only basketed outputs would satisfy the target' do
+        # 1_000_000 sats sit in basket 'todos'; the unbasketed pool tops
+        # out at 1_000 sats (500 + 300 + 200). Select must refuse the
+        # 5_000-sat target rather than reach into 'todos'.
+        create_funded_output(satoshis: 1_000_000, basket: 'todos')
+
+        expect { pool.select(satoshis: 5_000) }
+          .to raise_error(BSV::Wallet::PoolDepletedError)
+      end
+
+      it 'selects unbasketed outputs when present alongside basketed ones' do
+        create_funded_output(satoshis: 100_000, basket: 'todos')
+        unbasketed = create_funded_output(satoshis: 700)
+
+        candidates = pool.select(satoshis: 700)
+
+        expect(candidates.map { |c| c[:id] }).to include(unbasketed.id)
+      end
+    end
   end
 
   describe '#release' do

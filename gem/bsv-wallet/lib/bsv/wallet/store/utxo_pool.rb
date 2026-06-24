@@ -24,7 +24,12 @@ module BSV
         end
 
         def select(satoshis:, exclude: [])
-          candidates = @store.find_spendable(satoshis: satoshis, exclude: exclude)
+          # Auto-funding draws from the wallet's pool only — unbasketed
+          # outputs (change + explicitly-untracked). Application-basketed
+          # outputs are off-limits to auto-fund; spending them requires
+          # the caller to pass them explicitly as +inputs[]+ on
+          # +createAction+. See HLR #435 and ADR-027.
+          candidates = @store.find_spendable(satoshis: satoshis, basket: nil, exclude: exclude)
           total = candidates.sum { |c| c[:satoshis] }
           raise BSV::Wallet::PoolDepletedError, 'default' if total < satoshis
 
