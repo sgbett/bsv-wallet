@@ -106,10 +106,18 @@ Sequel.migration do
           drop_constraint :name_not_default
         end
 
+        # +COLLATE "C"+ on the regex-compared value forces byte-level
+        # interpretation of the +[a-z]+ character class — Postgres POSIX
+        # regex ranges are locale-dependent, and a deployment with an
+        # exotic +LC_CTYPE+ could otherwise let non-ASCII letters through
+        # the range. The application validator catches non-ASCII at the
+        # boundary first; the +COLLATE+ closes the theoretical leak so
+        # the schema floor honours its stated "byte-level ASCII only"
+        # intent regardless of cluster locale.
         run <<~SQL
           ALTER TABLE baskets
             ADD CONSTRAINT name_length        CHECK (length(name) BETWEEN 5 AND 300),
-            ADD CONSTRAINT name_charset       CHECK (name ~ '^[a-z0-9 ]+$'),
+            ADD CONSTRAINT name_charset       CHECK (name COLLATE "C" ~ '^[a-z0-9 ]+$'),
             ADD CONSTRAINT name_no_double_sp  CHECK (name NOT LIKE '%  %'),
             ADD CONSTRAINT name_not_basket    CHECK (name NOT LIKE '% basket');
         SQL
@@ -137,8 +145,8 @@ Sequel.migration do
             name TEXT NOT NULL UNIQUE,
             target_count INTEGER,
             target_value INTEGER,
-            created_at datetime DEFAULT (datetime(CURRENT_TIMESTAMP, 'localtime')) NOT NULL,
-            updated_at datetime DEFAULT (datetime(CURRENT_TIMESTAMP, 'localtime')) NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
             CONSTRAINT name_length        CHECK (length(name) BETWEEN 5 AND 300),
             CONSTRAINT name_charset       CHECK (name NOT GLOB '*[^a-z0-9 ]*'),
             CONSTRAINT name_no_double_sp  CHECK (name NOT LIKE '%  %'),
@@ -207,8 +215,8 @@ Sequel.migration do
             name TEXT NOT NULL UNIQUE,
             target_count INTEGER,
             target_value INTEGER,
-            created_at datetime DEFAULT (datetime(CURRENT_TIMESTAMP, 'localtime')) NOT NULL,
-            updated_at datetime DEFAULT (datetime(CURRENT_TIMESTAMP, 'localtime')) NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
             CONSTRAINT name_length        CHECK (length(name) BETWEEN 1 AND 300),
             CONSTRAINT name_not_default   CHECK (name != 'default'),
             CONSTRAINT target_count_range CHECK (target_count IS NULL OR target_count >= 0),
