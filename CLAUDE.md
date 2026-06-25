@@ -135,7 +135,7 @@ The schema chooses Postgres-native features deliberately: `bytea` for everything
 
 ### Migration discipline — pre-release
 
-The schema lives in **`001_create_schema.rb`** (structure: every table with its columns, inline CHECKs, NOT NULLs, single-table FKs and indexes) and **`002_triggers.rb`** (behavioural guards: BEFORE-row triggers and their PG functions that can't sit inside CREATE TABLE because they reference other tables).
+The schema lives in **`001_create_schema.rb`** (structure: every table with its columns, inline CHECKs, NOT NULLs, FKs — single-column and composite — and indexes) and **`002_triggers.rb`** (behavioural guards: BEFORE-row triggers and their PG functions that can't sit inside CREATE TABLE because they reference other tables).
 
 During pre-release development, schema changes amend these two files in place — no new migrations. The migration sequence is design documentation, not operational history; a reader should derive the full intended schema from 001 + 002 without piecing it together across follow-up files. The "hash trick" (`c[:type]` map at the top of 001) handles Postgres/SQLite divergence inline. Once a release ships and there are deployed wallets to forward-compat against, additive migrations begin at 003.
 
