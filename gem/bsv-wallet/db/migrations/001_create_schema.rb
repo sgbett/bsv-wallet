@@ -1,20 +1,47 @@
 # frozen_string_literal: true
 
-# Final schema structure: every table in its end-state shape, including the two
-# tables added post-001 (sse_cursors #249, promotions #307 / ADR-022 / ADR-023)
-# and the SEEN_MULTIPLE_NODES tx_status value (#011 folded inline).
+# The wallet's schema. One file, every table in its end-state shape, with
+# every structural constraint inline.
 #
-# Pre-release "amend in place" policy (#353): migrations express the canonical
-# structure rather than its change history. Validation (CHECKs, NOT NULLs,
-# triggers) lives in 003, except table-integrity CHECKs declared inline with
-# their CREATE TABLE — broadcasts.intent_not_none and the promotions gating
-# CHECKs (promo_path, auth_not_rejected). The denormalised action_id cascade
-# FKs remain in 002.
+# Pre-release "amend in place" policy: this migration expresses the canonical
+# structure rather than its change history. CHECK constraints, NOT NULL
+# settings, single-column UNIQUE, composite UNIQUE, FK CASCADE behaviour
+# and the inline integrity CHECKs all live with their CREATE TABLE.
+#
+# What is NOT here: BEFORE-row triggers and their PG functions live in
+# 002_triggers.rb — they reference other tables and can't sit inside CREATE
+# TABLE; they belong in a separate behavioural-guards file.
+#
+# Per-table column order convention:
+#   1. id (two-line PK: Postgres BIGINT IDENTITY, SQLite autoincrement)
+#   2. Foreign keys (belongs-to relationships)
+#   3. Required content columns (null: false)
+#   4. Optional content columns
+#   5. created_at + updated_at
+# After the create_table block:
+#   6. Inline UNIQUEs (single-column and composite)
+#   7. Indexes
+#
+# Documented deviations:
+#   * outputs — column order is layout-optimised for Postgres tuple packing
+#     (see the comment on the outputs block). Don't reorder without thinking.
+#   * spendable / output_details / transmission_txids — no timestamps;
+#     set-membership / 1:1 sidecar tables.
+#   * promotions — raw SQL on Postgres for the gating CHECKs + composite FK
+#     naming; SQLite uses the Sequel API path.
+#   * broadcasts.action_id — declared as a raw column, not foreign_key,
+#     because the composite FK (action_id, intent) → actions(id, broadcast_intent)
+#     covers it; a single-column FK would duplicate.
+#   * tx_proofs.wtxid — declared before block_id (the FK) because a proof is
+#     identified by what it proves; chain placement is secondary.
+#   * spendable's second FK to promotions(action_id) is added in an
+#     alter_table at the bottom — promotions doesn't exist yet at
+#     spendable creation time.
 #
 # Guard convention:
 #   postgres = database_type == :postgres
-#   c[:type]  — column type map (Postgres-native, SQLite equivalent)
-#   Two-line PK: Postgres BIGINT IDENTITY, SQLite autoincrement
+#   c[:type]  — cross-backend column type map
+#   c[:now]   — cross-backend default for timestamp columns
 
 Sequel.migration do
   up do
@@ -57,19 +84,34 @@ Sequel.migration do
       column :block_hash, c[:bytea]
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
+
+      constraint(:height_range, 'height >= 0')
+      constraint(:merkle_root_length, 'length(merkle_root) = 32')
+      constraint(:block_hash_length, 'block_hash IS NULL OR length(block_hash) = 32')
     end
 
     # 2. tx_proofs — merkle inclusion proofs (settlement evidence)
     create_table(:tx_proofs) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
+      # wtxid is the proof's natural identifier (the cryptographic content);
+      # block_id is loose secondary association (where it sits in the chain).
       column :wtxid, c[:bytea], null: false, unique: true
       foreign_key :block_id, :blocks, type: :bigint
       column :block_index, :integer
       column :merkle_path, c[:bytea]
-      column :raw_tx, c[:bytea]
+      column :raw_tx, c[:bytea], null: false
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
+
+      constraint(:wtxid_length, 'length(wtxid) = 32')
+      # raw_tx must be at least 20 bytes: version + input_count + output_count
+      # + amount + script_len + OP_1 + locktime (#380 gap 2).
+      constraint(:raw_tx_min_length, 'length(raw_tx) >= 20')
+      # A merkle_path without block context is unverifiable — no root to check
+      # against. The reverse is fine (#198/#219): height-known + path-pending is
+      # the "confirmed but unproven" intermediate state.
+      constraint(:path_requires_block, 'merkle_path IS NULL OR block_id IS NOT NULL')
     end
 
     # 3. actions — transaction lifecycle
@@ -83,23 +125,35 @@ Sequel.migration do
         # the UNIQUE index, no page splits or fragmentation. Native to
         # Postgres 18. SQLite has no default — the Action model generates
         # via SecureRandom.uuid_v7 in before_create.
-        column :reference, :uuid, unique: true, default: Sequel.function(:uuidv7)
+        column :reference, :uuid, null: false, unique: true, default: Sequel.function(:uuidv7)
       else
-        column :reference, :text, unique: true
+        column :reference, :text, null: false, unique: true
       end
-      column :description, :text
+      column :description, :text, null: false
       column :broadcast_intent, c[:broadcast_intent], null: false, default: 'delayed'
       column :raw_tx, c[:bytea]
       column :input_beef, c[:bytea]
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
+      # wtxid is unique when present; the partial unique index allows multiple
+      # unsigned actions (wtxid NULL) to coexist.
       index :wtxid, unique: true, where: Sequel.lit('wtxid IS NOT NULL')
       index :broadcast_intent
 
       # Composite FK target: broadcasts(action_id, intent) → actions(id, broadcast_intent)
       # makes broadcasts.intent track actions.broadcast_intent atomically (#221).
       unique %i[id broadcast_intent]
+
+      constraint(:wtxid_length, 'wtxid IS NULL OR length(wtxid) = 32')
+      constraint(:description_length, 'length(description) BETWEEN 5 AND 50')
+      constraint(:wtxid_raw_tx_parity, '(wtxid IS NULL) = (raw_tx IS NULL)')
+      # Parallel to tx_proofs.raw_tx_min_length above (#380 gap 2).
+      # NULL-permissive — the wtxid_raw_tx_parity rule allows both unset for
+      # not-yet-signed actions.
+      constraint(:raw_tx_min_length, 'raw_tx IS NULL OR length(raw_tx) >= 20')
+      # SQLite gets a CHECK to mirror the Postgres broadcast_intent ENUM.
+      constraint(:broadcast_intent_values, "broadcast_intent IN ('delayed', 'inline', 'none')") unless postgres
     end
 
     # 4. broadcasts — ARC lifecycle
@@ -120,10 +174,10 @@ Sequel.migration do
       column :merkle_path, c[:bytea]
       column :extra_info, :text
       column :competing_txs, postgres ? 'text[]' : :text
-      column :created_at, c[:timestamptz], null: false, default: c[:now]
-      column :updated_at, c[:timestamptz], null: false, default: c[:now]
       column :retry_count, :integer, null: false, default: 0
       column :provider, :text
+      column :created_at, c[:timestamptz], null: false, default: c[:now]
+      column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       unique :action_id
       # Composite FK target for promotions(action_id, authorising_status) → broadcasts.
@@ -135,9 +189,69 @@ Sequel.migration do
       foreign_key %i[action_id intent], :actions,
                   key: %i[id broadcast_intent], on_update: :restrict
       constraint(:intent_not_none, "intent != 'none'")
+      constraint(:block_hash_length, 'block_hash IS NULL OR length(block_hash) = 32')
+      constraint(:block_height_range, 'block_height IS NULL OR block_height >= 0')
+      # Path-requires-block (#380 gap 1): a merkle_path is unverifiable without
+      # block context, so if it's set the block fields must be too. The reverse
+      # (block_hash/height set, merkle_path NULL) is the legitimate "confirmed
+      # but unproven" intermediate state when ARC reports MINED with blockHeight
+      # ahead of the path — see the parallel tx_proofs.path_requires_block
+      # constraint and the discussion in docs/reference/schema.md.
+      constraint(
+        :path_requires_block,
+        'merkle_path IS NULL OR (block_hash IS NOT NULL AND block_height IS NOT NULL)'
+      )
+      # SQLite gets a CHECK to mirror the Postgres tx_status ENUM. List mirrors
+      # arc_tx_statuses above (ARC's metamorph Status enum plus IMMUTABLE,
+      # #198/#220).
+      unless postgres
+        constraint(
+          :tx_status_values,
+          "tx_status IS NULL OR tx_status IN ('UNKNOWN', 'QUEUED', 'RECEIVED', 'STORED', " \
+          "'ANNOUNCED_TO_NETWORK', 'REQUESTED_BY_NETWORK', 'SENT_TO_NETWORK', " \
+          "'ACCEPTED_BY_NETWORK', 'SEEN_IN_ORPHAN_MEMPOOL', 'SEEN_ON_NETWORK', " \
+          "'SEEN_MULTIPLE_NODES', 'DOUBLE_SPEND_ATTEMPTED', 'REJECTED', " \
+          "'MINED_IN_STALE_BLOCK', 'MINED', 'IMMUTABLE')"
+        )
+      end
     end
 
     # 5. baskets — output grouping with replenishment policy
+    #
+    # Rule selection framing: invalid data → DB CHECK; caller-facing policy
+    # → conformance layer only (BSV::Wallet::BRC100#validate_basket_name!).
+    # See docs/reference/brc100-conformance.md for the full principle.
+    #
+    # AT THE DB FLOOR (rules below) — invalid data the wallet never
+    # legitimately stores from any path:
+    #   * Shape — wrong length, non-allowed charset, double-space,
+    #     trailing ' basket'.
+    #   * Exact 'default' — the wallet's effective default is unbasketed
+    #     (no row), so a row literally named 'default' is a bug.
+    #   * Leading/trailing whitespace — the application validator
+    #     normalises it away on ingress via +strip+, but a non-BRC-100
+    #     caller (Engine-direct, raw store, future #223 binding) bypasses
+    #     the boundary and would otherwise land the malformed name.
+    #
+    # AT THE CONFORMANCE LAYER ONLY (NOT enforced here) — valid data the
+    # wallet itself stores via the Engine→Store direct path:
+    #   * 'admin' prefix — 'admin *' permission-token baskets for ADR-029
+    #     DBAP/DPACP/DCAP/DSAP (forward-looking).
+    #   * 'p ' prefix — 'p wbikd' is the WBIKD draft's live address-slot
+    #     basket today.
+    #
+    # Constraint names mirror the validator's rule identifiers so a future
+    # BRC-100 error-code mapper can translate Sequel::CheckConstraintViolation
+    # → wire error code by constraint name alone.
+    #
+    # SQLite charset (DO NOT SIMPLIFY): `name NOT GLOB '*[^a-z0-9 ]*'` is
+    # byte-aware — any byte outside the allowed set fails, including multi-byte
+    # UTF-8 (e.g. 'café'). The negation glyph is `[^...]`, NOT `[!...]` —
+    # SQLite treats `!` as a literal class member, causing silent-pass
+    # behaviour; verified against SQLite 3.x. Equivalent enforcement to the
+    # Postgres `~ '^[a-z0-9 ]+$'` regex; `COLLATE "C"` on Postgres forces
+    # byte-level interpretation of the `[a-z]` range regardless of cluster
+    # LC_CTYPE.
     create_table(:baskets) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
@@ -148,37 +262,85 @@ Sequel.migration do
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       unique :name, name: :baskets_name_unique
+
+      constraint(:name_length,           'length(name) BETWEEN 5 AND 300')
+      constraint(:name_charset,          postgres ? %(name COLLATE "C" ~ '^[a-z0-9 ]+$') : "name NOT GLOB '*[^a-z0-9 ]*'")
+      constraint(:name_no_double_sp,     "name NOT LIKE '%  %'")
+      constraint(:name_not_basket,       "name NOT LIKE '% basket'")
+      constraint(:name_not_default,      "name <> 'default'")
+      constraint(:name_no_leading_space, "name NOT LIKE ' %'")
+      constraint(:name_no_trailing_space, "name NOT LIKE '% '")
+      constraint(:target_count_range,    'target_count IS NULL OR target_count >= 0')
+      constraint(:target_value_range,    'target_value IS NULL OR target_value >= 0')
     end
 
     # 6. outputs — immutable append-only log
+    #
+    # Column order is LAYOUT-OPTIMISED for Postgres tuple packing — DO NOT
+    # REORDER without thinking through the alignment:
+    #   * locking_script (bytea, ~18b) aligns to 24b, leaving 6b alignment
+    #     padding.
+    #   * vout (integer, 4b) slots into 4 of those 6 padding bytes with no
+    #     padding of its own.
+    #   * output_type (enum/text, 2b) consumes the remaining 2b of
+    #     locking_script's padding window, sitting next to vout for the
+    #     semantic affinity ("structural role of this output").
+    #   * sender_identity_key, derivation_prefix, derivation_suffix (text,
+    #     ~18b each) follow. End-of-tuple padding is MAXALIGN regardless.
+    # No updated_at — outputs are immutable; rows never change after insert.
+    # Outputs is the wallet's largest-cardinality table; a few bytes per
+    # row compounds at scale.
     create_table(:outputs) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
       foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :restrict
       column :satoshis, :bigint, null: false
       column :created_at, c[:timestamptz], null: false, default: c[:now]
-      column :locking_script, c[:bytea]
+      column :locking_script, c[:bytea], null: false
       column :vout, :integer, null: false
+      column :output_type, c[:output_type]
       column :sender_identity_key, :text
       column :derivation_prefix, :text
       column :derivation_suffix, :text
-      column :output_type, c[:output_type]
 
       unique %i[action_id vout]
+
+      constraint(:satoshis_range,        'satoshis >= 0')
+      constraint(:vout_range,            'vout >= 0')
+      constraint(:locking_script_min,    'length(locking_script) >= 1')
+      # Typed outputs (root, outbound) carry no derivation params.
+      constraint(:typed_no_prefix,       'output_type IS NULL OR derivation_prefix IS NULL')
+      constraint(:typed_no_suffix,       'output_type IS NULL OR derivation_suffix IS NULL')
+      constraint(:typed_no_sender,       'output_type IS NULL OR sender_identity_key IS NULL')
+      # Derived outputs (output_type NULL) require the full derivation triple.
+      constraint(:derived_needs_prefix,  'output_type IS NOT NULL OR derivation_prefix IS NOT NULL')
+      constraint(:derived_needs_suffix,  'output_type IS NOT NULL OR derivation_suffix IS NOT NULL')
+      constraint(:derived_needs_sender,  'output_type IS NOT NULL OR sender_identity_key IS NOT NULL')
+      # SQLite gets a CHECK to mirror the Postgres output_type ENUM.
+      constraint(:output_type_values, "output_type IS NULL OR output_type IN ('root', 'outbound')") unless postgres
     end
 
     # 7. spendable — the UTXO set
+    # action_id duplicates outputs.action_id but lifted here as a direct FK
+    # so action deletion is a single statement: the action goes, every
+    # spendable row dependent on it goes with it. Set once at row creation
+    # and never mutated.
+    # A second FK to promotions(action_id) is added at the bottom of this
+    # migration — promotions doesn't exist yet at spendable creation time.
     create_table(:spendable) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
       foreign_key :output_id, :outputs, type: :bigint, null: false, unique: true
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
     end
 
-    # 8. output_details — display and application metadata
+    # 8. output_details — display and application metadata (1:1 sidecar)
+    # No timestamps — the parent outputs row carries them.
     create_table(:output_details) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
       foreign_key :output_id, :outputs, type: :bigint, null: false, unique: true
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
       column :change, :boolean, null: false, default: false
       column :type, :text
       column :purpose, :text
@@ -195,6 +357,7 @@ Sequel.migration do
       primary_key :id if !postgres
       foreign_key :output_id, :outputs, type: :bigint, null: false, unique: true
       foreign_key :basket_id, :baskets, type: :bigint, null: false
+      foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
@@ -215,6 +378,9 @@ Sequel.migration do
 
       unique :output_id
       unique %i[action_id vin]
+
+      constraint(:vin_range, 'vin >= 0')
+      constraint(:nsequence_range, 'nsequence BETWEEN 0 AND 4294967295')
     end
 
     # 11. labels — label definitions
@@ -226,6 +392,8 @@ Sequel.migration do
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       unique :label, name: :labels_label_unique
+
+      constraint(:label_length, 'length(label) BETWEEN 1 AND 300')
     end
 
     # 12. action_labels — join table
@@ -250,6 +418,8 @@ Sequel.migration do
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       unique :tag, name: :tags_tag_unique
+
+      constraint(:tag_length, 'length(tag) BETWEEN 1 AND 300')
     end
 
     # 14. output_tags — join table
@@ -266,6 +436,10 @@ Sequel.migration do
     end
 
     # 15. certificates — identity certificates (BRC-52)
+    # subject, certifier, verifier are BRC-52 identity pubkeys (compressed
+    # hex, 66 chars). verifier is nullable for self-issued certificates.
+    # SQLite under-enforces hex content (no portable regex in CHECKs) —
+    # length + 02/03 prefix only, per project_sqlite_schema_under_enforces.
     create_table(:certificates) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
@@ -282,6 +456,35 @@ Sequel.migration do
       unique %i[type serial_number certifier]
       index :certifier
       index :subject
+
+      if postgres
+        constraint(
+          :subject_pubkey_shape,
+          Sequel.lit("length(subject) = 66 AND subject ~ '^0[23][0-9a-f]{64}$'")
+        )
+        constraint(
+          :certifier_pubkey_shape,
+          Sequel.lit("length(certifier) = 66 AND certifier ~ '^0[23][0-9a-f]{64}$'")
+        )
+        constraint(
+          :verifier_pubkey_shape,
+          Sequel.lit("verifier IS NULL OR (length(verifier) = 66 AND verifier ~ '^0[23][0-9a-f]{64}$')")
+        )
+      else
+        constraint(
+          :subject_pubkey_shape,
+          "length(subject) = 66 AND (substr(subject, 1, 2) = '02' OR substr(subject, 1, 2) = '03')"
+        )
+        constraint(
+          :certifier_pubkey_shape,
+          "length(certifier) = 66 AND (substr(certifier, 1, 2) = '02' OR substr(certifier, 1, 2) = '03')"
+        )
+        constraint(
+          :verifier_pubkey_shape,
+          'verifier IS NULL OR (length(verifier) = 66 AND ' \
+          "(substr(verifier, 1, 2) = '02' OR substr(verifier, 1, 2) = '03'))"
+        )
+      end
     end
 
     # 16. certificate_fields — per-field encryption for selective revelation
@@ -311,13 +514,14 @@ Sequel.migration do
     # 18. sse_cursors — Arcade SSE /events cursor persistence (#249)
     #
     # Token has no FK — it is a wallet-derived identifier (HMAC-from-WIF
-    # via +BSV::Wallet::CallbackToken#derive+) that the wallet supplies to
+    # via BSV::Wallet::CallbackToken#derive) that the wallet supplies to
     # Arcade for callback scoping, not a row in any other wallet table.
     # last_event_id is the SSE id field, a nanosecond timestamp emitted by
     # Arcade (PR #50): bigint accommodates the full 19-digit value.
+    # No created_at — only the last-update time matters for cursor state.
     create_table(:sse_cursors) do
-      String :token, primary_key: true
-      Bignum :last_event_id, null: false
+      column :token, :text, primary_key: true
+      column :last_event_id, :bigint, null: false
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
     end
 
@@ -339,6 +543,8 @@ Sequel.migration do
     #     row first, else the cascade would hit auth_not_rejected.
     #
     # Created after actions and broadcasts so the composite FK targets exist.
+    # Postgres uses raw SQL so the named CHECK and composite FK constraint
+    # naming come out exactly as designed; SQLite uses the Sequel API path.
     if postgres
       run <<~SQL
         CREATE TABLE promotions (
@@ -382,26 +588,24 @@ Sequel.migration do
 
     # 20. transmissions — wallet→peer BEEF delivery, per (action × counterparty)
     #     (#385 / ADR-025). The wallet's first per-counterparty persistent state.
-    #     Delivery status is DERIVED, not stored: a present +acked_at+ means the
+    #     Delivery status is DERIVED, not stored: a present acked_at means the
     #     peer acknowledged internalisation — no status column (principle of state).
     #
-    #     The +ack_signature+ column is reserved nullable from day 1: v1 ACK is a
+    #     The ack_signature column is reserved nullable from day 1: v1 ACK is a
     #     bare HTTP 200, so it stays NULL; the Phase 2 signed-ACK protocol writes
     #     into it without a schema migration.
+    #
+    #     counterparty is a BRC-43 identity pubkey (compressed hex, 66 chars).
+    #     Identity-shaped pubkeys stay hex (the pubkey-hex carve-out in CLAUDE.md).
     create_table(:transmissions) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
       foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
-      # counterparty: BRC-43 identity pubkey (hex, 66-char compressed) — the
-      # named peer. Identity-shaped pubkeys stay hex (the pubkey-hex carve-out
-      # in CLAUDE.md). Shape CHECK (length + 02/03 prefix + hex body) lives in
-      # 003 alongside description_length, per the established structural-CHECK
-      # location precedent.
       column :counterparty, :text, null: false
       column :acked_at, c[:timestamptz]
-      # Phase 2 slot: peer-signed ACK over the wtxid, recorded alongside
-      # +acked_at+ when the signed-ACK protocol lands. NULL means a v1
-      # HTTP-200 ACK (or no ACK yet); see HLR #385 phasing.
+      # Phase 2 slot: peer-signed ACK over the wtxid, recorded alongside acked_at
+      # when the signed-ACK protocol lands. NULL means a v1 HTTP-200 ACK (or no
+      # ACK yet); see HLR #385 phasing.
       column :ack_signature, c[:bytea]
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
@@ -412,6 +616,18 @@ Sequel.migration do
       # counterparty, then JOIN transmission_txids by id) without a
       # sequential scan as the table grows.
       index %i[counterparty id]
+
+      if postgres
+        constraint(
+          :counterparty_shape,
+          Sequel.lit("length(counterparty) = 66 AND counterparty ~ '^0[23][0-9a-f]{64}$'")
+        )
+      else
+        constraint(
+          :counterparty_shape,
+          "length(counterparty) = 66 AND (substr(counterparty, 1, 2) = '02' OR substr(counterparty, 1, 2) = '03')"
+        )
+      end
     end
 
     # 21. transmission_txids — pure membership: which wtxids each transmission's
@@ -419,12 +635,12 @@ Sequel.migration do
     #     (BeefParty) to only what the peer lacks. The per-counterparty known
     #     set is the union of these rows across all of that peer's
     #     transmissions. wtxid stays binary (wire-order), per the
-    #     wtxid/dtxid convention; the length CHECK lives in 003.
+    #     wtxid/dtxid convention.
     #
-    #     Two-phase write (HLR #385, Crypto + Security gate): rows are
-    #     populated only in +Store#mark_transmission_acked+, never at
-    #     +record_transmission+ time — recording a wtxid the peer never
-    #     received would over-trim a future BEEF into unverifiability.
+    #     Two-phase write (HLR #385, Crypto + Security gate): rows are populated
+    #     only in Store#mark_transmission_acked, never at record_transmission
+    #     time — recording a wtxid the peer never received would over-trim a
+    #     future BEEF into unverifiability.
     create_table(:transmission_txids) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
@@ -432,16 +648,39 @@ Sequel.migration do
       column :wtxid, c[:bytea], null: false
 
       unique %i[transmission_id wtxid]
+
+      constraint(:wtxid_length, 'length(wtxid) = 32')
+    end
+
+    # spendable's second FK: action_id → promotions(action_id) ON DELETE CASCADE.
+    # Lives here at the bottom because promotions doesn't exist at spendable
+    # creation time. The double-FK on spendable.action_id means UTXO-set
+    # membership cannot exist without authorisation, AND reject/reorg teardown
+    # collapses to a single DELETE FROM promotions that cascades through.
+    if postgres
+      run <<~SQL
+        ALTER TABLE spendable
+          ADD CONSTRAINT spendable_promotion_fkey
+          FOREIGN KEY (action_id) REFERENCES promotions (action_id) ON DELETE CASCADE
+      SQL
+    else
+      alter_table(:spendable) do
+        add_foreign_key [:action_id], :promotions, key: [:action_id], on_delete: :cascade
+      end
     end
   end
 
   down do
     postgres = database_type == :postgres
 
+    # Drop in dependency-respecting order — children before parents.
+    # spendable carries spendable_promotion_fkey → promotions, so spendable
+    # must go before promotions.
     drop_table :transmission_txids, :transmissions,
-               :promotions, :sse_cursors, :settings, :certificate_fields, :certificates,
+               :spendable, :promotions,
+               :sse_cursors, :settings, :certificate_fields, :certificates,
                :output_tags, :tags, :action_labels, :labels, :inputs,
-               :output_baskets, :output_details, :spendable, :outputs,
+               :output_baskets, :output_details, :outputs,
                :baskets, :broadcasts, :actions, :tx_proofs, :blocks
 
     if postgres

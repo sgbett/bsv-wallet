@@ -133,6 +133,12 @@ This is a **Postgres-based** wallet. SQLite exists as a convenience for fast log
 
 The schema chooses Postgres-native features deliberately: `bytea` for everything hash-shaped, native `uuid` for `actions.reference`, ENUM types (`broadcast_intent`), CHECK constraints, RESTRICT FK semantics. See `docs/reference/schema.md` for the table-by-table reference, and `.architecture/decisions/adrs/20260505_ADR-009-postgres-native-primitives.md` for the per-primitive rationale.
 
+### Migration discipline — pre-release
+
+The schema lives in **`001_create_schema.rb`** (structure: every table with its columns, inline CHECKs, NOT NULLs, single-table FKs and indexes) and **`002_triggers.rb`** (behavioural guards: BEFORE-row triggers and their PG functions that can't sit inside CREATE TABLE because they reference other tables).
+
+During pre-release development, schema changes amend these two files in place — no new migrations. The migration sequence is design documentation, not operational history; a reader should derive the full intended schema from 001 + 002 without piecing it together across follow-up files. The "hash trick" (`c[:type]` map at the top of 001) handles Postgres/SQLite divergence inline. Once a release ships and there are deployed wallets to forward-compat against, additive migrations begin at 003.
+
 ### Configuration model — no mystery
 
 There are two audiences for wallet configuration, with different env-var conventions. Don't mix them up.
