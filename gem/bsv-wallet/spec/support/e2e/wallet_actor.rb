@@ -86,9 +86,13 @@ module E2E
       sh('import', '--no-send')
     end
 
-    # Wipe wallet state. Uses a direct Sequel connection (no Engine boot,
-    # no Sequel::Model rebinding) so resets don't pollute the global model
-    # bindings that the next subprocess invocation will set up cleanly.
+    # Truncate the actions table (with CASCADE) so all per-action state
+    # — outputs, spendable, output_baskets, broadcasts, transmissions,
+    # promotions — is wiped. Append-only chain knowledge (`tx_proofs`,
+    # `blocks`) and basket-name registrations are preserved (internalize
+    # is idempotent on duplicate proofs). Uses a direct Sequel connection
+    # (no Engine boot, no Sequel::Model rebinding) so resets don't
+    # pollute the global model bindings the next subprocess sets up.
     def reset!
       url = BSV::Wallet::Fixtures.wallet(@name.to_sym).database_url
       Sequel.connect(url) do |db|

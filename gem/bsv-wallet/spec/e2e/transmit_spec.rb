@@ -1,8 +1,7 @@
 # frozen_string_literal: true
 
-require 'spec_helper'
+require_relative 'spec_helper'
 require_relative '../support/e2e/wallet_actor'
-require_relative '../support/e2e/wallet_harness'
 
 RSpec.describe 'transmit', :e2e do # rubocop:disable RSpec/DescribeClass
   before(:all) do # rubocop:disable RSpec/BeforeAfterAll
