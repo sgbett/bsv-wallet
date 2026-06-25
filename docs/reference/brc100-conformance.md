@@ -59,7 +59,7 @@ These are the indivisible-verb 1:1 primitives ratified by ADR-026. Conformance w
 | `internalizeAction` | **`engine.import_beef`** | Implemented (core) | Naming divergence — see below. Both `wallet payment` (BRC-29) and `basket insertion` protocols. |
 | `abortAction` | `engine.abort_action` | Implemented (core) | Failure-bounded delete of unpromoted outputs (ADR-011 delete). |
 | `listActions` | `engine.list_actions` | Implemented (core) | Status derived from structural state per principle-of-state. |
-| `listOutputs` | **`engine.spendable_outputs`** | Implemented (core), with [HLR #434 nil-basket affordance](#listoutputs-basket-nil-affordance-hlr-434) | Naming divergence — see below. Basket-scoped query at the wrapper; Engine primitive accepts basket-optional with `nil` = unbasketed. The wrapper *also* accepts `basket: nil` as an intentional divergence to surface the wallet's change pool to BRC-100 callers — see footnote below. |
+| `listOutputs` | **`engine.spendable_outputs`** | Implemented (core), with [HLR #434 nil-basket affordance](#listoutputs-basket-nil-affordance-hlr-434) | Naming divergence — see below. Basket-scoped query at the wrapper; Engine primitive accepts basket-optional with `nil` = unbasketed. The wrapper *also* accepts `basket: nil` as an intentional divergence to surface the wallet's change pool to BRC-100 callers — see the [linked section](#listoutputs-basket-nil-affordance-hlr-434). |
 | `relinquishOutput` | `engine.relinquish_output` | Implemented (core) | Removes from `spendable`; output row preserved. |
 
 ### Engine primitive naming
