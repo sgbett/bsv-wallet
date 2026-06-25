@@ -38,9 +38,13 @@ BSV::Wallet::Fixtures.configure do |f|
 
   # E2E fleet — WIFs derived at runtime from :sdk by the harness; the
   # registrations here just pin the DB URLs so the inventory is
-  # visible. WIF will be overwritten when the harness boots.
+  # visible. In the in-process harness the derivation overwrites these
+  # registrations; the +ENV.fetch("BSV_WALLET_WIF_W#{n}", nil)+ here
+  # picks the WIF up in spawned subprocesses (which don't run the
+  # harness in-process) provided the caller exported the derived value.
   (1..5).each do |n|
     name = :"w#{n}"
-    f.wallet name, database_url: ENV.fetch("DATABASE_URL_W#{n}", nil)
+    f.wallet name, wif: ENV.fetch("BSV_WALLET_WIF_W#{n}", nil),
+                   database_url: ENV.fetch("DATABASE_URL_W#{n}", nil)
   end
 end
