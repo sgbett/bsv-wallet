@@ -31,8 +31,8 @@ module BSV
       # inline-equals-delayed robustness).
       class Transmission
         # BRC-43 canonical counterparty hex: compressed pubkey (02|03
-        # prefix), lowercase. Mirrors the Postgres CHECK in
-        # +db/migrations/003_schema_constraints.rb+ so the engine
+        # prefix), lowercase. Mirrors the Postgres CHECK on the
+        # transmissions table in +db/migrations/001_create_schema.rb+ so the engine
         # boundary rejects the same shapes the schema rejects — closes
         # the H1 correctness drift where uppercase hex passed the
         # engine then died as +Sequel::CheckConstraintViolation+ at
