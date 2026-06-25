@@ -4,9 +4,9 @@ require_relative 'shared_context'
 require 'bsv/wallet/engine'
 require 'bsv/wallet/brc100'
 
-# Schema-level CHECK constraints from migration 004
-# (db/migrations/004_basket_name_validation.rb), enforcing the SHAPE
-# rules from BRC-100 §"Rules for Basket Names" at the database floor.
+# Schema-level CHECK constraints on +baskets.name+ from
+# +db/migrations/003_schema_constraints.rb+, enforcing the SHAPE rules
+# from BRC-100 §"Rules for Basket Names" at the database floor.
 #
 # Design split (resolved after the +'p wbikd'+ regression):
 #   * SHAPE rules — length, charset, double-space, trailing +' basket'+ —
@@ -143,62 +143,6 @@ RSpec.describe 'baskets.name BRC-100 CHECK constraints (#428)', :store do
           db[:baskets].insert(name: 'default')
         end
       end.not_to raise_error
-    end
-  end
-
-  # Migration lifecycle: idempotent +up+, +down+ that restores the 003-era
-  # state, and the pre-flight audit that aborts +up+ if existing rows would
-  # violate the new ruleset. These exercise the migration directly through
-  # Sequel::Migrator on a scratch DB so the test database's existing
-  # migrated state is left untouched.
-  describe 'migration lifecycle' do
-    let(:migrations_path) { File.expand_path('../../../../db/migrations', __dir__) }
-
-    def scratch_db
-      Sequel.sqlite.tap { |d| d.run('PRAGMA foreign_keys = ON') }
-    end
-
-    it 'is idempotent: re-running up on a migrated DB is a no-op' do
-      d = scratch_db
-      Sequel::Migrator.run(d, migrations_path)
-      # Re-run — Sequel's version-tracking + the in-migration probe both
-      # cooperate to make this a no-op.
-      expect { Sequel::Migrator.run(d, migrations_path) }.not_to raise_error
-      d.disconnect
-    end
-
-    it 'down restores the 003-era predicates (bad-name is accepted after rollback)' do
-      d = scratch_db
-      Sequel::Migrator.run(d, migrations_path)
-      # Before rollback: 'bad-name' fails the new charset rule.
-      expect { d[:baskets].insert(name: 'bad-name') }.to raise_error(Sequel::CheckConstraintViolation)
-      # Rollback 004 only.
-      Sequel::Migrator.run(d, migrations_path, target: 3)
-      # After rollback: 003's name_length (1..300) is the only length CHECK;
-      # 'bad-name' is accepted.
-      expect { d[:baskets].insert(name: 'bad-name') }.not_to raise_error
-      d.disconnect
-    end
-
-    it 'pre-flight audit aborts up when existing rows would violate the new ruleset' do
-      d = scratch_db
-      # Apply 001..003 only — the new CHECKs are NOT yet in force, so a
-      # non-conformant name lands cleanly.
-      Sequel::Migrator.run(d, migrations_path, target: 3)
-      d[:baskets].insert(name: 'bad-name')
-      # Now try to apply 004 — the pre-flight audit must list the offender
-      # and abort.
-      expect { Sequel::Migrator.run(d, migrations_path) }
-        .to raise_error(StandardError, /aborting.*existing baskets/)
-      d.disconnect
-    end
-
-    it 'baskets_name_unique survives the SQLite alter_table rebuild' do
-      d = scratch_db
-      Sequel::Migrator.run(d, migrations_path)
-      # The index should still be present after 004's SQLite alter_table.
-      expect(d.indexes(:baskets)).to have_key(:baskets_name_unique)
-      d.disconnect
     end
   end
 end
