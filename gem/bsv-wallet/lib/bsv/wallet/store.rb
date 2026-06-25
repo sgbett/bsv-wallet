@@ -1190,6 +1190,18 @@ module BSV
             action_id: action_id,
             change: true
           )
+          # Optional basket per HLR #436 — internal change-producing
+          # operations (notably +Engine#import_utxo+) can route change
+          # into a named basket so the caller has a stable handle on the
+          # imported funds. Plain auto-fund change leaves +chg[:basket]+
+          # unset; no +output_baskets+ row is written, keeping the
+          # output in the wallet's unbasketed pool.
+          next unless chg[:basket]
+
+          basket_id = find_or_create_basket(name: chg[:basket])
+          models::OutputBasket.create(
+            output_id: output.id, basket_id: basket_id, action_id: action_id
+          )
         end
       end
 

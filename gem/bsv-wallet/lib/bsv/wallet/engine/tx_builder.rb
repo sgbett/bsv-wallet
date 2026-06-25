@@ -74,7 +74,8 @@ module BSV
         # outputs)+. Only when the surplus exceeds the required fee do
         # we delegate to +tx.fee+ for change distribution.
         def build_change(resolved_inputs:, caller_outputs:, caller_inputs:,
-                         lock_time:, version:, randomize:, change_count:)
+                         lock_time:, version:, randomize:, change_count:,
+                         change_basket: nil)
           raise ArgumentError, "change_count must be >= 1, got #{change_count}" if change_count < 1
 
           # Change derivation (step B) needs the deriver unconditionally —
@@ -161,7 +162,7 @@ module BSV
           # J. Build change_outputs specs for atomic store write
           change_output_specs = surviving_change.map do |co|
             ck = change_keys[change_tx_outputs.index(co)]
-            {
+            spec = {
               satoshis: co.satoshis,
               vout: tx.outputs.index(co),
               locking_script: ck[:script].to_binary,
@@ -169,6 +170,13 @@ module BSV
               derivation_suffix: ck[:suffix],
               sender_identity_key: @key_deriver.identity_key
             }
+            # Optional basket — set by callers that need imported funds (or
+            # other internal change-producing operations) tracked under a
+            # named basket. Plain change (the wallet's pool) leaves this
+            # unset and the Store writes no +output_baskets+ row. See HLR
+            # #436 and ADR-027.
+            spec[:basket] = change_basket if change_basket
+            spec
           end
 
           {

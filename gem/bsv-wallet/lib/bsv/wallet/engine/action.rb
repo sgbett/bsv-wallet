@@ -228,7 +228,8 @@ module BSV
         # the headroom recheck after the fact has somewhere to roll back to.
         #
         # @return [Hash] +{ wtxid:, raw_tx:, vout_mapping:, change_outputs:, total_input_satoshis: }+
-        def build_via_funding!(outputs:, caller_inputs:, lock_time:, version:, randomize:, change_count:)
+        def build_via_funding!(outputs:, caller_inputs:, lock_time:, version:, randomize:,
+                               change_count:, change_basket: nil)
           funding = @engine.funding_strategy.acquire(
             action_id: @id,
             caller_outputs: outputs || [],
@@ -239,7 +240,8 @@ module BSV
                 resolved_inputs: resolved, caller_outputs: outputs || [],
                 caller_inputs: caller_inputs,
                 lock_time: lock_time, version: version,
-                randomize: randomize, change_count: change_count
+                randomize: randomize, change_count: change_count,
+                change_basket: change_basket
               )
             }
           )

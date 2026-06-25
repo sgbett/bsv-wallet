@@ -218,6 +218,35 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
       expect(result[:tx]).to be_a(BSV::Transaction::Tx)
       expect(result[:tx].total_input_satoshis).to eq(100_000)
     end
+
+    context 'change_basket: (HLR #436)' do
+      let(:resolved) { [resolved_p2pkh_input(vin: 0, satoshis: 100_000)] }
+      let(:caller_outputs) { [{ satoshis: 10_000, locking_script: op_true }] }
+
+      it 'stamps :basket on change_output_specs when change_basket is supplied' do
+        result = builder.build_change(
+          resolved_inputs: resolved, caller_outputs: caller_outputs,
+          caller_inputs: nil, lock_time: 0, version: 1, randomize: false,
+          change_count: 1, change_basket: 'imported-funds'
+        )
+        expect(result[:change_outputs]).not_to be_empty
+        result[:change_outputs].each do |chg|
+          expect(chg[:basket]).to eq('imported-funds')
+        end
+      end
+
+      it 'omits :basket from change_output_specs when change_basket is nil (default)' do
+        result = builder.build_change(
+          resolved_inputs: resolved, caller_outputs: caller_outputs,
+          caller_inputs: nil, lock_time: 0, version: 1, randomize: false,
+          change_count: 1
+        )
+        expect(result[:change_outputs]).not_to be_empty
+        result[:change_outputs].each do |chg|
+          expect(chg).not_to have_key(:basket)
+        end
+      end
+    end
   end
 
   describe '#apply_spends' do

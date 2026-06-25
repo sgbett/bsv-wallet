@@ -1062,6 +1062,44 @@ RSpec.describe BSV::Wallet::Engine do
       params = engine.method(:build_action).parameters.map { |_kind, name| name }
       expect(params).not_to include(:originator, :return_txid_only, :trust_self)
     end
+
+    context 'change_basket: routes change into a named basket (HLR #436)' do
+      it 'lands the change output in the supplied basket, leaving the autofund pool untouched' do
+        fund_wallet(satoshis: 100_000, basket: nil, suffix: 'change_basket_routes')
+        engine_with_keys.build_action(
+          description: 'change-into-basket',
+          outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
+          no_send: true,
+          change_basket: 'imported-funds'
+        )
+
+        # The change output for the just-built action carries an
+        # output_baskets row pointing at the named basket.
+        basket = BSV::Wallet::Store::Models::Basket.first(name: 'imported-funds')
+        expect(basket).not_to be_nil
+
+        basketed_outputs = engine_with_keys.spendable_outputs(basket: 'imported-funds')
+        expect(basketed_outputs[:total]).to be >= 1
+        # And these are change outputs (output_details.change = true).
+        basketed_outputs[:outputs].each do |o|
+          detail = BSV::Wallet::Store::Models::OutputDetail.first(output_id: o[:id])
+          expect(detail&.change).to be(true)
+        end
+      end
+
+      it 'omits the basket affordance by default (existing behaviour preserved)' do
+        fund_wallet(satoshis: 100_000, basket: nil, suffix: 'change_basket_default')
+        engine_with_keys.build_action(
+          description: 'change-unbasketed',
+          outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
+          no_send: true
+        )
+
+        # No basket called 'imported-funds' should exist after a default
+        # build (no change_basket: kwarg).
+        expect(BSV::Wallet::Store::Models::Basket.first(name: 'imported-funds')).to be_nil
+      end
+    end
   end
 
   describe '#sign_action (wallet-vocab primitive)' do
