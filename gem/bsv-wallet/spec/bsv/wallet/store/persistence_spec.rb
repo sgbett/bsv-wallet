@@ -298,17 +298,17 @@ RSpec.describe BSV::Wallet::Store, :store do
           change_outputs: [
             { satoshis: 100, vout: 0, locking_script: SecureRandom.random_bytes(25),
               derivation_prefix: SecureRandom.uuid, derivation_suffix: 'c1',
-              sender_identity_key: 'self', basket: 'imported-funds' }
+              sender_identity_key: 'self', basket: 'imported funds' }
           ]
         )
         output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
         basket_row = BSV::Wallet::Store::Models::OutputBasket.first(output_id: output.id)
         expect(basket_row).not_to be_nil
-        expect(basket_row.basket.name).to eq('imported-funds')
+        expect(basket_row.basket.name).to eq('imported funds')
       end
 
       it 'reuses an existing basket row instead of duplicating' do
-        BSV::Wallet::Store::Models::Basket.create(name: 'imported-funds')
+        BSV::Wallet::Store::Models::Basket.create(name: 'imported funds')
 
         result = store.create_action(action: { description: 'basketed reuse', broadcast_intent: :delayed })
         store.sign_action(
@@ -316,10 +316,10 @@ RSpec.describe BSV::Wallet::Store, :store do
           change_outputs: [
             { satoshis: 100, vout: 0, locking_script: SecureRandom.random_bytes(25),
               derivation_prefix: SecureRandom.uuid, derivation_suffix: 'c1',
-              sender_identity_key: 'self', basket: 'imported-funds' }
+              sender_identity_key: 'self', basket: 'imported funds' }
           ]
         )
-        expect(BSV::Wallet::Store::Models::Basket.where(name: 'imported-funds').count).to eq(1)
+        expect(BSV::Wallet::Store::Models::Basket.where(name: 'imported funds').count).to eq(1)
       end
 
       it 'writes no output_baskets row when chg[:basket] is absent (existing behaviour)' do
@@ -665,7 +665,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       pending_outputs = [{
         satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
         derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-        sender_identity_key: 'self', basket: 'my-basket', tags: %w[urgent]
+        sender_identity_key: 'self', basket: 'mybasket', tags: %w[urgent]
       }]
       change_outputs = [{
         satoshis: 400, vout: 1, locking_script: SecureRandom.random_bytes(25),

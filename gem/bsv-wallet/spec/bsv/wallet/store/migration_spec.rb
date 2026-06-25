@@ -161,9 +161,9 @@ RSpec.describe 'Schema migration', :store do
     end
 
     it 'enforces UNIQUE on baskets.name' do
-      db[:baskets].insert(name: 'test-basket')
+      db[:baskets].insert(name: 'testbasket')
       expect do
-        db.transaction(savepoint: true) { db[:baskets].insert(name: 'test-basket') }
+        db.transaction(savepoint: true) { db[:baskets].insert(name: 'testbasket') }
       end.to raise_error(Sequel::UniqueConstraintViolation)
     end
 
