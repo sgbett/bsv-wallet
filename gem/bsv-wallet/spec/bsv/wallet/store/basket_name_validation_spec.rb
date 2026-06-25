@@ -5,8 +5,8 @@ require 'bsv/wallet/engine'
 require 'bsv/wallet/brc100'
 
 # Schema-level CHECK constraints on +baskets.name+ from
-# +db/migrations/003_schema_constraints.rb+, enforcing the SHAPE rules
-# from BRC-100 §"Rules for Basket Names" at the database floor.
+# +db/migrations/003_schema_constraints.rb+, enforcing the invalid-data
+# rules from BRC-100 §"Rules for Basket Names" at the database floor.
 #
 # Design split, framed as "invalid data → DB CHECK; caller-facing
 # policy → conformance layer only":

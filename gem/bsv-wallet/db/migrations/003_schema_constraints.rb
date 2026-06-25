@@ -83,15 +83,34 @@ Sequel.migration do
     end
 
     # --- 5. baskets ---
-    # Shape rules from BRC-100 §"Rules for Basket Names". Caller-facing
-    # reservation rules (admin / default / p prefix) live at the conformance
-    # layer only (BSV::Wallet::BRC100#validate_basket_name!) so wallet-internal
-    # protocol-reserved baskets — 'p wbikd' for the WBIKD draft today, 'admin *'
-    # for ADR-029 DBAP tomorrow — write via the Engine→Store direct path. See
-    # docs/reference/brc100-conformance.md for the principle. Constraint names
-    # mirror the validator's rule identifiers so a future BRC-100 error-code
-    # mapper can translate Sequel::CheckConstraintViolation → wire error code
-    # by constraint name alone.
+    # Rule selection framing: invalid data → DB CHECK; caller-facing policy
+    # → conformance layer only (BSV::Wallet::BRC100#validate_basket_name!).
+    # See docs/reference/brc100-conformance.md for the full principle.
+    #
+    # AT THE DB FLOOR (rules below) — invalid data the wallet never
+    # legitimately stores from any path:
+    #
+    #   * Shape — wrong length, non-allowed charset, double-space,
+    #     trailing ' basket'.
+    #   * Exact 'default' — the wallet's effective default is unbasketed
+    #     (no row), so a row literally named 'default' is a bug.
+    #   * Leading/trailing whitespace — the application validator
+    #     normalises it away on ingress via +strip+, but a non-BRC-100
+    #     caller (Engine-direct, raw store, future #223 binding) bypasses
+    #     the boundary and would otherwise land the malformed name.
+    #
+    # AT THE CONFORMANCE LAYER ONLY (NOT enforced here) — valid data the
+    # wallet itself stores via the Engine→Store direct path:
+    #
+    #   * 'admin' prefix — 'admin *' permission-token baskets for ADR-029
+    #     DBAP/DPACP/DCAP/DSAP (forward-looking).
+    #   * 'p ' prefix — 'p wbikd' is the WBIKD draft's live address-slot
+    #     basket today; BRC-99 reserves the prefix precisely because
+    #     protocols like WBIKD claim it.
+    #
+    # Constraint names mirror the validator's rule identifiers so a future
+    # BRC-100 error-code mapper can translate Sequel::CheckConstraintViolation
+    # → wire error code by constraint name alone.
     #
     # SQLite charset (DO NOT SIMPLIFY): `name NOT GLOB '*[^a-z0-9 ]*'` is
     # byte-aware — any byte outside the allowed set fails, including multi-byte
@@ -101,20 +120,6 @@ Sequel.migration do
     # Postgres `~ '^[a-z0-9 ]+$'` regex; `COLLATE "C"` on Postgres forces
     # byte-level interpretation of the `[a-z]` range regardless of cluster
     # LC_CTYPE.
-    # Framing for the rule selection: invalid data → DB CHECK;
-    # caller-facing policy → conformance layer only.
-    #
-    #   * 'default' is invalid data — the wallet's effective default is
-    #     unbasketed (no row), so a row literally named 'default' should
-    #     never exist. Schema-enforced.
-    #   * Leading/trailing whitespace is invalid data — the application
-    #     normalises it away on ingress via +strip+, but a non-BRC-100
-    #     caller (Engine-direct, raw store, future #223 binding) bypasses
-    #     the boundary and would otherwise land the malformed name.
-    #     Schema-enforced.
-    #   * 'admin'/'p ' prefixes are valid data the wallet itself stores
-    #     ('p wbikd' today, 'admin *' for ADR-029 DBAP tomorrow). Caller
-    #     policy — app-gated only.
     alter_table(:baskets) do
       add_constraint(:name_length,           'length(name) BETWEEN 5 AND 300')
       add_constraint(:name_charset,          postgres ? %(name COLLATE "C" ~ '^[a-z0-9 ]+$') : "name NOT GLOB '*[^a-z0-9 ]*'")
