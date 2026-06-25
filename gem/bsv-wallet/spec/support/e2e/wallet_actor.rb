@@ -86,17 +86,34 @@ module E2E
       sh('import', '--no-send')
     end
 
-    # Truncate the actions table (with CASCADE) so all per-action state
-    # — outputs, spendable, output_baskets, broadcasts, transmissions,
-    # promotions — is wiped. Append-only chain knowledge (`tx_proofs`,
-    # `blocks`) and basket-name registrations are preserved (internalize
-    # is idempotent on duplicate proofs). Uses a direct Sequel connection
-    # (no Engine boot, no Sequel::Model rebinding) so resets don't
-    # pollute the global model bindings the next subprocess sets up.
+    # Delete every no_send action (broadcast_intent = 'none') and its
+    # downstream rows, leaving any real broadcast state intact. The
+    # ordering matters: outputs.action_id is ON DELETE RESTRICT (#189)
+    # and the `check_internal_action_delete` trigger blocks the actions
+    # delete while a promotions row exists. So per-action: spendable →
+    # promotions → output_baskets/details/tags → outputs → broadcasts →
+    # actions. Append-only chain knowledge (`tx_proofs`, `blocks`) and
+    # basket-name registrations are preserved. Uses a direct Sequel
+    # connection (no Engine boot, no Sequel::Model rebinding) so resets
+    # don't pollute the global model bindings the next subprocess sets up.
     def reset!
       url = BSV::Wallet::Fixtures.wallet(@name.to_sym).database_url
       Sequel.connect(url) do |db|
-        db.run('TRUNCATE TABLE actions CASCADE')
+        db.transaction do
+          action_ids = db[:actions].where(broadcast_intent: 'none').select_map(:id)
+          next if action_ids.empty?
+
+          output_ids = db[:outputs].where(action_id: action_ids).select_map(:id)
+          db[:spendable].where(action_id: action_ids).delete
+          db[:inputs].where(action_id: action_ids).delete
+          db[:promotions].where(action_id: action_ids).delete
+          db[:output_baskets].where(action_id: action_ids).delete
+          db[:output_details].where(action_id: action_ids).delete
+          db[:output_tags].where(output_id: output_ids).delete unless output_ids.empty?
+          db[:outputs].where(action_id: action_ids).delete
+          db[:broadcasts].where(action_id: action_ids).delete
+          db[:actions].where(id: action_ids).delete
+        end
       end
     end
 
