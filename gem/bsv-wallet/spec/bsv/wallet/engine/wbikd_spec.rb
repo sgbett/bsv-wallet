@@ -14,9 +14,9 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     count.times { |i| fund_wallet(satoshis: rand(100..1000), basket: 'p wbikd', suffix: "wbikd#{i}") }
   end
 
-  before { prefund_wbikd_slots }
-
   describe '#list_receive_addresses' do
+    before { prefund_wbikd_slots }
+
     it 'returns empty array when no addresses have been generated' do
       result = engine_with_keys.list_receive_addresses
 
@@ -77,6 +77,8 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   end
 
   describe '#scan_receive_addresses' do
+    before { prefund_wbikd_slots }
+
     it 'returns { scanned: 0, found: 0 } without key_deriver' do
       result = engine.scan_receive_addresses
 
@@ -305,6 +307,8 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   end
 
   describe '#generate_receive_address' do
+    before { prefund_wbikd_slots }
+
     it 'returns an address string and derivation params' do
       result = engine_with_keys.generate_receive_address
 
@@ -368,6 +372,27 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       actions = engine_with_keys.brc100.list_actions(labels: ['wbikd'])
       locking_action = actions[:actions].first
       expect(locking_action[:status]).to eq(:internal)
+    end
+
+    # Regression — HLR #428 split shape/reservation rules across DB CHECK
+    # and BRC-100 conformance respectively. The conformance validator
+    # legitimately rejects the BRC-99 protocol-reserved basket name
+    # +p wbikd+ from application callers, so +find_or_create_wbikd_slot+
+    # must use +Engine#build_action+ (Engine-direct) not
+    # +brc100.create_action+ when creating the first slot. The wider
+    # describe block pre-funds slots in a +before+, masking this path;
+    # this context drops the pre-funding to exercise the create branch.
+    context 'when no pre-funded slot exists' do
+      before { fund_wallet(satoshis: 5_000, basket: 'spend') }
+
+      it 'creates the first slot via Engine-direct, bypassing BRC-100 validation' do
+        result = engine_with_keys.generate_receive_address
+
+        expect(result[:address]).to be_a(String)
+        expect(result[:address]).to start_with('1')
+        expect(result[:derivation_prefix]).to match(/\A[0-9a-f]{64}\z/)
+        expect(result[:derivation_suffix]).to match(/\A\d+\z/)
+      end
     end
   end
 

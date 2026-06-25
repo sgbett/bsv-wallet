@@ -1389,7 +1389,13 @@ module BSV
         marker = compute_wbikd_marker(slot_sats)
         op_return_script = BSV::Script::Script.op_return(marker).to_binary
 
-        create_result = brc100.create_action(
+        # Calls +Engine#build_action+ directly rather than the BRC-100
+        # wrapper: WBIKD slot creation is a wallet-internal operation (per
+        # the core-vs-conformance principle) writing into a BRC-99
+        # protocol-reserved basket name (+p wbikd+) that the conformance
+        # layer's +validate_basket_name!+ legitimately rejects from
+        # application callers. Same Engine-direct pattern as +import_utxo+.
+        create_result = build_action(
           description: 'wbikd slot creation',
           accept_delayed_broadcast: false,
           outputs: [
@@ -1402,8 +1408,7 @@ module BSV
           randomize_outputs: false
         )
 
-        # txid from create_action is wire-order wtxid
-        dtxid = create_result[:txid].to_dtxid
+        dtxid = create_result[:wtxid].to_dtxid
 
         # Re-query for the newly created slot
         result = @store.query_outputs(basket: 'p wbikd', limit: 1)
