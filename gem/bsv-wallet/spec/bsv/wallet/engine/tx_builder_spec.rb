@@ -227,11 +227,11 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
         result = builder.build_change(
           resolved_inputs: resolved, caller_outputs: caller_outputs,
           caller_inputs: nil, lock_time: 0, version: 1, randomize: false,
-          change_count: 1, change_basket: 'imported-funds'
+          change_count: 1, change_basket: 'importedfunds'
         )
         expect(result[:change_outputs]).not_to be_empty
         result[:change_outputs].each do |chg|
-          expect(chg[:basket]).to eq('imported-funds')
+          expect(chg[:basket]).to eq('importedfunds')
         end
       end
 

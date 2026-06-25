@@ -1,27 +1,36 @@
 # frozen_string_literal: true
 
 require_relative 'shared_context'
+require 'bsv/wallet/engine'
+require 'bsv/wallet/brc100'
 
 # Schema-level CHECK constraints from migration 004
-# (db/migrations/004_basket_name_validation.rb), enforcing BRC-100
-# §"Rules for Basket Names" at the database floor.
+# (db/migrations/004_basket_name_validation.rb), enforcing the SHAPE
+# rules from BRC-100 §"Rules for Basket Names" at the database floor.
 #
-# Matrix-aware: every rule is exercised under BOTH Postgres and SQLite
-# (per feedback_postgres_is_primary). The conformance layer at
-# +BSV::Wallet::BRC100+ (#440) translates these into BRC-100 errors;
-# this spec gates the principle-of-state floor — even if the conformance
-# layer is bypassed (Engine-direct, raw store calls), the DB rejects.
+# Design split (resolved after the +'p wbikd'+ regression):
+#   * SHAPE rules — length, charset, double-space, trailing +' basket'+ —
+#     enforced at BOTH the conformance layer (+BSV::Wallet::BRC100+) AND
+#     the DB CHECK. Documented here.
+#   * RESERVATION rules — +admin+ / +default+ / +p + — enforced at the
+#     conformance layer ONLY. The DB intentionally accepts these so that
+#     the wallet's own protocol-reserved baskets (e.g. +'p wbikd'+ for
+#     the WBIKD draft, future +admin *+ for ADR-029 DBAP) can be written
+#     via the Engine→Store direct path.
+#
+# Matrix-aware: every shape rule is exercised under BOTH Postgres and
+# SQLite (per feedback_postgres_is_primary).
 #
 # Behavioural assertions only — no schema-text comparisons
 # (per project_sqlite_schema_under_enforces).
 
 RSpec.describe 'baskets.name BRC-100 CHECK constraints (#428)', :store do
-  # Each rule is exercised by inserting directly via +db[:baskets].insert+
+  # Each shape rule is exercised by inserting directly via +db[:baskets].insert+
   # and asserting +Sequel::CheckConstraintViolation+. The error message
   # surfaces the constraint name on Postgres; SQLite's adapter only
   # reports the generic CHECK failure, so the name-in-message assertion
   # is Postgres-gated below.
-  describe 'rule-by-rule rejects' do
+  describe 'shape-rule rejects' do
     {
       name_length: { input: 'four', description: 'shorter than 5 characters' },
       name_length_max: { input: 'x' * 301, description: 'longer than 300 characters', constraint: :name_length },
@@ -29,10 +38,7 @@ RSpec.describe 'baskets.name BRC-100 CHECK constraints (#428)', :store do
       name_charset_caps: { input: 'HasCaps', description: 'uppercase letters', constraint: :name_charset },
       name_charset_utf8: { input: 'café au lait', description: 'non-ASCII UTF-8 (byte-aware)', constraint: :name_charset },
       name_no_double_sp: { input: 'two  spaces', description: 'two consecutive spaces' },
-      name_not_basket: { input: 'token basket', description: "trailing ' basket' suffix" },
-      name_not_admin: { input: 'admin foo', description: "leading 'admin' (reserved for DBAP, ADR-029)" },
-      name_not_default: { input: 'default', description: "exact literal 'default'" },
-      name_not_p_prefix: { input: 'p foo', description: "leading 'p ' (BRC-99 reserved)" }
+      name_not_basket: { input: 'token basket', description: "trailing ' basket' suffix" }
     }.each do |label, fixture|
       it "rejects #{fixture[:description]} (#{fixture[:constraint] || label})" do
         expect do
@@ -72,17 +78,6 @@ RSpec.describe 'baskets.name BRC-100 CHECK constraints (#428)', :store do
       expect { db[:baskets].insert(name: 'wallet payments') }.not_to raise_error
     end
 
-    it "accepts a name that contains 'admin' but does not start with it" do
-      # +name_not_admin+ is a prefix rule, not a substring rule —
-      # 'my admin notes' is allowed.
-      expect { db[:baskets].insert(name: 'my admin notes') }.not_to raise_error
-    end
-
-    it "accepts a name starting with 'p' but not 'p ' (no following space)" do
-      # The +p +-prefix rule requires a literal space; 'pizza' is fine.
-      expect { db[:baskets].insert(name: 'pizza') }.not_to raise_error
-    end
-
     it "accepts a name ending in 'basket' without a leading space" do
       # The ' basket' suffix rule requires a leading space; 'tokenbasket'
       # is allowed.
@@ -106,20 +101,48 @@ RSpec.describe 'baskets.name BRC-100 CHECK constraints (#428)', :store do
     end
   end
 
-  # Documents the principle-of-state floor: an Engine-level write
-  # (Store#find_or_create_basket — exactly the path Engine uses to land
-  # outputs in baskets) that bypasses the BRC-100 conformance layer at #440
-  # is still rejected by the DB CHECK.
-  describe 'Engine-direct bypass (principle-of-state floor)' do
-    it "rejects 'admin foo' written via Store#find_or_create_basket" do
+  # Documents the conformance-vs-floor boundary: reservation rules
+  # (+admin+ / +default+ / +p +) trip the BRC-100 wrapper but NOT the DB.
+  # +'p wbikd'+ is the concrete proof — the WBIKD draft uses it as the
+  # wallet's live address-slot basket, written via Engine→Store direct
+  # (see +Engine#find_or_create_wbikd_slot+). If the DB enforced the
+  # +p +-prefix rule the wallet's own internals would not boot.
+  describe 'reservation rules — conformance-only, DB accepts' do
+    let(:brc100) { BSV::Wallet::BRC100.new(Object.new) }
+
+    it "rejects 'p wbikd' at the BRC-100 conformance layer" do
+      expect { brc100.send(:validate_basket_name!, 'p wbikd') }
+        .to raise_error(BSV::Wallet::InvalidParameterError, /reserved/)
+    end
+
+    it "accepts 'p wbikd' written direct via Store (Engine→Store path)" do
       # Bypass the conformance layer entirely — invoke the Store primitive
-      # the Engine uses, with a reserved-name input the validator would
-      # otherwise have caught upstream.
+      # the Engine uses, with the WBIKD slot's actual basket name. The
+      # DB must NOT block this; if it did, +find_or_create_wbikd_slot+
+      # would fail at first use.
       expect do
         db.transaction(savepoint: true) do
-          store.find_or_create_basket(name: 'admin foo')
+          store.find_or_create_basket(name: 'p wbikd')
         end
-      end.to raise_error(Sequel::CheckConstraintViolation)
+      end.not_to raise_error
+    end
+
+    it "accepts 'admin foo' written direct via the baskets table" do
+      # +admin *+ is reserved at the boundary for future ADR-029 DBAP
+      # baskets; the DB accepts it so wallet-internal writes can land.
+      expect do
+        db.transaction(savepoint: true) do
+          db[:baskets].insert(name: 'admin foo')
+        end
+      end.not_to raise_error
+    end
+
+    it "accepts 'default' written direct via the baskets table" do
+      expect do
+        db.transaction(savepoint: true) do
+          db[:baskets].insert(name: 'default')
+        end
+      end.not_to raise_error
     end
   end
 

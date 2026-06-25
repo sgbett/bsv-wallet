@@ -59,18 +59,32 @@ BASKET_NAME_REJECT_CASES = [
   ['p admi',        /not starting with "p "/,          'rule 8 — no leading "p " (reserved)']
 ].freeze
 
-# HLR #428 rule-parity gate fixtures — same set of canonical rejects,
-# tagged with the constraint name the DB CHECK from sub-issue #441 is
-# expected to surface.
-BASKET_NAME_PARITY_CASES = [
+# HLR #428 rule-parity gate fixtures.
+#
+# Two sets — the design split between SHAPE rules (enforced at BOTH the
+# conformance layer and the DB CHECK) and RESERVATION rules (enforced at
+# the conformance layer ONLY) is structural, not stylistic. Putting
+# reservation rules in the DB collides with the wallet's own
+# protocol-reserved baskets (most acutely +'p wbikd'+, the WBIKD draft's
+# live address-slot basket). See +db/migrations/004_basket_name_validation.rb+
+# for the design write-up; the parity gate at the bottom of this file
+# enforces the split per-row.
+BASKET_NAME_SHAPE_PARITY_CASES = [
   ['abc',           :name_length],
   [('x' * 301),     :name_length],
   ['foo!bar',       :name_charset],
   ['hello  world',  :name_no_double_sp],
-  ['recipe basket', :name_not_basket],
-  ['admin foo',     :name_not_admin],
-  ['default',       :name_not_default],
-  ['p admi',        :name_not_p_prefix]
+  ['recipe basket', :name_not_basket]
+].freeze
+
+# Reservation rules — validator rejects, DB accepts. +'p wbikd'+ used
+# as the conformance-layer reject because it's the wallet's actual
+# WBIKD slot basket, written via Engine→Store direct (proves the boundary
+# is bidirectional: bounce at boundary, land via direct).
+BASKET_NAME_RESERVATION_PARITY_CASES = [
+  ['admin foo', :name_not_admin],
+  ['default',   :name_not_default],
+  ['p wbikd',   :name_not_p_prefix]
 ].freeze
 
 RSpec.describe BSV::Wallet::BRC100 do
@@ -453,35 +467,33 @@ RSpec.describe BSV::Wallet::BRC100 do
   end
 
   describe 'rule-parity gate — DB CHECK ↔ validator (HLR #428, sub-issue #441)', :store do
-    # Drift insurance: every canonical reject fixture the validator
-    # rejects must ALSO be rejected by the +baskets.name+ CHECK
-    # constraint from sub-issue #441's migration. The two layers encode
-    # the rules independently (Ruby regex / constants in +brc100.rb+;
-    # SQL CHECKs in the migration) — this spec is the cross-check that
-    # catches drift between them.
+    # Drift insurance, design-split-aware (resolved after the +'p wbikd'+
+    # regression on the HLR #428 branch).
+    #
+    # SHAPE rules — length, charset, double-space, trailing +' basket'+:
+    # both layers reject. The validator emits +InvalidParameterError+;
+    # the DB CHECK trips +Sequel::CheckConstraintViolation+ on the same
+    # input.
+    #
+    # RESERVATION rules — +admin+ / +default+ / +p +: validator rejects,
+    # DB ACCEPTS. The DB intentionally permits these so the wallet's own
+    # protocol-reserved baskets (+'p wbikd'+ for WBIKD today; future
+    # +'admin *'+ baskets for ADR-029 DBAP) can be written via the
+    # Engine→Store direct path. The parity-gate spec for reservation
+    # rules ASSERTS that the DB insert succeeds — a regression that adds
+    # back a DB-level reservation CHECK would surface here as
+    # +CheckConstraintViolation+ raised by what should be a clean insert.
     #
     # The +:store+ tag wires in the shared store context (db, store
     # instance, rollback-around-each transaction). The DB half is gated
     # on +baskets.name CHECK+ being present — if #441's migration
-    # hasn't run yet, the DB half is +skip+ped with a clear marker so
-    # the spec does not false-pass on the application layer alone.
-
-    parity_cases = [
-      ['abc',           :name_length],
-      [('x' * 301),     :name_length],
-      ['foo!bar',       :name_charset],
-      ['hello  world',  :name_no_double_sp],
-      ['recipe basket', :name_not_basket],
-      ['admin foo',     :name_not_admin],
-      ['default',       :name_not_default],
-      ['p admi',        :name_not_p_prefix]
-    ].freeze
+    # hasn't run yet, the gate is +skip+ped with a clear marker.
 
     let(:brc100) { described_class.new(Object.new) }
 
-    # Probe whether #441's CHECKs are live so the DB half doesn't
-    # false-pass when the migration hasn't run. Suite-scope so the
-    # per-spec lookup is cheap.
+    # Probe whether #441's CHECKs are live so the gate doesn't false-pass
+    # when the migration hasn't run. Suite-scope so the per-spec lookup
+    # is cheap.
     def self.basket_check_present?
       if STORE_DATABASE_TYPE == :postgres
         STORE_DB.from(:pg_constraint)
@@ -494,20 +506,33 @@ RSpec.describe BSV::Wallet::BRC100 do
       end
     end
 
-    parity_cases.each do |bad_name, rule_constraint|
-      it "rule #{rule_constraint}: validator AND DB reject #{bad_name.inspect}" do
-        # Application-layer half — always asserted.
+    BASKET_NAME_SHAPE_PARITY_CASES.each do |bad_name, rule_constraint|
+      it "shape rule #{rule_constraint}: validator AND DB reject #{bad_name.inspect}" do
         expect { brc100.send(:validate_basket_name!, bad_name) }
           .to raise_error(BSV::Wallet::InvalidParameterError)
 
-        # DB-layer half — gated on #441's migration being live. If the
-        # CHECK is absent, +skip+ rather than false-pass on the
-        # application half alone.
         skip 'sub-issue #441 baskets.name CHECK not yet migrated' unless self.class.basket_check_present?
 
         expect do
           db.transaction(savepoint: true) { db[:baskets].insert(name: bad_name) }
         end.to raise_error(Sequel::CheckConstraintViolation)
+      end
+    end
+
+    BASKET_NAME_RESERVATION_PARITY_CASES.each do |bad_name, rule_constraint|
+      it "reservation rule #{rule_constraint}: validator rejects, DB ACCEPTS #{bad_name.inspect}" do
+        expect { brc100.send(:validate_basket_name!, bad_name) }
+          .to raise_error(BSV::Wallet::InvalidParameterError)
+
+        skip 'sub-issue #441 baskets.name CHECK not yet migrated' unless self.class.basket_check_present?
+
+        # Reservation rules are conformance-only — wallet-internal writes
+        # via Engine→Store direct must land. A regression that added a
+        # DB-level reservation CHECK would raise CheckConstraintViolation
+        # here; the spec asserts the clean insert succeeds.
+        expect do
+          db.transaction(savepoint: true) { db[:baskets].insert(name: bad_name) }
+        end.not_to raise_error
       end
     end
   end

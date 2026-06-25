@@ -199,9 +199,14 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         suffix = addr_result[:derivation_suffix]
         address = addr_result[:address]
 
-        # Before scan: one slot locked, others still available
-        slots_before = engine_net.brc100.list_outputs(basket: 'p wbikd')
-        locked_count = slots_before[:total_outputs]
+        # Before scan: one slot locked, others still available.
+        # Query via Engine#spendable_outputs directly — the BRC-100
+        # wrapper rejects 'p wbikd' at the boundary (BRC-99 reserved
+        # prefix). Wallet-internal queries against protocol-reserved
+        # baskets go around the boundary the same way wallet-internal
+        # writes do (#428 boundary-only reservation rules).
+        slots_before = engine_net.spendable_outputs(basket: 'p wbikd')
+        locked_count = slots_before[:total]
 
         # Build tx
         derived_pub = key_deriver.derive_public_key(
@@ -229,9 +234,10 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         engine_net.scan_receive_addresses
 
-        # After scan: locking action aborted, slot recycled — one more than before
-        slots_after = engine_net.brc100.list_outputs(basket: 'p wbikd')
-        expect(slots_after[:total_outputs]).to eq(locked_count + 1)
+        # After scan: locking action aborted, slot recycled — one more than before.
+        # Engine#spendable_outputs (not the BRC-100 wrapper) — see note above.
+        slots_after = engine_net.spendable_outputs(basket: 'p wbikd')
+        expect(slots_after[:total]).to eq(locked_count + 1)
       end
 
       it 'the address disappears from list_receive_addresses after internalization' do
