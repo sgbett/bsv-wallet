@@ -101,13 +101,30 @@ Sequel.migration do
     # Postgres `~ '^[a-z0-9 ]+$'` regex; `COLLATE "C"` on Postgres forces
     # byte-level interpretation of the `[a-z]` range regardless of cluster
     # LC_CTYPE.
+    # Framing for the rule selection: invalid data → DB CHECK;
+    # caller-facing policy → conformance layer only.
+    #
+    #   * 'default' is invalid data — the wallet's effective default is
+    #     unbasketed (no row), so a row literally named 'default' should
+    #     never exist. Schema-enforced.
+    #   * Leading/trailing whitespace is invalid data — the application
+    #     normalises it away on ingress via +strip+, but a non-BRC-100
+    #     caller (Engine-direct, raw store, future #223 binding) bypasses
+    #     the boundary and would otherwise land the malformed name.
+    #     Schema-enforced.
+    #   * 'admin'/'p ' prefixes are valid data the wallet itself stores
+    #     ('p wbikd' today, 'admin *' for ADR-029 DBAP tomorrow). Caller
+    #     policy — app-gated only.
     alter_table(:baskets) do
-      add_constraint(:name_length,        'length(name) BETWEEN 5 AND 300')
-      add_constraint(:name_charset,       postgres ? %(name COLLATE "C" ~ '^[a-z0-9 ]+$') : "name NOT GLOB '*[^a-z0-9 ]*'")
-      add_constraint(:name_no_double_sp,  "name NOT LIKE '%  %'")
-      add_constraint(:name_not_basket,    "name NOT LIKE '% basket'")
-      add_constraint(:target_count_range, 'target_count IS NULL OR target_count >= 0')
-      add_constraint(:target_value_range, 'target_value IS NULL OR target_value >= 0')
+      add_constraint(:name_length,           'length(name) BETWEEN 5 AND 300')
+      add_constraint(:name_charset,          postgres ? %(name COLLATE "C" ~ '^[a-z0-9 ]+$') : "name NOT GLOB '*[^a-z0-9 ]*'")
+      add_constraint(:name_no_double_sp,     "name NOT LIKE '%  %'")
+      add_constraint(:name_not_basket,       "name NOT LIKE '% basket'")
+      add_constraint(:name_not_default,      "name <> 'default'")
+      add_constraint(:name_no_leading_space, "name NOT LIKE ' %'")
+      add_constraint(:name_no_trailing_space, "name NOT LIKE '% '")
+      add_constraint(:target_count_range,    'target_count IS NULL OR target_count >= 0')
+      add_constraint(:target_value_range,    'target_value IS NULL OR target_value >= 0')
     end
 
     # --- 6. outputs ---
@@ -378,6 +395,9 @@ Sequel.migration do
       drop_constraint :name_charset
       drop_constraint :name_no_double_sp
       drop_constraint :name_not_basket
+      drop_constraint :name_not_default
+      drop_constraint :name_no_leading_space
+      drop_constraint :name_no_trailing_space
       drop_constraint :target_count_range
       drop_constraint :target_value_range
     end

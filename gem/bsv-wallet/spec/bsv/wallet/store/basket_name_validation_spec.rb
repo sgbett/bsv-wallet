@@ -8,15 +8,19 @@ require 'bsv/wallet/brc100'
 # +db/migrations/003_schema_constraints.rb+, enforcing the SHAPE rules
 # from BRC-100 §"Rules for Basket Names" at the database floor.
 #
-# Design split (resolved after the +'p wbikd'+ regression):
-#   * SHAPE rules — length, charset, double-space, trailing +' basket'+ —
-#     enforced at BOTH the conformance layer (+BSV::Wallet::BRC100+) AND
-#     the DB CHECK. Documented here.
-#   * RESERVATION rules — +admin+ / +default+ / +p + — enforced at the
-#     conformance layer ONLY. The DB intentionally accepts these so that
-#     the wallet's own protocol-reserved baskets (e.g. +'p wbikd'+ for
-#     the WBIKD draft, future +admin *+ for ADR-029 DBAP) can be written
-#     via the Engine→Store direct path.
+# Design split, framed as "invalid data → DB CHECK; caller-facing
+# policy → conformance layer only":
+#   * INVALID-DATA rules — length, charset, double-space, trailing
+#     +' basket'+, exact +'default'+, leading/trailing whitespace —
+#     enforced at BOTH the conformance layer (+BSV::Wallet::BRC100+)
+#     AND the DB CHECK. These names should never reach storage from any
+#     path; the schema is the floor.
+#   * RESERVATION rules — +admin+ and +p + prefixes — enforced at the
+#     conformance layer ONLY. These ARE valid data the wallet itself
+#     stores (+'p wbikd'+ for the WBIKD draft today, +'admin *'+ for
+#     ADR-029 DBAP tomorrow), written via the Engine→Store direct path.
+#     The DB intentionally accepts them so the wallet's own internals
+#     can boot.
 #
 # Matrix-aware: every shape rule is exercised under BOTH Postgres and
 # SQLite (per feedback_postgres_is_primary).
@@ -38,7 +42,10 @@ RSpec.describe 'baskets.name BRC-100 CHECK constraints (#428)', :store do
       name_charset_caps: { input: 'HasCaps', description: 'uppercase letters', constraint: :name_charset },
       name_charset_utf8: { input: 'café au lait', description: 'non-ASCII UTF-8 (byte-aware)', constraint: :name_charset },
       name_no_double_sp: { input: 'two  spaces', description: 'two consecutive spaces' },
-      name_not_basket: { input: 'token basket', description: "trailing ' basket' suffix" }
+      name_not_basket: { input: 'token basket', description: "trailing ' basket' suffix" },
+      name_not_default: { input: 'default', description: "the literal 'default' (invalid data)" },
+      name_no_leading_space: { input: ' wallet', description: 'leading space (invalid data)' },
+      name_no_trailing_space: { input: 'wallet ', description: 'trailing space (invalid data)' }
     }.each do |label, fixture|
       it "rejects #{fixture[:description]} (#{fixture[:constraint] || label})" do
         expect do
@@ -102,11 +109,13 @@ RSpec.describe 'baskets.name BRC-100 CHECK constraints (#428)', :store do
   end
 
   # Documents the conformance-vs-floor boundary: reservation rules
-  # (+admin+ / +default+ / +p +) trip the BRC-100 wrapper but NOT the DB.
+  # (+admin+ and +p +) trip the BRC-100 wrapper but NOT the DB.
   # +'p wbikd'+ is the concrete proof — the WBIKD draft uses it as the
   # wallet's live address-slot basket, written via Engine→Store direct
   # (see +Engine#find_or_create_wbikd_slot+). If the DB enforced the
   # +p +-prefix rule the wallet's own internals would not boot.
+  # +'default'+ is NOT in this set — it's invalid data per the new
+  # framing and is now schema-rejected; see "shape-rule rejects" above.
   describe 'reservation rules — conformance-only, DB accepts' do
     let(:brc100) { BSV::Wallet::BRC100.new(Object.new) }
 
@@ -133,14 +142,6 @@ RSpec.describe 'baskets.name BRC-100 CHECK constraints (#428)', :store do
       expect do
         db.transaction(savepoint: true) do
           db[:baskets].insert(name: 'admin foo')
-        end
-      end.not_to raise_error
-    end
-
-    it "accepts 'default' written direct via the baskets table" do
-      expect do
-        db.transaction(savepoint: true) do
-          db[:baskets].insert(name: 'default')
         end
       end.not_to raise_error
     end
