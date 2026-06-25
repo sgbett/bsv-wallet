@@ -116,16 +116,26 @@ module BSV
         # @param randomize [Boolean] whether to shuffle output order.
         # @param change_count [Integer] number of BRC-42 change
         #   outputs to derive. Must be >= 1.
+        # @param change_basket [String, nil] optional basket name to
+        #   stamp on every surviving change output spec (HLR #436).
+        #   When set, the Store side writes an +output_baskets+ row per
+        #   change output, routing the change into the named basket
+        #   (used by +Engine#import_utxo(basket:)+ for tracked imports).
+        #   When +nil+ (default), change outputs land unbasketed in the
+        #   wallet's pool — the canonical auto-fund behaviour.
         # @return [Hash] one of:
         #   * +{ wtxid:, raw_tx:, tx:, vout_mapping:, change_outputs: }+
         #     on success. +tx+ is the live +Transaction::Tx+;
         #     +change_outputs+ lists only the change rows that survived
-        #     SDK +distribute_change+ (possibly empty).
+        #     SDK +distribute_change+ (possibly empty). Each spec carries
+        #     +:basket+ when +change_basket+ was supplied; absent
+        #     otherwise.
         #   * +{ shortfall: N }+ when the input surplus does not cover
         #     the required fee — +N+ is the positive deficit
         #     (+required_fee - surplus+) the caller needs to top up.
         def build_change(resolved_inputs:, caller_outputs:, caller_inputs:,
-                         lock_time:, version:, randomize:, change_count:)
+                         lock_time:, version:, randomize:, change_count:,
+                         change_basket: nil)
           raise NotImplementedError
         end
 

@@ -80,7 +80,10 @@ module BSV
         # @param change_outputs [Array<Hash>] optional change outputs to write
         #   atomically with no promotions row yet. Each: :satoshis, :vout,
         #   :locking_script, :derivation_prefix, :derivation_suffix,
-        #   :sender_identity_key
+        #   :sender_identity_key, :basket (optional — when present, an
+        #   +output_baskets+ row is written routing this change output
+        #   into the named basket per HLR #436; absent leaves the change
+        #   unbasketed in the wallet's pool).
         def sign_action(action_id:, wtxid:, raw_tx:, outputs: [], change_outputs: [])
           raise NotImplementedError
         end

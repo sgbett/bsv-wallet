@@ -210,7 +210,7 @@ module BSV
                        lock_time: nil, version: nil, labels: nil,
                        sign_and_process: true, accept_delayed_broadcast: true,
                        no_send: false, change_count: nil,
-                       randomize_outputs: true)
+                       randomize_outputs: true, change_basket: nil)
         # Caller-supplied inputs: explicit array (possibly empty) — the
         # wallet does not extend this set. inputs: nil means "select for me".
         caller_supplied_inputs = !inputs.nil?
@@ -303,7 +303,8 @@ module BSV
               funded = action.build_via_funding!(
                 outputs: outputs, caller_inputs: caller_supplied_inputs ? inputs : nil,
                 lock_time: lock_time, version: version,
-                randomize: randomize_outputs, change_count: pre_lock_change_count
+                randomize: randomize_outputs, change_count: pre_lock_change_count,
+                change_basket: change_basket
               )
               # Exact post-loop headroom check: actual fee is now known.
               actual_fee = funded[:total_input_satoshis] -
@@ -697,8 +698,15 @@ module BSV
       #   push). Tests that want "build + queue, never broadcast" leave
       #   this true and don't run walletd — the queue stays full but
       #   nothing reaches the network.
+      # @param basket [String, nil] optional basket name for the Phase 2
+      #   self-payment's change output. When present, the imported funds
+      #   land in the named basket (the application has a stable handle
+      #   on them via +listOutputs(basket:)+ or +Engine#spendable_outputs+).
+      #   When +nil+ (default), the imported funds land unbasketed in the
+      #   wallet's pool — the previous and still-canonical behaviour for
+      #   root-key bootstrap. See HLR #436 and ADR-027.
       # @return [Hash] { imported: true, satoshis:, dtxid: }
-      def import_utxo(dtxid:, vout: 0, no_send: false, accept_delayed_broadcast: true)
+      def import_utxo(dtxid:, vout: 0, basket: nil, no_send: false, accept_delayed_broadcast: true)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
@@ -787,16 +795,22 @@ module BSV
         # templated tx, and writes a single +sum(inputs) - fee+ output.
         # Bootstrap bypasses limp mode + headroom since this is how the
         # wallet gets funded in the first place.
+        #
+        # Calls +Engine#build_action+ directly rather than the BRC-100
+        # wrapper: import_utxo is a wallet-internal operation (per the
+        # core-vs-conformance principle), and the BRC-100 spec has no
+        # +change_basket+ vocab to pass through.
         @bypass_limp_mode = true
         begin
-          brc100.create_action(
+          build_action(
             description: 'import self-payment',
             inputs: [{ output_id: imported_output_id }],
             outputs: [],
             no_send: no_send,
             accept_delayed_broadcast: accept_delayed_broadcast,
             randomize_outputs: false,
-            change_count: 1
+            change_count: 1,
+            change_basket: basket
           )
         ensure
           @bypass_limp_mode = false

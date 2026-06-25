@@ -290,6 +290,52 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(BSV::Wallet::Store::Models::Promotion.where(action_id: result[:id]).any?).to be(false)
     end
 
+    context 'change_outputs with :basket (HLR #436)' do
+      it 'writes an output_baskets row when chg[:basket] is set, creating the basket on demand' do
+        result = store.create_action(action: { description: 'basketed change', broadcast_intent: :delayed })
+        store.sign_action(
+          action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+          change_outputs: [
+            { satoshis: 100, vout: 0, locking_script: SecureRandom.random_bytes(25),
+              derivation_prefix: SecureRandom.uuid, derivation_suffix: 'c1',
+              sender_identity_key: 'self', basket: 'imported-funds' }
+          ]
+        )
+        output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+        basket_row = BSV::Wallet::Store::Models::OutputBasket.first(output_id: output.id)
+        expect(basket_row).not_to be_nil
+        expect(basket_row.basket.name).to eq('imported-funds')
+      end
+
+      it 'reuses an existing basket row instead of duplicating' do
+        BSV::Wallet::Store::Models::Basket.create(name: 'imported-funds')
+
+        result = store.create_action(action: { description: 'basketed reuse', broadcast_intent: :delayed })
+        store.sign_action(
+          action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+          change_outputs: [
+            { satoshis: 100, vout: 0, locking_script: SecureRandom.random_bytes(25),
+              derivation_prefix: SecureRandom.uuid, derivation_suffix: 'c1',
+              sender_identity_key: 'self', basket: 'imported-funds' }
+          ]
+        )
+        expect(BSV::Wallet::Store::Models::Basket.where(name: 'imported-funds').count).to eq(1)
+      end
+
+      it 'writes no output_baskets row when chg[:basket] is absent (existing behaviour)' do
+        result = store.create_action(action: { description: 'unbasketed change', broadcast_intent: :delayed })
+        store.sign_action(
+          action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
+          change_outputs: [
+            { satoshis: 100, vout: 0, locking_script: SecureRandom.random_bytes(25),
+              derivation_prefix: SecureRandom.uuid, derivation_suffix: 'c1', sender_identity_key: 'self' }
+          ]
+        )
+        output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
+        expect(BSV::Wallet::Store::Models::OutputBasket.where(output_id: output.id).count).to eq(0)
+      end
+    end
+
     # The internal path (broadcast_intent='none') doesn't promote at sign_action
     # time — write_change_outputs is a plain INSERT. The promotions row arrives
     # via promote_change_to_spendable. So sign_action alone leaves no promotions
