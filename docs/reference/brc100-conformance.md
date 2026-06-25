@@ -59,7 +59,7 @@ These are the indivisible-verb 1:1 primitives ratified by ADR-026. Conformance w
 | `internalizeAction` | **`engine.import_beef`** | Implemented (core) | Naming divergence — see below. Both `wallet payment` (BRC-29) and `basket insertion` protocols. |
 | `abortAction` | `engine.abort_action` | Implemented (core) | Failure-bounded delete of unpromoted outputs (ADR-011 delete). |
 | `listActions` | `engine.list_actions` | Implemented (core) | Status derived from structural state per principle-of-state. |
-| `listOutputs` | **`engine.spendable_outputs`** | Implemented (core) | Naming divergence — see below. Basket-scoped query at the wrapper; Engine primitive accepts basket-optional with `nil` = unbasketed. |
+| `listOutputs` | **`engine.spendable_outputs`** | Implemented (core), with [HLR #434 nil-basket affordance](#listoutputs-basket-nil-affordance-hlr-434) | Naming divergence — see below. Basket-scoped query at the wrapper; Engine primitive accepts basket-optional with `nil` = unbasketed. The wrapper *also* accepts `basket: nil` as an intentional divergence to surface the wallet's change pool to BRC-100 callers — see the [linked section](#listoutputs-basket-nil-affordance-hlr-434). |
 | `relinquishOutput` | `engine.relinquish_output` | Implemented (core) | Removes from `spendable`; output row preserved. |
 
 ### Engine primitive naming
@@ -104,6 +104,52 @@ This is ADR-026's "Engine speaks wallet vocab, BRC-100 wraps" principle applied 
 The spec contract says: outputs created without `basket` are not surfaced by `listOutputs`. We honour this at the wire. Internally, however, every output is recorded in the `outputs` table; basket membership (via the `output_baskets` JOIN, not as a column on `outputs`) is a categorisation axis, not a tenancy axis. Multi-tenant wallets in the reference implementation use `basket` as a per-app sandbox key (with `userId` as the per-user partition). We have neither. For us, basket is what the application chose to name its outputs by, and the "untracked" behaviour is enforced as a query-time filter at the conformance layer, not as an absence in the storage layer.
 
 This is a divergence in internal semantics with full external conformance.
+
+### Change routing and the "disappearing basket"
+
+BRC-100 is silent on where change should land after a `createAction` spend. The spec says `listOutputs` is basket-scoped and forbids the basket name `'default'`, but it doesn't prescribe where the wallet puts change, nor how an application should reason about its per-basket balance after a spend cycle.
+
+The practical consequence is the **"disappearing basket"** failure:
+
+> An application calls `listOutputs(basket: 'X')` → sees 1 BSV. It spends 20m sats via `createAction`. The wallet selects the 1 BSV input, sends 20m, generates ~80m sats of change. Afterwards, `listOutputs(basket: 'X')` returns nothing — the UTXO was spent. The 80m sats of change went... where?
+
+Neither implementation we know of routes change back to the source basket. Both choose a single "pool" reading instead:
+
+| | wallet-toolbox | this wallet |
+|---|---|---|
+| Change destination | basket literally named `'default'` | unbasketed (no `output_baskets` row) |
+| App-visible via | `listOutputs(basket: 'default')` | `listOutputs(basket: nil)` — HLR #434 |
+| Auto-fund draws from | `'default'` basket only | unbasketed only — HLR #435 |
+| App-basketed UTXOs protected from auto-fund | yes | yes |
+| Spec compliance of the visibility mechanism | uses a spec-banned name | uses a Ruby-side type quirk; TS-conformant callers can't trigger |
+
+Functionally these are the same shape: a single wallet-managed pool, auto-funded from itself, queryable by applications under a known identifier. Wallet-toolbox's identifier (`'default'`) is the spec-banned name; ours (`nil`) is a Ruby-only affordance the spec doesn't recognise. Different identifiers, same trade-off.
+
+**Where the gap lives.** Both wallets end up here because BRC-100 doesn't decide. The spec could specify:
+
+- A `changeBasket` parameter on `createAction` (explicit caller control), or
+- Default change-to-source-basket routing (preserves the per-basket view), or
+- That change is intentionally invisible to `listOutputs` and apps reconstruct via `listActions` (strict reading).
+
+None of these is documented. Until upstream picks one, every BRC-100 wallet picks a workaround and the application-facing behaviour is implementation-defined. Our `basket: nil` affordance and wallet-toolbox's `'default'` basket are equivalent responses to the same silence.
+
+**Not our problem to fix unilaterally.** Routing change back to source baskets, or adding a `changeBasket` parameter to `createAction`, would create a third behaviour incompatible with the ambient (if unstated) convention. We're tracking this as a known UX failure shared with wallet-toolbox; the upstream resolution will retire both wallets' workarounds together. The `engine.build_action` primitive already accepts a `change_basket:` kwarg internally (used by `Engine#import_utxo` per HLR #436) — when upstream lands a spec for application-driven change routing, the plumbing to expose it on the conformance surface is already in place.
+
+### `listOutputs basket: nil` affordance (HLR #434)
+
+A second, more pointed divergence on this method: **`BSV::Wallet::BRC100#list_outputs` accepts `basket: nil` as a Ruby-side affordance** that routes to `engine.spendable_outputs(basket: nil)` — i.e. returns the wallet's unbasketed pool, which is where change outputs land in our model.
+
+The spec gap that motivates this: BRC-100 requires `basket` on `listOutputs` and bans `'default'` as a basket name. Wallet-toolbox sidesteps the gap by routing change to a basket literally named `'default'` and surfacing it via `listOutputs(basket: 'default')` — undocumented behaviour that contradicts the spec's ban on the name. We don't do that — our change is genuinely unbasketed. The cost is that spec-conformant BRC-100 callers have no way to see change or the wallet's residual pool via `listOutputs` at all (it's visible via `listActions` and the `createAction` response, but not via the per-basket query). For a Ruby client that knows our internals, `basket: nil` closes this gap pragmatically.
+
+**Invisible to TypeScript-conformant callers.** The TS type `BasketStringUnder300Characters` is non-nullable, so a TypeScript client constructing `listOutputs({ basket: null })` fails at type-check before reaching the wallet. The affordance affects only Ruby-side callers.
+
+**Acceptance / behaviour:**
+
+- `brc100.list_outputs(basket: nil)` returns the unbasketed spendable set, matching `engine.spendable_outputs(basket: nil)`.
+- `brc100.list_outputs(basket: '')` and `brc100.list_outputs(basket: '   ')` continue to raise `ArgumentError` — only literal `nil` is the affordance.
+- Return shape matches the BRC-100 hash: `{ total_outputs:, outputs: }`.
+
+**Temporary by design.** The cleaner fix is upstream: BRC-100 deciding either (a) how change should be visible (per-basket return, named change basket, a new method, etc.) or (b) that it's correctly invisible and apps must track via `createAction` responses + `listActions`. Until upstream settles, this affordance lets the wallet remain usable for BRC-100 callers. **When upstream lands real semantics, remove this affordance.** The risk worth naming: the affordance solves immediate problems well enough that pressure to push upstream for proper resolution can ebb. The HLR captures this so future-us reads it back.
 
 ## Chain queries
 
@@ -197,3 +243,4 @@ When a deferred concept becomes load-bearing, move the entry to its new stance, 
 
 - *2026-06-24* — Initial register. All categorisations recorded against the wallet's state at this date; subsequent moves between stances will be logged here.
 - *2026-06-24* — Added "Engine primitive" column to the method tables. Recorded the three current name divergences (`createAction` → `build_action`, `internalizeAction` → `import_beef`, `listOutputs` → `spendable_outputs`) and the naming policy under which future divergences are evaluated. Same-day with the initial register because the divergences and the principle that explains them are co-discovered. (PRs #429 and #430 landed the prerequisite Engine surface changes — the `spendable_outputs` rename and `seek_permission:` residue removal respectively.)
+- *2026-06-25* — Added the `listOutputs` `basket: nil` affordance (HLR #434) as an explicit, named divergence: BRC100 wrapper accepts `nil` and routes to `engine.spendable_outputs(basket: nil)`, surfacing the wallet's unbasketed pool (including change) to Ruby-side callers. Invisible to TypeScript-conformant callers (non-nullable TS type). Temporary by design — to be removed when BRC-100 settles change-pool visibility upstream.
