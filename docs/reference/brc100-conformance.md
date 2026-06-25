@@ -105,6 +105,36 @@ The spec contract says: outputs created without `basket` are not surfaced by `li
 
 This is a divergence in internal semantics with full external conformance.
 
+### Change routing and the "disappearing basket"
+
+BRC-100 is silent on where change should land after a `createAction` spend. The spec says `listOutputs` is basket-scoped and forbids the basket name `'default'`, but it doesn't prescribe where the wallet puts change, nor how an application should reason about its per-basket balance after a spend cycle.
+
+The practical consequence is the **"disappearing basket"** failure:
+
+> An application calls `listOutputs(basket: 'X')` → sees 1 BSV. It spends 20m sats via `createAction`. The wallet selects the 1 BSV input, sends 20m, generates ~80m sats of change. Afterwards, `listOutputs(basket: 'X')` returns nothing — the UTXO was spent. The 80m sats of change went... where?
+
+Neither implementation we know of routes change back to the source basket. Both choose a single "pool" reading instead:
+
+| | wallet-toolbox | this wallet |
+|---|---|---|
+| Change destination | basket literally named `'default'` | unbasketed (no `output_baskets` row) |
+| App-visible via | `listOutputs(basket: 'default')` | `listOutputs(basket: nil)` — HLR #434 |
+| Auto-fund draws from | `'default'` basket only | unbasketed only — HLR #435 |
+| App-basketed UTXOs protected from auto-fund | yes | yes |
+| Spec compliance of the visibility mechanism | uses a spec-banned name | uses a Ruby-side type quirk; TS-conformant callers can't trigger |
+
+Functionally these are the same shape: a single wallet-managed pool, auto-funded from itself, queryable by applications under a known identifier. Wallet-toolbox's identifier (`'default'`) is the spec-banned name; ours (`nil`) is a Ruby-only affordance the spec doesn't recognise. Different identifiers, same trade-off.
+
+**Where the gap lives.** Both wallets end up here because BRC-100 doesn't decide. The spec could specify:
+
+- A `changeBasket` parameter on `createAction` (explicit caller control), or
+- Default change-to-source-basket routing (preserves the per-basket view), or
+- That change is intentionally invisible to `listOutputs` and apps reconstruct via `listActions` (strict reading).
+
+None of these is documented. Until upstream picks one, every BRC-100 wallet picks a workaround and the application-facing behaviour is implementation-defined. Our `basket: nil` affordance and wallet-toolbox's `'default'` basket are equivalent responses to the same silence.
+
+**Not our problem to fix unilaterally.** Routing change back to source baskets, or adding a `changeBasket` parameter to `createAction`, would create a third behaviour incompatible with the ambient (if unstated) convention. We're tracking this as a known UX failure shared with wallet-toolbox; the upstream resolution will retire both wallets' workarounds together. The `engine.build_action` primitive already accepts a `change_basket:` kwarg internally (used by `Engine#import_utxo` per HLR #436) — when upstream lands a spec for application-driven change routing, the plumbing to expose it on the conformance surface is already in place.
+
 ### `listOutputs basket: nil` affordance (HLR #434)
 
 A second, more pointed divergence on this method: **`BSV::Wallet::BRC100#list_outputs` accepts `basket: nil` as a Ruby-side affordance** that routes to `engine.spendable_outputs(basket: nil)` — i.e. returns the wallet's unbasketed pool, which is where change outputs land in our model.
