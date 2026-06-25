@@ -177,30 +177,43 @@ The spec's authentication model presupposes a lock-screen / unlock UI. We replac
 | `seekPermission` | Boundary-only | Accepted, no-op'd. We have no permission UI to seek from. Will become meaningful when BRC-116 lands. |
 | `OriginatorDomainNameString` validation | Boundary-only | Format validation at the conformance layer (FQDN shape) where present; no behavioural use. |
 | Hash-vocabulary return shapes (`{ txid:, tx: }` etc.) | Boundary-only | Conformance translates wallet vocab returns into BRC-100 hash shapes. ADR-026 codifies this. |
-| Spec-shape input validation | Tracked under HLR #428 | Length limits, format constraints, and reserved-name checks: conformance-layer enforcement is tracked by HLR #428 — not yet implemented. The DB-level CHECK on `baskets.name` currently rejects the literal `'default'` (the only reserved name with active CHECK coverage). Engine continues to assume valid input. |
+| Spec-shape input validation | Partially implemented (HLR #428 — baskets); BRC-98 protocol IDs / labels / tags tracked | Basket-name validation landed under HLR #428: the four BRC-100 entry points (`createAction`, `internalizeAction`, `listOutputs`, `relinquishOutput`) normalise on ingress (trim + lowercase + frozen) and reject names that violate the 8 BRC-100 §"Rules for Basket Names" rules at the conformance layer, with a matching DB CHECK on `baskets.name`. Protocol IDs (BRC-98), labels, and tags follow the same family of rules and remain tracked. Engine continues to assume valid input (the conformance layer is responsible for spec-shape). |
 | `userId` (implied) | Amputated | No `users` table, no `user_id` column anywhere. Identity is the WIF (ADR-007). Forward direction: per-user databases (per-user-databases ADR). |
 
 ## Reserved names
 
-BRC-100 reserves several name patterns. We intend to enforce them at the conformance layer (tracked under HLR #428) so application callers cannot forward-incompatibly adopt the reserved namespace, even where the corresponding machinery isn't built yet. The schema-level CHECK on `baskets.name` already rejects the literal `'default'`; the comprehensive enforcement (the full table below, conformance-layer + schema) is HLR #428's scope.
+BRC-100 reserves several name patterns. The wallet enforces them at the conformance layer (`BSV::Wallet::BRC100`); the schema floor enforces **shape** rules only. Basket-name reservation landed under HLR #428 (boundary validator + shape CHECKs on `baskets.name`); the protocol-ID rows below remain tracked (same family of rules, not yet wired).
+
+The `admin` reservation is BRC-100 §"Rules for Basket Names" (the first-cut HLR misattributed it to BRC-99; BRC-99 specifies only the `p ` rule). It is load-bearing for ADR-029's DBAP/DPACP/DCAP/DSAP direction — letting `admin foo` through today would create a migration cost when the wallet's own permission-token baskets (`admin basket-access`, etc.) land.
+
+### Boundary-only vs boundary + DB — the design split
+
+Shape rules are enforced at BOTH the conformance layer and the DB CHECK floor — principle-of-state: even an Engine-direct or raw-store write can't store a name with the wrong length, charset, double spaces or a trailing ` basket` suffix.
+
+Reservation rules (`admin`, `default`, `p `) are enforced at the **conformance layer only**. The schema accepts these names because the wallet's own protocol-reserved baskets land via the Engine→Store direct path:
+
+- **`p wbikd`** — the WBIKD draft's address-slot basket (`docs/reference/drafts/brc-draft-wbikd.md`). BRC-99 reserves `p ` for specially-permissioned baskets *because* protocols like WBIKD claim those slots; a DB CHECK on `p ` would structurally block the wallet's own protocol-conformant usage.
+- **`admin *`** (forward-looking) — ADR-029's DBAP/DPACP/DCAP/DSAP permission-token baskets, written wallet-internally. A DB CHECK on `admin` would force a migration the day DBAP lands.
+
+The boundary is bidirectional and intentional: callers crossing the BRC-100 API are bounced from these names; wallet-internal writes go around the conformance layer and land via Engine→Store direct, where the DB applies the shape rules but not the reservation rules.
 
 | Pattern | Concern | Stance |
 |---|---|---|
-| Basket names starting with `admin` (BRC-99) | Reserved for wallet-internal use (e.g. wallet-toolbox uses `admin basket-access` for DBAP tokens). | Boundary-only — reject from the public API. Reserved for future originator/DBAP work. |
-| Basket name `default` | Historically used by some wallets for internal operations. | Boundary-only — reject from the public API. |
-| Basket names starting with `p ` (BRC-99) | Reserved for future specially-permissioned baskets. | Boundary-only — reject from the public API. |
-| Protocol IDs starting with `admin` (BRC-98) | Reserved for wallet-internal use. | Boundary-only — reject from the public API. |
-| Protocol IDs starting with `p ` (BRC-98) | Reserved for future specially-permissioned protocols. | Boundary-only — reject from the public API. |
-| Basket names trailing ` basket` | Redundant suffix. | Boundary-only — reject from the public API. |
-| Protocol IDs trailing ` protocol` | Redundant suffix. | Boundary-only — reject from the public API. |
+| Basket names starting with `admin` (BRC-100) | Reserved for wallet-internal use (e.g. wallet-toolbox uses `admin basket-access` for DBAP tokens). | **Implemented (boundary only)** — `BSV::Wallet::BRC100` rejects; DB accepts so wallet-internal `admin *` baskets (future ADR-029 DBAP) write via Engine→Store direct. |
+| Basket name `default` | Historically used by some wallets for internal operations. | **Implemented (boundary only)** — `BSV::Wallet::BRC100` rejects; DB accepts. |
+| Basket names starting with `p ` (BRC-99) | Reserved for future specially-permissioned baskets. | **Implemented (boundary only)** — `BSV::Wallet::BRC100` rejects; DB accepts so the wallet's own protocol-reserved baskets (today `p wbikd` for the WBIKD draft) write via Engine→Store direct. |
+| Basket names trailing ` basket` | Redundant suffix. | **Implemented (boundary + DB)** — `BSV::Wallet::BRC100` rejects; `baskets.name_not_basket` CHECK rejects. Shape rule, no internal-write carve-out needed. |
+| Protocol IDs starting with `admin` (BRC-98) | Reserved for wallet-internal use. | Boundary-only — reject from the public API. (Same-family work, not yet wired — tracked.) |
+| Protocol IDs starting with `p ` (BRC-98) | Reserved for future specially-permissioned protocols. | Boundary-only — reject from the public API. (Same-family work, not yet wired — tracked.) |
+| Protocol IDs trailing ` protocol` | Redundant suffix. | Boundary-only — reject from the public API. (Same-family work, not yet wired — tracked.) |
 
-Tracked HLR: BRC-100 basket-name validation (this branch's spawned issue).
+Implementation landed: HLR #428 (boundary validator + `baskets.name` shape CHECKs). Protocol IDs / labels / tags follow the same family of rules; tracked separately for the next sub-HLR.
 
-### Basket length limit — note a spec inconsistency
+### Basket length limit — landed at 300; upstream inconsistency tracked
 
 BRC-100 §"Rules for Basket Names" says basket names must be ≤ **400 characters**. The TS type `BasketStringUnder300Characters` used on every basket-bearing field says ≤ **300 characters**. The two are in tension within the spec itself.
 
-We adopt **300** as the binding limit, on the grounds that the TS type is what conformant callers will validate their inputs against. The discrepancy is worth raising upstream against the BRCs repository at some point, but the practical position is unambiguous: 300 wins.
+We adopt **300** as the binding limit, on the grounds that the TS type is what conformant callers validate their inputs against. HLR #428 landed this position in code (`BSV::Wallet::BRC100::BASKET_NAME_MAX = 300` plus the `baskets.name_length` CHECK `BETWEEN 5 AND 300`). A follow-up tracking issue against `bitcoin-sv/BRCs` surfaces the 300-vs-400 inconsistency upstream so the next spec revision can pick one.
 
 ## Permission machinery (BRC-116)
 
@@ -244,3 +257,4 @@ When a deferred concept becomes load-bearing, move the entry to its new stance, 
 - *2026-06-24* — Initial register. All categorisations recorded against the wallet's state at this date; subsequent moves between stances will be logged here.
 - *2026-06-24* — Added "Engine primitive" column to the method tables. Recorded the three current name divergences (`createAction` → `build_action`, `internalizeAction` → `import_beef`, `listOutputs` → `spendable_outputs`) and the naming policy under which future divergences are evaluated. Same-day with the initial register because the divergences and the principle that explains them are co-discovered. (PRs #429 and #430 landed the prerequisite Engine surface changes — the `spendable_outputs` rename and `seek_permission:` residue removal respectively.)
 - *2026-06-25* — Added the `listOutputs` `basket: nil` affordance (HLR #434) as an explicit, named divergence: BRC100 wrapper accepts `nil` and routes to `engine.spendable_outputs(basket: nil)`, surfacing the wallet's unbasketed pool (including change) to Ruby-side callers. Invisible to TypeScript-conformant callers (non-nullable TS type). Temporary by design — to be removed when BRC-100 settles change-pool visibility upstream.
+- *2026-06-25* — HLR #428 landed: BRC-100 basket-name validation, split across two layers by responsibility. `BSV::Wallet::BRC100` normalises (trim + lowercase + frozen) and rule-checks every basket-accepting entry point (`createAction`, `internalizeAction`, `listOutputs`, `relinquishOutput`) against all 8 BRC-100 §"Rules for Basket Names" rules. `baskets.name` carries 4 matching CHECK constraints for the **shape** rules (length, charset, double-space, trailing ` basket`) — the principle-of-state floor for malformed writes. The **reservation** rules (`admin`, `default`, `p `) live at the conformance layer only: the wallet's own protocol-reserved baskets (today `p wbikd` for the WBIKD draft; future `admin *` for ADR-029 DBAP) write via the Engine→Store direct path, and putting reservation CHECKs in the DB would structurally block them. The reserved-names table records the split (trailing ` basket` is boundary + DB; the three reservation prefixes are boundary-only). `admin` reservation citation corrected — BRC-100, not BRC-99 (the latter only specifies `p `). The 300-character limit (TS-type-aligned over the spec prose's 400) landed in code; upstream `bitcoin-sv/BRCs` tracker filed. Same-family work for BRC-98 protocol IDs / labels / tags remains tracked separately.

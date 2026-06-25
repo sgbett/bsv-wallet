@@ -14,9 +14,9 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     count.times { |i| fund_wallet(satoshis: rand(100..1000), basket: 'p wbikd', suffix: "wbikd#{i}") }
   end
 
-  before { prefund_wbikd_slots }
-
   describe '#list_receive_addresses' do
+    before { prefund_wbikd_slots }
+
     it 'returns empty array when no addresses have been generated' do
       result = engine_with_keys.list_receive_addresses
 
@@ -77,6 +77,8 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   end
 
   describe '#scan_receive_addresses' do
+    before { prefund_wbikd_slots }
+
     it 'returns { scanned: 0, found: 0 } without key_deriver' do
       result = engine.scan_receive_addresses
 
@@ -199,9 +201,14 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         suffix = addr_result[:derivation_suffix]
         address = addr_result[:address]
 
-        # Before scan: one slot locked, others still available
-        slots_before = engine_net.brc100.list_outputs(basket: 'p wbikd')
-        locked_count = slots_before[:total_outputs]
+        # Before scan: one slot locked, others still available.
+        # Query via Engine#spendable_outputs directly — the BRC-100
+        # wrapper rejects 'p wbikd' at the boundary (BRC-99 reserved
+        # prefix). Wallet-internal queries against protocol-reserved
+        # baskets go around the boundary the same way wallet-internal
+        # writes do (#428 boundary-only reservation rules).
+        slots_before = engine_net.spendable_outputs(basket: 'p wbikd')
+        locked_count = slots_before[:total]
 
         # Build tx
         derived_pub = key_deriver.derive_public_key(
@@ -229,9 +236,10 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         engine_net.scan_receive_addresses
 
-        # After scan: locking action aborted, slot recycled — one more than before
-        slots_after = engine_net.brc100.list_outputs(basket: 'p wbikd')
-        expect(slots_after[:total_outputs]).to eq(locked_count + 1)
+        # After scan: locking action aborted, slot recycled — one more than before.
+        # Engine#spendable_outputs (not the BRC-100 wrapper) — see note above.
+        slots_after = engine_net.spendable_outputs(basket: 'p wbikd')
+        expect(slots_after[:total]).to eq(locked_count + 1)
       end
 
       it 'the address disappears from list_receive_addresses after internalization' do
@@ -299,6 +307,8 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   end
 
   describe '#generate_receive_address' do
+    before { prefund_wbikd_slots }
+
     it 'returns an address string and derivation params' do
       result = engine_with_keys.generate_receive_address
 
@@ -362,6 +372,27 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       actions = engine_with_keys.brc100.list_actions(labels: ['wbikd'])
       locking_action = actions[:actions].first
       expect(locking_action[:status]).to eq(:internal)
+    end
+
+    # Regression — HLR #428 split shape/reservation rules across DB CHECK
+    # and BRC-100 conformance respectively. The conformance validator
+    # legitimately rejects the BRC-99 protocol-reserved basket name
+    # +p wbikd+ from application callers, so +find_or_create_wbikd_slot+
+    # must use +Engine#build_action+ (Engine-direct) not
+    # +brc100.create_action+ when creating the first slot. The wider
+    # describe block pre-funds slots in a +before+, masking this path;
+    # this context drops the pre-funding to exercise the create branch.
+    context 'when no pre-funded slot exists' do
+      before { fund_wallet(satoshis: 5_000, basket: 'spend') }
+
+      it 'creates the first slot via Engine-direct, bypassing BRC-100 validation' do
+        result = engine_with_keys.generate_receive_address
+
+        expect(result[:address]).to be_a(String)
+        expect(result[:address]).to start_with('1')
+        expect(result[:derivation_prefix]).to match(/\A[0-9a-f]{64}\z/)
+        expect(result[:derivation_suffix]).to match(/\A\d+\z/)
+      end
     end
   end
 

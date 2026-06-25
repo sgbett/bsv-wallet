@@ -527,7 +527,7 @@ RSpec.describe BSV::Wallet::Engine do
         sign_and_process: false,
         outputs: [
           { satoshis: 0, locking_script: locking_script,
-            output_description: 'output', basket: 'deferred_sign', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+            output_description: 'output', basket: 'deferredsign', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
         ]
       )
 
@@ -537,7 +537,7 @@ RSpec.describe BSV::Wallet::Engine do
       # written unpromoted at stage time. Phase 4 (broadcast acceptance) is
       # what records the promotions row and inserts the spendable rows that
       # list_outputs queries.
-      listed_before = engine.brc100.list_outputs(basket: 'deferred_sign')
+      listed_before = engine.brc100.list_outputs(basket: 'deferredsign')
       expect(listed_before[:total_outputs]).to eq(0)
 
       # Sign with empty spends (no inputs to sign). no_send: true short-
@@ -557,12 +557,12 @@ RSpec.describe BSV::Wallet::Engine do
       expect(parsed.outputs[0].satoshis).to eq(0)
 
       # Still no spendable rows — no broadcast acceptance was simulated.
-      listed_after = engine.brc100.list_outputs(basket: 'deferred_sign')
+      listed_after = engine.brc100.list_outputs(basket: 'deferredsign')
       expect(listed_after[:total_outputs]).to eq(0)
     end
 
     it 'promotes outputs after broadcast acceptance on a deferred sign-then-broadcast flow' do
-      basket = 'deferred_promoted'
+      basket = 'deferredpromoted'
       create_result = engine.brc100.create_action(
         description: 'deferred to broadcast',
         inputs: [],
@@ -602,7 +602,7 @@ RSpec.describe BSV::Wallet::Engine do
       # inputs (parent transactions), not the new action's own outputs.
       # Even with the new action unpromoted (no promotions row),
       # BEEF construction should produce a valid envelope.
-      basket = 'beef_before_phase4'
+      basket = 'beefbeforephase4'
       create_result = engine.brc100.create_action(
         description: 'beef pre phase4',
         inputs: [],
@@ -872,13 +872,13 @@ RSpec.describe BSV::Wallet::Engine do
           sign_and_process: false,
           outputs: [
             { satoshis: 0, locking_script: binary_script,
-              basket: 'deferred_test', output_description: 'test output', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+              basket: 'deferredtest', output_description: 'test output', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
 
         # Send-path outputs are pending Phase 4 — written but not in the
         # canonical UTXO set, so list_outputs returns nothing.
-        listed = engine.brc100.list_outputs(basket: 'deferred_test')
+        listed = engine.brc100.list_outputs(basket: 'deferredtest')
         expect(listed[:total_outputs]).to eq(0)
 
         # The output row itself exists, but no promotions row has been recorded.
@@ -915,7 +915,7 @@ RSpec.describe BSV::Wallet::Engine do
           sign_and_process: false,
           outputs: [
             { satoshis: 0, locking_script: OP_TRUE,
-              basket: 'cascade_test', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+              basket: 'cascadetest', derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
           ]
         )
 
@@ -1070,15 +1070,15 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'change-into-basket',
           outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
           no_send: true,
-          change_basket: 'imported-funds'
+          change_basket: 'importedfunds'
         )
 
         # The change output for the just-built action carries an
         # output_baskets row pointing at the named basket.
-        basket = BSV::Wallet::Store::Models::Basket.first(name: 'imported-funds')
+        basket = BSV::Wallet::Store::Models::Basket.first(name: 'importedfunds')
         expect(basket).not_to be_nil
 
-        basketed_outputs = engine_with_keys.spendable_outputs(basket: 'imported-funds')
+        basketed_outputs = engine_with_keys.spendable_outputs(basket: 'importedfunds')
         expect(basketed_outputs[:total]).to be >= 1
         # And these are change outputs (output_details.change = true).
         basketed_outputs[:outputs].each do |o|
@@ -1095,9 +1095,9 @@ RSpec.describe BSV::Wallet::Engine do
           no_send: true
         )
 
-        # No basket called 'imported-funds' should exist after a default
+        # No basket called 'importedfunds' should exist after a default
         # build (no change_basket: kwarg).
-        expect(BSV::Wallet::Store::Models::Basket.first(name: 'imported-funds')).to be_nil
+        expect(BSV::Wallet::Store::Models::Basket.first(name: 'importedfunds')).to be_nil
       end
     end
   end
@@ -1482,7 +1482,7 @@ RSpec.describe BSV::Wallet::Engine do
         labels: ['test'],
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-            insertion_remittance: { basket: 'wtxid_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+            insertion_remittance: { basket: 'wtxidtest', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -1505,7 +1505,7 @@ RSpec.describe BSV::Wallet::Engine do
         description: 'ancestor proof test',
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-            insertion_remittance: { basket: 'ancestor_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+            insertion_remittance: { basket: 'ancestortest', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -1529,7 +1529,7 @@ RSpec.describe BSV::Wallet::Engine do
         labels: ['proof-link'],
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-            insertion_remittance: { basket: 'proof_link_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+            insertion_remittance: { basket: 'prooflinktest', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -1557,7 +1557,7 @@ RSpec.describe BSV::Wallet::Engine do
         labels: ['no-proof'],
         outputs: [
           { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-            insertion_remittance: { basket: 'no_proof_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+            insertion_remittance: { basket: 'noprooftest', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
         ]
       )
 
@@ -1634,7 +1634,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'valid beef passes',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-              insertion_remittance: { basket: 'spv_valid', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+              insertion_remittance: { basket: 'spvvalid', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1649,7 +1649,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'chain tracker ok',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-              insertion_remittance: { basket: 'tracker_ok', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+              insertion_remittance: { basket: 'trackerok', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1721,7 +1721,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'fee adequate test',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 900,
-              insertion_remittance: { basket: 'fee_ok', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+              insertion_remittance: { basket: 'feeok', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1764,7 +1764,7 @@ RSpec.describe BSV::Wallet::Engine do
           trust_self: 'known',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-              insertion_remittance: { basket: 'trust_all', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+              insertion_remittance: { basket: 'trustall', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1791,7 +1791,7 @@ RSpec.describe BSV::Wallet::Engine do
           trust_self: 'known',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-              insertion_remittance: { basket: 'trust_some', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+              insertion_remittance: { basket: 'trustsome', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1848,7 +1848,7 @@ RSpec.describe BSV::Wallet::Engine do
           known_txids: [ancestor_wtxid],
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-              insertion_remittance: { basket: 'known_txids', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+              insertion_remittance: { basket: 'knowntxids', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1876,7 +1876,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'no trust self full',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-              insertion_remittance: { basket: 'no_trust', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+              insertion_remittance: { basket: 'notrust', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1900,7 +1900,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'raw_tx storage test',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-              insertion_remittance: { basket: 'raw_tx_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+              insertion_remittance: { basket: 'rawtxtest', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 
@@ -1931,7 +1931,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'format consistency',
           outputs: [
             { output_index: 0, protocol: :basket_insertion, satoshis: 0,
-              insertion_remittance: { basket: 'fmt_test', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
+              insertion_remittance: { basket: 'fmttest', derivation_prefix: 'test', derivation_suffix: '1', sender_identity_key: 'self' } }
           ]
         )
 

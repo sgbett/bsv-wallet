@@ -226,33 +226,21 @@ RSpec.describe 'Schema constraints', :postgres, :store do
   # --- baskets ---
 
   describe 'baskets' do
-    it 'rejects empty name' do
-      expect do
-        db.transaction(savepoint: true) { db[:baskets].insert(name: '') }
-      end.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
-    it 'rejects name longer than 300 characters' do
-      expect do
-        db.transaction(savepoint: true) { db[:baskets].insert(name: 'x' * 301) }
-      end.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
-    it "rejects name 'default'" do
-      expect do
-        db.transaction(savepoint: true) { db[:baskets].insert(name: 'default') }
-      end.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
+    # BRC-100 basket-name rules live in a dedicated spec
+    # (basket_name_validation_spec.rb) that is matrix-aware. This block
+    # covers the non-name CHECKs and uses BRC-100-conformant names
+    # ('tester' is 6 chars, lowercase ASCII, not reserved) so the new
+    # name_length rule (≥ 5) doesn't pre-empt the target_count / target_value
+    # CHECKs under test here.
     it 'rejects negative target_count' do
       expect do
-        db.transaction(savepoint: true) { db[:baskets].insert(name: 'test', target_count: -1) }
+        db.transaction(savepoint: true) { db[:baskets].insert(name: 'tester', target_count: -1) }
       end.to raise_error(Sequel::CheckConstraintViolation)
     end
 
     it 'rejects negative target_value' do
       expect do
-        db.transaction(savepoint: true) { db[:baskets].insert(name: 'test', target_value: -1) }
+        db.transaction(savepoint: true) { db[:baskets].insert(name: 'tester', target_value: -1) }
       end.to raise_error(Sequel::CheckConstraintViolation)
     end
   end

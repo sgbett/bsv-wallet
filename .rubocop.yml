@@ -166,6 +166,7 @@ RSpec/DescribeClass:
   Exclude:
     - 'gem/bsv-wallet/spec/bsv/wallet/store/migration_spec.rb'
     - 'gem/bsv-wallet/spec/bsv/wallet/store/constraints_spec.rb'
+    - 'gem/bsv-wallet/spec/bsv/wallet/store/basket_name_validation_spec.rb'
 
 # Store models live in a models/ subdirectory by design — path != namespace.
 # Bin specs live under spec/bin/ (mirroring bin/) — path != namespace.
