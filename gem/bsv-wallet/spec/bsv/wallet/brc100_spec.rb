@@ -133,14 +133,9 @@ RSpec.describe BSV::Wallet::BRC100 do
     end
   end
 
-  describe '#list_outputs basket required (BRC-100 spec contract)' do
+  describe '#list_outputs basket validation (BRC-100 spec contract, with HLR #434 nil-affordance)' do
     let(:fake_engine) { instance_double(BSV::Wallet::Engine) }
     let(:brc100) { described_class.new(fake_engine) }
-
-    it 'raises ArgumentError when basket is nil' do
-      expect { brc100.list_outputs(basket: nil) }
-        .to raise_error(ArgumentError, /basket: required/)
-    end
 
     it 'raises ArgumentError when basket is empty string' do
       expect { brc100.list_outputs(basket: '') }
@@ -168,6 +163,41 @@ RSpec.describe BSV::Wallet::BRC100 do
       brc100.list_outputs(basket: '  wallet  ')
       expect(fake_engine).to have_received(:spendable_outputs)
         .with(hash_including(basket: 'wallet'))
+    end
+  end
+
+  describe '#list_outputs basket: nil affordance (HLR #434)' do
+    # Intentional divergence from the strict BRC-100 contract: +basket: nil+
+    # is accepted as a "show me unbasketed outputs (the wallet's pool,
+    # including change)" affordance. TS-conformant callers cannot trigger
+    # this (the TS type is non-nullable); only Ruby callers can pass nil.
+    # Documented in docs/reference/brc100-conformance.md. Remove when
+    # BRC-100 settles change-pool visibility upstream.
+    let(:fake_engine) { instance_double(BSV::Wallet::Engine) }
+    let(:brc100) { described_class.new(fake_engine) }
+
+    it 'does not raise when basket is nil' do
+      allow(fake_engine).to receive(:spendable_outputs)
+        .with(hash_including(basket: nil))
+        .and_return(total: 0, outputs: [])
+      expect { brc100.list_outputs(basket: nil) }.not_to raise_error
+    end
+
+    it 'routes basket: nil to engine.spendable_outputs(basket: nil)' do
+      allow(fake_engine).to receive(:spendable_outputs)
+        .with(hash_including(basket: nil))
+        .and_return(total: 0, outputs: [])
+      brc100.list_outputs(basket: nil)
+      expect(fake_engine).to have_received(:spendable_outputs)
+        .with(hash_including(basket: nil))
+    end
+
+    it 'returns the BRC-100 hash shape on the nil path' do
+      allow(fake_engine).to receive(:spendable_outputs)
+        .with(hash_including(basket: nil))
+        .and_return(total: 3, outputs: [{ id: 1 }, { id: 2 }, { id: 3 }])
+      result = brc100.list_outputs(basket: nil)
+      expect(result).to eq(total_outputs: 3, outputs: [{ id: 1 }, { id: 2 }, { id: 3 }])
     end
   end
 end

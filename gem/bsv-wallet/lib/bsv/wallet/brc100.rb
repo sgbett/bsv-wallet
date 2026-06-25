@@ -164,16 +164,29 @@ module BSV
                        include_custom_instructions: false, include_tags: false,
                        include_labels: false, limit: 10, offset: 0,
                        seek_permission: true, originator: nil)
-        # Normalise on ingress per BRC-100 §"Logical Validation
-        # Procedures" — the spec notes interoperable SDK validation
-        # "trims ... these identifiers before enforcing length limits".
-        # Trim handles whitespace-only inputs (rejected below) AND
-        # incidental edge whitespace (silently normalised). Lowercasing
-        # and the full validation rule-set land with HLR #428 across
-        # all four basket-accepting wrappers; trim is here today to
-        # close the obvious gap.
-        basket = basket.to_s.strip
-        raise ArgumentError, 'basket: required (BRC-100 spec)' if basket.empty?
+        # HLR #434 — intentional divergence from the strict BRC-100
+        # contract: accept +basket: nil+ as a "show me the wallet's
+        # unbasketed pool (including change)" affordance. The spec
+        # requires +basket+ and forbids the literal +'default'+, leaving
+        # spec-conformant callers with no way to see change. The
+        # affordance is invisible to TypeScript-conformant callers (the
+        # TS type +BasketStringUnder300Characters+ is non-nullable;
+        # +null+ fails at type-check before reaching the wallet), so the
+        # divergence affects only Ruby-side callers. Documented in
+        # +docs/reference/brc100-conformance.md+. **Remove when BRC-100
+        # settles change-pool visibility upstream.**
+        unless basket.nil?
+          # Normalise on ingress per BRC-100 §"Logical Validation
+          # Procedures" — the spec notes interoperable SDK validation
+          # "trims ... these identifiers before enforcing length limits".
+          # Trim handles whitespace-only inputs (rejected below) AND
+          # incidental edge whitespace (silently normalised). Lowercasing
+          # and the full validation rule-set land with HLR #428 across
+          # all four basket-accepting wrappers; trim is here today to
+          # close the obvious gap.
+          basket = basket.to_s.strip
+          raise ArgumentError, 'basket: required (BRC-100 spec)' if basket.empty?
+        end
 
         # +seek_permission:+ and +originator:+ accepted as part of the
         # BRC-100 contract but not forwarded — conformance vocabulary
