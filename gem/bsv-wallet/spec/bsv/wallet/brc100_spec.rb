@@ -59,22 +59,40 @@ BASKET_NAME_REJECT_CASES = [
   ['p admi',        /not starting with "p "/,          'rule 8 — no leading "p " (reserved)']
 ].freeze
 
-# HLR #428 rule-parity gate fixtures.
+# Rule-parity gate fixtures.
 #
-# Two sets — the design split between SHAPE rules (enforced at BOTH the
-# conformance layer and the DB CHECK) and RESERVATION rules (enforced at
-# the conformance layer ONLY) is structural, not stylistic. Putting
-# reservation rules in the DB collides with the wallet's own
-# protocol-reserved baskets (most acutely +'p wbikd'+, the WBIKD draft's
-# live address-slot basket). See +db/migrations/004_basket_name_validation.rb+
-# for the design write-up; the parity gate at the bottom of this file
-# enforces the split per-row.
+# Two sets, framing the split as "invalid data → DB CHECK; caller-facing
+# policy → conformance layer only":
+#
+#   * SHAPE/INVALID-DATA rules — length, charset, double-space, trailing
+#     +' basket'+, exact +'default'+, leading/trailing whitespace.
+#     Enforced at BOTH the conformance layer (rejects the caller) and the
+#     DB CHECK (floors the wallet against malformed writes from any path).
+#   * RESERVATION rules — +admin+ and +p +. Enforced at the conformance
+#     layer ONLY. These ARE valid data the wallet itself stores
+#     (+'p wbikd'+ for the WBIKD draft today, +'admin *'+ for ADR-029
+#     DBAP tomorrow), so the DB intentionally accepts them; the boundary
+#     bounce only applies to application callers.
+#
+# See +db/migrations/003_schema_constraints.rb+ for the schema floor and
+# +docs/reference/brc100-conformance.md+ for the principle. The parity
+# gate at the bottom of this file enforces the split per-row.
 BASKET_NAME_SHAPE_PARITY_CASES = [
   ['abc',           :name_length],
   [('x' * 301),     :name_length],
   ['foo!bar',       :name_charset],
   ['hello  world',  :name_no_double_sp],
-  ['recipe basket', :name_not_basket]
+  ['recipe basket', :name_not_basket],
+  ['default',       :name_not_default]
+  # Leading/trailing-space rules (+name_no_leading_space+,
+  # +name_no_trailing_space+) are intentionally absent from this set —
+  # they are DB-direct-only enforcement. The conformance validator
+  # NORMALISES whitespace away via +strip+ on ingress, so a caller
+  # passing +' wallet'+ never reaches the rule-check phase as
+  # whitespace-bracketed; the validator sees +'wallet'+ and accepts.
+  # The schema CHECK floors against non-BRC-100 writers that bypass
+  # normalisation. See +basket_name_validation_spec.rb+ for the
+  # DB-direct rejection specs.
 ].freeze
 
 # Reservation rules — validator rejects, DB accepts. +'p wbikd'+ used
@@ -83,7 +101,6 @@ BASKET_NAME_SHAPE_PARITY_CASES = [
 # is bidirectional: bounce at boundary, land via direct).
 BASKET_NAME_RESERVATION_PARITY_CASES = [
   ['admin foo', :name_not_admin],
-  ['default',   :name_not_default],
   ['p wbikd',   :name_not_p_prefix]
 ].freeze
 
@@ -475,13 +492,13 @@ RSpec.describe BSV::Wallet::BRC100 do
     # the DB CHECK trips +Sequel::CheckConstraintViolation+ on the same
     # input.
     #
-    # RESERVATION rules — +admin+ / +default+ / +p +: validator rejects,
-    # DB ACCEPTS. The DB intentionally permits these so the wallet's own
-    # protocol-reserved baskets (+'p wbikd'+ for WBIKD today; future
-    # +'admin *'+ baskets for ADR-029 DBAP) can be written via the
-    # Engine→Store direct path. The parity-gate spec for reservation
-    # rules ASSERTS that the DB insert succeeds — a regression that adds
-    # back a DB-level reservation CHECK would surface here as
+    # RESERVATION rules — +admin+ / +p +: validator rejects, DB ACCEPTS.
+    # The DB intentionally permits these so the wallet's own protocol-
+    # reserved baskets (+'p wbikd'+ for WBIKD today; future +'admin *'+
+    # baskets for ADR-029 DBAP) can be written via the Engine→Store
+    # direct path. The parity-gate spec for reservation rules ASSERTS
+    # that the DB insert succeeds — a regression that adds back a
+    # DB-level reservation CHECK would surface here as
     # +CheckConstraintViolation+ raised by what should be a clean insert.
     #
     # The +:store+ tag wires in the shared store context (db, store

@@ -83,11 +83,53 @@ Sequel.migration do
     end
 
     # --- 5. baskets ---
+    # Rule selection framing: invalid data → DB CHECK; caller-facing policy
+    # → conformance layer only (BSV::Wallet::BRC100#validate_basket_name!).
+    # See docs/reference/brc100-conformance.md for the full principle.
+    #
+    # AT THE DB FLOOR (rules below) — invalid data the wallet never
+    # legitimately stores from any path:
+    #
+    #   * Shape — wrong length, non-allowed charset, double-space,
+    #     trailing ' basket'.
+    #   * Exact 'default' — the wallet's effective default is unbasketed
+    #     (no row), so a row literally named 'default' is a bug.
+    #   * Leading/trailing whitespace — the application validator
+    #     normalises it away on ingress via +strip+, but a non-BRC-100
+    #     caller (Engine-direct, raw store, future #223 binding) bypasses
+    #     the boundary and would otherwise land the malformed name.
+    #
+    # AT THE CONFORMANCE LAYER ONLY (NOT enforced here) — valid data the
+    # wallet itself stores via the Engine→Store direct path:
+    #
+    #   * 'admin' prefix — 'admin *' permission-token baskets for ADR-029
+    #     DBAP/DPACP/DCAP/DSAP (forward-looking).
+    #   * 'p ' prefix — 'p wbikd' is the WBIKD draft's live address-slot
+    #     basket today; BRC-99 reserves the prefix precisely because
+    #     protocols like WBIKD claim it.
+    #
+    # Constraint names mirror the validator's rule identifiers so a future
+    # BRC-100 error-code mapper can translate Sequel::CheckConstraintViolation
+    # → wire error code by constraint name alone.
+    #
+    # SQLite charset (DO NOT SIMPLIFY): `name NOT GLOB '*[^a-z0-9 ]*'` is
+    # byte-aware — any byte outside the allowed set fails, including multi-byte
+    # UTF-8 (e.g. 'café'). The negation glyph is `[^...]`, NOT `[!...]` —
+    # SQLite treats `!` as a literal class member, causing silent-pass
+    # behaviour; verified against SQLite 3.x. Equivalent enforcement to the
+    # Postgres `~ '^[a-z0-9 ]+$'` regex; `COLLATE "C"` on Postgres forces
+    # byte-level interpretation of the `[a-z]` range regardless of cluster
+    # LC_CTYPE.
     alter_table(:baskets) do
-      add_constraint(:name_length, 'length(name) BETWEEN 1 AND 300')
-      add_constraint(:name_not_default, "name != 'default'")
-      add_constraint(:target_count_range, 'target_count IS NULL OR target_count >= 0')
-      add_constraint(:target_value_range, 'target_value IS NULL OR target_value >= 0')
+      add_constraint(:name_length,           'length(name) BETWEEN 5 AND 300')
+      add_constraint(:name_charset,          postgres ? %(name COLLATE "C" ~ '^[a-z0-9 ]+$') : "name NOT GLOB '*[^a-z0-9 ]*'")
+      add_constraint(:name_no_double_sp,     "name NOT LIKE '%  %'")
+      add_constraint(:name_not_basket,       "name NOT LIKE '% basket'")
+      add_constraint(:name_not_default,      "name <> 'default'")
+      add_constraint(:name_no_leading_space, "name NOT LIKE ' %'")
+      add_constraint(:name_no_trailing_space, "name NOT LIKE '% '")
+      add_constraint(:target_count_range,    'target_count IS NULL OR target_count >= 0')
+      add_constraint(:target_value_range,    'target_value IS NULL OR target_value >= 0')
     end
 
     # --- 6. outputs ---
@@ -355,7 +397,12 @@ Sequel.migration do
     # --- 5. baskets ---
     alter_table(:baskets) do
       drop_constraint :name_length
+      drop_constraint :name_charset
+      drop_constraint :name_no_double_sp
+      drop_constraint :name_not_basket
       drop_constraint :name_not_default
+      drop_constraint :name_no_leading_space
+      drop_constraint :name_no_trailing_space
       drop_constraint :target_count_range
       drop_constraint :target_value_range
     end
