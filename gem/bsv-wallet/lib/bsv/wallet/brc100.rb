@@ -36,6 +36,23 @@ module BSV
     class BRC100
       include BSV::Wallet::Interface::BRC100
 
+      # Basket-name validation constants (HLR #428).
+      #
+      # BRC-100 §"Rules for Basket Names" carries an internal inconsistency:
+      # the prose says 400, but the TS type +BasketStringUnder300Characters+
+      # used on every basket-bearing field says 300. We adopt 300 — the TS
+      # type is what conformant callers validate their inputs against. See
+      # +docs/reference/brc100-conformance.md+ "Basket length limit — note a
+      # spec inconsistency" for the recorded reasoning; an upstream
+      # tracker against +bitcoin-sv/BRCs+ surfaces our position.
+      #
+      # Charset is byte-level ASCII to reject Unicode lookalikes (e.g.
+      # Cyrillic +а+ U+0430 sneaking into +'аdmin foo'+) on the charset
+      # rule rather than letting them slip through the reserved-name rule.
+      BASKET_NAME_MIN = 5
+      BASKET_NAME_MAX = 300
+      BASKET_NAME_CHARSET_RE = /\A[a-z0-9 ]+\z/
+
       attr_reader :engine
 
       def initialize(engine)
@@ -77,6 +94,7 @@ module BSV
         validate_description!(description)
         validate_create_action_params!(inputs: inputs, outputs: outputs)
         validate_output_ownership!(outputs)
+        outputs = normalize_and_validate_outputs_baskets(outputs)
 
         # +originator+, +return_txid_only+, +trust_self+ stay at BRC100
         # per ADR-026 decisions 5/7 — BRC-100 vocabulary that doesn't
@@ -150,6 +168,7 @@ module BSV
         validate_description!(description)
         # known_txids is the BRC-100 spec param name; values are wire-order wtxids
         known_txids&.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'known_txids entry') }
+        outputs = normalize_and_validate_internalize_baskets(outputs)
 
         # +seek_permission:+ accepted as part of the BRC-100 contract
         # but not forwarded — conformance vocabulary stops here
@@ -176,16 +195,12 @@ module BSV
         # +docs/reference/brc100-conformance.md+. **Remove when BRC-100
         # settles change-pool visibility upstream.**
         unless basket.nil?
-          # Normalise on ingress per BRC-100 §"Logical Validation
-          # Procedures" — the spec notes interoperable SDK validation
-          # "trims ... these identifiers before enforcing length limits".
-          # Trim handles whitespace-only inputs (rejected below) AND
-          # incidental edge whitespace (silently normalised). Lowercasing
-          # and the full validation rule-set land with HLR #428 across
-          # all four basket-accepting wrappers; trim is here today to
-          # close the obvious gap.
-          basket = basket.to_s.strip
-          raise ArgumentError, 'basket: required (BRC-100 spec)' if basket.empty?
+          # HLR #428 — normalise (trim + lowercase) then validate against
+          # the 8 BRC-100 basket-name rules. The +unless basket.nil?+ gate
+          # preserves the HLR #434 affordance above; on the +nil+ branch
+          # we pass +nil+ straight through to Engine.
+          basket = normalize_basket_name(basket)
+          validate_basket_name!(basket)
         end
 
         # +seek_permission:+ and +originator:+ accepted as part of the
@@ -203,6 +218,15 @@ module BSV
       end
 
       def relinquish_output(basket:, output:, originator: nil)
+        # HLR #428 — basket required on this entry. Normalise (trim +
+        # lowercase) then run the 8-rule check. The validated, frozen
+        # string is not forwarded to Engine (relinquish is keyed by
+        # +output_id+) but enforcing the rules here keeps the wrapper's
+        # contract symmetric with the other three basket-accepting
+        # entries: a caller cannot pass a malformed basket name to any
+        # of the four wrappers and have it slip through.
+        basket = normalize_basket_name(basket)
+        validate_basket_name!(basket)
         @engine.relinquish_output(output_id: output)
         { relinquished: true }
       end
@@ -458,6 +482,104 @@ module BSV
         return if reference.is_a?(String) && reference.match?(BSV::Wallet::Engine::UUID_RE)
 
         raise BSV::Wallet::InvalidParameterError, 'reference'
+      end
+
+      # Map +createAction+ +outputs+ to the same shape with each entry's
+      # +:basket+ normalised and validated. Absent +:basket+ is fine
+      # (per-output basket is optional on +createAction+); when present,
+      # the 8 rules fire — including whitespace-only, which trims to
+      # empty and trips the length rule (malformed, not silently treated
+      # as absent). The normalised string replaces the caller's original
+      # — Engine never sees the unfrozen, unvalidated input.
+      def normalize_and_validate_outputs_baskets(outputs)
+        return outputs if outputs.nil?
+
+        outputs.map do |out|
+          next out unless out.is_a?(Hash) && out.key?(:basket)
+
+          normalised = normalize_basket_name(out[:basket])
+          validate_basket_name!(normalised)
+          out.merge(basket: normalised)
+        end
+      end
+
+      # Map +internalizeAction+ +outputs+ to the same shape with each
+      # entry's basket-insertion +:insertionRemittance[:basket]+ normalised
+      # and validated. Only fires on the +:basket_insertion+ /
+      # +'basket insertion'+ branch — the +:wallet_payment+ branch carries
+      # +:paymentRemittance+ (no basket) and must not be touched.
+      def normalize_and_validate_internalize_baskets(outputs)
+        return outputs if outputs.nil?
+
+        outputs.map do |out|
+          next out unless out.is_a?(Hash)
+          next out unless [:basket_insertion, 'basket insertion'].include?(out[:protocol])
+
+          rem = out[:insertion_remittance]
+          next out unless rem.is_a?(Hash) && rem.key?(:basket)
+
+          normalised = normalize_basket_name(rem[:basket])
+          validate_basket_name!(normalised)
+          out.merge(insertion_remittance: rem.merge(basket: normalised))
+        end
+      end
+
+      # Trim + lowercase per BRC-100 §"Logical Validation Procedures"
+      # ("Current interoperable SDK validation trims and lowercases these
+      # identifiers before enforcing length limits"). Returns the frozen,
+      # normalised string. +nil+ passes through unchanged — the HLR #434
+      # +basket: nil+ affordance on +#list_outputs+ depends on this.
+      #
+      # No silent +to_s+ coercion: a non-String, non-nil input is a
+      # caller-side bug (or an attempted bypass surface) and is rejected
+      # with a clear BRC-100 parameter error before any further work.
+      # The frozen return value is what +validate_basket_name!+ checks
+      # and what the wrapper forwards to Engine — kills the TOCTOU class
+      # between validate and write.
+      def normalize_basket_name(name)
+        return if name.nil?
+        raise BSV::Wallet::InvalidParameterError.new('basket', 'a string') unless name.is_a?(String)
+
+        name.strip.downcase.freeze
+      end
+
+      # Enforce BRC-100 §"Rules for Basket Names" (the +admin+ reservation
+      # is BRC-100, not BRC-99 — the latter only specifies +'p '+). Each
+      # rule fires its own +InvalidParameterError+ with a distinct
+      # +must be+ expectation, so callers (and humans staring at a stack
+      # trace) can tell which rule tripped.
+      #
+      # Rules in stable order — the first failure aborts. The order is
+      # deliberate: type → length → charset (cheap pre-checks that pin
+      # down the byte shape before any pattern matching) → structural
+      # (no double space, suffix) → reserved-name. This mirrors the SQL
+      # CHECK ordering proposed for sub-issue #441 so application-layer
+      # and DB-layer errors point at the same diagnosis on each input.
+      #
+      # The +admin+ reservation is load-bearing for ADR-029 (DBAP-style
+      # permission tokens in +admin basket-access+/etc. baskets). Letting
+      # +admin foo+ through today would create a migration cost when DBAP
+      # lands.
+      def validate_basket_name!(name)
+        raise BSV::Wallet::InvalidParameterError.new('basket', 'a string') unless name.is_a?(String)
+
+        unless name.length.between?(BASKET_NAME_MIN, BASKET_NAME_MAX)
+          raise BSV::Wallet::InvalidParameterError.new('basket', basket_length_expectation)
+        end
+
+        unless name.match?(BASKET_NAME_CHARSET_RE)
+          raise BSV::Wallet::InvalidParameterError.new('basket', 'composed of lowercase ASCII letters, digits, and spaces')
+        end
+
+        raise BSV::Wallet::InvalidParameterError.new('basket', 'free of consecutive spaces') if name.include?('  ')
+        raise BSV::Wallet::InvalidParameterError.new('basket', 'not ending with " basket"') if name.end_with?(' basket')
+        raise BSV::Wallet::InvalidParameterError.new('basket', 'not starting with "admin" (reserved)') if name.start_with?('admin')
+        raise BSV::Wallet::InvalidParameterError.new('basket', 'not the reserved name "default"') if name == 'default'
+        raise BSV::Wallet::InvalidParameterError.new('basket', 'not starting with "p " (reserved)') if name.start_with?('p ')
+      end
+
+      def basket_length_expectation
+        "a string between #{BASKET_NAME_MIN} and #{BASKET_NAME_MAX} characters"
       end
     end
   end
