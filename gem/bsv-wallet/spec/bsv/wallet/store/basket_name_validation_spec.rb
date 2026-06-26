@@ -4,8 +4,8 @@ require_relative 'shared_context'
 require 'bsv/wallet/engine'
 require 'bsv/wallet/brc100'
 
-# Schema-level CHECK constraints on +baskets.name+ from
-# +db/migrations/003_schema_constraints.rb+, enforcing the invalid-data
+# Schema-level CHECK constraints on +baskets.name+ from the baskets block
+# in +db/migrations/001_create_schema.rb+, enforcing the invalid-data
 # rules from BRC-100 §"Rules for Basket Names" at the database floor.
 #
 # Design split, framed as "invalid data → DB CHECK; caller-facing

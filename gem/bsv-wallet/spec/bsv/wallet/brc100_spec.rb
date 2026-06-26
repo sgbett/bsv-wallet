@@ -74,7 +74,7 @@ BASKET_NAME_REJECT_CASES = [
 #     DBAP tomorrow), so the DB intentionally accepts them; the boundary
 #     bounce only applies to application callers.
 #
-# See +db/migrations/003_schema_constraints.rb+ for the schema floor and
+# See +db/migrations/001_create_schema.rb+ (baskets block) for the schema floor and
 # +docs/reference/brc100-conformance.md+ for the principle. The parity
 # gate at the bottom of this file enforces the split per-row.
 BASKET_NAME_SHAPE_PARITY_CASES = [
