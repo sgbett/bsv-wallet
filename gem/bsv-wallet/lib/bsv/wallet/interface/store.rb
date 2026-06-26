@@ -339,7 +339,7 @@ module BSV
         # +clean?+ is true ⇔ zero spendable derived outputs whose action
         # has been signed and broadcast. HLR #448.
         #
-        # @return [Store::SweepableState]
+        # @return [BSV::Wallet::Store::SweepableState]
         def sweepable_state
           raise NotImplementedError
         end

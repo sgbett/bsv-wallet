@@ -115,7 +115,7 @@ The schema knows what the wallet thinks it owns. Destructive operations — `DRO
 
 The workflow is **sweep then destroy**, not "destroy and hope":
 
-1. `sweep_to_root` consolidates every derived UTXO back to the root P2PKH. After it succeeds, every spendable row is gone; the only on-chain funds belong to a key the identity-key holder can re-derive trivially.
+1. `sweep_to_root` consolidates every derived UTXO back to the root P2PKH. After it succeeds, no derived spendable rows remain — any root P2PKH funds the schema still tracks are recoverable from the identity key alone, so they don't block destroy.
 2. `Store#sweepable_state` (HLR #448) is the structural check that says "the sweep happened and stuck." It returns a `SweepableState` with `clean?` true ⇔ zero spendable derived outputs whose action has been signed and broadcast. Root outputs and unsigned/aborted actions don't count — the former are recoverable from the identity key alone, the latter never reached chain.
 3. Destroy is safe iff `sweepable_state.clean?`. When it isn't clean the returned `detail` names the count of at-risk outputs/actions and points the caller at `sweep_to_root` — a guided refusal, not a veto.
 

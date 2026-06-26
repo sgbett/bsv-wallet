@@ -32,18 +32,26 @@ module BSV
         end
 
         # @return [Hash] structured breakdown for CLI / log reporting.
-        #   Always includes :at_risk_outputs and :at_risk_actions; when
-        #   :guidance is present it carries the suggested next step.
+        #   Always includes :at_risk_outputs and :at_risk_actions; +guidance+
+        #   is nil when clean and a suggested next step otherwise.
         def detail
-          return { at_risk_outputs: 0, at_risk_actions: 0, guidance: nil } if clean?
-
           {
             at_risk_outputs: at_risk_outputs,
             at_risk_actions: at_risk_actions,
-            guidance: "#{at_risk_outputs} derived spendable outputs across " \
-                      "#{at_risk_actions} broadcast actions still anchored on chain — " \
-                      'run sweep_to_root then re-check before destroying'
+            guidance: clean? ? nil : guidance
           }
+        end
+
+        private
+
+        # +signed actions+ rather than +broadcast actions+: an internal-path
+        # action (+broadcast_intent = 'none'+) that has been signed and
+        # internalised is also on chain, even though it didn't go through
+        # the broadcast pipeline. The guard counts both; the wording matches.
+        def guidance
+          "#{at_risk_outputs} derived spendable outputs across " \
+            "#{at_risk_actions} signed actions still anchored on chain — " \
+            'run sweep_to_root then re-check before destroying'
         end
       end
     end
