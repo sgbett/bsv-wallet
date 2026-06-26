@@ -41,11 +41,11 @@ bin/wallet [global-flags] <command> [command-args]
 | `--help`, `-h` | Help |
 
 **Precedence (highest → lowest):**
-1. `--wif` / `--database-url` (explicit per-field)
-2. `--wallet=<name>` (resolves through `Fixtures`)
-3. Inline ENV (`WIF=... bin/wallet ...`)
-4. `--env=<file>` (loads only what's unset)
-5. Shell ENV (`BSV_WALLET_POSTGRES`, `BSV_WALLET_WIF_<NAME>`, `DATABASE_URL`)
+1. `--wif` / `--database-url` (explicit per-field flags on the CLI)
+2. `--wallet=<name>` (resolves through `Fixtures` registry; Fixtures itself reads process ENV)
+3. Process ENV (`BSV_WALLET_POSTGRES`, `BSV_WALLET_WIF_<NAME>`, `DATABASE_URL` — includes both shell-exported vars and inline `WIF=... bin/wallet ...` invocations; the CLI can't distinguish them)
+
+`--env=<file>` is **not a precedence tier** — it's a seed mechanism. Loaded BEFORE process ENV is read, populating only the keys that are currently unset (dotenv-style). The values it seeds then participate in process ENV at tier 3.
 
 **Subcommand router** dispatches to a `BSV::Wallet::CLI::Commands::<Command>` class. Each command class owns its own `OptionParser` for command-specific flags, calls Engine methods, prints JSON to stdout / human-readable to stderr.
 
@@ -68,7 +68,7 @@ bin/wallet [global-flags] <command> [command-args]
 |---------|------|-------------|-------|
 | `build` | `--to=<addr>:<sats> [--to=...] --description=<text>` | `engine.build_action(description:, sign_and_process: false, ...)` | Parks an unsigned action via deferred signing. `--description` REQUIRED (engine contract). Note: `no_send: true` + `sign_and_process: false` is explicitly rejected by the engine (`#192`). Engine returns `{ signable: { atomic_beef:, reference: } }`; CLI flattens at the boundary to `{ "reference": "<ref>", "atomic_beef": "<hex>" }` (the `signable:` wrapper is engine-internal disambiguation, redundant at the CLI). |
 | `sign <reference>` | `[--spends=<json>]` | `engine.sign_action(reference:, spends:)` | Completes deferred-signing flow |
-| `broadcast <reference>` | `[--inline\|--async]` | `engine.broadcast_action(reference:, intent:)` | Engine has no public `broadcast(raw_tx)` — broadcast is by action only. Phase 2 exposes `engine.broadcast_action(reference:, intent: :inline)` which: (1) looks up action by reference, (2) rehydrates `atomic_beef` from the parked `raw_tx` via `@hydrator.build_atomic_beef`, (3) calls internal `dispatch_broadcast(action_id, atomic_beef, intent:)` at `engine.rb:1296`. Lookup + rehydration live in the engine because `@hydrator` is engine-internal; the CLI never touches it. |
+| `broadcast <reference>` | `[--inline\|--async]` | `engine.broadcast_action(reference:, intent:)` | Engine has no public `broadcast(raw_tx)` — broadcast is by action only. CLI vocab maps to engine vocab: `--inline` → `intent: :inline` (sync ARC dispatch), `--async` → `intent: :delayed` (daemon picks up via OMQ). `--async` is CLI sugar for the engine's existing `:delayed` term. Phase 2 exposes `engine.broadcast_action(reference:, intent: :inline)` which: (1) looks up action by reference, (2) rehydrates `atomic_beef` from the parked `raw_tx` via `@hydrator.build_atomic_beef`, (3) calls internal `dispatch_broadcast(action_id, atomic_beef, intent:)` at `engine.rb:1296`. Lookup + rehydration live in the engine because `@hydrator` is engine-internal; the CLI never touches it. |
 | `transmit` | `--reference=<ref> --target=<uri> [--counterparty=<key>]` | `engine.transmit_action(reference:, target:, counterparty: nil)` | Delivers BEEF to peer endpoint. **Engine surface gap:** Engine currently sets `@transmission = Transmission.new(...)` with no public accessor; `Transmission#transmit` requires `counterparty:`, `action_id:`, `outputs:`, `sender_identity_key:`, `endpoint:` — far more than `reference + target`. Phase 3 adds `engine.transmit_action(reference:, target:, counterparty: nil)` wrapper which: (1) looks up action by reference, (2) gathers `outputs` from the action's stored outputs, (3) reads `sender_identity_key` from the wallet's `key_deriver.identity_key`, (4) defaults `counterparty` to the action's stored counterparty when `--counterparty` omitted, (5) calls `@transmission.transmit(counterparty:, action_id:, outputs:, sender_identity_key:, endpoint: target)`. CLI stays a thin wrapper. |
 
 **Operational:**
@@ -89,8 +89,8 @@ Add:
 - `CLI::Commands::Base` — small abstract: defines `call(ctx, args)`, owns OptionParser banner, output helpers.
 - `CLI::Commands::<Verb>` — one class per command (12 classes).
 
-Keep unchanged:
-- `CLI.boot(wallet_name:, network:)` — wraps store/migrate/engine assembly. Dispatcher calls it once after global-flag parse.
+Extend or keep:
+- `CLI.boot` — signature extended to `CLI.boot(wallet_name:, network:, wif_override: nil, database_url_override: nil)`. Current signature only reads WIF/DB URL from `BSV::Wallet.config` / `Fixtures`; the new overrides let the dispatcher pass `--wif` / `--database-url` flag values through without mutating ENV. Backward-compatible for `bin/walletd` and other callers that don't pass the new kwargs.
 - `CLI.extract_wallet_name` — UNCHANGED (parses positional first-arg wallet name). Used by `bin/walletd` and other surviving scripts; repurposing would break them. The dispatcher uses `parse_global_options` instead.
 - `CLI::Output.write_json`, `write_binary` — unchanged.
 
@@ -180,7 +180,7 @@ Integration: `bundle exec rspec spec/e2e/transmit_spec.rb` (after Phase 6).
 ## Decisions (resolved during planning)
 
 1. **PR cadence — six phases.** Each phase is small enough to review thoroughly; merge overhead is the acceptable cost. Phases 1–2 can land in either order; 3–5 build on 2; 6 closes out the spec rewrite.
-2. **Engine broadcast surface — `engine.broadcast_action(reference:, intent: :inline)`.** NOT a thin wrapper: performs action lookup by reference + `atomic_beef` rehydration via `@hydrator.build_atomic_beef`, then delegates to internal `dispatch_broadcast(action_id, atomic_beef, intent:)` at `engine.rb:1296`. `intent:` accepts `:inline` (default) or `:async` (enqueue for daemon). The lookup/rehydration live engine-side because `@hydrator` is engine-internal; `reject` and `transmit` keep their lookup CLI-side (no hydrator needed).
+2. **Engine broadcast surface — `engine.broadcast_action(reference:, intent: :inline)`.** NOT a thin wrapper: performs action lookup by reference + `atomic_beef` rehydration via `@hydrator.build_atomic_beef`, then delegates to internal `dispatch_broadcast(action_id, atomic_beef, intent:)` at `engine.rb:1296`. `intent:` accepts `:inline` (default, sync ARC dispatch) or `:delayed` (enqueue for daemon) — matches the engine's existing `map_broadcast_intent` vocabulary. CLI surfaces `--async` as sugar for `:delayed`. The lookup/rehydration live engine-side because `@hydrator` is engine-internal; `reject` and `transmit` keep their lookup CLI-side (no hydrator needed).
 3. **`reject` semantics — hard fail on non-rejectable state.** Aligns with the no-invalid-state invariant: pending actions are rejectable, broadcast actions are not. Failure mode is structured stderr + non-zero exit; the action stays in its current valid state.
 
 ## Follow-up Issues (to create)
