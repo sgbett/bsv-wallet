@@ -55,21 +55,21 @@ bin/wallet [global-flags] <command> [command-args]
 
 | Command | Args | Engine call | Notes |
 |---------|------|-------------|-------|
-| `balance` | `[--basket NAME] [--outputs]` | `engine.spendable_outputs(aggregate: :sum)` or full `spendable_outputs` if `--outputs` | `--outputs` is shortcut for `list outputs --spendable` |
+| `balance` | `[--basket NAME] [--outputs]` | `engine.spendable_outputs(aggregate: :sum)` or full `spendable_outputs` if `--outputs` | `--outputs` is shorthand for `list outputs` (always-spendable; the underlying `engine.spendable_outputs` has no non-spendable mode). |
 | `list <noun>` | `outputs\|actions [filters]` | `engine.spendable_outputs` / `engine.list_actions` | Power-user query, noun-based. **Note:** `engine.list_actions(labels:)` is label-required (no unfiltered primitive). `list actions` requires at least one `--label=<name>` flag; an unfiltered listing primitive is a follow-up engine addition (out of scope here). |
-| `send <address> <sats>` | `[--broadcast=inline\|async] [--transmit=inline --target=<uri>] [--dry-run]` | `engine.build_action(...)` with appropriate `no_send` / `accept_delayed_broadcast` | Default: `--broadcast=inline --transmit=none`. Failure → non-zero exit, action stays in valid pending state. |
-| `receive` | `[--file=<path>\|stdin] [--basket=<name>] [--description=<text>]` | `engine.import_beef(...)` | Reads BEEF from stdin or file. `--basket=<name>` routes received outputs into named basket (current `bin/receive` defaults to `'received'`; new dispatcher uses `nil` default = unbasketed pool, explicit `--basket` opts in). |
+| `send <address> <sats>` | `[--broadcast=inline\|async] [--transmit=inline --target=<uri>] [--description=<text>]` | `engine.build_action(description:, accept_delayed_broadcast:, ...)` | Default: `--broadcast=inline --transmit=none`. `--description` defaults to `'cli-send'` if omitted (engine requires non-nil). `--broadcast=async` maps to `accept_delayed_broadcast: true`; inline is the sync path. Failure → non-zero exit, action stays in valid pending state. |
+| `receive` | `[--file=<path>] [--basket=<name>] [--description=<text>]` | `engine.import_beef(description:, ...)` | Reads BEEF from `--file=<path>` if given, otherwise stdin. `--description` REQUIRED by engine; CLI defaults to `'cli-receive'` if omitted. `--basket=<name>` routes received outputs into named basket (new dispatcher uses `nil` default = unbasketed pool, explicit `--basket` opts in). |
 | `import` | `[--basket=<name>] [--no-send]` | `engine.import_wallet(...)` | Scanning form (root → spendable self-send). `--basket=<name>` routes imported outputs into named basket (parity with current `bin/import_root_utxo` HLR #436 semantics). Pinpoint `import_utxo` dropped from CLI; engine method survives. |
-| `reject <reference>` | — | `engine.reject_action(reference:)` | Abandon pending action. CLI takes `reference` consistently with `build`/`sign`/`broadcast`; engine wrapper resolves to internal `action_id`. |
+| `reject <reference>` | — | `engine.reject_action(action_id:)` | Abandon pending action. CLI command resolves `reference` → `action_id` via `Engine::Action.find(engine:, reference:)` before the engine call (no engine surface change needed). Engine method signature stays as-is. |
 
 **Plumbing:**
 
 | Command | Args | Engine call | Notes |
 |---------|------|-------------|-------|
-| `build` | `--to=<addr>:<sats> [--to=...] --description=<text>` | `engine.build_action(description:, sign_and_process: false, ...)` | Parks an unsigned action via deferred signing. `--description` is REQUIRED (engine contract). Note: `no_send: true` + `sign_and_process: false` is explicitly rejected by the engine (`#192`). Deferred return shape: `{ signable: { atomic_beef:, reference: } }` — CLI prints `reference` (the stable identifier) + atomic BEEF. |
+| `build` | `--to=<addr>:<sats> [--to=...] --description=<text>` | `engine.build_action(description:, sign_and_process: false, ...)` | Parks an unsigned action via deferred signing. `--description` REQUIRED (engine contract). Note: `no_send: true` + `sign_and_process: false` is explicitly rejected by the engine (`#192`). Engine returns `{ signable: { atomic_beef:, reference: } }`; CLI flattens at the boundary to `{ "reference": "<ref>", "atomic_beef": "<hex>" }` (the `signable:` wrapper is engine-internal disambiguation, redundant at the CLI). |
 | `sign <reference>` | `[--spends=<json>]` | `engine.sign_action(reference:, spends:)` | Completes deferred-signing flow |
-| `broadcast <reference>` | `[--inline\|--async]` | `engine.broadcast_action(reference:, intent:)` | Engine has no public `broadcast(raw_tx)` — broadcast is by action only. Phase 2 exposes `engine.broadcast_action(reference:, intent: :inline)` which: (1) looks up action by reference, (2) rehydrates `atomic_beef` from the parked `raw_tx` via `@hydrator.build_atomic_beef`, (3) calls internal `dispatch_broadcast(action_id, atomic_beef, intent:)` at `engine.rb:1296`. |
-| `transmit` | `--reference=<ref> --target=<uri> [--counterparty=<key>]` | `engine.transmission.transmit(...)` | Delivers BEEF to peer endpoint. CLI takes `reference`; engine call resolves to internal action lookup. |
+| `broadcast <reference>` | `[--inline\|--async]` | `engine.broadcast_action(reference:, intent:)` | Engine has no public `broadcast(raw_tx)` — broadcast is by action only. Phase 2 exposes `engine.broadcast_action(reference:, intent: :inline)` which: (1) looks up action by reference, (2) rehydrates `atomic_beef` from the parked `raw_tx` via `@hydrator.build_atomic_beef`, (3) calls internal `dispatch_broadcast(action_id, atomic_beef, intent:)` at `engine.rb:1296`. Lookup + rehydration live in the engine because `@hydrator` is engine-internal; the CLI never touches it. |
+| `transmit` | `--reference=<ref> --target=<uri> [--counterparty=<key>]` | `engine.transmission.transmit(action_id:, ...)` | Delivers BEEF to peer endpoint. CLI command resolves `reference` → `action_id` via `Engine::Action.find(engine:, reference:)` before the engine call (no engine surface change needed). Same pattern as `reject`; differs from `broadcast` which encapsulates the lookup engine-side because it also needs hydrator access. |
 
 **Operational:**
 
@@ -137,7 +137,7 @@ Don't carry e2e/integration coverage of the rebuild in flight — it slows itera
 Each phase is one PR. Order matters — earlier phases unblock later ones.
 
 1. **Phase 1 — Dispatcher scaffolding + balance + list.** `bin/wallet` exists, global flag parsing works, `balance` and `list outputs/actions` route through it. Old `bin/balance`, `bin/list_outputs` deleted in same PR. Smallest viable demo of the surface.
-2. **Phase 2 — Engine broadcast surface tweak.** Expose `engine.broadcast_action(action_id:, intent: :inline)` as public. Tiny PR, isolated.
+2. **Phase 2 — Engine broadcast surface.** Expose `engine.broadcast_action(reference:, intent: :inline)` as public. Includes action lookup by reference + `atomic_beef` rehydration via `@hydrator.build_atomic_beef` before delegating to internal `dispatch_broadcast`. Small, isolated PR — not a pure wrapper.
 3. **Phase 3 — Plumbing: build, sign, broadcast, transmit.** Adds the four elementary verbs. No porcelain yet.
 4. **Phase 4 — Porcelain: send, receive.** Built on Phase 3 plumbing. send is the macro, receive consumes BEEF.
 5. **Phase 5 — Porcelain: import, reject + operational: sweep, consolidate.** Remaining commands. Old bins deleted.
@@ -177,7 +177,7 @@ Integration: `bundle exec rspec spec/e2e/transmit_spec.rb` (after Phase 6).
 ## Decisions (resolved during planning)
 
 1. **PR cadence — six phases.** Each phase is small enough to review thoroughly; merge overhead is the acceptable cost. Phases 1–2 can land in either order; 3–5 build on 2; 6 closes out the spec rewrite.
-2. **Engine broadcast surface — `engine.broadcast_action(action_id:, intent: :inline)`.** Wraps the current internal `dispatch_broadcast` at `engine.rb:1296`. `intent:` accepts `:inline` (default) or `:async` (enqueue for daemon).
+2. **Engine broadcast surface — `engine.broadcast_action(reference:, intent: :inline)`.** NOT a thin wrapper: performs action lookup by reference + `atomic_beef` rehydration via `@hydrator.build_atomic_beef`, then delegates to internal `dispatch_broadcast(action_id, atomic_beef, intent:)` at `engine.rb:1296`. `intent:` accepts `:inline` (default) or `:async` (enqueue for daemon). The lookup/rehydration live engine-side because `@hydrator` is engine-internal; `reject` and `transmit` keep their lookup CLI-side (no hydrator needed).
 3. **`reject` semantics — hard fail on non-rejectable state.** Aligns with the no-invalid-state invariant: pending actions are rejectable, broadcast actions are not. Failure mode is structured stderr + non-zero exit; the action stays in its current valid state.
 
 ## Follow-up Issues (to create)
