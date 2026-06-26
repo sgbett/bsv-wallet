@@ -537,6 +537,40 @@ module BSV
         end
       end
 
+      # Snapshot of "would dropping this DB destroy on-chain-anchored state?"
+      #
+      # Returns a {SweepableState} carrying +at_risk_outputs+ (count of
+      # spendable derived outputs whose action has been signed and
+      # broadcast) and +at_risk_actions+ (distinct actions owning them).
+      # +clean?+ is true iff +at_risk_outputs+ is zero. Consult before
+      # any destructive operation (DB drop, blank-slate reset, spec
+      # setup recreation, future +bsv-wallet destroy+ CLI). HLR #448.
+      #
+      # The query intentionally excludes:
+      #   * Root outputs (+output_type = 'root'+) — recoverable from the
+      #     identity key alone, so destroying them costs only re-import.
+      #   * Unsigned / aborted actions (+actions.wtxid IS NULL+) — no
+      #     broadcast happened, so nothing on chain to orphan.
+      #
+      # @return [SweepableState]
+      def sweepable_state
+        row = @db[:spendable]
+              .join(:outputs, id: Sequel[:spendable][:output_id])
+              .join(:actions, id: Sequel[:outputs][:action_id])
+              .where(Sequel[:outputs][:output_type] => nil)
+              .exclude(Sequel[:actions][:wtxid] => nil)
+              .select do
+                [Sequel.function(:count, Sequel[:outputs][:id]).as(:at_risk_outputs),
+                 Sequel.function(:count, Sequel[:actions][:id]).distinct.as(:at_risk_actions)]
+              end
+              .first
+
+        SweepableState.new(
+          at_risk_outputs: row[:at_risk_outputs].to_i,
+          at_risk_actions: row[:at_risk_actions].to_i
+        )
+      end
+
       # --- Labels, Tags, Baskets ---
 
       def find_or_create_labels(names:)
@@ -1439,4 +1473,5 @@ require_relative 'store/postgres'
 # Service classes
 BSV::Wallet::Store.autoload :BroadcastCallback, 'bsv/wallet/store/broadcast_callback'
 BSV::Wallet::Store.autoload :EventApplicator,   'bsv/wallet/store/event_applicator'
+BSV::Wallet::Store.autoload :SweepableState,    'bsv/wallet/store/sweepable_state'
 BSV::Wallet::Store.autoload :UTXOPool,          'bsv/wallet/store/utxo_pool'
