@@ -109,6 +109,20 @@ This is why:
 - Multi-process composition (producer CLI + walletd daemon + future hydrator) doesn't need a coordinator — they share the database.
 - A daemon crash mid-broadcast doesn't corrupt state. The pending broadcast row is still there; the next poll resumes it.
 
+## What this means for destructive operations
+
+The schema knows what the wallet thinks it owns. Destructive operations — `DROP DATABASE`, blank-slate reset, spec-setup recreation, a future `bsv-wallet destroy` CLI — must consult it before proceeding, or they destroy on-chain-anchored state that no longer has a local index.
+
+The workflow is **sweep then destroy**, not "destroy and hope":
+
+1. `sweep_to_root` consolidates every derived UTXO back to the root P2PKH. After it succeeds, no derived spendable rows remain — any root P2PKH funds the schema still tracks are recoverable from the identity key alone, so they don't block destroy.
+2. `Store#sweepable_state` (HLR #448) is the structural check that says "the sweep happened and stuck." It returns a `SweepableState` with `clean?` true ⇔ zero spendable derived outputs whose action has been signed and broadcast. Root outputs and unsigned/aborted actions don't count — the former are recoverable from the identity key alone, the latter never reached chain.
+3. Destroy is safe iff `sweepable_state.clean?`. When it isn't clean the returned `detail` names the count of at-risk outputs/actions and points the caller at `sweep_to_root` — a guided refusal, not a veto.
+
+This makes destructive operations safe by construction: misconfiguration (the classic "I pointed my test runner at production") fails loudly instead of silently destroying state. The wallet's principle of state extends to its own end-of-life: at every instant the database tells the truth, including "is it OK to throw me away?"
+
+The primitive lives in `Store`; consumer policy (which destroyers consult it, which accept the gap) is each consumer's call. The HLR #448 PR landed the primitive only — wiring it into spec setup or a destructive CLI surface follows as separate work.
+
 ## What this means for batched sending (#192)
 
 The chopped `noSend × sendWith` quadrants (see #291 sanity-check section) were chopped because the base wallet couldn't honestly support them: there was no database-canonical representation of a *batch*. Restoring them requires a `batches` (or similarly named) entity:

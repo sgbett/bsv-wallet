@@ -333,6 +333,17 @@ module BSV
           raise NotImplementedError
         end
 
+        # Snapshot of "would dropping this DB destroy on-chain-anchored state?"
+        # Consult before any destructive operation (DB drop, blank-slate
+        # reset, spec-setup recreation, future +bsv-wallet destroy+ CLI).
+        # +clean?+ is true ⇔ zero spendable derived outputs whose action
+        # has been signed and broadcast. HLR #448.
+        #
+        # @return [BSV::Wallet::Store::SweepableState]
+        def sweepable_state
+          raise NotImplementedError
+        end
+
         # --- Labels, Tags, Baskets ---
 
         # Find or create labels by name. Returns an array of label IDs.
