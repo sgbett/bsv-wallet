@@ -56,20 +56,20 @@ bin/wallet [global-flags] <command> [command-args]
 | Command | Args | Engine call | Notes |
 |---------|------|-------------|-------|
 | `balance` | `[--basket NAME] [--outputs]` | `engine.spendable_outputs(aggregate: :sum)` or full `spendable_outputs` if `--outputs` | `--outputs` is shortcut for `list outputs --spendable` |
-| `list <noun>` | `outputs\|actions [filters]` | `engine.spendable_outputs` / `engine.list_actions` | Power-user query, noun-based |
+| `list <noun>` | `outputs\|actions [filters]` | `engine.spendable_outputs` / `engine.list_actions` | Power-user query, noun-based. **Note:** `engine.list_actions(labels:)` is label-required (no unfiltered primitive). `list actions` requires at least one `--label=<name>` flag; an unfiltered listing primitive is a follow-up engine addition (out of scope here). |
 | `send <address> <sats>` | `[--broadcast=inline\|async] [--transmit=inline --target=<uri>] [--dry-run]` | `engine.build_action(...)` with appropriate `no_send` / `accept_delayed_broadcast` | Default: `--broadcast=inline --transmit=none`. Failure → non-zero exit, action stays in valid pending state. |
 | `receive` | `[--file=<path>\|stdin] [--basket=<name>] [--description=<text>]` | `engine.import_beef(...)` | Reads BEEF from stdin or file. `--basket=<name>` routes received outputs into named basket (current `bin/receive` defaults to `'received'`; new dispatcher uses `nil` default = unbasketed pool, explicit `--basket` opts in). |
 | `import` | `[--basket=<name>] [--no-send]` | `engine.import_wallet(...)` | Scanning form (root → spendable self-send). `--basket=<name>` routes imported outputs into named basket (parity with current `bin/import_root_utxo` HLR #436 semantics). Pinpoint `import_utxo` dropped from CLI; engine method survives. |
-| `reject <action_id>` | — | `engine.reject_action(action_id:)` | Abandon pending action |
+| `reject <reference>` | — | `engine.reject_action(reference:)` | Abandon pending action. CLI takes `reference` consistently with `build`/`sign`/`broadcast`; engine wrapper resolves to internal `action_id`. |
 
 **Plumbing:**
 
 | Command | Args | Engine call | Notes |
 |---------|------|-------------|-------|
-| `build` | `--to=<addr>:<sats> [--to=...] [--description=<text>]` | `engine.build_action(no_send: true, sign_and_process: false)` | Parks an unsigned action, prints `action_id` + atomic BEEF |
-| `sign <action_id>` | `[--spends=<json>]` | `engine.sign_action(reference:, spends:)` | Completes deferred-signing flow |
-| `broadcast <action_id>` | `[--inline\|--async]` | `engine.broadcast_action(action_id:, intent:)` | Engine has no public `broadcast(raw_tx)` — broadcast is by action_id only. Phase 2 exposes `engine.broadcast_action(action_id:, intent: :inline)` (wraps internal `dispatch_broadcast` at `engine.rb:1296`). |
-| `transmit` | `--action-id=<id> --target=<uri> [--counterparty=<key>]` | `engine.transmission.transmit(...)` | Delivers BEEF to peer endpoint |
+| `build` | `--to=<addr>:<sats> [--to=...] --description=<text>` | `engine.build_action(description:, sign_and_process: false, ...)` | Parks an unsigned action via deferred signing. `--description` is REQUIRED (engine contract). Note: `no_send: true` + `sign_and_process: false` is explicitly rejected by the engine (`#192`). Deferred return shape: `{ signable: { atomic_beef:, reference: } }` — CLI prints `reference` (the stable identifier) + atomic BEEF. |
+| `sign <reference>` | `[--spends=<json>]` | `engine.sign_action(reference:, spends:)` | Completes deferred-signing flow |
+| `broadcast <reference>` | `[--inline\|--async]` | `engine.broadcast_action(reference:, intent:)` | Engine has no public `broadcast(raw_tx)` — broadcast is by action only. Phase 2 exposes `engine.broadcast_action(reference:, intent: :inline)` which: (1) looks up action by reference, (2) rehydrates `atomic_beef` from the parked `raw_tx` via `@hydrator.build_atomic_beef`, (3) calls internal `dispatch_broadcast(action_id, atomic_beef, intent:)` at `engine.rb:1296`. |
+| `transmit` | `--reference=<ref> --target=<uri> [--counterparty=<key>]` | `engine.transmission.transmit(...)` | Delivers BEEF to peer endpoint. CLI takes `reference`; engine call resolves to internal action lookup. |
 
 **Operational:**
 
@@ -85,16 +85,17 @@ File: `gem/bsv-wallet/lib/bsv/wallet/cli.rb` (existing; extend, don't replace).
 Add:
 - `CLI::Dispatcher` — argv router. Parses global flags, splits at subcommand boundary, instantiates the command class.
 - `CLI::GlobalOptions` — struct/dataclass passed to commands (wallet name, network, json flag, env-file path, explicit wif/db).
+- `CLI::parse_global_options(argv)` — NEW helper that parses `--wallet=<name>` and other global flags, returning `[GlobalOptions, remaining_argv]`. Distinct from `extract_wallet_name` (which stays as-is for `bin/walletd` and other positional callers).
 - `CLI::Commands::Base` — small abstract: defines `call(ctx, args)`, owns OptionParser banner, output helpers.
 - `CLI::Commands::<Verb>` — one class per command (12 classes).
 
 Keep unchanged:
 - `CLI.boot(wallet_name:, network:)` — wraps store/migrate/engine assembly. Dispatcher calls it once after global-flag parse.
-- `CLI.extract_wallet_name` — repurposed for `--wallet=<name>` global flag parsing.
+- `CLI.extract_wallet_name` — UNCHANGED (parses positional first-arg wallet name). Used by `bin/walletd` and other surviving scripts; repurposing would break them. The dispatcher uses `parse_global_options` instead.
 - `CLI::Output.write_json`, `write_binary` — unchanged.
 
-One small engine tweak:
-- Expose `engine.broadcast_action(action_id:, intent: :inline)` as public (wraps current internal `dispatch_broadcast` at `engine.rb:1296`). Needed by `bin/wallet broadcast <action_id>`. Phase 2 lands this in isolation.
+Engine surface tweak (Phase 2):
+- Expose `engine.broadcast_action(reference:, intent: :inline)` as public. NOT a thin wrapper — looks up the action by reference, rehydrates `atomic_beef` from the parked `raw_tx` via `@hydrator.build_atomic_beef(raw_tx, action_id)`, then calls the existing internal `dispatch_broadcast(action_id, atomic_beef, intent:)` at `engine.rb:1296`. Phase 2 lands this lookup + rehydration logic in isolation; the broadcast plumbing CLI verb (Phase 3) then becomes a thin wrapper over it.
 
 ## Deletions
 
@@ -153,11 +154,12 @@ cd gem/bsv-wallet
 # Phase 1
 bin/wallet --wallet=alice balance
 bin/wallet --wallet=alice list outputs --limit=5
+bin/wallet --wallet=alice list actions --label=cli-test --limit=5  # --label required (no unfiltered primitive)
 
 # Phase 3
-ACTION=$(bin/wallet --wallet=alice build --to=<addr>:1000 --description="test")
-bin/wallet --wallet=alice sign $ACTION
-bin/wallet --wallet=alice broadcast $ACTION
+REF=$(bin/wallet --wallet=alice build --to=<addr>:1000 --description="test" --json | jq -r .reference)
+bin/wallet --wallet=alice sign $REF --spends='{...}'
+bin/wallet --wallet=alice broadcast $REF
 
 # Phase 4
 bin/wallet --wallet=alice send <addr> 1000
