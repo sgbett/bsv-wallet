@@ -278,8 +278,6 @@ module BSV
             bytes
           end
 
-          # Walk subject tx outputs, return the vouts whose locking script
-          # is a standard P2PKH paying to the supplied pubkey hash.
           def scan_outputs_for_pubkey_hash(tx, pubkey_hash)
             tx.outputs.each_with_index.filter_map do |output, idx|
               extracted = extract_p2pkh_hash(output.locking_script)

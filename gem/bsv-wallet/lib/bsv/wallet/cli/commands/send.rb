@@ -20,33 +20,24 @@ module BSV
         # step. +--broadcast=inline+ maps to sync ARC dispatch;
         # +--broadcast=async+ to daemon-queued via OMQ hint.
         #
-        # Base58 path: decode the address to a pubkey hash, build a P2PKH
-        # output, call +engine.build_action+. No envelope — the recipient
-        # already knows their key by definition (they generated the address).
+        # Base58 path emits no envelope — the recipient already controls
+        # the address-resolved key by definition.
         #
-        # Identity-key path: generate a per-payment derivation prefix, derive
-        # the recipient's public key via BRC-42 (counterparty: identity key,
-        # protocol: BRC-29 magic), build the P2PKH output to that key, call
-        # +engine.build_action+. Emit a JSON envelope to stdout carrying the
-        # BEEF + per-output derivation hints so the recipient can recover the
-        # private key.
-        #
-        # The envelope shape matches the existing porcelain flow (BEEF in hex
-        # + flat per-output hint array). A strict-BRC-29-spec format is a
-        # follow-up if/when cross-implementation interop matters.
+        # Identity-key path emits a JSON envelope to stdout carrying the
+        # BEEF + per-output derivation hints, because the recipient needs
+        # them to recover the private key for the BRC-42-derived output.
+        # Envelope shape is wallet-internal (see +BRC29_PROTOCOL_LEVEL+
+        # below); strict-BRC-29 alignment is a follow-up.
         class Send < Base
-          # BRC-29 protocol magic per spec: invoice number is
-          # "2-3241645161d8-<prefix> <suffix>". The +derive_public_key+
-          # call assembles this via +protocol_id: [2, <prefix>]+ + the
-          # BRC-29 magic is implicit in how callers structure +protocol_id+
-          # for this codebase. The existing porcelain uses
-          # +protocol_id: [2, pay_prefix]+ — pre-Phase-2 convention; keeping
-          # it so envelope shape stays interoperable with the existing
-          # +bin/receive+ during the transition.
+          # Wallet-internal payment derivation convention, shared with
+          # engine.rb + tx_builder.rb pay-side and receive-side:
+          # +protocol_id: [LEVEL, prefix]+, +key_id: SUFFIX+. Internal
+          # round-trip works (send here pairs with receive's envelope
+          # path). NOT strict BRC-29: the spec mandates
+          # +protocol_id: [2, '3241645161d8']+, +key_id: "<prefix> <suffix>"+
+          # — strict alignment is a wallet-wide convention change tracked
+          # separately, not local to this verb.
           BRC29_PROTOCOL_LEVEL = 2
-
-          # Suffix is per-UTXO. With a single payment output we use the
-          # fixed suffix '1' (matches existing porcelain convention).
           PAYMENT_SUFFIX = '1'
 
           # P2PKH address version bytes: mainnet 0x00, testnet 0x6f.
@@ -164,11 +155,8 @@ module BSV
             payload[1..]
           end
 
-          # Base58 path. Decode address, build P2PKH, build_action with no
-          # derivation hints (engine marks the output 'outbound' per the
-          # +build_output_specs+ default). No envelope on stdout — the
-          # recipient is presumed to control the address-resolved key
-          # already and finds the output by chain scan.
+          # No envelope on stdout — the recipient controls the
+          # address-resolved key already and finds the output by chain scan.
           def call_base58(engine, address, sats, description, accept_delayed)
             pubkey_hash = decode_base58_p2pkh!(address)
             locking_script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
@@ -192,10 +180,6 @@ module BSV
             emit_human "dtxid:    #{dtxid}"
           end
 
-          # Identity-key path. Generate derivation prefix, derive
-          # recipient's pubkey via BRC-42 with BRC-29 protocol level, build
-          # P2PKH to derived key, +build_action+. Emit JSON envelope to
-          # stdout with BEEF + hints so recipient can recover the key.
           def call_identity_key(engine, identity_key, sats, description, accept_delayed)
             key_deriver = @ctx[:key_deriver]
             sender_identity_key = @ctx[:identity_key]
