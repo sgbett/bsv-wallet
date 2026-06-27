@@ -107,6 +107,21 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
         described_class.parse_global_options(["--wif-file=#{wif_file}", 'balance'])
       end.to raise_error(BSV::Wallet::CLI::UsageError, /mode must be 0600/)
     end
+
+    it 'wraps ENOENT as UsageError instead of bubbling SystemCallError' do
+      missing = File.join(tmpdir, 'absent')
+      expect do
+        described_class.parse_global_options(["--wif-file=#{missing}", 'balance'])
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /file not found/)
+    end
+
+    it 'refuses symlinked WIF files' do
+      symlink = File.join(tmpdir, 'wif-link')
+      File.symlink(wif_file, symlink)
+      expect do
+        described_class.parse_global_options(["--wif-file=#{symlink}", 'balance'])
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /symlinks refused/)
+    end
   end
 
   describe 'secrets policy: --database-url' do
@@ -168,6 +183,14 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
       end.to raise_error(BSV::Wallet::CLI::UsageError, /mode must be 0600/)
     end
 
+    it 'wraps EACCES (permission denied) as UsageError' do
+      allow(File).to receive(:lstat).and_call_original
+      allow(File).to receive(:lstat).with(env_file).and_raise(Errno::EACCES.new(env_file))
+      expect do
+        described_class.parse_global_options(["--env=#{env_file}", 'balance'])
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /--env.*Permission denied/i)
+    end
+
     it 'refuses symlinked env files without --env-allow-symlink' do
       Dir.mktmpdir do |dir2|
         symlink = File.join(dir2, 'env-link')
@@ -184,6 +207,25 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
       code = nil
       expect { code = described_class.call(['--help']) }.to output(%r{Usage: bin/wallet}).to_stdout
       expect(code).to eq(0)
+    end
+
+    it 'short-circuits to global help when -h appears with a command' do
+      # Previously, `bin/wallet -h balance` consumed -h silently then
+      # ran balance (which would boot the engine). The dispatcher now
+      # captures the flag and prints global help instead.
+      allow(described_class).to receive(:boot_engine)
+      code = nil
+      expect { code = described_class.call(['-h', 'balance']) }.to output(%r{Usage: bin/wallet}).to_stdout
+      expect(code).to eq(0)
+      expect(described_class).not_to have_received(:boot_engine)
+    end
+
+    it 'short-circuits to global help when --help appears after --wallet' do
+      allow(described_class).to receive(:boot_engine)
+      code = nil
+      expect { code = described_class.call(['--wallet=alice', '--help', 'balance']) }.to output(%r{Usage: bin/wallet}).to_stdout
+      expect(code).to eq(0)
+      expect(described_class).not_to have_received(:boot_engine)
     end
 
     it 'returns exit code 2 for unknown command' do

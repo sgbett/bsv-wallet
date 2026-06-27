@@ -14,7 +14,12 @@ module BSV
       # Fields:
       #   - +wallet_name+      — value of +--wallet=<name>+; +nil+ if unset
       #   - +network+          — +:mainnet+ / +:testnet+ / +nil+
-      #   - +json+             — +true+ if +--json+ forces JSON on TTY
+      #   - +json+             — +true+ when +--json+ is set; consumed by
+      #                          +Commands::Base#pretty_json?+ to disable
+      #                          pretty-printing on TTY (compact JSON
+      #                          regardless). Does NOT switch a non-JSON
+      #                          command into JSON mode; +list+ always
+      #                          emits NDJSON regardless of this flag.
       #   - +wif_override+     — value of +--wif=<wif>+ (after policy check)
       #                          or +--wif-file=<path>+ contents; +nil+ if unset
       #   - +database_url_override+ — value of +--database-url=<url>+ (after

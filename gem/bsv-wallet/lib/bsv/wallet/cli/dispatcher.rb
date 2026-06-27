@@ -40,9 +40,13 @@ module BSV
         # @param argv [Array<String>]
         # @return [Integer]
         def call(argv)
-          opts, remaining = parse_global_options(argv.dup)
+          opts, remaining, help_requested = parse_global_options(argv.dup)
 
-          if remaining.empty? || remaining.first == 'help' || remaining.first == '--help' || remaining.first == '-h'
+          # Global help shortcuts: explicit -h/--help anywhere in the
+          # global slice, the literal 'help' command, or no command
+          # supplied at all. None of these should boot the engine —
+          # `bin/wallet -h balance` previously ran balance silently.
+          if help_requested || remaining.empty? || remaining.first == 'help'
             print_global_help
             return 0
           end
@@ -51,14 +55,16 @@ module BSV
           command_class = COMMANDS[name]
           raise UsageError, "unknown command: #{name.inspect} (available: #{COMMANDS.keys.join(', ')})" unless command_class
 
-          ctx = boot_engine(opts)
-          command = command_class.new(ctx: ctx, global_options: opts)
-
+          # Per-command help: same short-circuit — print and exit
+          # before booting the engine. The command needs to exist (we
+          # checked above) but doesn't need its ctx wired.
           if remaining.include?('--help') || remaining.include?('-h')
-            command.help
+            command_class.new(ctx: nil, global_options: opts).help
             return 0
           end
 
+          ctx = boot_engine(opts)
+          command = command_class.new(ctx: ctx, global_options: opts)
           command.call(remaining)
         rescue CLI::Error => e
           warn "error: #{redact_message(e.message)}"
@@ -125,6 +131,7 @@ module BSV
           database_url = nil
           env_file = nil
           env_allow_symlink = false
+          help_requested = false
 
           parser = OptionParser.new do |opts|
             # Blank/whitespace --wallet falls through to +nil+ so
@@ -144,7 +151,7 @@ module BSV
             # bypasses the fallback.
             opts.on('--network=NET') { |v| network = v.to_s.strip.empty? ? nil : v.to_s.strip.to_sym }
             opts.on('--json') { json = true }
-            opts.on('-h', '--help')
+            opts.on('-h', '--help') { help_requested = true }
           end
           remaining = parser.order(argv)
 
@@ -161,7 +168,7 @@ module BSV
             database_url_override: database_url_override,
             env_file: env_file
           )
-          [opts, remaining]
+          [opts, remaining, help_requested]
         end
 
         # Boot the engine with the parsed global options.
@@ -197,15 +204,32 @@ module BSV
         end
 
         # Read a WIF from +--wif-file=<path>+. Mode-checked (must be 0600
-        # or stricter) and owner-checked.
+        # or stricter), owner-checked, symlink-refused. Same shape as the
+        # +--env+ loader: +lstat+ first (symlink detection happens
+        # before any read), then mode/owner, then read. All syscall
+        # errors get wrapped as +UsageError+ to preserve the
+        # dispatcher's never-raises-uncaught contract.
         # @return [String]
         def read_wif_file!(path)
-          stat = File.stat(path)
-          raise UsageError, "--wif-file #{path}: not a regular file" unless stat.file?
-          raise UsageError, "--wif-file #{path}: must be owned by the invoker" unless stat.owned?
-          raise UsageError, "--wif-file #{path}: mode must be 0600 or stricter (got 0#{(stat.mode & 0o777).to_s(8)})" if stat.mode.anybits?(0o077)
+          lstat =
+            begin
+              File.lstat(path)
+            rescue Errno::ENOENT
+              raise UsageError, "--wif-file #{path}: file not found"
+            rescue SystemCallError => e
+              raise UsageError, "--wif-file #{path}: #{e.message}"
+            end
 
-          File.read(path).strip
+          raise UsageError, "--wif-file #{path}: symlinks refused (resolve the path before passing)" if lstat.symlink?
+          raise UsageError, "--wif-file #{path}: not a regular file" unless lstat.file?
+          raise UsageError, "--wif-file #{path}: must be owned by the invoker" unless lstat.owned?
+          raise UsageError, "--wif-file #{path}: mode must be 0600 or stricter (got 0#{(lstat.mode & 0o777).to_s(8)})" if lstat.mode.anybits?(0o077)
+
+          begin
+            File.read(path).strip
+          rescue SystemCallError => e
+            raise UsageError, "--wif-file #{path}: #{e.message}"
+          end
         end
 
         # +--database-url+ accepts a URL but rejects an embedded password
@@ -250,12 +274,23 @@ module BSV
               File.lstat(path)
             rescue Errno::ENOENT
               raise UsageError, "--env file not found: #{path}"
+            rescue SystemCallError => e
+              raise UsageError, "--env #{path}: #{e.message}"
             end
           raise UsageError, "--env #{path}: symlinks refused (use --env-allow-symlink to opt in)" if lstat.symlink? && !allow_symlink
 
           # For the symlink-allowed case we stat the target; for the
           # normal case lstat IS the target.
-          stat = allow_symlink ? File.stat(path) : lstat
+          stat =
+            if allow_symlink
+              begin
+                File.stat(path)
+              rescue SystemCallError => e
+                raise UsageError, "--env #{path}: #{e.message}"
+              end
+            else
+              lstat
+            end
 
           raise UsageError, "--env #{path}: must be a regular file" unless stat.file?
           raise UsageError, "--env #{path}: must be owned by the invoker" unless stat.owned?
@@ -264,18 +299,27 @@ module BSV
           # Resolve through symlinks LAST (only meaningful when
           # +--env-allow-symlink+ is set — otherwise we've already
           # refused symlinks above).
-          canonical = File.realpath(path)
+          canonical =
+            begin
+              File.realpath(path)
+            rescue SystemCallError => e
+              raise UsageError, "--env #{path}: #{e.message}"
+            end
 
-          File.foreach(canonical) do |line|
-            line = line.strip
-            next if line.empty? || line.start_with?('#')
+          begin
+            File.foreach(canonical) do |line|
+              line = line.strip
+              next if line.empty? || line.start_with?('#')
 
-            key, value = line.split('=', 2)
-            next unless key && value
-            next unless env_key_allowed?(key)
-            next if ENV[key] # seed-mechanism: don't override
+              key, value = line.split('=', 2)
+              next unless key && value
+              next unless env_key_allowed?(key)
+              next if ENV[key] # seed-mechanism: don't override
 
-            ENV[key] = value.gsub(/\A["']|["']\z/, '')
+              ENV[key] = value.gsub(/\A["']|["']\z/, '')
+            end
+          rescue SystemCallError => e
+            raise UsageError, "--env #{path}: #{e.message}"
           end
         end
 
@@ -296,7 +340,7 @@ module BSV
               --env=<file>             Seed process ENV from dotenv-style file
               --env-allow-symlink      Permit --env path to be a symlink
               --network=<mainnet|testnet>
-              --json                   Force JSON output even on TTY (NDJSON for list)
+              --json                   Use compact JSON (no pretty-printing on TTY); `list` always emits NDJSON regardless
               --help, -h               Show this message
 
             Commands:

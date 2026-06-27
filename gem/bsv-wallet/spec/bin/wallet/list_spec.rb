@@ -53,6 +53,18 @@ RSpec.describe BSV::Wallet::CLI::Commands::List do
     it 'emits one NDJSON row per output' do
       expect { command.call(['outputs']) }.to output(/^\{"id":1\}\n\{"id":2\}/).to_stdout
     end
+
+    it 'rejects negative --limit' do
+      expect do
+        command.call(['outputs', '--limit=-1'])
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /--limit must be >= 0/)
+    end
+
+    it 'rejects negative --offset' do
+      expect do
+        command.call(['outputs', '--offset=-1'])
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /--offset must be >= 0/)
+    end
   end
 
   describe 'list actions' do

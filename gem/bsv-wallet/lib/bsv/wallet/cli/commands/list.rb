@@ -42,10 +42,14 @@ module BSV
               opts.banner = 'Usage: bin/wallet list <outputs|actions> [options]'
 
               opts.on('--limit=N', Integer, "Result cap (default: #{DEFAULT_LIMIT}, --all to remove)") do |v|
+                raise UsageError, "--limit must be >= 0 (got #{v})" if v.negative?
+
                 @options[:limit] = v
               end
 
               opts.on('--offset=N', Integer, 'Result offset (default: 0)') do |v|
+                raise UsageError, "--offset must be >= 0 (got #{v})" if v.negative?
+
                 @options[:offset] = v
               end
 
