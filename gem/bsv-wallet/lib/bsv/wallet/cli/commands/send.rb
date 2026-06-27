@@ -35,8 +35,7 @@ module BSV
           # round-trip works (send here pairs with receive's envelope
           # path). NOT strict BRC-29: the spec mandates
           # +protocol_id: [2, '3241645161d8']+, +key_id: "<prefix> <suffix>"+
-          # — strict alignment is a wallet-wide convention change tracked
-          # separately, not local to this verb.
+          # — wallet-wide alignment tracked in HLR #460.
           BRC29_PROTOCOL_LEVEL = 2
           PAYMENT_SUFFIX = '1'
 
