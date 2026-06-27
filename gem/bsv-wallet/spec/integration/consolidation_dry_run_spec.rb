@@ -48,6 +48,14 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
   # BSV_WALLET_WIF_<NAME> + a derivable DATABASE_URL_<NAME> (or
   # BSV_WALLET_POSTGRES base).
   before do
+    # Paused during the #433 native CLI rebuild. This spec shells out
+    # to bin/balance / bin/list_outputs which were deleted in Phase 1
+    # (replaced by bin/wallet balance / bin/wallet list outputs). The
+    # consolidation + sweep scenario will be rebuilt in Phase 6
+    # against the new dispatcher. Re-enable for ad-hoc verification
+    # with WALLET_LEGACY_INTEGRATION=1.
+    skip 'paused during #433 rebuild (set WALLET_LEGACY_INTEGRATION=1 to run)' unless ENV['WALLET_LEGACY_INTEGRATION'] == '1'
+
     BSV::Wallet::Fixtures.reset!
     BSV::Wallet::Fixtures.load_config_file!
     missing = wallet_names.reject do |n|

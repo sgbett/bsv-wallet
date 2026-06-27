@@ -34,6 +34,15 @@ RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable R
   end
 
   before do
+    # Paused during the #433 native CLI rebuild. This spec shells out
+    # to bin/balance which was deleted in Phase 1 (replaced by
+    # bin/wallet balance). The full create | receive pipeline shape
+    # will be rebuilt in Phase 6 against the new dispatcher —
+    # adapting it piecemeal across each phase would test a moving
+    # target. Re-enable for ad-hoc verification with
+    # WALLET_LEGACY_INTEGRATION=1.
+    skip 'paused during #433 rebuild (set WALLET_LEGACY_INTEGRATION=1 to run)' unless ENV['WALLET_LEGACY_INTEGRATION'] == '1'
+
     require 'bsv-wallet'
     BSV::Wallet::Fixtures.reset!
     BSV::Wallet::Fixtures.load_config_file!

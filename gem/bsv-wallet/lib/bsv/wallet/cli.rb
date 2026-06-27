@@ -36,8 +36,12 @@ module BSV
       #
       # @param wallet_name [String, nil] e.g. "alice", "bob", or nil for default
       # @param network [Symbol, nil] :mainnet or :testnet; nil → read from config
+      # @param wif_override [String, nil] explicit WIF (from +--wif+ /
+      #   +--wif-file+); +nil+ → fall back to Fixtures / Config / ENV
+      # @param database_url_override [String, nil] explicit DB URL (from
+      #   +--database-url+); +nil+ → fall back to Fixtures / Config / ENV
       # @return [Hash] { engine:, utxo_pool:, key_deriver:, db:, identity_key:, private_key: }
-      def boot(wallet_name: nil, network: nil)
+      def boot(wallet_name: nil, network: nil, wif_override: nil, database_url_override: nil)
         require 'sequel'
         require 'logger'
         require 'bsv-wallet'
@@ -58,15 +62,23 @@ module BSV
           BSV.logger.level = Logger::DEBUG
         end
 
-        # Named wallets resolve through the Fixtures registry (#292);
-        # end-user (unnamed) mode reads BSV::Wallet.config (#277).
+        # Resolution order (highest → lowest):
+        #   1. Explicit overrides from +bin/wallet+ global flags
+        #      (+wif_override+ / +database_url_override+).
+        #   2. Fixtures registry (named wallets — dev/test mode).
+        #   3. +BSV::Wallet.config+ (end-user mode).
+        # Override + Fixtures may combine: e.g. +--wif=...+ with the
+        # named wallet's database_url, or vice versa.
+        wif = wif_override
+        db_url = database_url_override
+
         if wallet_name
           fixture = BSV::Wallet::Fixtures.wallet(wallet_name)
-          wif = fixture&.wif
-          db_url = fixture&.database_url
+          wif ||= fixture&.wif
+          db_url ||= fixture&.database_url
         else
-          wif = BSV::Wallet.config.wif
-          db_url = BSV::Wallet.config.database_url
+          wif ||= BSV::Wallet.config.wif
+          db_url ||= BSV::Wallet.config.database_url
         end
         abort missing_wif_message(wallet_name) if wif.nil? || wif.empty?
         db_url ||= default_sqlite_url(wallet_name)
