@@ -92,14 +92,8 @@ RSpec.describe 'Porcelain CLI tools' do # rubocop:disable RSpec/DescribeClass
 
   # --- bin/balance ---
 
-  describe 'bin/balance' do
-    it 'exits non-zero without wallet env vars' do
-      _stdout, stderr, status = run_tool('balance', 'nonexistent')
-
-      expect(status.exitstatus).to eq(1)
-      expect(stderr).not_to be_empty
-    end
-  end
+  # bin/balance deleted in Phase 1 of #433 — coverage moves to
+  # spec/bin/wallet/balance_spec.rb (driving bin/wallet balance).
 
   # --- bin/receive ---
 

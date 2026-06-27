@@ -1,0 +1,18 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Native porcelain CLI — bin/wallet <command> [args]
+#
+# Snake-case verbs, structured exit codes, NDJSON output, shell-pipeable.
+# Routes commands to BSV::Wallet::Engine directly (bypasses
+# BSV::Wallet::BRC100). For BRC-100 spec-conformance dispatch use
+# +bin/brc100+ (HLR #431).
+#
+# Run +bin/wallet --help+ for the surface; +bin/wallet <command> --help+
+# for per-command options.
+
+require 'bsv-wallet'
+require_relative '../lib/bsv/wallet/cli'
+require_relative '../lib/bsv/wallet/cli/dispatcher'
+
+exit BSV::Wallet::CLI::Dispatcher.call(ARGV)
