@@ -140,6 +140,17 @@ By keeping the conformance layer paper-thin and the core BRC-100-naive:
 
 None of these require disturbing the schema or the Engine's primitive surface. The core stays a Bitcoin wallet; conformance grows the new feature.
 
+## CLI surface allocation
+
+The same axis governs how CLI surfaces are split. Two CLI binaries are planned:
+
+- **`bin/brc100`** (HLR #431) is the conformance layer surfaced as a transport: positional dispatch over the 28 BRC-100 methods, JSON-in/JSON-out, `WERR_*` codes. It exposes `Interface::BRC100` only — no commands are invented, the surface is the spec.
+- **`bin/wallet`** (HLR #433) is the core layer surfaced as a transport: native wallet-vocab commands (`balance`, `send`, `receive`, `build`, `sign`, `broadcast`, `transmit`, `sweep`, `consolidate`, etc.) invoking Engine methods directly. Snake-case verbs, structured exit codes, flat JSON, shell-pipeable.
+
+The allocation rule: a method either is or isn't part of `Interface::BRC100`. If it is, it surfaces via `bin/brc100`. If it isn't, it surfaces via `bin/wallet`. The default expectation is no overlap. The unusual case — a BRC-100 method we choose to wrap in `bin/wallet` with non-spec semantics, or a wallet-vocab convenience over `bin/brc100` — requires an explicit decision recorded in an ADR. The reason this case needs ADR-grade documentation is that it punctures the otherwise clean split, and the rationale needs to survive any future "which CLI owns X" question.
+
+This is the same core/conformance boundary viewed at the CLI transport layer rather than the Engine/Conformance internal layer. Both CLIs consume `Engine`; the split between them is the same split between Conformance and Core inside the wallet.
+
 ## Related
 
 - [`principle-of-state.md`](principle-of-state.md) — *what* the wallet maintains (schema is canon).
