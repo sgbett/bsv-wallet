@@ -7,7 +7,7 @@
 
 Existing porcelain (`bin/send`, `bin/balance`, `bin/import`, `bin/receive`, etc.) routes through `BSV::Wallet::BRC100`, importing the spec's quirks (change-pool ambiguity, basket-required semantics, originator noise) into use cases that don't need conformance. #431 is settling the BRC-100 surface under `bin/brc100`. This HLR is the sibling: a native wallet-vocab surface that calls Engine methods directly, designs its own basket/change semantics, and stays shell-pipeable.
 
-Outcome: a single `bin/wallet <command>` dispatcher replacing the 16 standalone porcelain scripts, with a cleaner config story (one place for `--wallet`, `--database-url`, `--wif`) and a Git-style porcelain/plumbing split.
+Outcome: a single `bin/wallet <command>` dispatcher replacing the 16 standalone porcelain scripts, with a cleaner config story (one place for `--wallet`, `--database-url`, `--wif`) and a porcelain/operational verb split. (Originally also planned a Git-style plumbing layer; deferred per ADR-030 — see Scope.)
 
 ## Surface Allocation: `bin/wallet` vs `bin/brc100`
 
@@ -134,7 +134,7 @@ Add:
   - `#read_binary_input(file: nil)` — reads from `$stdin.binmode` or `File.binread(path)`. The single home for BEEF-shaped input; subclasses can't forget `binmode`.
   - `#parse_pubkey_hex(str)` — wraps `BSV::PublicKey.from_hex`; raises `UsageError` with a clear message on failure. All ingest points for `--counterparty`, `--to=<root_key_hex>`, etc. go through this.
   - All files: `# frozen_string_literal: true` at top.
-- `CLI::Commands::<Verb>` — one class per command (12 classes). Each inherits `Base`, defines `#parser` and `#call(ctx, args)`. Approximate size: 30-80 lines per class.
+- `CLI::Commands::<Verb>` — one class per command (9 classes — 6 porcelain + 3 operational, post-ADR-030 deferral of the plumbing layer). Each inherits `Base`, defines `#build_parser` and `#call(args)` (the boot `ctx` is passed via `#initialize`). Approximate size: 30-80 lines per class.
 - Every command class lands with `frozen_string_literal: true` and passes `bundle exec rubocop lib/bsv/wallet/cli/` — no mass disables.
 
 Extend or keep:
