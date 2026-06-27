@@ -75,6 +75,14 @@ module BSV
         rescue OptionParser::ParseError => e
           warn "usage: #{redact_message(e.message)}"
           2
+        rescue SystemExit => e
+          # +CLI.boot+ uses +abort+ on missing-WIF / Fixtures-not-found
+          # paths, which raises +SystemExit+ and would otherwise bypass
+          # the dispatcher's never-raises-uncaught contract (and
+          # terminate any RSpec run that loaded the dispatcher). Convert
+          # to a clean integer return; +abort+ has already written its
+          # own stderr line so we don't duplicate it.
+          e.status || 1
         end
 
         # Apply +Secrets+ patterns at the string level. Exception
@@ -120,7 +128,11 @@ module BSV
         #   - +--env=<file>+ lstat → mode/owner → realpath ordering
         #
         # @param argv [Array<String>]
-        # @return [Array(GlobalOptions, Array<String>)]
+        # @return [Array(GlobalOptions, Array<String>, Boolean)]
+        #   +[opts, remaining, help_requested]+ — the parsed value
+        #   object, the remaining argv after global flags are consumed,
+        #   and a flag indicating +-h+/+--help+ was set anywhere in
+        #   the global slice.
         def parse_global_options(argv)
           wallet_name = nil
           network = nil

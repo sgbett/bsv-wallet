@@ -41,7 +41,7 @@ module BSV
             OptionParser.new do |opts|
               opts.banner = 'Usage: bin/wallet list <outputs|actions> [options]'
 
-              opts.on('--limit=N', Integer, "Result cap (default: #{DEFAULT_LIMIT}, --all to remove)") do |v|
+              opts.on('--limit=N', Integer, "Result cap (default: #{DEFAULT_LIMIT}, --all to raise to engine cap of 10000)") do |v|
                 raise UsageError, "--limit must be >= 0 (got #{v})" if v.negative?
 
                 @options[:limit] = v
@@ -53,7 +53,7 @@ module BSV
                 @options[:offset] = v
               end
 
-              opts.on('--all', 'Remove --limit ceiling (caveat: hydrates full set)') do
+              opts.on('--all', 'Raise --limit to the engine cap of 10000 (NOT unbounded — engine.spendable_outputs clamps at 10000)') do
                 @options[:all] = true
               end
 
@@ -124,9 +124,10 @@ module BSV
             emit_human "limit:   #{@options[:all] ? '(all)' : effective_limit}"
           end
 
-          # +--all+ passes a very large limit through to the engine,
-          # rather than hand-rolling a streaming query. Engine caps
-          # internally; the CLI's job is to opt out of its OWN ceiling.
+          # +--all+ raises the limit to the engine's hard cap of 10000
+          # (which +engine.spendable_outputs+ clamps to internally).
+          # Genuinely unbounded fetch would require streaming engine
+          # support — out of scope for Phase 1.
           def effective_limit
             @options[:all] ? 10_000 : @options[:limit]
           end

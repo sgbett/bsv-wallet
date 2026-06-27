@@ -83,7 +83,7 @@ module BSV
 
             emit_human "wallet:   #{@global_options.wallet_name || '(default)'}"
             emit_human "basket:   #{basket_label}"
-            emit_human "outputs:  #{outputs.length} (limit=100; use `list outputs --all` for full set)"
+            emit_human "outputs:  #{outputs.length} (limit=100; use `list outputs --all` to raise the cap to 10000 — engine clamps there)"
           end
 
           # Build the aggregate kwargs Hash. Only includes +basket:+ when

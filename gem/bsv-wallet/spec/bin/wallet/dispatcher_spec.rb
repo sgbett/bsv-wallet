@@ -245,6 +245,15 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
       expect(code).to eq(1)
     end
 
+    it 'rescues SystemExit (CLI.boot abort) and returns its status' do
+      # CLI.boot uses `abort` on missing-WIF — would raise
+      # SystemExit and terminate the host process (or RSpec run)
+      # without this rescue.
+      allow(described_class).to receive(:boot_engine).and_raise(SystemExit.new(1))
+      code = described_class.call(['--wallet=missing', 'balance'])
+      expect(code).to eq(1)
+    end
+
     it 'redacts secret values from exception messages bubbled to stderr' do
       allow(described_class).to receive(:boot_engine).and_raise(
         BSV::Wallet::CLI::UsageError, 'bad wif=L1RrrnXkcKut5DEMwtDthjwRcTTwED36thyL1DebVrKuwvohjMNi'
