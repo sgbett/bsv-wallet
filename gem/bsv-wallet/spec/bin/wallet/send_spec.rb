@@ -82,6 +82,21 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
       end.to raise_error(BSV::Wallet::CLI::UsageError)
       expect(engine).not_to have_received(:build_action)
     end
+
+    it 'raises UsageError on non-standard Base58Check payload length (no engine call)' do
+      # Stub the SDK to simulate a checksum-valid but non-standard
+      # payload (e.g. 10 bytes instead of 21). Real-world this is rare,
+      # but without the length check an empty payload would TypeError
+      # on +format('%02x', nil)+ and an oversized payload would build a
+      # malformed P2PKH lock with the wrong hash length — misdirecting
+      # funds.
+      allow(BSV::Primitives::Base58).to receive(:check_decode).and_return("\x00".b * 10)
+      allow(engine).to receive(:build_action)
+      expect do
+        command.call(%w[1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa 1000])
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /10-byte payload/)
+      expect(engine).not_to have_received(:build_action)
+    end
   end
 
   describe 'base58 path' do

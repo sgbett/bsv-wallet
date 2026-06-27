@@ -56,6 +56,9 @@ module BSV
           # unspendable output.
           P2PKH_VERSION_BYTES = [0x00, 0x6f].freeze
 
+          # Base58Check P2PKH payload: 1 version byte + 20-byte pubkey hash.
+          P2PKH_PAYLOAD_BYTES = 21
+
           def name = 'send'
 
           def build_parser
@@ -123,10 +126,15 @@ module BSV
           end
 
           # Base58Check decode + version-byte validation. Returns the
-          # 20-byte pubkey hash. Two failure modes mapped to UsageError:
-          # invalid checksum/encoding (ArgumentError from check_decode),
-          # and non-P2PKH version bytes (P2SH 0x05/0xc4 would otherwise
-          # silently produce an unspendable P2PKH lock).
+          # 20-byte pubkey hash. Three failure modes mapped to UsageError:
+          # invalid checksum/encoding (raised by check_decode), wrong
+          # payload length (a checksum-valid but non-standard Base58Check
+          # could be any byte length; without this check, an empty payload
+          # would TypeError on +format('%02x', nil)+ and an oversized
+          # payload would build a malformed P2PKH lock with the wrong
+          # hash length — misdirecting funds), and non-P2PKH version
+          # bytes (P2SH 0x05/0xc4 would otherwise produce an unspendable
+          # P2PKH lock).
           def decode_base58_p2pkh!(address)
             payload =
               begin
@@ -138,6 +146,12 @@ module BSV
                 # same UsageError message.
                 raise UsageError, "send recipient #{address.inspect}: #{e.message}"
               end
+
+            unless payload.bytesize == P2PKH_PAYLOAD_BYTES
+              raise UsageError,
+                    "send recipient #{address.inspect} decoded to #{payload.bytesize}-byte payload " \
+                    "(P2PKH requires exactly #{P2PKH_PAYLOAD_BYTES} bytes: 1 version + 20 pubkey-hash)"
+            end
 
             version = payload.bytes.first
             unless P2PKH_VERSION_BYTES.include?(version)

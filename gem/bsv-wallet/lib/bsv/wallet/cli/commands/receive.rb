@@ -105,27 +105,34 @@ module BSV
 
           # Envelope path: parse derivation hints from the JSON, build
           # +engine.import_beef+ output specs with appropriate remittance.
+          #
+          # All four BRC-29 fields (+sender_identity_key+, +beef+, per-output
+          # +derivation_prefix+ / +derivation_suffix+) are required and
+          # validated at the CLI boundary. Engine-side defaults silently
+          # cover for missing fields (counterparty becomes +'self'+,
+          # vout becomes 0) — but those defaults derive the WRONG key,
+          # importing outputs the wallet can never spend. Catch it here
+          # rather than discovering it on attempted spend.
           def call_envelope(engine, envelope, description)
             beef_hex = envelope[:beef]
             raise UsageError, 'envelope missing "beef" field' if beef_hex.nil? || beef_hex.empty?
 
             sender_identity_key = envelope[:sender_identity_key]
+            unless sender_identity_key.is_a?(String) && sender_identity_key.match?(/\A(02|03)[0-9a-fA-F]{64}\z/)
+              raise UsageError,
+                    'envelope missing or invalid "sender_identity_key" ' \
+                    '(required for BRC-29 key recovery: must be 66-char compressed pubkey hex starting 02/03)'
+            end
+
             pay_outputs = envelope[:outputs] || []
             raise UsageError, 'envelope missing "outputs" array' if pay_outputs.empty?
 
             beef_bytes = decode_hex_field!(beef_hex, field: 'envelope "beef"')
 
             output_specs = pay_outputs.map.with_index do |out, idx|
-              vout = out[:vout]
-              unless vout.is_a?(Integer) && vout >= 0
-                raise UsageError,
-                      "envelope output [#{idx}] missing or invalid \"vout\" " \
-                      '(must be a non-negative integer; engine-side default-to-zero ' \
-                      'could silently target the wrong output)'
-              end
-
+              validate_envelope_output!(out, idx)
               {
-                output_index: vout,
+                output_index: out[:vout],
                 protocol: 'basket insertion',
                 insertion_remittance: {
                   basket: effective_basket(envelope_basket: out[:basket]),
@@ -233,6 +240,29 @@ module BSV
                     'string of [0-9a-fA-F])'
             end
             [value].pack('H*')
+          end
+
+          # Validate one envelope output's BRC-29 fields. All three
+          # (+vout+, +derivation_prefix+, +derivation_suffix+) are
+          # required: silent engine-side defaults would derive the
+          # wrong key, producing an unspendable import.
+          def validate_envelope_output!(out, idx)
+            vout = out[:vout]
+            unless vout.is_a?(Integer) && vout >= 0
+              raise UsageError,
+                    "envelope output [#{idx}] missing or invalid \"vout\" " \
+                    '(must be a non-negative integer; engine-side default-to-zero ' \
+                    'could silently target the wrong output)'
+            end
+
+            { derivation_prefix: out[:derivation_prefix],
+              derivation_suffix: out[:derivation_suffix] }.each do |field, value|
+              next if value.is_a?(String) && !value.empty?
+
+              raise UsageError,
+                    "envelope output [#{idx}] missing or invalid \"#{field}\" " \
+                    '(required for BRC-29 key recovery: must be a non-empty string)'
+            end
           end
 
           # Auto-detect binary BEEF vs hex-encoded BEEF. Hex form is
