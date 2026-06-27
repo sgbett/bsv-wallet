@@ -1,5 +1,15 @@
 # frozen_string_literal: true
 
+# Force-load the gem before reopening +KeyDeriver+ / +Engine+. Without
+# this, +require_relative 'inspect_overrides'+ from a caller that
+# hasn't yet required +bsv-wallet+ would SILENTLY define two empty
+# classes named +BSV::Wallet::KeyDeriver+ and +BSV::Wallet::Engine+;
+# the real definitions later would reopen those empty stubs, but any
+# code path that hit the stubs before the real load (or any future
+# load-order shift) would silently get the empty version. Requiring
+# the gem here means these are always true reopenings.
+require 'bsv-wallet'
+
 # +#inspect+ overrides on classes carrying secret material. Required by
 # +cli/dispatcher.rb+ so the protection is guaranteed any time the CLI
 # is in play. The override is harmless for non-CLI callers — it changes

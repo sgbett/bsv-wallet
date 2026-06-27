@@ -25,9 +25,11 @@ module BSV
         # follow-up engine addition, out of scope for Phase 1.
         #
         # Defaults: +--limit=100+; +--all+ is the explicit opt-out.
-        # +--json+ output is NDJSON — one JSON object per line; never
-        # buffers the full set in memory. TTY output is the same row
-        # stream, formatted lightly for human reading.
+        # Output is ALWAYS NDJSON — one JSON object per line, never
+        # buffers the full set in memory. This is intentional: keeps
+        # piping to +jq+/+grep+ predictable regardless of whether
+        # stdout is a TTY. The human-readable summary lines (noun,
+        # filter, row count) go to stderr via +emit_human+.
         class List < Base
           NOUNS = %w[outputs actions].freeze
           DEFAULT_LIMIT = 100

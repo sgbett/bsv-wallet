@@ -23,6 +23,16 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
       expect(opts.network).to be_nil
     end
 
+    it 'treats --wallet= (blank) as nil so CLI.boot end-user mode fires' do
+      opts, = described_class.parse_global_options(['--wallet=', 'balance'])
+      expect(opts.wallet_name).to be_nil
+    end
+
+    it 'trims whitespace from --wallet' do
+      opts, = described_class.parse_global_options(['--wallet= alice ', 'balance'])
+      expect(opts.wallet_name).to eq('alice')
+    end
+
     it 'trims whitespace from --network' do
       opts, = described_class.parse_global_options(['--network= mainnet ', 'balance'])
       expect(opts.network).to eq(:mainnet)
@@ -209,6 +219,26 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
       expect do
         described_class.call(['--wallet=alice', 'balance'])
       end.to output(/private_key:\s*\[REDACTED\]/).to_stderr
+    end
+
+    it 'does NOT redact identity_key (interchange identifier, not secret)' do
+      allow(described_class).to receive(:boot_engine).and_raise(
+        BSV::Wallet::CLI::UsageError,
+        "missing identity_key: 02#{'a' * 64}"
+      )
+      expect do
+        described_class.call(['--wallet=alice', 'balance'])
+      end.to output(/identity_key:\s*02a/).to_stderr
+    end
+
+    it 'does NOT redact public_key (interchange identifier)' do
+      allow(described_class).to receive(:boot_engine).and_raise(
+        BSV::Wallet::CLI::UsageError,
+        'missing public_key: 02deadbeef'
+      )
+      expect do
+        described_class.call(['--wallet=alice', 'balance'])
+      end.to output(/public_key:\s*02deadbeef/).to_stderr
     end
   end
 end

@@ -115,14 +115,39 @@ module BSV
           end
 
           # Human-readable line to stderr. Use for progress, summaries,
-          # warnings, anything not destined for shell piping. Goes
-          # through +Secrets.redact+ at the string level via the
-          # +#inspect+ overrides on key-bearing classes.
+          # warnings, anything not destined for shell piping. Applies
+          # the same string-level redaction as the dispatcher's
+          # top-level rescue, so a stray identity-key /
+          # derivation-prefix in a summary line doesn't leak.
           #
           # @param line [String]
           def emit_human(line)
-            warn line
+            warn redact_text(line)
           end
+
+          # String-level redaction matching +Secrets::SENSITIVE_FIELD+.
+          # Matches +key=value+ / +key: value+ tokens for sensitive
+          # field names; leaves interchange identifiers
+          # (+identity_key+, +public_key+) untouched.
+          def redact_text(text)
+            text.to_s.gsub(TEXT_REDACTION) do
+              "#{Regexp.last_match(1)}#{Secrets::REDACTED}"
+            end
+          end
+
+          TEXT_REDACTION = /
+            \b(
+              (?:
+                wif |
+                secret |
+                (?!identity_|public_|pub)\w*_(?:key|priv) |
+                (?:private|signing|root)_key |
+                derivation_(?:prefix|suffix)
+              )
+              [=:]\s*
+            )
+            \S+
+          /xi
 
           # Read binary input from +--file=<path>+ or stdin. Always
           # +binmode+ — text-mode reads would mangle BEEF bytes with

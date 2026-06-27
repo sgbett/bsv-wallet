@@ -71,18 +71,39 @@ module BSV
           2
         end
 
-        # Apply +Secrets.redact+ at the string level. Exception messages
-        # may quote argv tokens (a malformed +--wif=<wif>+ value, a
-        # +--database-url+ containing a password) — bubbling those to
-        # stderr verbatim would defeat the secrets policy. Substitution
-        # matches the same key patterns +Secrets.redact+ scrubs in
-        # JSON, applied to the colon-delimited "key: value" / "key=value"
-        # tokens that show up in OptionParser and engine error text.
+        # Apply +Secrets+ patterns at the string level. Exception
+        # messages may quote argv tokens (a malformed +--wif=<wif>+
+        # value, a +--database-url+ containing a password) — bubbling
+        # those to stderr verbatim would defeat the secrets policy.
+        # Matches the same field names +Secrets::SENSITIVE_FIELD+
+        # scrubs in JSON, including the carve-outs for interchange
+        # identifiers (+identity_key+, +public_key+) which stay
+        # visible. Token-shaped (+\w++) to avoid greedy spans across
+        # whitespace.
         def redact_message(message)
-          message.to_s.gsub(/((?:wif|secret|.*_(?:key|priv)|derivation_(?:prefix|suffix))[=:\s]+)\S+/i) do
+          message.to_s.gsub(MESSAGE_REDACTION) do
             "#{Regexp.last_match(1)}#{Secrets::REDACTED}"
           end
         end
+
+        # Field-name + separator capture group. Matches keys that
+        # +Secrets::SENSITIVE_FIELD+ would scrub, followed by an
+        # +=+/+:+/space separator. Pubkey-identifier carve-outs
+        # (+identity_key+, +public_key+, +pubkey+) are NOT matched —
+        # they're interchange identifiers, not secret material.
+        MESSAGE_REDACTION = /
+          \b(
+            (?:
+              wif |
+              secret |
+              (?!identity_|public_|pub)\w*_(?:key|priv) |
+              (?:private|signing|root)_key |
+              derivation_(?:prefix|suffix)
+            )
+            [=:]\s*
+          )
+          \S+
+        /xi
 
         # Parse the global flag layer; everything after the first
         # non-flag token is left for the subcommand. Enforces the
@@ -106,7 +127,11 @@ module BSV
           env_allow_symlink = false
 
           parser = OptionParser.new do |opts|
-            opts.on('--wallet=NAME') { |v| wallet_name = v }
+            # Blank/whitespace --wallet falls through to +nil+ so
+            # +CLI.boot+'s end-user-mode branch fires (read from
+            # +BSV::Wallet.config+) instead of looking up Fixtures
+            # for the literal empty string.
+            opts.on('--wallet=NAME') { |v| wallet_name = v.to_s.strip.empty? ? nil : v.to_s.strip }
             opts.on('--wif=WIF') { |v| wif_argv = v }
             opts.on('--wif-file=PATH') { |v| wif_file = v }
             opts.on('--allow-insecure-wif') { allow_insecure_wif = true }
