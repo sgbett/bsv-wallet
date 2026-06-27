@@ -61,14 +61,27 @@ module BSV
 
           command.call(remaining)
         rescue CLI::Error => e
-          warn "error: #{e.message}"
+          warn "error: #{redact_message(e.message)}"
           e.exit_code
         rescue BSV::Wallet::Error => e
-          warn "engine error: #{e.message}"
+          warn "engine error: #{redact_message(e.message)}"
           1
         rescue OptionParser::ParseError => e
-          warn "usage: #{e.message}"
+          warn "usage: #{redact_message(e.message)}"
           2
+        end
+
+        # Apply +Secrets.redact+ at the string level. Exception messages
+        # may quote argv tokens (a malformed +--wif=<wif>+ value, a
+        # +--database-url+ containing a password) — bubbling those to
+        # stderr verbatim would defeat the secrets policy. Substitution
+        # matches the same key patterns +Secrets.redact+ scrubs in
+        # JSON, applied to the colon-delimited "key: value" / "key=value"
+        # tokens that show up in OptionParser and engine error text.
+        def redact_message(message)
+          message.to_s.gsub(/((?:wif|secret|.*_(?:key|priv)|derivation_(?:prefix|suffix))[=:\s]+)\S+/i) do
+            "#{Regexp.last_match(1)}#{Secrets::REDACTED}"
+          end
         end
 
         # Parse the global flag layer; everything after the first
@@ -100,7 +113,11 @@ module BSV
             opts.on('--database-url=URL') { |v| database_url = v }
             opts.on('--env=FILE') { |v| env_file = v }
             opts.on('--env-allow-symlink') { env_allow_symlink = true }
-            opts.on('--network=NET') { |v| network = v.to_sym }
+            # Blank/whitespace networks fall through to +nil+ so
+            # +CLI.boot+'s +network ||= BSV::Wallet.config.network+
+            # fallback fires. +":""+ would be a junk symbol that
+            # bypasses the fallback.
+            opts.on('--network=NET') { |v| network = v.to_s.strip.empty? ? nil : v.to_s.strip.to_sym }
             opts.on('--json') { json = true }
             opts.on('-h', '--help')
           end
@@ -199,9 +216,16 @@ module BSV
         # / +PG*+ prefixes are loaded; arbitrary ENV injection from an
         # attacker-writable file is refused.
         def load_env_file!(path, allow_symlink)
-          raise UsageError, "--env file not found: #{path}" unless File.exist?(path)
-
-          lstat = File.lstat(path)
+          # Use +lstat+ as the existence check too — +File.exist?+ follows
+          # symlinks, which would (a) misclassify a broken symlink as
+          # "not found" (hiding the policy violation), and (b) add a
+          # TOCTOU window between the existence check and the lstat.
+          lstat =
+            begin
+              File.lstat(path)
+            rescue Errno::ENOENT
+              raise UsageError, "--env file not found: #{path}"
+            end
           raise UsageError, "--env #{path}: symlinks refused (use --env-allow-symlink to opt in)" if lstat.symlink? && !allow_symlink
 
           # For the symlink-allowed case we stat the target; for the
@@ -251,7 +275,7 @@ module BSV
               --help, -h               Show this message
 
             Commands:
-              #{COMMANDS.keys.sort.map { |c| "  #{c}" }.join("\n  ").strip}
+            #{COMMANDS.keys.sort.map { |c| "  #{c}" }.join("\n")}
 
             Run `bin/wallet <command> --help` for command-specific options.
           HELP

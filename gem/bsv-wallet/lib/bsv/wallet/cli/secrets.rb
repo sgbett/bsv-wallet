@@ -5,15 +5,19 @@ module BSV
     module CLI
       # Defence against accidental secrets disclosure on CLI output paths.
       #
-      # Three lines of defence:
+      # Four lines of defence:
       #   1. +Secrets.redact(obj)+ — deep-walks Hash/Array structures and
       #      elides values whose keys match the sensitive-field pattern.
-      #      Used by +Commands::Base#emit_json+ before stdout writes and
-      #      by the dispatcher's top-level rescue before stderr writes.
-      #   2. +KeyDeriver#inspect+ — overridden to elide +@root_key+.
+      #      Used by +Commands::Base#emit_json+ before stdout writes.
+      #   2. +Dispatcher#redact_message+ — applies the same field pattern
+      #      at the STRING level (regex substitution) to exception
+      #      messages bubbled to stderr by the top-level rescue.
+      #      OptionParser / engine errors quote argv tokens verbatim;
+      #      this stops a stray +--wif=<wif>+ value reaching stderr.
+      #   3. +KeyDeriver#inspect+ — overridden to elide +@root_key+.
       #      Defends against a stray +Engine.inspect+ in an exception
       #      message or a future +#to_s+ slip.
-      #   3. +Engine#inspect+ — overridden to elide +@key_deriver+ and
+      #   4. +Engine#inspect+ — overridden to elide +@key_deriver+ and
       #      +@store+. Same rationale; Engine holds the keyderiver as an
       #      ivar so an unredacted inspect would expose root material.
       #

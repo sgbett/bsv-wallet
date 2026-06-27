@@ -14,7 +14,9 @@ module BSV
         #
         # Contract (subclasses MUST):
         #   - implement +#name+        — the subcommand token (e.g. "balance")
-        #   - implement +#call(ctx, args)+ — returns +Integer+ exit code
+        #   - implement +#call(args)+  — returns +Integer+ exit code
+        #     (the boot +ctx+ is passed via +#initialize+; +#call+ only
+        #     receives the remaining argv slice for this command)
         #   - implement +#build_parser+ — defines the per-command +OptionParser+
         #
         # Helpers (subclasses MAY use):
@@ -49,7 +51,10 @@ module BSV
           end
 
           # Process +args+ and emit results. Returns the process exit code.
-          # @return [Integer]
+          # @param args [Array<String>] remaining argv after the
+          #   subcommand token (global flags and the subcommand have
+          #   already been consumed by +Dispatcher+).
+          # @return [Integer] exit code
           def call(_args)
             raise NotImplementedError, "#{self.class}#call must be implemented"
           end

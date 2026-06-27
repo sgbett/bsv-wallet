@@ -17,6 +17,16 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
       expect(opts.network).to eq(:testnet)
     end
 
+    it 'treats --network= (blank) as nil so CLI.boot config fallback fires' do
+      opts, _ = described_class.parse_global_options(['--network=', 'balance'])
+      expect(opts.network).to be_nil
+    end
+
+    it 'trims whitespace from --network' do
+      opts, _ = described_class.parse_global_options(['--network= mainnet ', 'balance'])
+      expect(opts.network).to eq(:mainnet)
+    end
+
     it 'parses --json' do
       opts, _ = described_class.parse_global_options(['--json', 'balance'])
       expect(opts.json).to be(true)
@@ -177,6 +187,24 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
       allow(described_class).to receive(:boot_engine).and_raise(BSV::Wallet::Error.new('engine down'))
       code = described_class.call(['--wallet=alice', 'balance'])
       expect(code).to eq(1)
+    end
+
+    it 'redacts secret values from exception messages bubbled to stderr' do
+      allow(described_class).to receive(:boot_engine).and_raise(
+        BSV::Wallet::CLI::UsageError, 'bad wif=L1RrrnXkcKut5DEMwtDthjwRcTTwED36thyL1DebVrKuwvohjMNi'
+      )
+      expect {
+        described_class.call(['--wallet=alice', 'balance'])
+      }.to output(/wif=\[REDACTED\]/).to_stderr
+    end
+
+    it 'redacts private_key values from exception messages' do
+      allow(described_class).to receive(:boot_engine).and_raise(
+        BSV::Wallet::CLI::UsageError, 'bad private_key: abc123def456'
+      )
+      expect {
+        described_class.call(['--wallet=alice', 'balance'])
+      }.to output(/private_key:\s*\[REDACTED\]/).to_stderr
     end
   end
 end

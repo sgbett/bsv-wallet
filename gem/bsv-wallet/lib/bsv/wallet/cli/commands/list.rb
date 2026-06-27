@@ -8,12 +8,16 @@ module BSV
       module Commands
         # +bin/wallet list <noun>+ — power-user query over wallet state.
         #
-        #   list outputs                              # all spendable, --limit=100
-        #   list outputs --basket=<name> --limit=50
-        #   list outputs --all                        # no limit (caveat: scale)
-        #   list outputs --json                       # NDJSON (one row per line)
-        #   list actions --label=<name>               # --label REQUIRED
-        #   list actions --label=<name> --label=<n2>  # match-any across labels
+        #   bin/wallet list outputs                              # all spendable, --limit=100
+        #   bin/wallet list outputs --basket=<name> --limit=50
+        #   bin/wallet list outputs --all                        # no limit (caveat: scale)
+        #   bin/wallet --json list outputs                       # NDJSON (one row per line)
+        #   bin/wallet list actions --label=<name>               # --label REQUIRED
+        #   bin/wallet list actions --label=<n1> --label=<n2>    # match-any across labels
+        #
+        # +--json+ is a GLOBAL flag (parsed before the subcommand). The
+        # NDJSON output mode fires when +--json+ is set OR when stdout
+        # is not a TTY.
         #
         # +list actions+ is label-required because +Engine#list_actions+
         # has no unfiltered primitive; +Engine::Action.list+ returns an
