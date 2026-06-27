@@ -14,7 +14,7 @@ Outcome: a single `bin/wallet <command>` dispatcher replacing the 10+ standalone
 Both CLIs consume `BSV::Wallet::Engine`. The allocation rule that prevents drift:
 
 - **`bin/brc100`** (#431): transport for methods on `Interface::BRC100` only. Spec-conformance dispatch — camelCase method names, `WERR_*` codes, BRC-100 hash-vocabulary JSON. No commands invented; the surface is the 28 spec methods.
-- **`bin/wallet`** (this HLR): native wallet-vocab commands invoking Engine methods *not* in `Interface::BRC100`, or wrapping spec methods with non-spec semantics. Snake-case verbs, structured exit codes, flat JSON.
+- **`bin/wallet`** (this HLR): native wallet-vocab commands invoking Engine methods *not* in `Interface::BRC100`, or wrapping spec methods with non-spec semantics. snake_case verbs, structured exit codes, flat JSON.
 - **Overlap**: requires an explicit decision, recorded in an ADR. The default expectation is no overlap — a method either is or isn't part of BRC-100; the surface allocation falls out of that.
 
 The same axis is the core/conformance principle (`docs/reference/core-vs-conformance.md`) viewed at the CLI transport layer rather than the Engine/Conformance layer.
@@ -43,11 +43,14 @@ bin/wallet [global-flags] <command> [command-args]
 | Flag | Purpose |
 |------|---------|
 | `--wallet=<name>` | Resolve via `Fixtures` registry |
-| `--wif=<wif>` | Explicit WIF override |
-| `--database-url=<url>` | Explicit DB override |
-| `--env=<file>` | Load env file (dotenv-style; existing process env wins) |
+| `--wif=<wif>` | Explicit WIF on argv — refused on TTY by default; requires `--allow-insecure-wif` to override. See Secrets on the CLI. |
+| `--wif-file=<path>` | Preferred WIF input — file must be mode `0600` and owned by the invoker. See Secrets on the CLI. |
+| `--allow-insecure-wif` | Escape hatch: permits `--wif=<wif>` on a TTY (dev/test only). |
+| `--database-url=<url>` | Explicit DB override — `userinfo` must not embed a password (`postgres://user@host/db`, never `postgres://user:pass@host/db`). DB password comes from `.pgpass`/`PGPASSFILE`. |
+| `--env=<file>` | Load env file (dotenv-style; seed mechanism — only fills unset keys). File mode-checked (`& 0077` refused), owner-checked, symlinks refused. |
+| `--env-allow-symlink` | Permits `--env=<path>` to resolve through a symlink. |
 | `--network=mainnet\|testnet` | Network override |
-| `--json` | Force JSON output even on TTY |
+| `--json` | Force JSON output (NDJSON for `list`) even on TTY |
 | `--help`, `-h` | Help |
 
 **Precedence (highest → lowest):**
