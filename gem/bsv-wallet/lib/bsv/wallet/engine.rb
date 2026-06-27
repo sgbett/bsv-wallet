@@ -398,6 +398,64 @@ module BSV
         action.abort!
       end
 
+      # Broadcast a previously-signed action by reference. Not a thin
+      # +dispatch_broadcast+ wrapper — performs:
+      #
+      #   1. Action lookup by reference (+Engine::Action.find+)
+      #   2. Signed-state validation (+raw_tx+ + +wtxid+ both present)
+      #   3. +atomic_beef+ rehydration via +@hydrator.build_atomic_beef+
+      #      (walks ancestor proofs and assembles the BEEF envelope)
+      #   4. +@hydrator.validate_for_handoff!+ — SPV honesty check on
+      #      the assembled BEEF before it leaves the engine
+      #   5. Delegation to internal +dispatch_broadcast+
+      #
+      # +intent:+ accepts +:inline+ (sync ARC dispatch via
+      # +@broadcast_worker.process+) or +:delayed+ (publishes a BEEF
+      # cache hint for daemon pickup via OMQ). Matches the engine's
+      # existing +map_broadcast_intent+ vocabulary.
+      #
+      # The lookup + rehydration live engine-side because +@hydrator+
+      # is engine-internal — exposing it to external callers (a CLI
+      # plumbing verb, a future BRC-100 binding) would either leak the
+      # ancestry walk or force re-implementation. Callers that already
+      # hold an +action_id+ + +atomic_beef+ (the +build_action+ /
+      # +sign_action+ tails) call +dispatch_broadcast+ directly.
+      #
+      # @param reference [String] BRC-100 reference UUID
+      # @param intent [Symbol] +:inline+ or +:delayed+
+      # @return [Hash] +{ wtxid:, atomic_beef: }+ — same shape as
+      #   +build_action+ / +sign_action+ for caller consistency
+      # @raise [BSV::Wallet::InvalidParameterError] reference not found,
+      #   or unknown intent
+      # @raise [BSV::Wallet::UnsupportedActionError] action exists but
+      #   is not in a broadcastable state (raw_tx / wtxid absent —
+      #   unsigned or already aborted)
+      def broadcast_action(reference:, intent: :inline)
+        unless %i[inline delayed].include?(intent)
+          raise BSV::Wallet::InvalidParameterError,
+                "intent: must be :inline or :delayed (got #{intent.inspect})"
+        end
+
+        action = Engine::Action.find(engine: self, reference: reference)
+        raise BSV::Wallet::InvalidParameterError, 'reference (not found)' unless action
+
+        raw_tx = action.row[:raw_tx]
+        wtxid = action.row[:wtxid]
+
+        if raw_tx.nil? || wtxid.nil?
+          raise BSV::Wallet::UnsupportedActionError,
+                "action #{reference} is not in a broadcastable state " \
+                '(raw_tx / wtxid absent — either unsigned or aborted)'
+        end
+
+        atomic_beef = @hydrator.build_atomic_beef(raw_tx, action.id)
+        @hydrator.validate_for_handoff!(atomic_beef, wtxid)
+
+        dispatch_broadcast(action.id, atomic_beef, intent: intent)
+
+        { wtxid: wtxid, atomic_beef: atomic_beef }
+      end
+
       def import_beef(tx:, outputs:, description:, labels: nil,
                       trust_self: nil, known_txids: nil)
         @beef_importer.import(
