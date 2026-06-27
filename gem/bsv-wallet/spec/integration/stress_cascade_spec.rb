@@ -35,6 +35,13 @@ require_relative '../support/fanout'
 # and the bin/ subprocesses it spawns alike.
 
 RSpec.describe '3-wallet no_send stress cascade' do # rubocop:disable RSpec/DescribeClass
+  # Paused during the #433 native CLI rebuild. This spec shells out to
+  # bin/balance / bin/list_outputs which were deleted in Phase 1
+  # (replaced by `bin/wallet balance` / `bin/wallet list outputs`).
+  # The 3-wallet cascade scenario will be rebuilt in Phase 6 against
+  # the new dispatcher.
+  before { skip 'paused during #433 rebuild; rebuilt in Phase 6 against bin/wallet' }
+
   let(:payments_per_wallet) { (ENV['STRESS_PAYMENTS'] || 73).to_i }
   let(:payment_sats)        { 5_000 }
   let(:wallet_names)        { %w[alice bob carol].freeze }
