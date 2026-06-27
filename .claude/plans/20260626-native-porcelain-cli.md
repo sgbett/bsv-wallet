@@ -126,8 +126,9 @@ Add:
   - `class InsecureWifError < UsageError; def exit_code = 2; end` — `--wif=` on TTY without `--allow-insecure-wif`
   - Commands `raise`; dispatcher `rescue`s at the top and translates to exit codes. No `abort` inside commands (untestable, bypasses the contract).
 - `CLI::Commands::Base` — abstract class (not module — commands inherit, not mix in). Contract:
-  - `#call(ctx, args) → Integer` — exit code. Subclasses must implement.
-  - `#parser` — memoised OptionParser, banner format `"Usage: bin/wallet #{name} [options] <args>"`.
+  - `#initialize(ctx:, global_options:)` — boot context (engine + identity_key + utxo_pool + ...) and `GlobalOptions` passed once; held as ivars for the command's lifetime.
+  - `#call(args) → Integer` — exit code. Subclasses must implement. `args` is the per-command argv slice (global flags already consumed by the dispatcher). No `ctx` parameter — that came in via `#initialize`.
+  - `#parser` — memoised OptionParser, banner format `"Usage: bin/wallet #{name} [options] <args>"`. Subclasses override `#build_parser`, which `#parser` memoises.
   - `#help` — prints `@parser.help` for per-command `--help`.
   - `#emit_json(payload)` — wraps `CLI::Output.write_json` with the redaction layer applied. Subclasses use this for stdout JSON; never `puts JSON.generate(...)` directly.
   - `#emit_human(line)` — writes to stderr via `warn`. For human progress / summary lines.
