@@ -117,8 +117,11 @@ module BSV
           # Human-readable line to stderr. Use for progress, summaries,
           # warnings, anything not destined for shell piping. Applies
           # the same string-level redaction as the dispatcher's
-          # top-level rescue, so a stray identity-key /
-          # derivation-prefix in a summary line doesn't leak.
+          # top-level rescue, so a stray +wif=+, +private_key:+,
+          # +derivation_prefix:+, or +derivation_suffix:+ in a summary
+          # line doesn't leak. Interchange identifiers (+identity_key+,
+          # +public_key+, +pubkey+) pass through unredacted — they're
+          # not secret material per the pubkey-hex carve-out.
           #
           # @param line [String]
           def emit_human(line)
