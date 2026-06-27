@@ -49,6 +49,13 @@ module BSV
           # fixed suffix '1' (matches existing porcelain convention).
           PAYMENT_SUFFIX = '1'
 
+          # P2PKH address version bytes: mainnet 0x00, testnet 0x6f.
+          # P2SH addresses (0x05 mainnet, 0xc4 testnet) are explicitly
+          # rejected — Phase 2 only supports P2PKH, and building a P2PKH
+          # lock to a P2SH address's embedded hash would create an
+          # unspendable output.
+          P2PKH_VERSION_BYTES = [0x00, 0x6f].freeze
+
           def name = 'send'
 
           def build_parser
@@ -92,16 +99,18 @@ module BSV
           private
 
           # Recipient shape detection. Pubkey identity keys are 66-char hex
-          # starting +02+/+03+; addresses are Base58Check (26-35 chars,
-          # Base58 alphabet, +1+/+3+/+m+/+n+ leading char). The shapes
-          # don't overlap.
+          # starting +02+/+03+; P2PKH addresses are Base58Check (26-35 chars,
+          # Base58 alphabet, +1+ mainnet / +m+/+n+ testnet leading char).
+          # P2SH prefixes ('2'/'3') deliberately excluded — they pass the
+          # length+alphabet test but version-byte validation in
+          # +decode_base58_p2pkh!+ catches them as a second line of defence.
           def detect_recipient_kind(recipient)
             return :identity_key if recipient.match?(/\A(02|03)[0-9a-fA-F]{64}\z/)
-            return :base58 if recipient.match?(/\A[mn123][1-9A-HJ-NP-Za-km-z]{25,34}\z/)
+            return :base58 if recipient.match?(/\A[mn1][1-9A-HJ-NP-Za-km-z]{25,34}\z/)
 
             raise UsageError,
                   "send recipient #{recipient.inspect} not recognised " \
-                  '(expected Base58 P2PKH address or 66-char hex identity key)'
+                  '(expected mainnet/testnet P2PKH Base58 address or 66-char hex identity key)'
           end
 
           def parse_satoshis(arg)
@@ -113,19 +122,41 @@ module BSV
             raise UsageError, "send sats must be an integer (got #{arg.inspect})"
           end
 
+          # Base58Check decode + version-byte validation. Returns the
+          # 20-byte pubkey hash. Two failure modes mapped to UsageError:
+          # invalid checksum/encoding (ArgumentError from check_decode),
+          # and non-P2PKH version bytes (P2SH 0x05/0xc4 would otherwise
+          # silently produce an unspendable P2PKH lock).
+          def decode_base58_p2pkh!(address)
+            payload =
+              begin
+                BSV::Primitives::Base58.check_decode(address)
+              rescue StandardError => e
+                # SDK raises +BSV::Primitives::Base58::ChecksumError+ on
+                # checksum mismatch and +ArgumentError+ on non-Base58
+                # input. Either is operator error; both translate to the
+                # same UsageError message.
+                raise UsageError, "send recipient #{address.inspect}: #{e.message}"
+              end
+
+            version = payload.bytes.first
+            unless P2PKH_VERSION_BYTES.include?(version)
+              raise UsageError,
+                    "send recipient #{address.inspect} has version byte " \
+                    "0x#{format('%02x', version)} — only P2PKH addresses " \
+                    '(mainnet 0x00, testnet 0x6f) are supported (Phase 2)'
+            end
+
+            payload[1..]
+          end
+
           # Base58 path. Decode address, build P2PKH, build_action with no
           # derivation hints (engine marks the output 'outbound' per the
           # +build_output_specs+ default). No envelope on stdout — the
           # recipient is presumed to control the address-resolved key
           # already and finds the output by chain scan.
           def call_base58(engine, address, sats, description, accept_delayed)
-            # Base58Check decode → 21-byte payload (version byte + 20-byte
-            # pubkey hash). Slice off the version; build P2PKH from the
-            # hash. Version byte not validated here — the regex already
-            # constrained the leading character to mainnet/testnet P2PKH
-            # prefixes; a fuller version-byte allowlist is a follow-up
-            # when we model network-aware sends.
-            pubkey_hash = BSV::Primitives::Base58.check_decode(address)[1..]
+            pubkey_hash = decode_base58_p2pkh!(address)
             locking_script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
 
             result = engine.build_action(

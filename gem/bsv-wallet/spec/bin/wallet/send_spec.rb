@@ -55,6 +55,33 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
         command.call(%w[neither-address-nor-key 100])
       end.to raise_error(BSV::Wallet::CLI::UsageError, /not recognised/)
     end
+
+    # P2SH mainnet addresses lead with '3'; P2SH testnet with '2'. Both
+    # are valid Base58Check but would produce an unspendable P2PKH lock
+    # if the embedded 20-byte hash got wrapped in OP_DUP/OP_HASH160/.../
+    # OP_CHECKSIG. Two lines of defence: regex prefix exclusion +
+    # post-decode version-byte validation. We test the regex line here
+    # (cheap, no decode).
+    it 'rejects mainnet P2SH addresses (leading 3)' do
+      expect do
+        command.call(%w[3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy 1000])
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /not recognised/)
+    end
+
+    it 'rejects testnet P2SH addresses (leading 2)' do
+      expect do
+        command.call(%w[2N2JD6wb56AfK4tfmM6PwdVmoYk2dCKf4Br 1000])
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /not recognised/)
+    end
+
+    it 'raises UsageError on Base58Check checksum failure (no engine call)' do
+      allow(engine).to receive(:build_action)
+      # Mainnet P2PKH-prefixed address with a corrupted checksum byte.
+      expect do
+        command.call(%w[1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNX 1000])
+      end.to raise_error(BSV::Wallet::CLI::UsageError)
+      expect(engine).not_to have_received(:build_action)
+    end
   end
 
   describe 'base58 path' do

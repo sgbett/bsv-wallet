@@ -64,6 +64,7 @@ module BSV
           def call(args)
             parser.parse!(args)
             input_bytes = read_input
+            raise UsageError, 'receive input is empty (pipe BEEF bytes or use --file=<path>)' if input_bytes.empty?
 
             kind = detect_input_kind(input_bytes)
             engine = @ctx[:engine]
@@ -71,7 +72,7 @@ module BSV
 
             case kind
             when :envelope
-              call_envelope(engine, JSON.parse(input_bytes, symbolize_names: true), description)
+              call_envelope(engine, parse_envelope_json!(input_bytes), description)
             when :raw_beef
               call_raw_beef(engine, input_bytes, description)
             end
@@ -112,15 +113,22 @@ module BSV
             pay_outputs = envelope[:outputs] || []
             raise UsageError, 'envelope missing "outputs" array' if pay_outputs.empty?
 
-            beef_bytes = [beef_hex].pack('H*')
+            beef_bytes = decode_hex_field!(beef_hex, field: 'envelope "beef"')
 
-            output_specs = pay_outputs.map do |out|
-              basket = effective_basket(envelope_basket: out[:basket])
+            output_specs = pay_outputs.map.with_index do |out, idx|
+              vout = out[:vout]
+              unless vout.is_a?(Integer) && vout >= 0
+                raise UsageError,
+                      "envelope output [#{idx}] missing or invalid \"vout\" " \
+                      '(must be a non-negative integer; engine-side default-to-zero ' \
+                      'could silently target the wrong output)'
+              end
+
               {
-                output_index: out[:vout],
+                output_index: vout,
                 protocol: 'basket insertion',
                 insertion_remittance: {
-                  basket: basket,
+                  basket: effective_basket(envelope_basket: out[:basket]),
                   derivation_prefix: out[:derivation_prefix],
                   derivation_suffix: out[:derivation_suffix],
                   sender_identity_key: sender_identity_key
@@ -143,14 +151,18 @@ module BSV
           # Raw BEEF path: parse, scan outputs for P2PKH locks to wallet's
           # root address, import matches as basket insertion with no
           # derivation hints (engine marks them root via the output_type
-          # shim).
+          # shim). Accepts either binary BEEF or its hex-string encoding
+          # (the latter is shell-pipe-friendly; binary in pipes is fiddly
+          # with locale/encoding pitfalls).
           def call_raw_beef(engine, beef_bytes, description)
+            beef_bytes = decode_hex_if_hex(beef_bytes)
+            subject_tx = parse_beef_subject(beef_bytes)
+
             key_deriver = @ctx[:key_deriver]
             root_pubkey_hash = BSV::Primitives::Digest.hash160(
               key_deriver.root_private_key.public_key.compressed
             )
 
-            subject_tx = parse_beef_subject(beef_bytes)
             matches = scan_outputs_for_pubkey_hash(subject_tx, root_pubkey_hash)
 
             if matches.empty?
@@ -182,10 +194,58 @@ module BSV
           end
 
           # Parse a BEEF (binary) and return the subject Tx. The subject
-          # tx is the last one in the BEEF per BRC-62.
+          # tx is the last one in the BEEF per BRC-62. Two failure modes
+          # both map to UsageError: parser exceptions (truncated input,
+          # bad magic, unsupported version) and parser-tolerated but
+          # empty BEEF (parses cleanly with zero txs — the SDK doesn't
+          # treat that as an error, but downstream callers would crash
+          # on the nil subject).
           def parse_beef_subject(beef_bytes)
             beef = BSV::Transaction::Beef.from_binary(beef_bytes)
-            beef.txs.last
+            subject = beef.txs.last
+            raise UsageError, 'receive input is not valid BEEF: empty (zero transactions)' if subject.nil?
+
+            subject
+          rescue UsageError
+            raise
+          rescue StandardError => e
+            raise UsageError, "receive input is not valid BEEF: #{e.message}"
+          end
+
+          # Parse JSON envelope input. JSON::ParserError is not a
+          # CLI::Error / Wallet::Error / OptionParser::ParseError, so
+          # the dispatcher's rescue chain wouldn't catch it — would
+          # surface as an uncaught stack trace. Wrap to UsageError.
+          def parse_envelope_json!(bytes)
+            JSON.parse(bytes, symbolize_names: true)
+          rescue JSON::ParserError => e
+            raise UsageError, "receive envelope is not valid JSON: #{e.message}"
+          end
+
+          # Validate + decode a required hex-string field. Bare
+          # +pack('H*')+ silently truncates on non-hex chars or odd
+          # length, which would either crash deeper down or pass
+          # unexpected bytes to the engine.
+          def decode_hex_field!(value, field:)
+            unless value.is_a?(String) && !value.empty? && value.bytesize.even? && value.match?(/\A[0-9a-fA-F]+\z/)
+              raise UsageError,
+                    "#{field} is not valid hex (must be a non-empty even-length " \
+                    'string of [0-9a-fA-F])'
+            end
+            [value].pack('H*')
+          end
+
+          # Auto-detect binary BEEF vs hex-encoded BEEF. Hex form is
+          # identifiable by being all-ASCII hex characters with even
+          # length; binary BEEF contains non-hex bytes within its first
+          # few bytes (BRC-62 version magic includes high bits and nulls).
+          # The collision risk — binary BEEF whose every byte happens to
+          # be an ASCII hex char — is astronomically small.
+          def decode_hex_if_hex(bytes)
+            trimmed = bytes.strip
+            return [trimmed].pack('H*') if trimmed.bytesize.even? && trimmed.match?(/\A[0-9a-fA-F]+\z/)
+
+            bytes
           end
 
           # Walk subject tx outputs, return the vouts whose locking script

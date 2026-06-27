@@ -18,6 +18,33 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
   after { FileUtils.rm_rf(tmpdir) }
 
+  describe 'input guard rails' do
+    it 'raises UsageError on empty input' do
+      empty = File.join(tmpdir, 'empty.beef')
+      File.binwrite(empty, '')
+      expect { command.call(["--file=#{empty}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /empty/)
+    end
+
+    it 'raises UsageError on invalid JSON (envelope shape but unparseable)' do
+      bad = File.join(tmpdir, 'bad.json')
+      File.write(bad, '{ this: is, not: valid JSON }')
+      expect { command.call(["--file=#{bad}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /not valid JSON/)
+    end
+
+    it 'raises UsageError on malformed BEEF (parser failure mapped to UsageError, not crash)' do
+      bad = File.join(tmpdir, 'bad.beef')
+      # Truncated: a single byte cannot encode a valid BEEF preamble. The
+      # parser either raises or returns an empty BEEF; both paths map to
+      # UsageError so the dispatcher's never-raises-uncaught contract
+      # holds.
+      File.binwrite(bad, "\x00")
+      expect { command.call(["--file=#{bad}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /not valid BEEF/)
+    end
+  end
+
   describe 'input format detection' do
     let(:envelope) do
       JSON.generate(
@@ -162,6 +189,50 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       File.write(path, bad)
       expect { command.call(["--file=#{path}"]) }.to raise_error(BSV::Wallet::CLI::UsageError, /outputs/)
     end
+
+    it 'raises UsageError when envelope.beef is not valid hex (odd length)' do
+      bad = JSON.generate(beef: 'abc',
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: 100,
+                                      derivation_prefix: 'p', derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /not valid hex/)
+    end
+
+    it 'raises UsageError when envelope.beef contains non-hex characters' do
+      bad = JSON.generate(beef: 'zzzz',
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: 100,
+                                      derivation_prefix: 'p', derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /not valid hex/)
+    end
+
+    it 'raises UsageError when an envelope output is missing vout (engine would default to 0)' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ satoshis: 100,
+                                      derivation_prefix: 'p', derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "vout"/)
+    end
+
+    it 'raises UsageError when an envelope output has non-integer vout' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 'first', satoshis: 100,
+                                      derivation_prefix: 'p', derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "vout"/)
+    end
   end
 
   describe 'raw BEEF path' do
@@ -223,6 +294,21 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
           )
         )
       )
+    end
+
+    it 'accepts hex-encoded BEEF (auto-detects ASCII-hex input and decodes)' do
+      hex_file = File.join(tmpdir, 'raw.hex')
+      File.write(hex_file, "\x01\x02\x03BEEF".unpack1('H*'))
+
+      output = instance_double(BSV::Transaction::TransactionOutput,
+                               locking_script: instance_double(BSV::Script::Script, to_binary: p2pkh_lock),
+                               satoshis: 1234)
+      subject_tx = instance_double(BSV::Transaction::Tx, outputs: [output])
+      # Assert decode_hex_if_hex actually unhexed before parse_beef_subject sees it.
+      allow(command).to receive(:parse_beef_subject).with("\x01\x02\x03BEEF".b).and_return(subject_tx)
+
+      command.call(["--file=#{hex_file}"])
+      expect(command).to have_received(:parse_beef_subject).with("\x01\x02\x03BEEF".b)
     end
 
     it 'reports no-matches to stderr without calling engine when no outputs match' do

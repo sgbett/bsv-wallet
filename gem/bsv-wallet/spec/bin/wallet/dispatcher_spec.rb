@@ -291,5 +291,40 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
         described_class.call(['--wallet=alice', 'balance'])
       end.to output(/public_key:\s*02deadbeef/).to_stderr
     end
+
+    # Consistency with JSON-field redaction: the field-name allowlist
+    # in Secrets::SENSITIVE_FIELD also gates string-level redaction via
+    # the shared SENSITIVE_FIELD_NAMES_PATTERN. Compound identifiers
+    # like sender_identity_key / recipient_public_key are interchange
+    # identifiers, NOT secrets, and must pass through both surfaces.
+    it 'does NOT redact compound sender_identity_key in exception messages' do
+      allow(described_class).to receive(:boot_engine).and_raise(
+        BSV::Wallet::CLI::UsageError,
+        "envelope sender_identity_key: 02#{'b' * 64}"
+      )
+      expect do
+        described_class.call(['--wallet=alice', 'balance'])
+      end.to output(/sender_identity_key:\s*02b/).to_stderr
+    end
+
+    it 'does NOT redact compound recipient_public_key in exception messages' do
+      allow(described_class).to receive(:boot_engine).and_raise(
+        BSV::Wallet::CLI::UsageError,
+        'envelope recipient_public_key: 02feedface'
+      )
+      expect do
+        described_class.call(['--wallet=alice', 'balance'])
+      end.to output(/recipient_public_key:\s*02feedface/).to_stderr
+    end
+
+    it 'still redacts derivation_prefix in exception messages' do
+      allow(described_class).to receive(:boot_engine).and_raise(
+        BSV::Wallet::CLI::UsageError,
+        'leaking derivation_prefix: deadbeef0000'
+      )
+      expect do
+        described_class.call(['--wallet=alice', 'balance'])
+      end.to output(/derivation_prefix:\s*\[REDACTED\]/).to_stderr
+    end
   end
 end

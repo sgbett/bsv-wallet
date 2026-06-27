@@ -146,19 +146,13 @@ module BSV
             end
           end
 
-          TEXT_REDACTION = /
-            \b(
-              (?:
-                wif |
-                secret |
-                (?!identity_|public_|pub)\w*_(?:key|priv) |
-                (?:private|signing|root)_key |
-                derivation_(?:prefix|suffix)
-              )
-              [=:]\s*
-            )
-            \S+
-          /xi
+          # Same pattern, same source-of-truth as +Dispatcher::MESSAGE_REDACTION+
+          # — built from +Secrets::SENSITIVE_FIELD_NAMES_PATTERN+ so all
+          # three redaction surfaces (JSON, exception messages, human
+          # output) move together. Compound identifiers like
+          # +sender_identity_key+ pass through unredacted (interchange
+          # identifier, not secret material).
+          TEXT_REDACTION = /\b(#{Secrets::SENSITIVE_FIELD_NAMES_PATTERN}[=:]\s*)\S+/i
 
           # Read binary input from +--file=<path>+ or stdin. Always
           # +binmode+ — text-mode reads would mangle BEEF bytes with

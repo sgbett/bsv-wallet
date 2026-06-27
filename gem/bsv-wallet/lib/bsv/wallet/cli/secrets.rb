@@ -26,31 +26,31 @@ module BSV
       # fields are NOT redacted — those are interchange identifiers, not
       # secrets, per the identity-key hex carve-out.
       module Secrets
-        # Field-name pattern (case-insensitive). Matches:
-        #   - +wif+, +Wif+, +WIF+
-        #   - +secret+, +Secret+
-        #   - anything ending in +_key+ (matches +root_key+, +private_key+,
-        #     +signing_key+) EXCEPT +identity_key+ + +public_key+ +
-        #     +pubkey+ (interchange identifiers, not secret material).
-        #   - +derivation_prefix+ / +derivation_suffix+ (per-output BRC-29
-        #     derivation hints — recoverable from the chain but should
-        #     not leak through error messages).
-        # Explicit allowlist of sensitive field names. Catch-all wildcards
-        # over `*_key` would snag compound identifiers like
-        # `sender_identity_key` or `recipient_public_key` that ARE
+        # Explicit allowlist of sensitive field names. Catch-all
+        # wildcards over +*_key+ would snag compound identifiers like
+        # +sender_identity_key+ / +recipient_public_key+ that ARE
         # interchange identifiers, not secrets (per the identity-key
         # hex carve-out). Better to enumerate known-secret names and
         # leave compound pubkey-shaped names alone.
-        SENSITIVE_FIELD = /
-          \A(
-            wif |
-            secret |
-            private_key |
-            signing_key |
-            root_key |
-            derivation_(prefix|suffix)
-          )\z
-        /xi
+        #
+        # Members:
+        #   - +wif+ — WIF private key
+        #   - +secret+ — generic secret material
+        #   - +private_key+ / +signing_key+ / +root_key+ — named keys
+        #   - +derivation_prefix+ / +derivation_suffix+ — per-output
+        #     BRC-29 derivation hints (recoverable from the chain but
+        #     should not leak through error messages)
+        #
+        # The single canonical pattern string below is the source of
+        # truth for SENSITIVE_FIELD (full-string match for JSON keys),
+        # and for the string-level regexes in +Dispatcher+ and
+        # +Commands::Base+ which interpolate it into token-shape
+        # context (+\b … [=:]\s* \S++). Keep the three in sync via this
+        # constant; do not edit the regexes independently.
+        SENSITIVE_FIELD_NAMES_PATTERN =
+          '(?:wif|secret|private_key|signing_key|root_key|derivation_(?:prefix|suffix))'
+
+        SENSITIVE_FIELD = /\A#{SENSITIVE_FIELD_NAMES_PATTERN}\z/i
 
         REDACTED = '[REDACTED]'
 

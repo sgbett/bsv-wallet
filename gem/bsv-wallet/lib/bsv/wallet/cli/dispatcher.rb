@@ -104,24 +104,13 @@ module BSV
           end
         end
 
-        # Field-name + separator capture group. Matches keys that
-        # +Secrets::SENSITIVE_FIELD+ would scrub, followed by an
-        # +=+/+:+/space separator. Pubkey-identifier carve-outs
-        # (+identity_key+, +public_key+, +pubkey+) are NOT matched —
-        # they're interchange identifiers, not secret material.
-        MESSAGE_REDACTION = /
-          \b(
-            (?:
-              wif |
-              secret |
-              (?!identity_|public_|pub)\w*_(?:key|priv) |
-              (?:private|signing|root)_key |
-              derivation_(?:prefix|suffix)
-            )
-            [=:]\s*
-          )
-          \S+
-        /xi
+        # Field-name + separator capture group. Built from the same
+        # canonical list as +Secrets::SENSITIVE_FIELD+ so JSON-field
+        # redaction and string-level redaction stay consistent. Compound
+        # identifiers like +sender_identity_key+ pass through unredacted
+        # (interchange identifier, not secret material; see the
+        # pubkey-hex carve-out).
+        MESSAGE_REDACTION = /\b(#{Secrets::SENSITIVE_FIELD_NAMES_PATTERN}[=:]\s*)\S+/i
 
         # Parse the global flag layer; everything after the first
         # non-flag token is left for the subcommand. Enforces the
