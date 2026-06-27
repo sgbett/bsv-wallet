@@ -9,6 +9,8 @@ require_relative 'global_options'
 require_relative 'commands/base'
 require_relative 'commands/balance'
 require_relative 'commands/list'
+require_relative 'commands/send'
+require_relative 'commands/receive'
 
 module BSV
   module Wallet
@@ -28,7 +30,9 @@ module BSV
         # class — no implicit registration.
         COMMANDS = {
           'balance' => Commands::Balance,
-          'list' => Commands::List
+          'list' => Commands::List,
+          'send' => Commands::Send,
+          'receive' => Commands::Receive
         }.freeze
 
         module_function

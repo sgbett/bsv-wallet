@@ -35,12 +35,19 @@ module BSV
         #   - +derivation_prefix+ / +derivation_suffix+ (per-output BRC-29
         #     derivation hints — recoverable from the chain but should
         #     not leak through error messages).
+        # Explicit allowlist of sensitive field names. Catch-all wildcards
+        # over `*_key` would snag compound identifiers like
+        # `sender_identity_key` or `recipient_public_key` that ARE
+        # interchange identifiers, not secrets (per the identity-key
+        # hex carve-out). Better to enumerate known-secret names and
+        # leave compound pubkey-shaped names alone.
         SENSITIVE_FIELD = /
           \A(
             wif |
             secret |
-            (?!identity_|public_|pub)\w*_(key|priv) |
-            (private|signing|root)_key |
+            private_key |
+            signing_key |
+            root_key |
             derivation_(prefix|suffix)
           )\z
         /xi

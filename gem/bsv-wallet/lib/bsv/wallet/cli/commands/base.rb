@@ -4,6 +4,7 @@ require 'json'
 require 'optparse'
 require_relative '../errors'
 require_relative '../secrets'
+require_relative '../global_options'
 
 module BSV
   module Wallet
@@ -84,21 +85,28 @@ module BSV
 
           protected
 
-          # JSON to stdout, with secrets redaction applied. Pretty when
-          # stdout is a TTY (and +--json+ wasn't forced), compact when
-          # piped or +--json+ is set.
+          # JSON to stdout, with secrets redaction applied by default.
+          # Pretty when stdout is a TTY (and +--json+ wasn't forced),
+          # compact when piped or +--json+ is set.
+          #
+          # +redact: false+ skips the redaction layer. Use for outputs
+          # that DELIBERATELY carry derivation hints to the recipient
+          # (BRC-29 payment message envelopes) — those hints are the
+          # whole point of the envelope and must reach the other side.
+          # Default stays +redact: true+ — opt-out is intentional.
           #
           # For NDJSON (streamed list output), call +#emit_ndjson_row+
           # per row instead — never buffer the full set in memory.
           #
           # @param payload [Hash, Array]
-          def emit_json(payload)
-            redacted = Secrets.redact(payload)
+          # @param redact [Boolean] apply +Secrets.redact+ before emit
+          def emit_json(payload, redact: true)
+            payload = Secrets.redact(payload) if redact
             json =
               if pretty_json?
-                JSON.pretty_generate(redacted)
+                JSON.pretty_generate(payload)
               else
-                JSON.generate(redacted)
+                JSON.generate(payload)
               end
             $stdout.puts json
           end
