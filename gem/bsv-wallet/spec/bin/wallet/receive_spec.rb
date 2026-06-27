@@ -287,6 +287,51 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       expect { command.call(["--file=#{path}"]) }
         .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "derivation_prefix"/)
     end
+
+    # JSON faithfully decodes whatever shape the operator supplies —
+    # numbers, arrays, strings where Hashes are expected. Without explicit
+    # type checks at the CLI boundary, the dispatcher's never-raises-uncaught
+    # contract breaks (NoMethodError / TypeError instead of UsageError).
+    it 'raises UsageError when "beef" is a number (not a string)' do
+      bad = JSON.generate(beef: 42,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: 100,
+                                      derivation_prefix: 'p', derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "beef"/)
+    end
+
+    it 'raises UsageError when "outputs" is a string (not an array)' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: 'not-an-array')
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "outputs"/)
+    end
+
+    it 'raises UsageError when "outputs" is a hash (not an array)' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: { vout: 0 })
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "outputs"/)
+    end
+
+    it 'raises UsageError when an outputs element is not a JSON object' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: ['oops'])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /must be a JSON object/)
+    end
   end
 
   describe 'raw BEEF path' do

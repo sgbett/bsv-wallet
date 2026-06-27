@@ -115,7 +115,9 @@ module BSV
           # rather than discovering it on attempted spend.
           def call_envelope(engine, envelope, description)
             beef_hex = envelope[:beef]
-            raise UsageError, 'envelope missing "beef" field' if beef_hex.nil? || beef_hex.empty?
+            unless beef_hex.is_a?(String) && !beef_hex.empty?
+              raise UsageError, 'envelope missing or invalid "beef" field (must be a non-empty hex string)'
+            end
 
             sender_identity_key = envelope[:sender_identity_key]
             unless sender_identity_key.is_a?(String) && sender_identity_key.match?(/\A(02|03)[0-9a-fA-F]{64}\z/)
@@ -124,8 +126,10 @@ module BSV
                     '(required for BRC-29 key recovery: must be 66-char compressed pubkey hex starting 02/03)'
             end
 
-            pay_outputs = envelope[:outputs] || []
-            raise UsageError, 'envelope missing "outputs" array' if pay_outputs.empty?
+            pay_outputs = envelope[:outputs]
+            unless pay_outputs.is_a?(Array) && !pay_outputs.empty?
+              raise UsageError, 'envelope missing or invalid "outputs" (must be a non-empty array)'
+            end
 
             beef_bytes = decode_hex_field!(beef_hex, field: 'envelope "beef"')
 
@@ -247,6 +251,12 @@ module BSV
           # required: silent engine-side defaults would derive the
           # wrong key, producing an unspendable import.
           def validate_envelope_output!(out, idx)
+            unless out.is_a?(Hash)
+              raise UsageError,
+                    "envelope output [#{idx}] must be a JSON object " \
+                    "(got #{out.class}: #{out.inspect.slice(0, 60)})"
+            end
+
             vout = out[:vout]
             unless vout.is_a?(Integer) && vout >= 0
               raise UsageError,
