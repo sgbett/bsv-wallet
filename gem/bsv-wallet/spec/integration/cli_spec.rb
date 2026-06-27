@@ -23,13 +23,6 @@ require 'fileutils'
 require 'securerandom'
 
 RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable RSpec/DescribeClass
-  # Paused during the #433 native CLI rebuild. This spec shells out to
-  # bin/balance which was deleted in Phase 1 (replaced by `bin/wallet
-  # balance`). The full create | receive pipeline shape will be
-  # rebuilt in Phase 6 against the new dispatcher — adapting it
-  # piecemeal across each phase would test a moving target.
-  before { skip 'paused during #433 rebuild; rebuilt in Phase 6 against bin/wallet' }
-
   let(:bin_dir) { File.expand_path('../../bin', __dir__) }
   let(:tmpdir)   { Dir.mktmpdir("bsv_wallet_integration_#{SecureRandom.hex(4)}_") }
   let(:alice_db) { File.join(tmpdir, 'alice.db') }
@@ -41,6 +34,14 @@ RSpec.describe 'CLI porcelain: create | receive pipeline' do # rubocop:disable R
   end
 
   before do
+    # Paused during the #433 native CLI rebuild. This spec shells out
+    # to bin/balance which was deleted in Phase 1 (replaced by
+    # bin/wallet balance). The full create | receive pipeline shape
+    # will be rebuilt in Phase 6 against the new dispatcher —
+    # adapting it piecemeal across each phase would test a moving
+    # target.
+    skip 'paused during #433 rebuild; rebuilt in Phase 6 against bin/wallet'
+
     require 'bsv-wallet'
     BSV::Wallet::Fixtures.reset!
     BSV::Wallet::Fixtures.load_config_file!

@@ -69,7 +69,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Balance do
 
     it 'emits NDJSON rows for each output' do
       expect { command.call(['--outputs']) }.to output(
-        %r{\{"satoshis":100\}\n\{"satoshis":200\}}
+        /\{"satoshis":100\}\n\{"satoshis":200\}/
       ).to_stdout
     end
   end

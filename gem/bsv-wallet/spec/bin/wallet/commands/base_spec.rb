@@ -26,21 +26,21 @@ RSpec.describe BSV::Wallet::CLI::Commands::Base do
     end
 
     it 'rejects wrong prefix' do
-      expect {
+      expect do
         command.send(:parse_pubkey_hex, "04#{'a' * 64}")
-      }.to raise_error(BSV::Wallet::CLI::UsageError, /invalid public key/)
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /invalid public key/)
     end
 
     it 'rejects wrong length' do
-      expect {
+      expect do
         command.send(:parse_pubkey_hex, "02#{'a' * 62}")
-      }.to raise_error(BSV::Wallet::CLI::UsageError, /invalid public key/)
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /invalid public key/)
     end
 
     it 'rejects non-hex characters' do
-      expect {
+      expect do
         command.send(:parse_pubkey_hex, "02#{'z' * 64}")
-      }.to raise_error(BSV::Wallet::CLI::UsageError, /invalid public key/)
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /invalid public key/)
     end
   end
 
@@ -61,9 +61,9 @@ RSpec.describe BSV::Wallet::CLI::Commands::Base do
   describe '#read_binary_input' do
     it 'refuses to read from a TTY stdin' do
       allow($stdin).to receive(:tty?).and_return(true)
-      expect {
+      expect do
         command.send(:read_binary_input)
-      }.to raise_error(BSV::Wallet::CLI::UsageError, /no input on stdin/)
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /no input on stdin/)
     end
 
     it 'reads from --file with binmode' do

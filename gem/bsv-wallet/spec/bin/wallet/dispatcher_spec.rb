@@ -2,6 +2,7 @@
 
 require 'spec_helper'
 require 'tmpdir'
+require 'fileutils'
 require 'bsv/wallet/cli/dispatcher'
 
 RSpec.describe BSV::Wallet::CLI::Dispatcher do
@@ -13,22 +14,22 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
     end
 
     it 'parses --network and converts to symbol' do
-      opts, _ = described_class.parse_global_options(['--network=testnet', 'balance'])
+      opts, = described_class.parse_global_options(['--network=testnet', 'balance'])
       expect(opts.network).to eq(:testnet)
     end
 
     it 'treats --network= (blank) as nil so CLI.boot config fallback fires' do
-      opts, _ = described_class.parse_global_options(['--network=', 'balance'])
+      opts, = described_class.parse_global_options(['--network=', 'balance'])
       expect(opts.network).to be_nil
     end
 
     it 'trims whitespace from --network' do
-      opts, _ = described_class.parse_global_options(['--network= mainnet ', 'balance'])
+      opts, = described_class.parse_global_options(['--network= mainnet ', 'balance'])
       expect(opts.network).to eq(:mainnet)
     end
 
     it 'parses --json' do
-      opts, _ = described_class.parse_global_options(['--json', 'balance'])
+      opts, = described_class.parse_global_options(['--json', 'balance'])
       expect(opts.json).to be(true)
     end
 
@@ -49,13 +50,13 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
     before { allow($stdin).to receive(:tty?).and_return(true) }
 
     it 'refuses --wif=<wif> on TTY without --allow-insecure-wif' do
-      expect {
+      expect do
         described_class.parse_global_options(['--wif=L1xxx', 'balance'])
-      }.to raise_error(BSV::Wallet::CLI::InsecureWifError, /shell-history capture/)
+      end.to raise_error(BSV::Wallet::CLI::InsecureWifError, /shell-history capture/)
     end
 
     it 'allows --wif=<wif> on TTY when --allow-insecure-wif is set' do
-      opts, _ = described_class.parse_global_options(
+      opts, = described_class.parse_global_options(
         ['--wif=L1xxx', '--allow-insecure-wif', 'balance']
       )
       expect(opts.wif_override).to eq('L1xxx')
@@ -66,74 +67,77 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
     before { allow($stdin).to receive(:tty?).and_return(false) }
 
     it 'accepts --wif=<wif> when stdin is piped' do
-      opts, _ = described_class.parse_global_options(['--wif=L1xxx', 'balance'])
+      opts, = described_class.parse_global_options(['--wif=L1xxx', 'balance'])
       expect(opts.wif_override).to eq('L1xxx')
     end
   end
 
   describe 'secrets policy: --wif-file' do
-    around do |example|
-      Dir.mktmpdir do |dir|
-        @wif_file = File.join(dir, 'wif')
-        File.write(@wif_file, "L1RrrnXkcKut5DEMwtDthjwRcTTwED36thyL1DebVrKuwvohjMNi\n")
-        File.chmod(0o600, @wif_file)
-        example.run
-      end
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:wif_file) { File.join(tmpdir, 'wif') }
+    let(:wif_value) { 'L1RrrnXkcKut5DEMwtDthjwRcTTwED36thyL1DebVrKuwvohjMNi' }
+
+    before do
+      File.write(wif_file, "#{wif_value}\n")
+      File.chmod(0o600, wif_file)
     end
 
+    after { FileUtils.rm_rf(tmpdir) }
+
     it 'reads the WIF from a mode-0600 file' do
-      opts, _ = described_class.parse_global_options(
-        ["--wif-file=#{@wif_file}", 'balance']
+      opts, = described_class.parse_global_options(
+        ["--wif-file=#{wif_file}", 'balance']
       )
-      expect(opts.wif_override).to eq('L1RrrnXkcKut5DEMwtDthjwRcTTwED36thyL1DebVrKuwvohjMNi')
+      expect(opts.wif_override).to eq(wif_value)
     end
 
     it 'refuses world-readable WIF files' do
-      File.chmod(0o644, @wif_file)
-      expect {
-        described_class.parse_global_options(["--wif-file=#{@wif_file}", 'balance'])
-      }.to raise_error(BSV::Wallet::CLI::UsageError, /mode must be 0600/)
+      File.chmod(0o644, wif_file)
+      expect do
+        described_class.parse_global_options(["--wif-file=#{wif_file}", 'balance'])
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /mode must be 0600/)
     end
   end
 
   describe 'secrets policy: --database-url' do
     it 'accepts URLs without password in userinfo' do
-      opts, _ = described_class.parse_global_options(
+      opts, = described_class.parse_global_options(
         ['--database-url=postgres://user@host/db', 'balance']
       )
       expect(opts.database_url_override).to eq('postgres://user@host/db')
     end
 
     it 'refuses URLs with password embedded in userinfo' do
-      expect {
+      expect do
         described_class.parse_global_options(
           ['--database-url=postgres://user:pass@host/db', 'balance']
         )
-      }.to raise_error(BSV::Wallet::CLI::UsageError, /embedded password refused/)
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /embedded password refused/)
     end
 
     it 'reports an invalid URL as a usage error' do
-      expect {
+      expect do
         described_class.parse_global_options(
           ['--database-url=not a url', 'balance']
         )
-      }.to raise_error(BSV::Wallet::CLI::UsageError, /invalid URI/)
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /invalid URI/)
     end
   end
 
   describe 'secrets policy: --env=<file>' do
-    around do |example|
-      Dir.mktmpdir do |dir|
-        @env_file = File.join(dir, '.env')
-        File.write(@env_file, "BSV_WALLET_POSTGRES=postgres://localhost/test\n")
-        File.chmod(0o600, @env_file)
-        example.run
-      end
+    let(:tmpdir) { Dir.mktmpdir }
+    let(:env_file) { File.join(tmpdir, '.env') }
+
+    before do
+      File.write(env_file, "BSV_WALLET_POSTGRES=postgres://localhost/test\n")
+      File.chmod(0o600, env_file)
     end
+
+    after { FileUtils.rm_rf(tmpdir) }
 
     it 'loads keys with allowed prefixes' do
       ENV.delete('BSV_WALLET_POSTGRES')
-      described_class.parse_global_options(["--env=#{@env_file}", 'balance'])
+      described_class.parse_global_options(["--env=#{env_file}", 'balance'])
       expect(ENV.fetch('BSV_WALLET_POSTGRES')).to eq('postgres://localhost/test')
     ensure
       ENV.delete('BSV_WALLET_POSTGRES')
@@ -141,26 +145,26 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
 
     it 'does not override existing process ENV (seed-mechanism)' do
       ENV['BSV_WALLET_POSTGRES'] = 'postgres://existing/db'
-      described_class.parse_global_options(["--env=#{@env_file}", 'balance'])
+      described_class.parse_global_options(["--env=#{env_file}", 'balance'])
       expect(ENV.fetch('BSV_WALLET_POSTGRES')).to eq('postgres://existing/db')
     ensure
       ENV.delete('BSV_WALLET_POSTGRES')
     end
 
     it 'refuses world-readable env files' do
-      File.chmod(0o644, @env_file)
-      expect {
-        described_class.parse_global_options(["--env=#{@env_file}", 'balance'])
-      }.to raise_error(BSV::Wallet::CLI::UsageError, /mode must be 0600/)
+      File.chmod(0o644, env_file)
+      expect do
+        described_class.parse_global_options(["--env=#{env_file}", 'balance'])
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /mode must be 0600/)
     end
 
     it 'refuses symlinked env files without --env-allow-symlink' do
       Dir.mktmpdir do |dir2|
         symlink = File.join(dir2, 'env-link')
-        File.symlink(@env_file, symlink)
-        expect {
+        File.symlink(env_file, symlink)
+        expect do
           described_class.parse_global_options(["--env=#{symlink}", 'balance'])
-        }.to raise_error(BSV::Wallet::CLI::UsageError, /symlinks refused/)
+        end.to raise_error(BSV::Wallet::CLI::UsageError, /symlinks refused/)
       end
     end
   end
@@ -168,7 +172,7 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
   describe '.call' do
     it 'returns exit code 0 for --help' do
       code = nil
-      expect { code = described_class.call(['--help']) }.to output(/Usage: bin\/wallet/).to_stdout
+      expect { code = described_class.call(['--help']) }.to output(%r{Usage: bin/wallet}).to_stdout
       expect(code).to eq(0)
     end
 
@@ -193,18 +197,18 @@ RSpec.describe BSV::Wallet::CLI::Dispatcher do
       allow(described_class).to receive(:boot_engine).and_raise(
         BSV::Wallet::CLI::UsageError, 'bad wif=L1RrrnXkcKut5DEMwtDthjwRcTTwED36thyL1DebVrKuwvohjMNi'
       )
-      expect {
+      expect do
         described_class.call(['--wallet=alice', 'balance'])
-      }.to output(/wif=\[REDACTED\]/).to_stderr
+      end.to output(/wif=\[REDACTED\]/).to_stderr
     end
 
     it 'redacts private_key values from exception messages' do
       allow(described_class).to receive(:boot_engine).and_raise(
         BSV::Wallet::CLI::UsageError, 'bad private_key: abc123def456'
       )
-      expect {
+      expect do
         described_class.call(['--wallet=alice', 'balance'])
-      }.to output(/private_key:\s*\[REDACTED\]/).to_stderr
+      end.to output(/private_key:\s*\[REDACTED\]/).to_stderr
     end
   end
 end

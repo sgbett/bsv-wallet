@@ -29,13 +29,6 @@ require 'bsv-wallet'
 # and the bin/ subprocesses it spawns alike.
 
 RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
-  # Paused during the #433 native CLI rebuild. This spec shells out to
-  # bin/balance / bin/list_outputs which were deleted in Phase 1
-  # (replaced by `bin/wallet balance` / `bin/wallet list outputs`).
-  # The consolidation + sweep scenario will be rebuilt in Phase 6
-  # against the new dispatcher.
-  before { skip 'paused during #433 rebuild; rebuilt in Phase 6 against bin/wallet' }
-
   let(:wallet_names) { %w[alice bob carol].freeze }
   let(:payments_per_wallet) { 4 }
   let(:payment_sats) { 5_000 }
@@ -55,6 +48,13 @@ RSpec.describe 'consolidation dry-run' do # rubocop:disable RSpec/DescribeClass
   # BSV_WALLET_WIF_<NAME> + a derivable DATABASE_URL_<NAME> (or
   # BSV_WALLET_POSTGRES base).
   before do
+    # Paused during the #433 native CLI rebuild. This spec shells out
+    # to bin/balance / bin/list_outputs which were deleted in Phase 1
+    # (replaced by bin/wallet balance / bin/wallet list outputs). The
+    # consolidation + sweep scenario will be rebuilt in Phase 6
+    # against the new dispatcher.
+    skip 'paused during #433 rebuild; rebuilt in Phase 6 against bin/wallet'
+
     BSV::Wallet::Fixtures.reset!
     BSV::Wallet::Fixtures.load_config_file!
     missing = wallet_names.reject do |n|

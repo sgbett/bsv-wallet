@@ -57,9 +57,9 @@ RSpec.describe BSV::Wallet::CLI::Commands::List do
 
   describe 'list actions' do
     it 'requires at least one --label' do
-      expect {
+      expect do
         command.call(['actions'])
-      }.to raise_error(BSV::Wallet::CLI::UsageError, /requires at least one --label/)
+      end.to raise_error(BSV::Wallet::CLI::UsageError, /requires at least one --label/)
     end
 
     it 'forwards labels to engine.list_actions' do
@@ -82,9 +82,9 @@ RSpec.describe BSV::Wallet::CLI::Commands::List do
       allow(engine).to receive(:list_actions).and_return(
         { actions: [{ ref: 'a' }, { ref: 'b' }], total: 2 }
       )
-      expect {
+      expect do
         command.call(['actions', '--label=foo'])
-      }.to output(/^\{"ref":"a"\}\n\{"ref":"b"\}/).to_stdout
+      end.to output(/^\{"ref":"a"\}\n\{"ref":"b"\}/).to_stdout
     end
   end
 end
