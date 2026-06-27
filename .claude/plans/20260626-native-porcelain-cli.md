@@ -76,8 +76,9 @@ Three credential classes flow through the dispatcher; each has a safe-handling r
 - `--database-url=<url>` is accepted but the `userinfo` component **must not contain a password** (i.e. `postgres://user@host/db` is fine; `postgres://user:pass@host/db` is rejected at parse time). Same argv-leakage rationale as WIF.
 
 **`--env=<file>` — permission-checked before load.**
-- Stat the file: refuse mode `& 0077`, refuse non-owner, refuse symlinks unless `--env-allow-symlink` is set.
-- Canonicalise the path via `File.realpath` to prevent cwd-relative hijacks.
+- `File.lstat` the path FIRST to detect symlinks (a regular `File.stat` would silently follow them and miss the policy). If `File.symlink?(path)` and `--env-allow-symlink` is not set, refuse.
+- Then `File.stat` (or `File.lstat` for the non-symlink case): refuse mode `& 0077`, refuse non-owner.
+- Canonicalise via `File.realpath` only AFTER the symlink check passes — `realpath` resolves symlinks, so checking after it would defeat the policy.
 - Loads only keys not already in process ENV (seed-mechanism semantics, unchanged from above).
 - Valid keys are constrained to the documented `BSV_WALLET_*` and `DATABASE_URL_*` prefixes — arbitrary ENV injection from a writable env file is refused.
 
@@ -159,7 +160,7 @@ The plan introduces no schema changes, but four new read patterns benefit from e
 | Command(s) | Query shape | Index relied on | Status |
 |------------|-------------|-----------------|--------|
 | `reject`, `broadcast`, `transmit`, `sign` (lookup phase) | `actions WHERE reference = ?` | `actions.reference UNIQUE` (`uuid` B-tree) | Confirm before Phase 2; index already present per `001_create_schema.rb` |
-| `list actions --label=<name>` | `labels JOIN action_labels JOIN actions WHERE labels.name = ?` | `labels(name) UNIQUE`, `action_labels(label_id, action_id)` composite | Confirm before Phase 1; add to `001_create_schema.rb` if missing (pre-release, so schema lives in 001) |
+| `list actions --label=<name>` | `labels JOIN action_labels JOIN actions WHERE labels.label = ?` | `labels(label) UNIQUE` (already `labels_label_unique` in 001), `action_labels(label_id, action_id)` composite | Confirm `action_labels` composite before Phase 1; add to `001_create_schema.rb` if missing (pre-release, so schema lives in 001) |
 | `broadcast_action` rehydration | `actions WHERE id = ?` → `@hydrator.build_atomic_beef(raw_tx, action_id)` | Primary key on `actions.id` | Index-backed by construction |
 | `list outputs` (paginated) | `spendable_outputs` with `LIMIT`/`OFFSET` | Existing indices on `outputs` | Verify engine pushes `LIMIT` to SQL, not Ruby-side |
 

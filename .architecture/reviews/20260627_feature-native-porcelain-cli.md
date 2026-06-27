@@ -530,9 +530,9 @@ Project conventions in play: SOA architecture, principle-of-state, stateless SDK
    - **Recommendation**: State explicitly that `import_utxo` is the atomic unit (per-row `db.transaction`), and the scan is a loop of independent units — matches principle-of-state's "atomic transition" framing.
 
 2. **`list actions --label` index coverage unverified** (Impact: Medium)
-   - **Issue**: The plan asserts label-required but doesn't confirm the join path (`labels.name = ?` → `action_labels.label_id` → `actions`) has the composite index needed to avoid a labels-side seq scan at scale.
+   - **Issue**: The plan asserts label-required but doesn't confirm the join path (`labels.label = ?` → `action_labels.label_id` → `actions`) has the composite index needed to avoid a labels-side seq scan at scale.
    - **Why it matters**: At 100k+ actions a missing `action_labels(label_id, action_id)` index turns a porcelain command into a table scan.
-   - **Recommendation**: Verify `001_create_schema.rb` carries `action_labels(label_id, action_id)` and `labels(name) UNIQUE`; if absent, fold into the same PR (still pre-release, schema lives in 001).
+   - **Recommendation**: Verify `001_create_schema.rb` carries `action_labels(label_id, action_id)` and `labels(label) UNIQUE`; if absent, fold into the same PR (still pre-release, schema lives in 001). (Note: `labels_label_unique` is already present in the current schema; the composite still needs verification.)
 
 3. **Pagination cost at high `--limit`** (Impact: Low)
    - **Issue**: `list outputs --limit=N` with no stated ceiling — engine's `spendable_outputs` may materialise all rows before slicing.
