@@ -18,6 +18,18 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
   after { FileUtils.rm_rf(tmpdir) }
 
+  describe 'file IO errors' do
+    it 'raises UsageError (not Errno::ENOENT) on missing --file' do
+      expect { command.call(["--file=#{tmpdir}/does-not-exist.beef"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /input file not found/)
+    end
+
+    it 'raises UsageError (not Errno::EISDIR) when --file points to a directory' do
+      expect { command.call(["--file=#{tmpdir}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /input file/)
+    end
+  end
+
   describe 'input guard rails' do
     it 'raises UsageError on empty input' do
       empty = File.join(tmpdir, 'empty.beef')

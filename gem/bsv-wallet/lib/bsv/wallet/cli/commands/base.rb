@@ -170,7 +170,7 @@ module BSV
           def read_binary_input(file: nil, max_bytes: nil)
             bytes =
               if file
-                max_bytes ? File.binread(file, max_bytes) : File.binread(file)
+                read_file_safely(file, max_bytes)
               else
                 raise UsageError, 'no input on stdin (pipe BEEF bytes or use --file=<path>)' if $stdin.tty?
 
@@ -181,6 +181,19 @@ module BSV
             # file, closed stdin); without length it returns "". Normalise
             # so callers can rely on +#bytesize+ / +#empty?+ unconditionally.
             bytes || (+'').b
+          end
+
+          # File.binread raises Errno::* (ENOENT, EACCES, EISDIR, …)
+          # which the dispatcher's rescue chain doesn't catch (CLI::Error
+          # / Wallet::Error / OptionParser::ParseError / SystemExit only).
+          # Wrap to UsageError so a missing or unreadable +--file+ becomes
+          # exit-2 with a clean message rather than a stack trace.
+          def read_file_safely(file, max_bytes)
+            max_bytes ? File.binread(file, max_bytes) : File.binread(file)
+          rescue Errno::ENOENT
+            raise UsageError, "input file not found: #{file}"
+          rescue SystemCallError => e
+            raise UsageError, "input file #{file}: #{e.message}"
           end
 
           # Validate a hex-encoded compressed public key (66 chars,

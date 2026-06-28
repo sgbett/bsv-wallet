@@ -97,13 +97,15 @@ module BSV
             bytes
           end
 
-          # Distinguish BRC-29 envelope JSON from raw BEEF bytes. JSON
-          # always starts with whitespace or +{+; BEEF begins with a
-          # specific 4-byte magic (BRC-62 / BRC-95). A first-byte check is
-          # cheap and unambiguous.
+          # Distinguish BRC-29 envelope JSON from raw BEEF bytes by
+          # looking at the first non-whitespace byte: JSON envelopes
+          # start with +{+ (optionally preceded by whitespace from
+          # pretty-printers); BEEF starts with binary version bytes that
+          # are never whitespace or +{+. Anchored regex scan — no buffer
+          # allocation, bounded at the first non-whitespace byte
+          # regardless of input size.
           def detect_input_kind(bytes)
-            trimmed = bytes.lstrip
-            return :envelope if trimmed.start_with?('{')
+            return :envelope if bytes.match?(/\A\s*\{/)
 
             :raw_beef
           end
