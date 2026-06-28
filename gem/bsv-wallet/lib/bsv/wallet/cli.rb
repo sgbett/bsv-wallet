@@ -91,6 +91,7 @@ module BSV
 
         store = BSV::Wallet::Store.connect(db_url, identity_pubkey_hash: key_deriver.identity_pubkey_hash)
         store.migrate!
+        store.verify_schema! # HLR #467 — fail fast on schema/WIF mismatch (restore-to-wrong-DB, drift)
         db = store.db
 
         utxo_pool = BSV::Wallet::Store::UTXOPool.new(store: store)
