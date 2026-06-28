@@ -77,7 +77,7 @@ module BSV
 
             id
           rescue ArgumentError
-            raise UsageError, "reject <action_id> must be a positive integer (got #{arg.inspect})"
+            raise UsageError, "reject <action_id> must be a positive integer (got #{safe_preview(arg)})"
           end
         end
       end

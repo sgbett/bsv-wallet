@@ -210,7 +210,27 @@ module BSV
             return hex if hex.is_a?(String) && hex.match?(/\A(02|03)[0-9a-fA-F]{64}\z/)
 
             raise UsageError,
-                  "invalid public key: expected 66-char hex starting 02 or 03, got #{hex.inspect}"
+                  "invalid public key: expected 66-char hex starting 02 or 03, got #{safe_preview(hex)}"
+          end
+
+          # Defence against accidental secret disclosure in error
+          # messages. An operator mistyping a WIF (or anything else
+          # long) into a wrong slot — recipient, --to, <action_id> —
+          # would otherwise have the raw value echoed to stderr / logs
+          # / CI output if the validator dumped +#inspect+. Short
+          # values pass through verbatim (diagnostic for typos; too
+          # short to be a WIF); long values get a prefix + length
+          # indicator that's diagnostic without being a disclosure
+          # surface.
+          #
+          # @param value [Object] anything responding to +#to_s+
+          # @param limit [Integer] threshold above which truncation kicks in
+          # @return [String] inspect-shaped preview safe for error messages
+          def safe_preview(value, limit: 20)
+            s = value.to_s
+            return s.inspect if s.length <= limit
+
+            "#{s.slice(0, 8).inspect[0..-2]}…\" (#{s.length} chars)"
           end
 
           # +true+ iff JSON output should be pretty-formatted (TTY +

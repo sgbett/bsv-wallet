@@ -36,6 +36,19 @@ RSpec.describe BSV::Wallet::CLI::Commands::Sweep do
       expect { command.call(["--to=04#{'a' * 64}"]) }
         .to raise_error(BSV::Wallet::CLI::UsageError, /invalid public key/)
     end
+
+    # Defence-in-depth: an operator pasting a WIF or other long secret
+    # into --to should not see it echoed verbatim in the error message
+    # (would persist in shell history, CI logs, bug reports). Length
+    # threshold is 20 chars — anything longer gets prefix + length.
+    it 'truncates long invalid --to values in the error message (no operator-secret echo)' do
+      wif_lookalike = "L#{'a' * 51}"
+      expect { command.call(["--to=#{wif_lookalike}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError) do |error|
+          expect(error.message).not_to include(wif_lookalike)
+          expect(error.message).to include('52 chars')
+        end
+    end
   end
 
   describe 'engine integration (happy path)' do

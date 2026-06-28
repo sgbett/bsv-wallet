@@ -20,6 +20,15 @@ RSpec.describe BSV::Wallet::CLI::Commands::Reject do
         .to raise_error(BSV::Wallet::CLI::UsageError, /must be a positive integer/)
     end
 
+    it 'truncates long non-integer <action_id> in the error message (no operator-secret echo)' do
+      wif_lookalike = "L#{'a' * 51}"
+      expect { command.call([wif_lookalike]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError) do |error|
+          expect(error.message).not_to include(wif_lookalike)
+          expect(error.message).to include('52 chars')
+        end
+    end
+
     it 'rejects zero <action_id>' do
       expect { command.call(['0']) }
         .to raise_error(BSV::Wallet::CLI::UsageError, /must be a positive integer/)

@@ -101,23 +101,8 @@ module BSV
             return :base58 if recipient.match?(/\A[mn1][1-9A-HJ-NP-Za-km-z]{25,34}\z/)
 
             raise UsageError,
-                  "send recipient #{recipient_preview(recipient)} not recognised " \
+                  "send recipient #{safe_preview(recipient)} not recognised " \
                   '(expected mainnet/testnet P2PKH Base58 address or 66-char hex identity key)'
-          end
-
-          # Defence against accidental secret disclosure when an operator
-          # mistypes a WIF (or anything else long) into the recipient slot.
-          # The unknown-recipient branch fires precisely when the value
-          # ISN'T address-shaped — could be anything. Echoing the full
-          # value to stderr would persist it in shell history, CI logs,
-          # bug reports. Short values pass through (too short to be a
-          # WIF anyway); long values get a prefix + length indicator
-          # that's diagnostic without being a disclosure surface.
-          def recipient_preview(recipient)
-            s = recipient.to_s
-            return s.inspect if s.length <= 20
-
-            "#{s.slice(0, 8).inspect[0..-2]}…\" (#{s.length} chars)"
           end
 
           def parse_satoshis(arg)
