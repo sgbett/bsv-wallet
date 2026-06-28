@@ -213,6 +213,44 @@ module BSV
                   "invalid public key: expected 66-char hex starting 02 or 03, got #{safe_preview(hex)}"
           end
 
+          # Validate a basket name against the schema's DB CHECK rules
+          # (mirrors +baskets_name_length+ + +baskets_name_charset+ +
+          # +baskets_name_no_double_sp+ in +001_create_schema.rb+).
+          # Without this gate, invalid names reach the engine and bubble
+          # as +Sequel::CheckConstraintViolation+ — outside the
+          # dispatcher's never-raises-uncaught rescue chain.
+          #
+          # Native CLI deliberately stops at the schema floor, NOT the
+          # BRC-100 conformance layer. +BSV::Wallet::BRC100#validate_basket_name!+
+          # additionally rejects +'p '+ / +'admin'+ / +'default'+ / +' basket'+
+          # suffix names — those are spec-mandated for the BRC-100
+          # surface but native wallet vocabulary legitimately uses them
+          # (e.g. +'p wbikd'+ for WBIKD address slots per
+          # +project_outputs_immutability_violation+ memory). BRC-100
+          # CLI (+bin/brc100+, HLR #431) is the right place for the
+          # tighter rules.
+          BASKET_NAME_MIN = 5
+          BASKET_NAME_MAX = 300
+          BASKET_NAME_CHARSET = /\A[a-z0-9 ]+\z/
+
+          def validate_basket!(name)
+            unless name.is_a?(String) && name.length.between?(BASKET_NAME_MIN, BASKET_NAME_MAX)
+              raise UsageError,
+                    "--basket=<name> must be #{BASKET_NAME_MIN}-#{BASKET_NAME_MAX} chars " \
+                    "(got #{safe_preview(name)})"
+            end
+
+            unless name.match?(BASKET_NAME_CHARSET)
+              raise UsageError,
+                    '--basket=<name> must contain only lowercase ASCII letters, digits, and spaces ' \
+                    "(got #{safe_preview(name)})"
+            end
+
+            return unless name.include?('  ')
+
+            raise UsageError, '--basket=<name> must not contain consecutive spaces'
+          end
+
           # Defence against accidental secret disclosure in error
           # messages. An operator mistyping a WIF (or anything else
           # long) into a wrong slot — recipient, --to, <action_id> —

@@ -66,17 +66,21 @@ module BSV
             parser.parse!(args)
             raise UsageError, "import takes no positional arguments (got #{args.length})" unless args.empty?
 
-            # +--basket=+ (empty value) is operator confusion: the schema
-            # rejects basket names shorter than 5 chars, so leaving this
-            # unguarded produces an uncaught Sequel::CheckConstraintViolation.
-            # Catch it here with a message that points at the right
-            # alternative (omit the flag entirely for unbasketed).
+            # Validate +--basket+ against the schema's DB CHECK rules
+            # (length, charset, no consecutive spaces). Without this,
+            # invalid names reach +import_utxo+ → +find_or_create_basket+
+            # and surface as +Sequel::CheckConstraintViolation+ outside
+            # the dispatcher's rescue chain. The empty-string case is
+            # the most common operator confusion ("I just want
+            # unbasketed") — caught explicitly so the message can point
+            # at the right alternative.
             basket = @options[:basket]
             if basket.is_a?(String) && basket.empty?
               raise UsageError,
                     '--basket=<name> must be non-empty ' \
                     '(omit --basket entirely for the unbasketed pool)'
             end
+            validate_basket!(basket) if basket
 
             no_send = @options[:no_send] || false
             inline = @options[:inline] || false

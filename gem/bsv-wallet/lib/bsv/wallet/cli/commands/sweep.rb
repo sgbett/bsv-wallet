@@ -19,8 +19,11 @@ module BSV
         # +--to+ takes the recipient's 66-char compressed pubkey hex
         # (02/03 prefix); the engine's +validate_recipient_key!+ is a
         # second line of defence after CLI-side +parse_pubkey_hex+.
-        # +--no-send+ keeps the swept action unsubmitted (build + sign
-        # + return BEEF for handoff without publishing).
+        # +--no-send+ keeps the swept action unsubmitted (built and
+        # signed, but never broadcast). BEEF emission for peer-to-peer
+        # handoff is not currently exposed — operators wanting the BEEF
+        # bytes can pull them from the engine's return via direct API
+        # access, or wait for a future +--emit-beef+ flag.
         #
         # Empty-pool case (engine returns nil) is reported as "nothing
         # to sweep" without an error — sweeping an empty wallet is a

@@ -34,6 +34,35 @@ RSpec.describe BSV::Wallet::CLI::Commands::Import do
       expect { command.call(['--basket=']) }
         .to raise_error(BSV::Wallet::CLI::UsageError, /must be non-empty.*omit --basket/m)
     end
+
+    # Full schema-rule mirror at the CLI boundary — every constraint
+    # below would otherwise crash with Sequel::CheckConstraintViolation
+    # outside the dispatcher's rescue chain.
+    it 'rejects --basket with name < 5 chars (length constraint)' do
+      expect { command.call(['--basket=ab']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /5-300 chars/)
+    end
+
+    it 'rejects --basket with uppercase letters (charset constraint)' do
+      expect { command.call(['--basket=Foo bar']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /lowercase ASCII/)
+    end
+
+    it 'rejects --basket with special characters (charset constraint)' do
+      expect { command.call(['--basket=hello!']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /lowercase ASCII/)
+    end
+
+    it 'rejects --basket with consecutive spaces (no-double-space constraint)' do
+      expect { command.call(['--basket=hello  world']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /consecutive spaces/)
+    end
+
+    it 'accepts wallet-internal prefixed baskets that BRC-100 rejects (e.g. p wbikd)' do
+      allow(engine).to receive(:import_wallet).and_return(imported: 0, utxos: [])
+      expect { command.call(['--basket=p wbikd']) }.not_to raise_error
+      expect(engine).to have_received(:import_wallet).with(hash_including(basket: 'p wbikd'))
+    end
   end
 
   describe 'flag forwarding' do

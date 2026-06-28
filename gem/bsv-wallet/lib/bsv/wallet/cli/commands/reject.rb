@@ -20,11 +20,16 @@ module BSV
         # show up in +list actions+ output; operators pick the one that
         # matches their CLI.
         #
-        # Engine errors that bubble through the dispatcher's
-        # +Wallet::Error+ rescue (→ exit 1):
-        # - +InvalidParameterError+               unknown action_id
-        # - +CannotRejectInternalActionError+     broadcast_intent == 'none'
-        # - +CannotRejectAcceptedActionError+     broadcast accepted on-chain
+        # Engine error handling:
+        # - +InvalidParameterError+ (unknown action_id, e.g. typo or stale
+        #   id) is translated to +UsageError+ → exit 2, matching the CLI
+        #   "bad argument" path. Same class as the up-front shape check.
+        # - +CannotRejectInternalActionError+ (broadcast_intent == 'none')
+        #   bubbles through +Wallet::Error+ → exit 1: the action exists
+        #   but cannot be rejected — a genuine engine-state condition.
+        # - +CannotRejectAcceptedActionError+ (broadcast accepted on-chain)
+        #   same: bubbles → exit 1. Operator response is investigation,
+        #   not retry.
         class Reject < Base
           def name = 'reject'
 
