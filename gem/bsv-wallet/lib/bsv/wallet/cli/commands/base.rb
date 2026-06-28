@@ -4,6 +4,7 @@ require 'json'
 require 'optparse'
 require_relative '../errors'
 require_relative '../secrets'
+require_relative '../global_options'
 
 module BSV
   module Wallet
@@ -84,21 +85,28 @@ module BSV
 
           protected
 
-          # JSON to stdout, with secrets redaction applied. Pretty when
-          # stdout is a TTY (and +--json+ wasn't forced), compact when
-          # piped or +--json+ is set.
+          # JSON to stdout, with secrets redaction applied by default.
+          # Pretty when stdout is a TTY (and +--json+ wasn't forced),
+          # compact when piped or +--json+ is set.
+          #
+          # +redact: false+ skips the redaction layer. Use for outputs
+          # that DELIBERATELY carry derivation hints to the recipient
+          # (BRC-29 payment message envelopes) — those hints are the
+          # whole point of the envelope and must reach the other side.
+          # Default stays +redact: true+ — opt-out is intentional.
           #
           # For NDJSON (streamed list output), call +#emit_ndjson_row+
           # per row instead — never buffer the full set in memory.
           #
           # @param payload [Hash, Array]
-          def emit_json(payload)
-            redacted = Secrets.redact(payload)
+          # @param redact [Boolean] apply +Secrets.redact+ before emit
+          def emit_json(payload, redact: true)
+            payload = Secrets.redact(payload) if redact
             json =
               if pretty_json?
-                JSON.pretty_generate(redacted)
+                JSON.pretty_generate(payload)
               else
-                JSON.generate(redacted)
+                JSON.generate(payload)
               end
             $stdout.puts json
           end
@@ -138,35 +146,54 @@ module BSV
             end
           end
 
-          TEXT_REDACTION = /
-            \b(
-              (?:
-                wif |
-                secret |
-                (?!identity_|public_|pub)\w*_(?:key|priv) |
-                (?:private|signing|root)_key |
-                derivation_(?:prefix|suffix)
-              )
-              [=:]\s*
-            )
-            \S+
-          /xi
+          # Same pattern, same source-of-truth as +Dispatcher::MESSAGE_REDACTION+
+          # — built from +Secrets::SENSITIVE_FIELD_NAMES_PATTERN+ so all
+          # three redaction surfaces (JSON, exception messages, human
+          # output) move together. Compound identifiers like
+          # +sender_identity_key+ pass through unredacted (interchange
+          # identifier, not secret material).
+          TEXT_REDACTION = /\b(#{Secrets::SENSITIVE_FIELD_NAMES_PATTERN}[=:]\s*)\S+/i
 
           # Read binary input from +--file=<path>+ or stdin. Always
           # +binmode+ — text-mode reads would mangle BEEF bytes with
           # encoding errors or CRLF translation.
           #
+          # +max_bytes:+ bounds the read at source rather than after the
+          # fact. Without it, a 10 GiB stdin pipe slurps fully into
+          # memory before any caller-side size cap can fire — OOM before
+          # UsageError. Callers should pass +cap + 1+ so the returned
+          # bytesize signals "at or over the cap" unambiguously.
+          #
           # @param file [String, nil]
+          # @param max_bytes [Integer, nil] hard ceiling on bytes read
           # @return [String] binary content
-          def read_binary_input(file: nil)
-            if file
-              File.binread(file)
-            else
-              raise UsageError, 'no input on stdin (pipe BEEF bytes or use --file=<path>)' if $stdin.tty?
+          def read_binary_input(file: nil, max_bytes: nil)
+            bytes =
+              if file
+                read_file_safely(file, max_bytes)
+              else
+                raise UsageError, 'no input on stdin (pipe BEEF bytes or use --file=<path>)' if $stdin.tty?
 
-              $stdin.binmode
-              $stdin.read
-            end
+                $stdin.binmode
+                max_bytes ? $stdin.read(max_bytes) : $stdin.read
+              end
+            # IO#read with a length returns nil at immediate EOF (empty
+            # file, closed stdin); without length it returns "". Normalise
+            # so callers can rely on +#bytesize+ / +#empty?+ unconditionally.
+            bytes || (+'').b
+          end
+
+          # File.binread raises Errno::* (ENOENT, EACCES, EISDIR, …)
+          # which the dispatcher's rescue chain doesn't catch (CLI::Error
+          # / Wallet::Error / OptionParser::ParseError / SystemExit only).
+          # Wrap to UsageError so a missing or unreadable +--file+ becomes
+          # exit-2 with a clean message rather than a stack trace.
+          def read_file_safely(file, max_bytes)
+            max_bytes ? File.binread(file, max_bytes) : File.binread(file)
+          rescue Errno::ENOENT
+            raise UsageError, "input file not found: #{file}"
+          rescue SystemCallError => e
+            raise UsageError, "input file #{file}: #{e.message}"
           end
 
           # Validate a hex-encoded compressed public key (66 chars,

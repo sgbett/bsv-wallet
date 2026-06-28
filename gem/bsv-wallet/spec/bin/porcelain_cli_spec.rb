@@ -97,61 +97,11 @@ RSpec.describe 'Porcelain CLI tools' do # rubocop:disable RSpec/DescribeClass
 
   # --- bin/receive ---
 
-  describe 'bin/receive' do
-    it 'aborts when stdin is a TTY (no piped data)' do
-      # When run without piped input and stdin is a TTY, receive aborts.
-      # Open3 provides a pipe (not a TTY), so we test the empty-stdin path.
-      _stdout, stderr, status = run_tool('receive', 'alice', stdin_data: '')
+  # bin/receive deleted in Phase 2 of #433 — coverage moves to
+  # spec/bin/wallet/receive_spec.rb (driving bin/wallet receive).
 
-      expect(status.exitstatus).to eq(1)
-      expect(stderr).to include('Empty stdin')
-    end
-
-    it 'aborts when stdin contains invalid JSON' do
-      _stdout, stderr, status = run_tool('receive', 'alice', stdin_data: 'not json')
-
-      expect(status.exitstatus).to eq(1)
-      expect(stderr).not_to be_empty
-    end
-
-    it 'aborts when envelope is missing "beef" key' do
-      envelope = JSON.generate({ sender_identity_key: valid_identity_key, outputs: [] })
-      _stdout, stderr, status = run_tool('receive', 'alice', stdin_data: envelope)
-
-      expect(status.exitstatus).to eq(1)
-      expect(stderr).to include('beef')
-    end
-
-    it 'aborts when envelope is missing "sender_identity_key"' do
-      envelope = JSON.generate({ beef: 'a' * 64, outputs: [] })
-      _stdout, stderr, status = run_tool('receive', 'alice', stdin_data: envelope)
-
-      expect(status.exitstatus).to eq(1)
-      expect(stderr).to include('sender_identity_key')
-    end
-
-    it 'aborts when envelope is missing "outputs"' do
-      envelope = JSON.generate({ beef: 'a' * 64, sender_identity_key: valid_identity_key })
-      _stdout, stderr, status = run_tool('receive', 'alice', stdin_data: envelope)
-
-      expect(status.exitstatus).to eq(1)
-      expect(stderr).to include('outputs')
-    end
-  end
-
-  # --- bin/send (deprecated) ---
-
-  describe 'bin/send' do
-    it 'warns about deprecation' do
-      # bin/send prints a deprecation warning before doing anything else.
-      # It will eventually fail due to missing args/env, but the warning
-      # should appear regardless.
-      _stdout, stderr, _status = run_tool('send')
-
-      expect(stderr).to include('DEPRECATED')
-      expect(stderr).to include('bin/create')
-    end
-  end
+  # bin/send deleted in Phase 2 of #433 — coverage moves to
+  # spec/bin/wallet/send_spec.rb (driving bin/wallet send).
 
   # --- bin/transmit ---
 
