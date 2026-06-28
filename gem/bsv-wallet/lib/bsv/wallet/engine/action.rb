@@ -110,6 +110,13 @@ module BSV
         # Translate caller outputs into Store output specs. Used by both the
         # synchronous internal path ({Store#complete_internal_action}) and the
         # send-path sign-time persistence ({Store#sign_action}).
+        #
+        # Every output spec must carry +:spendable_intent+ — +'spendable'+
+        # (wallet-owned, joins the UTXO set on promotion) or +'none'+
+        # (outbound; no spendable row written). Inferring intent from the
+        # presence of +derivation_prefix+ was the anti-pattern HLR #467 /
+        # +docs/reference/intent-and-outcomes.md+ removed; the decision-maker
+        # states it explicitly. A missing intent is a caller-side bug.
         def self.build_output_specs(outputs, vout_mapping = nil)
           outputs.each_with_index.map do |out, idx|
             vout = if vout_mapping
@@ -118,10 +125,14 @@ module BSV
                      out[:vout] || idx
                    end
 
-            # Outputs without derivation data or explicit output_type are
-            # payments to others — mark as outbound so the constraint on
-            # outputs (NULL type requires derivation) is satisfied.
-            effective_type = out[:output_type] || (out[:derivation_prefix] ? nil : 'outbound')
+            unless out[:spendable_intent]
+              raise BSV::Wallet::InvalidParameterError.new(
+                "outputs[#{idx}].spendable_intent",
+                "'spendable' or 'none' (HLR #467 / docs/reference/intent-and-outcomes.md — " \
+                'every output spec must state intent explicitly; inference from derivation ' \
+                'presence is no longer accepted)'
+              )
+            end
 
             {
               satoshis: out[:satoshis],
@@ -131,7 +142,7 @@ module BSV
               tags: out[:tags],
               description: out[:output_description],
               custom_instructions: out[:custom_instructions],
-              output_type: effective_type,
+              spendable_intent: out[:spendable_intent],
               derivation_prefix: out[:derivation_prefix],
               derivation_suffix: out[:derivation_suffix],
               sender_identity_key: out[:sender_identity_key]

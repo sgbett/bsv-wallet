@@ -50,6 +50,24 @@ RSpec.describe BSV::Wallet::KeyDeriver do
     end
   end
 
+  describe '#identity_pubkey_hash' do
+    it 'returns the 20-byte binary hash160 of the identity pubkey' do
+      hash = deriver.identity_pubkey_hash
+      expect(hash).to be_a(String)
+      expect(hash.encoding).to eq(Encoding::BINARY)
+      expect(hash.bytesize).to eq(20)
+    end
+
+    it 'equals hash160(identity_key_bytes) (round-trip vs known address-hash)' do
+      expected = BSV::Primitives::Digest.hash160(deriver.identity_key_bytes)
+      expect(deriver.identity_pubkey_hash).to eq(expected)
+    end
+
+    it 'memoises the result' do
+      expect(deriver.identity_pubkey_hash).to equal(deriver.identity_pubkey_hash)
+    end
+  end
+
   describe '#derive_public_key' do
     context "with counterparty: 'self'" do
       it 'uses own public key for derivation' do

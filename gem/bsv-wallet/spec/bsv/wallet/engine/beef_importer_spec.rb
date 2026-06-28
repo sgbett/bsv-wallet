@@ -422,17 +422,26 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         basket: 'gift', custom_instructions: 'ci', tags: ['a'],
         derivation_prefix: 'pfx', sender_identity_key: 'sender_hex'
       )
+      # HLR #467: spendable_intent is stated explicitly — every
+      # internalize output is wallet-bound by definition (that's the
+      # point of +internalizeAction+).
+      expect(spec[:spendable_intent]).to eq('spendable')
       expect(spec).not_to include(:output_type)
     end
 
-    it 'marks basket_insertion without derivation_prefix as output_type root' do
+    # HLR #467: basket_insertion without derivation_prefix is still
+    # +spendable_intent: 'spendable'+ — the locking script will match
+    # the wallet's per-instance root P2PKH literal (enforced declaratively
+    # by +outputs.spendable_recoverable+, not by an inference here).
+    it 'marks basket_insertion without derivation_prefix as spendable_intent: spendable' do
       out = {
         satoshis: 700, output_index: 0, protocol: :basket_insertion,
         insertion_remittance: { basket: 'gift' }
       }
       spec = beef_importer.send(:resolve_internalize_output, out)
 
-      expect(spec[:output_type]).to eq('root')
+      expect(spec[:spendable_intent]).to eq('spendable')
+      expect(spec).not_to include(:output_type)
     end
   end
 

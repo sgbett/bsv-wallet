@@ -93,7 +93,6 @@ module BSV
                         randomize_outputs: true, originator: nil)
         validate_description!(description)
         validate_create_action_params!(inputs: inputs, outputs: outputs)
-        validate_output_ownership!(outputs)
         outputs = normalize_and_validate_outputs_baskets(outputs)
 
         # +originator+, +return_txid_only+, +trust_self+ stay at BRC100
@@ -446,36 +445,6 @@ module BSV
 
         raise BSV::Wallet::InvalidParameterError.new('inputs/outputs',
                                                      'present (at least one input or output required)')
-      end
-
-      # Validate output_type declarations against locking scripts.
-      #
-      # If output_type is 'root', the locking script must be P2PKH to the
-      # wallet's identity key. Other output_type values are not validated here.
-      def validate_output_ownership!(outputs)
-        return unless outputs && @engine.key_deriver
-
-        root_hash = nil
-        outputs.each_with_index do |out, idx|
-          next unless out[:output_type] == 'root'
-
-          script = BSV::Wallet::Engine::TxBuilder.resolve_locking_script(out[:locking_script])
-          unless script.p2pkh?
-            raise BSV::Wallet::InvalidParameterError.new(
-              "outputs[#{idx}].output_type",
-              "'root' requires a P2PKH script"
-            )
-          end
-
-          root_hash ||= BSV::Primitives::Digest.hash160(@engine.key_deriver.identity_key_bytes)
-          pubkey_hash = script.chunks[2].data
-          next if pubkey_hash == root_hash
-
-          raise BSV::Wallet::InvalidParameterError.new(
-            "outputs[#{idx}].output_type",
-            "'root' but script does not match identity key"
-          )
-        end
       end
 
       def validate_reference!(reference)

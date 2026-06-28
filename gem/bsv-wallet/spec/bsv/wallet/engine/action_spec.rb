@@ -97,24 +97,41 @@ RSpec.describe BSV::Wallet::Engine::Action do
   end
 
   describe '.build_output_specs' do
-    it 'marks outputs without derivation data as outbound' do
-      specs = described_class.build_output_specs([
-                                                   { satoshis: 100, locking_script: OP_TRUE }
-                                                 ])
-      expect(specs.first).to include(satoshis: 100, vout: 0, output_type: 'outbound')
-    end
-
-    it 'leaves output_type nil when derivation_prefix is present (BRC-100 normal)' do
+    # HLR #467: explicit +spendable_intent+ is required on every output;
+    # inferring from derivation presence is gone (cf.
+    # +docs/reference/intent-and-outcomes.md+).
+    it "passes a caller's spendable_intent: 'none' through unchanged" do
       specs = described_class.build_output_specs([
                                                    { satoshis: 100, locking_script: OP_TRUE,
+                                                     spendable_intent: 'none' }
+                                                 ])
+      expect(specs.first).to include(satoshis: 100, vout: 0, spendable_intent: 'none')
+    end
+
+    it "passes a caller's spendable_intent: 'spendable' (BRC-42 self) through unchanged" do
+      specs = described_class.build_output_specs([
+                                                   { satoshis: 100, locking_script: OP_TRUE,
+                                                     spendable_intent: 'spendable',
                                                      derivation_prefix: 'p', derivation_suffix: 's' }
                                                  ])
-      expect(specs.first).to include(output_type: nil, derivation_prefix: 'p', derivation_suffix: 's')
+      expect(specs.first).to include(spendable_intent: 'spendable',
+                                     derivation_prefix: 'p', derivation_suffix: 's')
+    end
+
+    it 'raises InvalidParameterError when spendable_intent is missing' do
+      expect do
+        described_class.build_output_specs([
+                                             { satoshis: 100, locking_script: OP_TRUE }
+                                           ])
+      end.to raise_error(BSV::Wallet::InvalidParameterError, /spendable_intent.*HLR #467/m)
     end
 
     it 'honours an explicit vout mapping' do
       specs = described_class.build_output_specs(
-        [{ satoshis: 100, locking_script: OP_TRUE }, { satoshis: 200, locking_script: OP_TRUE }],
+        [
+          { satoshis: 100, locking_script: OP_TRUE, spendable_intent: 'none' },
+          { satoshis: 200, locking_script: OP_TRUE, spendable_intent: 'none' }
+        ],
         { 0 => 3, 1 => 2 }
       )
       expect(specs.map { |s| s[:vout] }).to eq([3, 2])

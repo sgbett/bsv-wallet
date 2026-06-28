@@ -18,9 +18,11 @@ module BSV
         # belong to it. Parses the subject tx, walks each output, checks if
         # its P2PKH lock targets the wallet's root key's address. Matches
         # are imported via +engine.import_beef+ with the +basket insertion+
-        # protocol and no derivation hints (engine marks them +root+ per
-        # the schema's output_type semantics). Phase 2 scans the root
-        # address only; HD/WBIKD-derived receive addresses are a follow-up.
+        # protocol and no derivation hints — the locking script matches the
+        # wallet's per-instance root P2PKH literal (enforced declaratively
+        # by +outputs.spendable_recoverable+; HLR #467). Phase 2 scans the
+        # root address only; HD/WBIKD-derived receive addresses are a
+        # follow-up.
         #
         # Envelope path: the sender shipped explicit derivation hints. Each
         # listed output gets imported via +engine.import_beef+ with the
@@ -168,18 +170,18 @@ module BSV
 
           # Raw BEEF path: parse, scan outputs for P2PKH locks to wallet's
           # root address, import matches as basket insertion with no
-          # derivation hints (engine marks them root via the output_type
-          # shim). Accepts either binary BEEF or its hex-string encoding
-          # (the latter is shell-pipe-friendly; binary in pipes is fiddly
-          # with locale/encoding pitfalls).
+          # derivation hints — the engine sets +spendable_intent: 'spendable'+
+          # at the import boundary, and the per-wallet +spendable_recoverable+
+          # CHECK validates the locking script matches the wallet's root
+          # P2PKH literal (HLR #467). Accepts either binary BEEF or its
+          # hex-string encoding (the latter is shell-pipe-friendly; binary
+          # in pipes is fiddly with locale/encoding pitfalls).
           def call_raw_beef(engine, beef_bytes, description)
             beef_bytes = decode_hex_if_hex(beef_bytes)
             subject_tx = parse_beef_subject(beef_bytes)
 
             key_deriver = @ctx[:key_deriver]
-            root_pubkey_hash = BSV::Primitives::Digest.hash160(
-              key_deriver.root_private_key.public_key.compressed
-            )
+            root_pubkey_hash = key_deriver.identity_pubkey_hash
 
             matches = scan_outputs_for_pubkey_hash(subject_tx, root_pubkey_hash)
 

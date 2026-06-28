@@ -32,6 +32,8 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         satoshis: satoshis, vout: i,
         locking_script: script.to_binary,
         basket: nil,
+        # HLR #467: BRC-42 self-derived test fixtures are wallet-owned.
+        spendable_intent: 'spendable',
         derivation_prefix: prefix,
         derivation_suffix: out_suffix,
         sender_identity_key: 'self'
@@ -44,7 +46,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   # --- send_payment ---
 
   describe '#send_payment' do
-    it 'returns a BEEF envelope with derivation metadata' do
+    it 'returns wallet-vocab atomic_beef + wtxid with derivation metadata' do
       fund_wallet_for_auto
 
       recipient_key = BSV::Primitives::PrivateKey.generate
@@ -52,7 +54,14 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
       result = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000)
 
-      expect(result[:beef]).to be_a(String)
+      # HLR #467 / ADR-026 / ADR-027: +send_payment+ is wallet-vocab
+      # porcelain — calls +#build_action+ directly, returns wallet vocab
+      # (+:wtxid+ / +:atomic_beef+). The earlier routing through
+      # +brc100.create_action+ was a pre-existing inversion the HLR sweep
+      # corrected.
+      expect(result[:wtxid]).to be_a(String)
+      expect(result[:wtxid].bytesize).to eq(32)
+      expect(result[:atomic_beef]).to be_a(String)
       expect(result[:sender_identity_key]).to eq(key_deriver.identity_key)
       expect(result[:outputs]).to be_an(Array)
       expect(result[:outputs].length).to eq(1)
@@ -64,15 +73,35 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect(out[:derivation_suffix]).to eq('1')
     end
 
-    it 'produces BEEF that can be parsed' do
+    it 'produces atomic_beef that can be parsed' do
       fund_wallet_for_auto
 
       recipient_key = BSV::Primitives::PrivateKey.generate
       result = engine_with_keys.send_payment(recipient: recipient_key.public_key.to_hex, satoshis: 5_000)
 
-      parsed = parse_beef_tx(result[:beef])
+      parsed = parse_beef_tx(result[:atomic_beef])
       expect(parsed.inputs.length).to eq(1)
       expect(parsed.outputs.length).to be >= 2 # payment + change
+    end
+
+    # HLR #467 regression spec: explicit intent-stating decision-maker.
+    # +send_payment+ must mark the outbound payment output as
+    # +spendable_intent: 'none'+ at the engine boundary — never inferred
+    # by Store from the absence of derivation fields.
+    it "stages the outbound output with spendable_intent: 'none'" do
+      fund_wallet_for_auto
+
+      recipient_key = BSV::Primitives::PrivateKey.generate
+      result = engine_with_keys.send_payment(
+        recipient: recipient_key.public_key.to_hex, satoshis: 5_000, no_send: true
+      )
+
+      action = store.find_action(wtxid: result[:wtxid])
+      output = BSV::Wallet::Store::Models::Output
+               .where(action_id: action[:id], vout: 0).first
+      expect(output.spendable_intent.to_s).to eq('none')
+      expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output.id).any?)
+        .to be(false)
     end
   end
 

@@ -15,8 +15,9 @@ module BSV
       # whose action has been signed and broadcast. Under that condition
       # the wallet has no on-chain commitment a destroy would orphan:
       #
-      # * Root outputs (output_type = 'root') don't count — root P2PKH
-      #   funds are recoverable from the identity key alone.
+      # * Root outputs (no derivation triple — `derivation_prefix IS NULL`)
+      #   don't count — root P2PKH funds are recoverable from the identity
+      #   key alone.
       # * Unsigned / aborted actions don't count — no broadcast happened,
       #   so no on-chain anchor was created.
       #

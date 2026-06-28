@@ -240,7 +240,7 @@ module BSV
           record_promotion(action_id: action_id, authorising_status: nil)
 
           outputs.map do |out|
-            intent = resolve_spendable_intent(out)
+            intent = out[:spendable_intent].to_s
             output = create_output_or_translate(
               action_id: action_id,
               satoshis: out[:satoshis],
@@ -1320,7 +1320,7 @@ module BSV
             satoshis: out[:satoshis],
             vout: out[:vout],
             locking_script: out[:locking_script],
-            spendable_intent: resolve_spendable_intent(out),
+            spendable_intent: out[:spendable_intent].to_s,
             derivation_prefix: out[:derivation_prefix],
             derivation_suffix: out[:derivation_suffix],
             sender_identity_key: out[:sender_identity_key]
@@ -1353,11 +1353,6 @@ module BSV
         tag_ids.each { |tid| models::OutputTag.create(output_id: output.id, tag_id: tid) }
       end
 
-      # True when the output is a change output (has a change=true detail row).
-      def change_output?(output_id:)
-        models::OutputDetail.where(output_id: output_id, change: true).any?
-      end
-
       # Single boundary for +models::Output.create+: translates Sequel's
       # +ValidationFailed+ (raised when the +Output+ model's +#validate+
       # finds a structural mismatch — HLR #467 / +intent-and-outcomes.md+)
@@ -1369,31 +1364,6 @@ module BSV
         models::Output.create(attrs)
       rescue Sequel::ValidationFailed => e
         raise BSV::Wallet::InvalidParameterError, "output: #{e.message}"
-      end
-
-      # Translate an output spec hash to a +spendable_intent+ value.
-      #
-      # Preferred input is explicit +spendable_intent:+ stated by the caller
-      # (HLR #467). The legacy +output_type:+ shape is mapped here for
-      # back-compat during the migration window:
-      #   * +output_type: 'root'+     → +'spendable'+ (we own the root P2PKH)
-      #   * +output_type: 'outbound'+ → +'none'+      (counterparty's output)
-      #   * +output_type: nil+ + derivation triple    → +'spendable'+ (BRC-42 self)
-      #   * +output_type: nil+ + no derivation triple → +'none'+      (legacy outbound)
-      #
-      # Phases 4–5 remove the +output_type+ shape from all engine/CLI callers,
-      # leaving the explicit +spendable_intent:+ kwarg as the only input
-      # (this helper degrades to a passthrough at that point).
-      def resolve_spendable_intent(out)
-        explicit = out[:spendable_intent]
-        return explicit.to_s if explicit
-
-        case out[:output_type]
-        when 'root'     then 'spendable'
-        when 'outbound' then 'none'
-        else
-          out[:derivation_prefix] ? 'spendable' : 'none'
-        end
       end
 
       # Convert a value to binary. If already binary-encoded, return as-is;
