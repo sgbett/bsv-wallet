@@ -241,7 +241,7 @@ module BSV
 
           outputs.map do |out|
             intent = resolve_spendable_intent(out)
-            output = models::Output.create(
+            output = create_output_or_translate(
               action_id: action_id,
               satoshis: out[:satoshis],
               vout: out[:vout],
@@ -1280,7 +1280,7 @@ module BSV
       # the promote_* paths, not a column here.
       def write_change_outputs(action_id:, change_outputs:)
         change_outputs.each do |chg|
-          output = models::Output.create(
+          output = create_output_or_translate(
             action_id: action_id,
             satoshis: chg[:satoshis],
             vout: chg[:vout],
@@ -1315,7 +1315,7 @@ module BSV
       # for wrapping in a transaction.
       def write_pending_outputs(action_id:, outputs:)
         outputs.each do |out|
-          output = models::Output.create(
+          output = create_output_or_translate(
             action_id: action_id,
             satoshis: out[:satoshis],
             vout: out[:vout],
@@ -1356,6 +1356,19 @@ module BSV
       # True when the output is a change output (has a change=true detail row).
       def change_output?(output_id:)
         models::OutputDetail.where(output_id: output_id, change: true).any?
+      end
+
+      # Single boundary for +models::Output.create+: translates Sequel's
+      # +ValidationFailed+ (raised when the +Output+ model's +#validate+
+      # finds a structural mismatch — HLR #467 / +intent-and-outcomes.md+)
+      # into +BSV::Wallet::InvalidParameterError+ so callers see a clean
+      # app-level error rather than the raw Sequel exception. The DB CHECK
+      # is the same logic, one step downstream — this rescue exists to
+      # surface the failure earlier with a per-field message.
+      def create_output_or_translate(**attrs)
+        models::Output.create(attrs)
+      rescue Sequel::ValidationFailed => e
+        raise BSV::Wallet::InvalidParameterError, "output: #{e.message}"
       end
 
       # Translate an output spec hash to a +spendable_intent+ value.

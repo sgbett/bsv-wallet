@@ -172,4 +172,103 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
       expect(described_class.min_satoshis(500).count).to eq(2)
     end
   end
+
+  # --- #validate (app-layer mirror of the DB CHECKs, HLR #467) ---
+  #
+  # The Output model's +#validate+ encodes the same 8-permutation matrix
+  # the +outputs+ table CHECKs (+controls_all_or_nothing+ +
+  # +spendable_recoverable+) enforce structurally. The two layers exist
+  # in parallel: the model surfaces clean field-level errors before the
+  # DB rejects, the DB is the structural backstop. These specs exercise
+  # the model side via +valid?+ / +errors+ — no DB roundtrip. The
+  # +constraints_spec.rb+ matrix covers the same shapes at the DB layer.
+  describe '#validate (8-permutation matrix)' do
+    let(:root_script) { TEST_ROOT_LOCKING_SCRIPT }
+    let(:non_root_script) { SecureRandom.random_bytes(25) }
+
+    def build_output(root:, controls:, intent:)
+      attrs = {
+        action_id: action.id, satoshis: 1000, vout: 0,
+        locking_script: root ? root_script : non_root_script,
+        spendable_intent: intent
+      }
+      if controls
+        attrs[:derivation_prefix] = 'prefix'
+        attrs[:derivation_suffix] = 'suffix'
+        attrs[:sender_identity_key] = 'self'
+      end
+      described_class.new(attrs)
+    end
+
+    # [label, root, controls, intent, valid?]
+    matrix = [
+      ['root + no_controls + spendable',    true,  false, 'spendable', true],
+      ['root + no_controls + none',         true,  false, 'none',      false],
+      ['root + controls + spendable',       true,  true,  'spendable', false],
+      ['root + controls + none',            true,  true,  'none',      false],
+      ['nonroot + no_controls + spendable', false, false, 'spendable', false],
+      ['nonroot + no_controls + none',      false, false, 'none',      true],
+      ['nonroot + controls + spendable',    false, true,  'spendable', true],
+      ['nonroot + controls + none',         false, true,  'none',      true]
+    ]
+
+    matrix.each do |label, root, controls, intent, want_valid|
+      it "permutation [#{label}] is #{want_valid ? 'valid' : 'invalid'}" do
+        output = build_output(root: root, controls: controls, intent: intent)
+        if want_valid
+          expect(output.valid?).to be(true), "expected valid; got errors=#{output.errors.full_messages}"
+          # +Sequel::Model::Errors#[]+ returns +nil+ for an un-touched field
+          # (Hash-like, not Array-like). +to_a+ normalises so the assertion
+          # is consistent across "no errors" and "field has errors" cases.
+          expect(Array(output.errors[:spendable_intent])).to be_empty
+        else
+          expect(output.valid?).to be(false)
+          expect(output.errors[:spendable_intent]).not_to be_nil
+          expect(output.errors[:spendable_intent].first).to include('HLR #467')
+          expect(output.errors[:spendable_intent].first).to include('intent-and-outcomes.md')
+        end
+      end
+    end
+
+    describe 'controls_all_or_nothing' do
+      # Partial derivation triple — orthogonal to the 8-permutation matrix
+      # (which only exercises all-three-set or all-three-absent), so
+      # specced separately.
+      it 'rejects partial fill (prefix + suffix, no sender_identity_key)' do
+        output = described_class.new(
+          action_id: action.id, satoshis: 1000, vout: 0,
+          locking_script: SecureRandom.random_bytes(25),
+          spendable_intent: 'spendable',
+          derivation_prefix: 'prefix', derivation_suffix: 'suffix',
+          sender_identity_key: nil
+        )
+
+        expect(output.valid?).to be(false)
+        expect(output.errors[:derivation_prefix]).not_to be_empty
+        expect(output.errors[:derivation_prefix].first).to include('all set or all absent')
+        expect(output.errors[:derivation_prefix].first).to include('HLR #467')
+      end
+
+      it 'rejects partial fill (only sender_identity_key set)' do
+        output = described_class.new(
+          action_id: action.id, satoshis: 1000, vout: 0,
+          locking_script: SecureRandom.random_bytes(25),
+          spendable_intent: 'none',
+          derivation_prefix: nil, derivation_suffix: nil,
+          sender_identity_key: 'self'
+        )
+
+        expect(output.valid?).to be(false)
+        expect(output.errors[:derivation_prefix]).not_to be_empty
+      end
+    end
+
+    describe 'save behaviour' do
+      it 'raises Sequel::ValidationFailed when an invalid output is saved' do
+        output = build_output(root: true, controls: false, intent: 'none')
+
+        expect { output.save }.to raise_error(Sequel::ValidationFailed, /HLR #467/)
+      end
+    end
+  end
 end

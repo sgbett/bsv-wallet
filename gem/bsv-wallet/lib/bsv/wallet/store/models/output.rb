@@ -74,6 +74,67 @@ module BSV
           def basket
             output_basket&.basket
           end
+
+          # Application-layer mirror of the +outputs+ table's two structural
+          # CHECKs (+controls_all_or_nothing+ and +spendable_recoverable+,
+          # HLR #467 / +intent-and-outcomes.md+). The DB enforces the same
+          # rules — these validators surface failures as field-level errors
+          # before the DB rejects, so callers see clean app-level messages
+          # rather than raw +CheckConstraintViolation+ noise.
+          #
+          # Sequel calls +#save+ which raises +Sequel::ValidationFailed+
+          # when +errors+ is non-empty; +Store+ wraps that and re-raises as
+          # +BSV::Wallet::InvalidParameterError+ at the insertion boundary.
+          def validate
+            super
+            validate_controls_all_or_nothing
+            validate_spendable_recoverable
+          end
+
+          private
+
+          # Mirror of the +controls_all_or_nothing+ CHECK. The derivation
+          # triple (+derivation_prefix+/+derivation_suffix+/+sender_identity_key+)
+          # must be all set or all absent — a partial fill is a structural
+          # nonsense (no derivable spending key, no honest "outbound" claim).
+          def validate_controls_all_or_nothing
+            set_count = [derivation_prefix, derivation_suffix, sender_identity_key].count { |v| !v.nil? }
+            return if [0, 3].include?(set_count)
+
+            errors.add(:derivation_prefix,
+                       'derivation_prefix/derivation_suffix/sender_identity_key must be all set or all absent ' \
+                       '(HLR #467 / intent-and-outcomes.md)')
+          end
+
+          # Mirror of the +spendable_recoverable+ CHECK. Three independent
+          # row properties (+root_pattern+ from +locking_script+ vs the
+          # per-wallet expected root, +controls_set+ from the derivation
+          # triple, and +spendable_intent+) yield 8 combinations; only
+          # four are valid:
+          #
+          #   * root + no controls + spendable      — wallet-owned root P2PKH
+          #   * non-root + no controls + none       — outbound (no recoverable key)
+          #   * non-root + controls + spendable     — BRC-42 self-payment / change
+          #   * non-root + controls + none          — BRC-29 outbound to counterparty
+          #
+          # Flat conditional matches the four valid permutations; anything
+          # else fails. No +case/in+ — the codebase has no precedent for
+          # pattern matching and a flat predicate is more searchable.
+          def validate_spendable_recoverable
+            root_match   = locking_script == self.class.expected_root_script
+            controls_set = !derivation_prefix.nil?
+            intent       = spendable_intent.to_s
+
+            valid =
+              (root_match  && !controls_set && intent == 'spendable') ||
+              (!root_match && !controls_set && intent == 'none')      ||
+              (!root_match && controls_set)
+            return if valid
+
+            errors.add(:spendable_intent,
+                       'invalid combination (HLR #467 / intent-and-outcomes.md): ' \
+                       "root_match=#{root_match} controls=#{controls_set} intent=#{intent}")
+          end
         end
       end
     end
