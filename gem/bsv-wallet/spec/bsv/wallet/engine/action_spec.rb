@@ -194,7 +194,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: OP_TRUE,
-            output_description: 'output' }
+            output_description: 'output', spendable: false }
         ]
       )
       reference = create_result[:signable_transaction][:reference]
@@ -213,7 +213,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: OP_TRUE,
-            output_description: 'output' }
+            output_description: 'output', spendable: false }
         ]
       )
       reference = create_result[:signable_transaction][:reference]

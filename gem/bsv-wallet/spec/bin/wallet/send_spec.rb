@@ -138,6 +138,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
           hash_including(
             satoshis: 1000,
             locking_script: instance_of(String),
+            # HLR #467 — every output spec states intent explicitly.
+            # Base58 send is an outbound payment to the recipient's address;
+            # the wallet never holds the output, so +'none'+.
+            spendable_intent: 'none',
             output_description: 'payment'
           )
         ),
@@ -205,6 +209,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
           outputs: array_including(
             hash_including(
               satoshis: 5000,
+              # HLR #467 — explicit intent. Identity-key (BRC-29) send is
+              # an outbound payment; the derivation triple is recipient-side
+              # provenance, not a signal that the wallet owns the output.
+              spendable_intent: 'none',
               derivation_prefix: 'deadbeef0000',
               derivation_suffix: '1',
               sender_identity_key: identity_key

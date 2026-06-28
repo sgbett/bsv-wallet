@@ -113,9 +113,11 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         fund_wallet_for_auto
 
         payment_script = SecureRandom.random_bytes(25)
+        # HLR #467 — outbound payment (no derivation, recipient script).
+        # BRC-100 +spendable: false+ → engine +spendable_intent: 'none'+.
         result = engine_with_keys.brc100.create_action(
           description: 'auto-fund test',
-          outputs: [{ satoshis: 5_000, locking_script: payment_script }],
+          outputs: [{ satoshis: 5_000, locking_script: payment_script, spendable: false }],
           no_send: true
         )
 
@@ -141,7 +143,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         result = engine_with_keys.brc100.create_action(
           description: 'auto-fund multi-change',
-          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
+          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25), spendable: false }],
           no_send: true
         )
 
@@ -154,7 +156,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         result = engine_with_keys.brc100.create_action(
           description: 'auto-fund nosend',
-          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
+          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25), spendable: false }],
           no_send: true
         )
 
@@ -168,7 +170,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         engine_with_keys.brc100.create_action(
           description: 'auto-fund spend',
-          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
+          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25), spendable: false }],
           no_send: true
         )
 
@@ -187,7 +189,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         expect do
           engine_with_keys.brc100.create_action(
             description: 'auto-fund dust',
-            outputs: [{ satoshis: 960_000, locking_script: SecureRandom.random_bytes(25) }],
+            outputs: [{ satoshis: 960_000, locking_script: SecureRandom.random_bytes(25), spendable: false }],
             no_send: true
           )
         end.to raise_error(BSV::Wallet::LimpModeError)
@@ -201,7 +203,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         expect do
           engine_with_keys.brc100.create_action(
             description: 'auto-fund broke',
-            outputs: [{ satoshis: 960_000, locking_script: SecureRandom.random_bytes(25) }],
+            outputs: [{ satoshis: 960_000, locking_script: SecureRandom.random_bytes(25), spendable: false }],
             no_send: true
           )
         end.to raise_error(BSV::Wallet::LimpModeError)
@@ -214,7 +216,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
           engine_with_keys.brc100.create_action(
             description: 'auto-fund defer',
             sign_and_process: false,
-            outputs: [{ satoshis: 100, locking_script: SecureRandom.random_bytes(25) }]
+            outputs: [{ satoshis: 100, locking_script: SecureRandom.random_bytes(25), spendable: false }]
           )
         end.to raise_error(BSV::Wallet::InvalidParameterError, /sign_and_process/)
       end
@@ -225,7 +227,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         expect do
           engine.brc100.create_action(
             description: 'auto-fund nokey',
-            outputs: [{ satoshis: 100, locking_script: SecureRandom.random_bytes(25) }]
+            outputs: [{ satoshis: 100, locking_script: SecureRandom.random_bytes(25), spendable: false }]
           )
         end.to raise_error(BSV::Wallet::Error, /key deriver/)
       end
@@ -359,10 +361,12 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       it 'explicit empty inputs (OP_RETURN) still work' do
         fund_wallet_for_auto
 
+        # HLR #467 — OP_RETURN is unspendable by design (provably unspendable
+        # script); +spendable: false+ → engine intent +'none'+.
         result = engine_with_keys.brc100.create_action(
           description: 'opret test12345',
           inputs: [],
-          outputs: [{ satoshis: 0, locking_script: "\x00\x6a\x04test".b }]
+          outputs: [{ satoshis: 0, locking_script: "\x00\x6a\x04test".b, spendable: false }]
         )
 
         expect(result[:txid]).to be_a(String)
@@ -379,7 +383,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         first = engine_with_keys.brc100.create_action(
           description: 'first action',
-          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
+          outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25), spendable: false }],
           no_send: true
         )
         expect(first[:no_send_change]).not_to be_empty
@@ -399,7 +403,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         second = engine_with_keys.brc100.create_action(
           description: 'second action',
-          outputs: [{ satoshis: 1_000, locking_script: SecureRandom.random_bytes(25) }],
+          outputs: [{ satoshis: 1_000, locking_script: SecureRandom.random_bytes(25), spendable: false }],
           no_send: true
         )
 
@@ -432,10 +436,15 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         register_funded_outputs(
           [
             { satoshis: big_sats, vout: 0, locking_script: p2pkh_locking_script_for(big_key).to_binary,
-              basket: nil, derivation_prefix: 'topup prefix', derivation_suffix: 'big',
+              basket: nil,
+              # HLR #467 — explicit intent. BRC-42 self-derived funding outputs.
+              spendable_intent: 'spendable',
+              derivation_prefix: 'topup prefix', derivation_suffix: 'big',
               sender_identity_key: 'self' },
             { satoshis: small_sats, vout: 1, locking_script: p2pkh_locking_script_for(small_key).to_binary,
-              basket: nil, derivation_prefix: 'topup prefix', derivation_suffix: 'small',
+              basket: nil,
+              spendable_intent: 'spendable',
+              derivation_prefix: 'topup prefix', derivation_suffix: 'small',
               sender_identity_key: 'self' }
           ],
           description: 'topup funding'
@@ -443,7 +452,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         result = engine_with_keys.brc100.create_action(
           description: 'topup test',
-          outputs: [{ satoshis: big_sats, locking_script: SecureRandom.random_bytes(25) }],
+          outputs: [{ satoshis: big_sats, locking_script: SecureRandom.random_bytes(25), spendable: false }],
           no_send: true
         )
 

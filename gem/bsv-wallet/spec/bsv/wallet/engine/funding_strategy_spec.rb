@@ -85,6 +85,8 @@ RSpec.describe BSV::Wallet::Engine::FundingStrategy do
       action_id: funding[:id],
       outputs: [{
         satoshis: satoshis, vout: 0, locking_script: SecureRandom.random_bytes(25),
+        # HLR #467 — wallet-owned BRC-42 self-derived funding output.
+        spendable_intent: 'spendable',
         derivation_prefix: 'p', derivation_suffix: 's',
         sender_identity_key: 'self', basket: nil
       }]

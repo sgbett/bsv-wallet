@@ -169,10 +169,18 @@ module BSV
             pubkey_hash = decode_base58_p2pkh!(address)
             locking_script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
 
+            # +spendable_intent: 'none'+ marks the output as the recipient's,
+            # not ours (HLR #467 / +intent-and-outcomes.md+): an outbound
+            # payment the wallet must not insert into its UTXO set. Intent
+            # is stated explicitly — no inference from the absence of
+            # derivation fields. Change outputs (added by
+            # +TxBuilder#build_change+) carry +'spendable'+ at their own
+            # construction site.
             result = engine.build_action(
               description: description,
               outputs: [
                 { satoshis: sats, locking_script: locking_script,
+                  spendable_intent: 'none',
                   output_description: 'payment' }
               ],
               accept_delayed_broadcast: accept_delayed,
@@ -203,11 +211,18 @@ module BSV
               BSV::Primitives::Digest.hash160(derived_pub)
             ).to_binary
 
+            # +spendable_intent: 'none'+ — outbound BRC-29 payment to the
+            # counterparty; the derivation triple is recipient-side material
+            # the recipient needs to reconstruct the spending key, not a
+            # signal that the wallet owns the output (HLR #467 /
+            # +intent-and-outcomes.md+). Derivation columns are retained as
+            # provenance and are harmless under the new structural CHECK.
             result = engine.build_action(
               description: description,
               outputs: [
                 { satoshis: sats,
                   locking_script: locking_script,
+                  spendable_intent: 'none',
                   derivation_prefix: prefix,
                   derivation_suffix: PAYMENT_SUFFIX,
                   sender_identity_key: sender_identity_key,
