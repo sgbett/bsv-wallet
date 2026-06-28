@@ -1,4 +1,4 @@
 --format documentation
 --colour
 --require spec_helper
---exclude-pattern "spec/{e2e,integration}/**/*_spec.rb"
+--exclude-pattern "spec/integration/**/*_spec.rb"

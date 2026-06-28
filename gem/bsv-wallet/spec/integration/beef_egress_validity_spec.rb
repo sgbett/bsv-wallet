@@ -31,7 +31,7 @@ require 'sequel'
 require 'bsv-wallet'
 
 RSpec.describe 'BEEF egress validity' do # rubocop:disable RSpec/DescribeClass
-  let(:bin_dir) { File.expand_path('../../bin', __dir__) }
+  let(:wallet_bin) { File.expand_path('../../bin/wallet', __dir__) }
   let(:alice_db_url) { BSV::Wallet::Fixtures.wallet(:alice).database_url }
   let(:bob_identity_key) do
     wif = BSV::Wallet::Fixtures.wallet(:bob).wif
@@ -59,22 +59,22 @@ RSpec.describe 'BEEF egress validity' do # rubocop:disable RSpec/DescribeClass
     db&.disconnect
   end
 
-  def run_cli(tool, *args, stdin_data: nil)
-    cmd = [File.join(bin_dir, tool)] + args
+  def run_wallet(*args, stdin_data: nil)
+    cmd = [wallet_bin] + args
     stdout, stderr, status = Open3.capture3(*cmd, stdin_data: stdin_data, binmode: true)
-    expect(status).to be_success, "[#{tool} #{args.join(' ')}] failed: #{stderr}"
+    expect(status).to be_success, "[wallet #{args.join(' ')}] failed: #{stderr}"
     stdout
   end
 
   describe 'after alice imports a confirmed UTXO from chain' do
     it 'every root output in alice.spendable has a merkle_path in tx_proofs' do
-      run_cli('import', 'alice', '--no-send')
+      run_wallet('--wallet=alice', 'import', '--no-send')
 
       alice_db = Sequel.connect(alice_db_url)
       begin
         root_actions = alice_db[:actions].where(description: 'imported UTXO').all
         expect(root_actions).not_to be_empty,
-                                    "import produced no 'imported UTXO' actions — bin/import failed silently"
+                                    "import produced no 'imported UTXO' actions — bin/wallet import failed silently"
 
         root_actions.each do |action|
           proof = alice_db[:tx_proofs].where(wtxid: Sequel.blob(action[:wtxid])).first
@@ -95,8 +95,8 @@ RSpec.describe 'BEEF egress validity' do # rubocop:disable RSpec/DescribeClass
 
   describe 'alice → bob send_payment' do
     it 'produces a BEEF that verifies against a structural-only chain_tracker' do
-      run_cli('import', 'alice', '--no-send')
-      envelope_json = run_cli('create', 'alice', bob_identity_key, '5000', '--no-send')
+      run_wallet('--wallet=alice', 'import', '--no-send')
+      envelope_json = run_wallet('--wallet=alice', 'send', bob_identity_key, '5000', '--broadcast=none')
       envelope = JSON.parse(envelope_json, symbolize_names: true)
       beef_bytes = [envelope[:beef]].pack('H*')
 

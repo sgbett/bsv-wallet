@@ -158,6 +158,13 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
       )
     end
 
+    it 'maps --broadcast=none to no_send: true' do
+      command.call([base58_address, '1000', '--broadcast=none'])
+      expect(engine).to have_received(:build_action).with(
+        hash_including(no_send: true, accept_delayed_broadcast: false)
+      )
+    end
+
     it 'forwards --description' do
       command.call([base58_address, '1000', '--description=invoice-77'])
       expect(engine).to have_received(:build_action).with(
@@ -217,6 +224,22 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
 
     it 'envelope carries the sender_identity_key' do
       expect { command.call([identity_key, '5000']) }.to output(/"sender_identity_key":"#{identity_key}"/).to_stdout
+    end
+
+    it 'envelope carries the dtxid' do
+      expected_dtxid = fake_wtxid.reverse.unpack1('H*')
+      expect { command.call([identity_key, '5000']) }.to output(/"dtxid":"#{expected_dtxid}"/).to_stdout
+    end
+
+    it 'maps --broadcast=none to no_send: true on the identity-key path' do
+      command.call([identity_key, '5000', '--broadcast=none'])
+      expect(engine).to have_received(:build_action).with(
+        hash_including(no_send: true, accept_delayed_broadcast: false)
+      )
+    end
+
+    it 'still emits the envelope when --broadcast=none' do
+      expect { command.call([identity_key, '5000', '--broadcast=none']) }.to output(/"beef":/).to_stdout
     end
   end
 end
