@@ -51,7 +51,7 @@ module BSV
 
           def call(args)
             parser.parse!(args)
-            raise UsageError, "import takes no positional arguments (got #{args.inspect})" unless args.empty?
+            raise UsageError, "import takes no positional arguments (got #{args.length})" unless args.empty?
 
             engine = @ctx[:engine]
             result = engine.import_wallet(

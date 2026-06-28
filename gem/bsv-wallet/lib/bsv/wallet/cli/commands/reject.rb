@@ -43,11 +43,23 @@ module BSV
                     'reject requires <action_id> (positive integer; ' \
                     'see id: from `bin/wallet list actions`)'
             end
-            raise UsageError, "reject: unexpected extra arguments #{args.inspect}" unless args.empty?
+            raise UsageError, "reject: unexpected extra arguments (got #{args.length})" unless args.empty?
 
             action_id = parse_action_id!(action_id_str)
             engine = @ctx[:engine]
-            engine.reject_action(action_id: action_id)
+
+            begin
+              engine.reject_action(action_id: action_id)
+            rescue BSV::Wallet::InvalidParameterError => e
+              # Unknown action_id is operator input (typo, stale id) —
+              # CLI semantics put it on the UsageError → exit 2 path
+              # alongside other "bad argument" errors. The other two
+              # rejection failures (CannotRejectInternalActionError,
+              # CannotRejectAcceptedActionError) are genuine engine-state
+              # conditions where the action exists but can't be rejected;
+              # those bubble through Wallet::Error → exit 1.
+              raise UsageError, e.message
+            end
 
             emit_human "rejected: action #{action_id}"
             0

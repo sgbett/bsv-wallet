@@ -49,7 +49,7 @@ module BSV
 
           def call(args)
             parser.parse!(args)
-            raise UsageError, "consolidate takes no positional arguments (got #{args.inspect})" unless args.empty?
+            raise UsageError, "consolidate takes no positional arguments (got #{args.length})" unless args.empty?
 
             target_inputs = @options[:target_inputs] || DEFAULT_TARGET_INPUTS
             if target_inputs < MIN_TARGET_INPUTS

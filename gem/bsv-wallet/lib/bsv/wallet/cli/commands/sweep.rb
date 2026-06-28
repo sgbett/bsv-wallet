@@ -49,7 +49,7 @@ module BSV
 
           def call(args)
             parser.parse!(args)
-            raise UsageError, "sweep takes no positional arguments (got #{args.inspect})" unless args.empty?
+            raise UsageError, "sweep takes no positional arguments (got #{args.length})" unless args.empty?
 
             recipient = @options[:to]
             raise UsageError, 'sweep requires --to=<root_key_hex> (66-char compressed pubkey starting 02/03)' if recipient.nil? || recipient.empty?

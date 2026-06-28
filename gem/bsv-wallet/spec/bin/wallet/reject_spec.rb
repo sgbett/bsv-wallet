@@ -51,11 +51,29 @@ RSpec.describe BSV::Wallet::CLI::Commands::Reject do
       expect { command.call(['7']) }.to output(/rejected:\s+action 7/).to_stderr
     end
 
-    it 'lets engine InvalidParameterError bubble (handled by dispatcher Wallet::Error rescue)' do
+    # Unknown action_id is operator input (typo, stale id) — translated
+    # to UsageError → exit 2 alongside other "bad argument" errors. Distinct
+    # from non-rejectable state, which is genuine engine state and bubbles
+    # through Wallet::Error → exit 1.
+    it 'translates engine InvalidParameterError (unknown action_id) to UsageError' do
       allow(engine).to receive(:reject_action)
         .and_raise(BSV::Wallet::InvalidParameterError, 'action_id=99 not found')
       expect { command.call(['99']) }
-        .to raise_error(BSV::Wallet::InvalidParameterError)
+        .to raise_error(BSV::Wallet::CLI::UsageError, /action_id=99 not found/)
+    end
+
+    it 'lets engine CannotRejectInternalActionError bubble (non-rejectable state, exit 1)' do
+      allow(engine).to receive(:reject_action)
+        .and_raise(BSV::Wallet::CannotRejectInternalActionError, 42)
+      expect { command.call(['42']) }
+        .to raise_error(BSV::Wallet::CannotRejectInternalActionError)
+    end
+
+    it 'lets engine CannotRejectAcceptedActionError bubble (non-rejectable state, exit 1)' do
+      allow(engine).to receive(:reject_action)
+        .and_raise(BSV::Wallet::CannotRejectAcceptedActionError.new(42, 'ACCEPTED'))
+      expect { command.call(['42']) }
+        .to raise_error(BSV::Wallet::CannotRejectAcceptedActionError)
     end
   end
 end
