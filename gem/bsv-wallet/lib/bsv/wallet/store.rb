@@ -119,7 +119,7 @@ module BSV
         # around quoting variations across PG versions.
         defn = @db.fetch(
           'SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint ' \
-          "WHERE conname = 'spendable_recoverable'"
+          "WHERE conname = 'spendable_recoverable' AND conrelid = 'outputs'::regclass"
         ).first
         raise BSV::Wallet::SchemaIntegrityError, 'spendable_recoverable CHECK not found' unless defn
 
@@ -1363,7 +1363,7 @@ module BSV
       def create_output_or_translate(**attrs)
         models::Output.create(attrs)
       rescue Sequel::ValidationFailed => e
-        raise BSV::Wallet::InvalidParameterError, "output: #{e.message}"
+        raise BSV::Wallet::InvalidParameterError.new('output', e.message)
       end
 
       # Convert a value to binary. If already binary-encoded, return as-is;

@@ -27,9 +27,11 @@ RSpec.describe BSV::Wallet::Store::Models::Input, :store do
     end
 
     it 'enforces unique vin within an action' do
-      # Two non-colliding root outputs from the same source action — give the
-      # second a distinct non-root locking_script so spendable_recoverable
-      # doesn't reject duplicate root-shape rows.
+      # Two non-colliding outputs from the same source action. The second
+      # uses a non-root locking_script + spendable_intent: 'none' so it
+      # satisfies spendable_recoverable without needing the suite's root
+      # P2PKH literal (the constraint is per-row structural validity, not
+      # uniqueness).
       output2 = BSV::Wallet::Store::Models::Output.create(
         action_id: source_action.id, satoshis: 500, vout: 1,
         locking_script: SecureRandom.random_bytes(25), spendable_intent: 'none'
