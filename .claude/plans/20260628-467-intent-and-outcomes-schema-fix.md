@@ -79,7 +79,7 @@ for db in test alice bob carol sdk w1 w2 w3 w4 w5; do
 done
 ```
 
-## Phase 1 — Principle documentation (Commit 1)
+## Phase 1 — Foundational documentation
 
 **Deliverables:**
 
@@ -92,21 +92,36 @@ done
    - The outcome-row-deletion catastrophe: derivation must survive on the immutable log (`outputs`, not `spendable`).
    - Living register of intent points: `broadcast_intent` (settled), `spendable_intent` (this HLR), shape for additions.
    - The enum convention: enums over booleans, even for two values (extensibility + symmetry).
-   - Cross-references: `principle-of-state.md`, `state-boundaries.md`, `core-vs-conformance.md`; ADR-003, ADR-010, ADR-031.
+   - Intent-placement rule: intent on the grain at which it varies (per-action → on actions; per-output → on outputs).
+   - Per-wallet CHECK literal mechanism (mirrored from schema.md for discoverability).
+   - Threat-model note (hash literal in schema is public; the wallet's root P2PKH address is public on chain).
+   - WIF-rotation note (per-wallet CHECK literal tied to WIF for the wallet's lifetime; rotation = new wallet).
+   - BRC-100 alignment note (the principle aligns with spec but isn't spec-mandated).
+   - Cross-references: `principle-of-state.md`, `state-boundaries.md`, `core-vs-conformance.md`, `hot-path-design.md`; ADR-003, ADR-010, ADR-031.
 
-3. **`.architecture/decisions/adrs/20260628_ADR-031-intent-and-outcomes.md`** — captures why we articulated the principle now:
+3. **`docs/reference/hot-path-design.md`** (NEW) — declarative-beats-trigger principle:
+   - Rule: no triggers on the hot path (output insert, spendable insert, broadcast row, etc.).
+   - The composite FK + CHECK pattern as the canonical declarative shape (`broadcasts` is the worked example).
+   - When triggers are appropriate (cold-path consistency checks; never per-row-on-write).
+   - Cross-reference to `intent-and-outcomes.md` and ADR-019.
+
+4. **`CLAUDE.md`** — one-line addition pointing fresh agents at `hot-path-design.md`. Caught by every spawned agent on every session.
+
+5. **`.architecture/decisions/adrs/20260628_ADR-031-intent-and-outcomes.md`** — captures why we articulated the principle now:
    - Two examples that surfaced it (`broadcast_intent` settled correctly; spendable-controls inference surfaced by `send_beef_spec.rb`).
    - ADR-010's blindspot: banned the inference in code, encoded it structurally via `typed_no_*`.
    - HLR #467 as the first principle-driven schema fix; HLR #60 as the living audit register.
    - Pragmatic Enforcer block: this is naming what we have been doing wrong, not adding speculation.
 
-4. **`.architecture/decisions/adrs/INDEX.md`** — add ADR-031 entry.
+6. **`.architecture/decisions/adrs/INDEX.md`** — add ADR-031 entry.
 
 **Verification:** cross-references resolve; British prose, no emoji.
 
+**Independent of code** — can run in parallel to Phase 2.
+
 ---
 
-## Phase 2 — Schema rework + migration plumbing (Commit 2)
+## Phase 2 — Schema rework + migration plumbing
 
 **Deliverables:**
 
@@ -116,21 +131,34 @@ done
      class << self
        attr_accessor :identity_pubkey_hash
      end
+
+     def self.expected_root_script
+       raise 'identity_pubkey_hash not set — Store#migrate! must populate before any migration runs' unless identity_pubkey_hash
+       BSV::Script::Script.p2pkh_lock(identity_pubkey_hash).to_binary
+     end
    end
    ```
-   Plus an `expected_root_script` helper that returns the 25-byte locking script bytes for the current `identity_pubkey_hash` — shared between migrations and the model validator.
+   The literal is built via `BSV::Script::Script.p2pkh_lock(...).to_binary` — single source of truth (SDK). Not hand-rolled `\x76\xa9\x14...\x88\xac`.
 
-2. **`Store#migrate!`** — set the hash before invoking Sequel migrator, reset after:
+2. **`Store.new(identity_pubkey_hash:, ...)`** — accept the hash as a constructor parameter, store on instance. **`Store#migrate!`** populates `Migration.identity_pubkey_hash` from instance before invoking Sequel migrator, resets in `ensure`:
    ```ruby
+   def initialize(url:, identity_pubkey_hash: nil, ...)
+     @identity_pubkey_hash = identity_pubkey_hash
+     # ...
+   end
+
    def migrate!
-     BSV::Wallet::Migration.identity_pubkey_hash = key_deriver.identity_pubkey_hash
+     BSV::Wallet::Migration.identity_pubkey_hash = @identity_pubkey_hash
+     # set Output model's class accessor too, for runtime validation
+     models::Output.expected_root_script = BSV::Wallet::Migration.expected_root_script
      Sequel::Migrator.run(@db, MIGRATIONS_DIR)
    ensure
      BSV::Wallet::Migration.identity_pubkey_hash = nil
    end
    ```
+   `cli.rb` boot ordering: construct `KeyDeriver` first; then `Store.new(identity_pubkey_hash: kd.identity_pubkey_hash, ...)`; then `store.migrate!`. Spec helper (`shared_context.rb`) constructs a deterministic test hash (e.g. `"\x00" * 20` or hash of a fixture WIF) and passes via `Store.new`.
 
-3. **`KeyDeriver#identity_pubkey_hash`** — verify the method exists; if not, add it (returns 20-byte binary `hash160(identity_pubkey_bytes)`).
+3. **`KeyDeriver#identity_pubkey_hash`** — confirmed missing today; add as memoised reader on `KeyDeriver` (follows existing pattern of `identity_key` / `identity_key_bytes`). Returns 20-byte binary `hash160(identity_key_bytes)`. Refactor inline `hash160(identity_key_bytes)` callsites (`brc100.rb:470`, `engine.rb:728`) to use it — single source of truth.
 
 4. **Amend `db/migrations/001_create_schema.rb`:**
 
@@ -149,17 +177,35 @@ done
    - Add `controls_all_or_nothing` constraint
    - Add `spendable_recoverable` constraint with per-wallet literal (see above)
 
+   Add a unique index on `outputs(id, spendable_intent)` — needed as the composite FK target for the spendable denormalisation (below).
+
+   In `create_table(:spendable)`:
+   - Add `column :spendable_intent, c[:spendable_intent], null: false`
+   - Add composite FK: `foreign_key %i[output_id spendable_intent], :outputs, key: %i[id spendable_intent]`
+   - Add CHECK: `constraint(:spendable_intent_must_be_spendable, "spendable_intent = 'spendable'")`
+   - This is the declarative replacement for the dropped `prevent_outbound_spendable` trigger. Mirrors the `broadcasts.intent` composite FK pattern.
+
    SQLite-only ENUM-equivalent CHECK:
    - Remove `output_type_values` constraint
    - Add `constraint(:spendable_intent_values, "spendable_intent IN ('spendable', 'none')") unless postgres`
 
+   Preamble comment block on the `spendable_recoverable` constraint explaining: (a) the literal is the WIF-derived root P2PKH script populated by `Migration.identity_pubkey_hash`, (b) the literal is wallet-specific — cross-wallet schema dumps will differ, (c) the hash is public information (root P2PKH address).
+
 5. **Amend `db/migrations/002_triggers.rb`:**
-   - Rewrite `prevent_outbound_spendable` trigger: change `output_type = 'outbound'` check to `spendable_intent = 'none'`.
-   - Keep the trigger as defence-in-depth for direct `spendable` inserts that bypass the application path. Follow-up issue tracks its eventual evaluation for removal.
+   - **Drop `prevent_outbound_spendable` trigger entirely.** The composite FK + CHECK on `spendable` (step 4 above) replaces it declaratively. **No trigger on the hot path.** This resolves the open follow-up item.
 
-6. **`models::Output`** — drop the `:output_type` column reference; add `:spendable_intent`. Verify existing scopes (`spendable`, etc.) are unaffected.
+6. **`models::Output`** — drop the `:output_type` column reference; add `:spendable_intent`. Add class-level accessor `expected_root_script` (set by `Store#migrate!`). Verify existing scopes (`spendable`, etc.) are unaffected.
 
-**Constraint-level spec coverage:** new spec exercises each of the 8 permutations against a real DB, confirming the 4 invalid combinations are rejected with the right constraint name. Postgres-targeted; SQLite differs slightly in error text — translate.
+7. **`Store#verify_schema!`** — reads the `spendable_recoverable` CHECK definition from `pg_constraint` (or SQLite equivalent), asserts the literal matches the current `identity_pubkey_hash`. Called at boot. Catches schema drift, restore-to-wrong-DB, WIF mismatch. Raises `BSV::Wallet::SchemaIntegrityError` on mismatch.
+
+**Constraint-level spec coverage:**
+- 8-permutation table-driven matrix (Postgres + SQLite); each invalid row asserts the *expected* constraint name in the error
+- Direct `INSERT INTO spendable` for an output whose `spendable_intent='none'` → composite-FK violation (proves the declarative replacement works without a trigger)
+- Cross-backend constraint-name parity check
+- `\d+ outputs` literal verification (psql)
+- Migration round-trip determinism (dump → drop → re-migrate → diff → byte-identical)
+- Wrong-wallet detection (migrate alice's DB; attempt bob-root-shape insert; rejected)
+- `Store#verify_schema!` on a manually-corrupted CHECK literal raises cleanly
 
 **Verification:**
 - `bundle exec rspec spec/bsv` against Postgres against a fresh `bsv_wallet_test` DB — schema specs pass.
@@ -167,14 +213,18 @@ done
 
 ---
 
-## Phase 3 — Sequel model validation (Commit 3)
+## Phase 3 — Sequel model validation (app-layer mirror)
 
 **Deliverables:**
 
-1. **`def validate`** on `models::Output` mirroring the DB CHECK logic:
+1. **`def validate`** on `models::Output` mirroring the DB CHECK logic. Reads expected script from the class accessor set by `Store#migrate!` (NOT from `Migration.identity_pubkey_hash` global, which is reset after migration). Flat conditional, not `case/in` (no codebase precedent for pattern matching; flat is searchable and matches every other validator):
 
    ```ruby
-   class Output < Sequel::Model(:outputs)
+   class Output < Sequel::Model
+     class << self
+       attr_accessor :expected_root_script
+     end
+
      def validate
        super
        validate_controls_all_or_nothing
@@ -192,20 +242,19 @@ done
      end
 
      def validate_spendable_recoverable
-       expected = BSV::Wallet::Migration.expected_root_script
-       root_match = locking_script == expected
+       root_match   = locking_script == self.class.expected_root_script
        controls_set = !derivation_prefix.nil?
+       intent       = spendable_intent.to_s
 
-       valid = case [root_match, controls_set, spendable_intent.to_s]
-               in [true, false, 'spendable'] | [false, false, 'none'] | [false, true, _]
-                 true
-               else
-                 false
-               end
+       valid =
+         (root_match  && !controls_set && intent == 'spendable') ||
+         (!root_match && !controls_set && intent == 'none')      ||
+         (!root_match && controls_set)
        return if valid
 
        errors.add(:spendable_intent,
-                  "invalid combination: root_match=#{root_match} controls=#{controls_set} intent=#{spendable_intent}")
+                  "invalid combination (HLR #467 / intent-and-outcomes.md): " \
+                  "root_match=#{root_match} controls=#{controls_set} intent=#{intent}")
      end
    end
    ```
@@ -213,30 +262,31 @@ done
 2. **Store-boundary error translation** — wherever `models::Output.create` is called (Store insertion paths), rescue `Sequel::ValidationFailed` and raise `BSV::Wallet::InvalidParameterError` with the formatted error message. Single rescue covers the whole insertion path.
 
 **Verification:**
-- New spec `spec/bsv/wallet/store/models/output_spec.rb` exercising all 8 permutations against the model (no DB roundtrip required for the validation tests — model `valid?` returns false for the four invalid combinations).
-- Existing Store specs still pass (with `spendable_intent` added to their output specs in Phase 5 if not in this phase).
+- New spec `spec/bsv/wallet/store/models/output_spec.rb` exercising all 8 permutations against the model via `valid?` / `errors[:spendable_intent]` (no DB roundtrip required for the validation tests).
+- Existing Store specs still pass (with `spendable_intent` added to their output specs in Phase 5).
 
 ---
 
-## Phase 4 — Engine API + inference site removal (Commit 4)
+## Phase 4 — Engine API + inference removal + Engine→BRC-100 inversion fix + identity_pubkey_hash accessor
 
 **Deliverables:**
 
+**Inference site removal:**
+
 1. **`Engine::Action.canonical_outputs`** (`engine/action.rb:115-140`):
    - Drop `effective_type = out[:output_type] || (out[:derivation_prefix] ? nil : 'outbound')`.
-   - Require `out[:spendable_intent]` — raise `InvalidParameterError` with a clean message if missing.
+   - Require `out[:spendable_intent]` — raise `InvalidParameterError` with message that references HLR #467 / `intent-and-outcomes.md` as context anchor.
    - Pass `spendable_intent: out[:spendable_intent]` through to the row hash.
    - Drop the `output_type: effective_type` field from the emitted hash.
 
 2. **`Store#do_create_action_outputs`** (`store.rb:185-205`):
    - Replace `wallet_owned = out[:derivation_prefix] || out[:output_type] == 'root'`
    - With `wallet_owned = out[:spendable_intent].to_s == 'spendable'`.
-   - Spendable row creation continues to be gated on stated intent.
 
 3. **`Store#promote_action_outputs`** (`store.rb:216-235`):
    - Replace the inference with `output.spendable_intent.to_s == 'spendable'`.
-   - Drop the `change_output?` fallback (no longer needed — `spendable_intent` stated explicitly upstream covers change outputs).
-   - Grep for any remaining callers of `change_output?`; if none, delete the method; if any, leave + add to the follow-up issue.
+   - Drop the `change_output?` fallback (covered by stated intent).
+   - **Delete `change_output?` method entirely** (confirmed dead after this commit — single caller is the one being removed). No follow-up.
 
 4. **`Engine::BeefImporter#resolve_internalize_output`** (`beef_importer.rb:317-330`):
    - Drop `spec[:output_type] = 'root' unless rem[:derivation_prefix]`.
@@ -252,6 +302,34 @@ done
    - Update the surrounding docstring's "Root outputs (output_type = 'root')" wording.
 
 7. **`store/sweepable_state.rb`** docstring — same wording fix.
+
+**Engine→BRC-100 inversion fix (pre-existing architectural defect — violates ADR-026 / ADR-027):**
+
+8. **`Engine#send_payment`** (`engine.rb:1042`): reshape to call `engine.build_action` directly with engine-vocab output spec (drop the `brc100.create_action(...)` detour). The wallet-vocab method no longer reaches outward into the conformance wrapper.
+
+9. **`Engine#sweep`**: same — call `engine.build_action` directly.
+
+10. **`Engine#consolidate_step`**: same.
+
+**`KeyDeriver#identity_pubkey_hash` accessor (and its consumers):**
+
+11. **`KeyDeriver#identity_pubkey_hash`** — confirmed missing today. Add as memoised reader on `KeyDeriver` (binary, 20 bytes, `hash160(identity_key_bytes)`). Follows the existing pattern of `identity_key` (hex) and `identity_key_bytes` (binary).
+
+12. **Refactor inline `hash160(identity_key_bytes)` callsites** to use the new accessor:
+    - `brc100.rb:470` (inside `validate_output_ownership!` which is being deleted — moot)
+    - `engine.rb:728` (the wallet's own-root-hash derivation)
+    - Grep for any other inline `hash160(...)` of the wallet's own identity key and migrate
+
+**YARD updates in this commit (not deferred to Phase 6):**
+
+13. **`lib/bsv/wallet/interface/store.rb`** (lines 77, 130): drop `:output_type` from output-spec docstrings; add `:spendable_intent` (required); link to `intent-and-outcomes.md`.
+14. **Engine YARD comments referencing `output_type`** — scan changed classes, update in same commit.
+
+**Spec coverage:**
+
+- "No-inference-remaining" canary spec — grep-equivalent at test level; fails loudly if a 6th inference site sneaks in
+- `Engine#send_payment` end-to-end integration spec confirming outbound output gets `spendable_intent: 'none'`
+- `KeyDeriver#identity_pubkey_hash` unit spec (round-trip, memoisation, 20-byte assertion)
 
 **Verification:** unit specs around the changed classes pass. Specs that construct fixture outputs may need `spendable_intent:` added — fixed mechanically here or in Phase 5.
 
@@ -282,8 +360,9 @@ Every site that constructs an output spec for `engine.build_action` (or directly
 - Change outputs are BRC-42 self-payments → `spendable_intent: 'spendable'`.
 
 **BRC-100 wrapper** (`brc100.rb`):
-- `createAction` outputs spec — translate from BRC-100 vocab to engine vocab with default `spendable_intent: 'spendable'` (the BRC-100 spec assumes self-owned outputs).
-- Document this in the wrapper.
+- `createAction` outputs spec — translate from BRC-100 vocab to engine vocab with default `spendable_intent: 'spendable'` (BRC-100 spec assumes self-owned outputs).
+- Accept explicit `spendable: Int8` from BRC-100 spec input if present, translate: `false → 'none'`, `true|absent → 'spendable'`.
+- Document this in the wrapper YARD.
 
 **Unit-spec updates included in this commit** for each touched class.
 
@@ -297,7 +376,12 @@ Every site that constructs an output spec for `engine.build_action` (or directly
 - Update `sweepable_state_spec` for new query semantics.
 
 **Integration spec:**
-- `spec/integration/send_beef_spec.rb`: `pending` → real `expect`. Sender funds drop by exactly `sats + fee`.
+- `spec/integration/send_beef_spec.rb`: `pending` → real `expect`. Sender funds drop by exactly `sats + fee` (tightened from `<=` to `==` or `be_within(fee_tolerance).of` — catches both over- and under-debiting regressions).
+- Table-driven 8-permutation matrix spec (one data table, drivers for DB CHECK + model validate + engine surface). Eliminates 3-way drift risk.
+- `Store#verify_schema!` integration spec (schema-drift assertion).
+- `Migration.identity_pubkey_hash` lifecycle spec (set during migrate, nil after `ensure` runs in both success and failure paths).
+- Cross-wallet contamination spec (boot wallet A in process, then wallet B; legitimate root output on B succeeds — confirms per-instance threading).
+- Hot-path microbenchmark for `spendable_recoverable` CHECK (confirm constant-folded; no measurable insert-time regression).
 
 **Docs sweep:**
 - `docs/reference/schema.md`: outputs section rewrite — drop `output_type`, add `spendable_intent`, document the per-wallet literal CHECK, document the model-mirror validation, cross-reference `intent-and-outcomes.md`.
@@ -363,20 +447,23 @@ PR body covers: problem, principle, fix shape, test results, breaking-change ope
 | Risk | Mitigation |
 |---|---|
 | Per-wallet literal in CHECK differs across Postgres/SQLite | Sequel's `Sequel.blob(...)` abstracts; verify in Phase 2 against both engines. |
-| `Migration.identity_pubkey_hash` global feels fragile | Set inside `Store#migrate!` and reset in `ensure`. Single-threaded migration runner. Documented in the migration file's preamble. |
-| Removing `change_output?` breaks something | Phase 4 grep for all callers; defensive-keep if found. |
-| Spec fixtures balloon in scope | Search-and-replace mostly mechanical; `spendable_intent:` field uniform across most call sites (`:spendable` for wallet-owned, `:none` for outbound). |
-| BRC-100 wrapper makes wrong default assumption | BRC-100 spec assumes self-owned outputs; defaulting to `'spendable'` is correct. Document in the wrapper. |
+| `Migration.identity_pubkey_hash` global pattern | Per-instance threading via `Store.new(identity_pubkey_hash:)` and class accessor `Output.expected_root_script` (set at boot). Global is only used at migration-emit time, reset in `ensure`. Cross-wallet contamination spec validates the threading. |
+| Cross-wallet schema dump divergence | Each wallet's `pg_dump` shows its own hash literal in the CHECK. Documented in `docs/reference/schema.md` and `intent-and-outcomes.md` as by-design per ADR-028 (multi-user). |
+| Schema drift / restore-to-wrong-DB | `Store#verify_schema!` at boot reads the CHECK literal, asserts it matches the current `identity_pubkey_hash`, raises on mismatch. |
+| Spec fixtures balloon in scope | Table-driven matrix for the 8 permutations; mechanical `spendable_intent:` addition for other fixtures (uniform across most call sites). |
+| BRC-100 wrapper default assumption | Inversion fix removes Engine→BRC-100 detour for `send_payment`/`sweep`/`consolidate_step`; wrapper default `'spendable'` only fires for genuine BRC-100 callers (spec-self-owned). |
 | Operators don't know to drop+recreate test DBs | CHANGELOG entry + PR description make this explicit. CI runs against fresh DBs. |
-| The 8-permutation constraint encoding is wrong | Phase 2 constraint-level spec; Phase 3 model spec — both exercise all 8 directly. |
+| The 8-permutation constraint encoding is wrong | Phase 2 constraint-level spec; Phase 3 model spec — both exercise all 8 directly via the same data table. |
+| `controls_all_or_nothing` redundancy with `spendable_recoverable` | Kept separately for distinct error messages (controls partial vs root-shape inconsistent). Trivial cost; real diagnostic value. |
 
 ---
 
-## Open items (flag during execution)
+## Resolved during this PR (no follow-ups)
 
-1. **`change_output?` deletion confidence** — verify no other callers before deleting (Phase 4).
-2. **`prevent_outbound_spendable` trigger continued role** — rewrite in this PR; evaluate removal in follow-up issue.
-3. Follow-up issue to file alongside #467 (not part of it): *Post-#467 defence-in-depth audit: evaluate removal of `prevent_outbound_spendable` trigger; resolve `change_output?` fate if it survives #467 as defensive code.*
+- ✅ Trigger removal — `prevent_outbound_spendable` dropped entirely in Phase 2; declarative composite FK + CHECK replaces it.
+- ✅ `change_output?` deletion — confirmed dead, deleted in Phase 4.
+- ✅ BRC-100 wrapper default leak — addressed by the Engine→BRC-100 inversion fix (Phase 4).
+- ✅ `KeyDeriver#identity_pubkey_hash` accessor — added in Phase 4.
 
 ## Estimate
 
