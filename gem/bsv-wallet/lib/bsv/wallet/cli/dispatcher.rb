@@ -11,6 +11,10 @@ require_relative 'commands/balance'
 require_relative 'commands/list'
 require_relative 'commands/send'
 require_relative 'commands/receive'
+require_relative 'commands/import'
+require_relative 'commands/reject'
+require_relative 'commands/sweep'
+require_relative 'commands/consolidate'
 
 module BSV
   module Wallet
@@ -32,7 +36,11 @@ module BSV
           'balance' => Commands::Balance,
           'list' => Commands::List,
           'send' => Commands::Send,
-          'receive' => Commands::Receive
+          'receive' => Commands::Receive,
+          'import' => Commands::Import,
+          'reject' => Commands::Reject,
+          'sweep' => Commands::Sweep,
+          'consolidate' => Commands::Consolidate
         }.freeze
 
         module_function

@@ -210,7 +210,77 @@ module BSV
             return hex if hex.is_a?(String) && hex.match?(/\A(02|03)[0-9a-fA-F]{64}\z/)
 
             raise UsageError,
-                  "invalid public key: expected 66-char hex starting 02 or 03, got #{hex.inspect}"
+                  "invalid public key: expected 66-char hex starting 02 or 03, got #{safe_preview(hex)}"
+          end
+
+          # Validate a basket name against the schema's DB CHECK rules
+          # (mirrors all seven +baskets_name_*+ constraints in
+          # +001_create_schema.rb:266-272+). Without this gate, invalid
+          # names reach the engine and bubble as
+          # +Sequel::CheckConstraintViolation+ — outside the dispatcher's
+          # never-raises-uncaught rescue chain.
+          #
+          # Schema floor (enforced here): length 5-300, lowercase ASCII
+          # letters/digits/spaces, no consecutive spaces, no leading or
+          # trailing space, not the literal +'default'+, no trailing
+          # +' basket'+ suffix. These are the DB CHECK constraints; every
+          # path that writes to +baskets+ obeys them.
+          #
+          # NOT enforced here (BRC-100 conformance layer only —
+          # +BSV::Wallet::BRC100#validate_basket_name!+): +'admin'+ prefix
+          # and +'p '+ prefix. Native +bin/wallet+ legitimately uses these
+          # for wallet-internal baskets (+'p wbikd'+ for WBIKD address
+          # slots per the WBIKD draft; +'admin *'+ for permission tokens
+          # per ADR-029); the sibling +bin/brc100+ surface (HLR #431) is
+          # where those tighter spec-mandated rules belong.
+          BASKET_NAME_MIN = 5
+          BASKET_NAME_MAX = 300
+          BASKET_NAME_CHARSET = /\A[a-z0-9 ]+\z/
+
+          def validate_basket!(name)
+            unless name.is_a?(String) && name.length.between?(BASKET_NAME_MIN, BASKET_NAME_MAX)
+              raise UsageError,
+                    "--basket=<name> must be #{BASKET_NAME_MIN}-#{BASKET_NAME_MAX} chars " \
+                    "(got #{safe_preview(name)})"
+            end
+
+            unless name.match?(BASKET_NAME_CHARSET)
+              raise UsageError,
+                    '--basket=<name> must contain only lowercase ASCII letters, digits, and spaces ' \
+                    "(got #{safe_preview(name)})"
+            end
+
+            raise UsageError, '--basket=<name> must not contain consecutive spaces' if name.include?('  ')
+
+            raise UsageError, '--basket=<name> must not start with a space' if name.start_with?(' ')
+
+            raise UsageError, '--basket=<name> must not end with a space' if name.end_with?(' ')
+
+            raise UsageError, %(--basket=<name> must not end with " basket" (schema reservation)) if name.end_with?(' basket')
+
+            return unless name == 'default'
+
+            raise UsageError, %(--basket=<name> cannot be "default" (schema reservation))
+          end
+
+          # Defence against accidental secret disclosure in error
+          # messages. An operator mistyping a WIF (or anything else
+          # long) into a wrong slot — recipient, --to, <action_id> —
+          # would otherwise have the raw value echoed to stderr / logs
+          # / CI output if the validator dumped +#inspect+. Short
+          # values pass through verbatim (diagnostic for typos; too
+          # short to be a WIF); long values get a prefix + length
+          # indicator that's diagnostic without being a disclosure
+          # surface.
+          #
+          # @param value [Object] anything responding to +#to_s+
+          # @param limit [Integer] threshold above which truncation kicks in
+          # @return [String] inspect-shaped preview safe for error messages
+          def safe_preview(value, limit: 20)
+            s = value.to_s
+            return s.inspect if s.length <= limit
+
+            "#{s.slice(0, 8).inspect[0..-2]}…\" (#{s.length} chars)"
           end
 
           # +true+ iff JSON output should be pretty-formatted (TTY +

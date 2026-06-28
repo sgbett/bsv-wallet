@@ -1,0 +1,85 @@
+# frozen_string_literal: true
+
+require_relative 'base'
+
+module BSV
+  module Wallet
+    module CLI
+      module Commands
+        # +bin/wallet sweep --to=<root_key_hex>+ — drain every spendable
+        # output back to the recipient's root P2PKH address.
+        #
+        # Blank-slate operational tool. Locks a single caller output to
+        # the recipient's *root* P2PKH (literal +hash160(recipient_pubkey)+,
+        # NOT a BRC-42-derived address), so the receiving wallet's DB can
+        # be wiped and re-imported by scanning the root address with
+        # +bin/wallet import+. Any rounding surplus against the actual
+        # fee is dropped on the funding loop's change-key slot.
+        #
+        # +--to+ takes the recipient's 66-char compressed pubkey hex
+        # (02/03 prefix); the engine's +validate_recipient_key!+ is a
+        # second line of defence after CLI-side +parse_pubkey_hex+.
+        # +--no-send+ keeps the swept action unsubmitted (built and
+        # signed, but never broadcast). BEEF emission for peer-to-peer
+        # handoff is not currently exposed — operators wanting the BEEF
+        # bytes can pull them from the engine's return via direct API
+        # access, or wait for a future +--emit-beef+ flag.
+        #
+        # Empty-pool case (engine returns nil) is reported as "nothing
+        # to sweep" without an error — sweeping an empty wallet is a
+        # no-op, not a failure. Dust-only wallet (fee exceeds total)
+        # raises +InsufficientFundsError+ → exit 1 with the engine's
+        # message.
+        class Sweep < Base
+          def name = 'sweep'
+
+          def build_parser
+            @options = {}
+            OptionParser.new do |opts|
+              opts.banner = 'Usage: bin/wallet sweep --to=<root_key_hex> [--no-send]'
+
+              opts.on('--to=ROOT_KEY_HEX',
+                      "Recipient's 66-char compressed pubkey hex (02/03 prefix)") do |v|
+                @options[:to] = v
+              end
+
+              opts.on('--no-send',
+                      "Build + sign the swept action but don't submit it") do
+                @options[:no_send] = true
+              end
+            end
+          end
+
+          def call(args)
+            parser.parse!(args)
+            raise UsageError, "sweep takes no positional arguments (got #{args.length})" unless args.empty?
+
+            recipient = @options[:to]
+            raise UsageError, 'sweep requires --to=<root_key_hex> (66-char compressed pubkey starting 02/03)' if recipient.nil? || recipient.empty?
+
+            parse_pubkey_hex(recipient)
+
+            no_send = @options[:no_send] || false
+            engine = @ctx[:engine]
+            # Engine defaults +accept_delayed_broadcast: true+ (queue for
+            # daemon push) and ignores it when +no_send+ is true. Omit
+            # rather than pass +!no_send+ — passing the negation is
+            # misleading "logic" for what's actually engine default.
+            result = engine.sweep(recipient: recipient, no_send: no_send)
+
+            if result.nil?
+              emit_human 'sweep:    no spendable outputs (nothing to sweep)'
+              return 0
+            end
+
+            dtxid = result[:wtxid].reverse.unpack1('H*')
+            emit_human "swept to: #{recipient[0..15]}..."
+            emit_human "no_send:  #{no_send ? 'yes' : 'no'}"
+            emit_human "dtxid:    #{dtxid}"
+            0
+          end
+        end
+      end
+    end
+  end
+end

@@ -844,9 +844,13 @@ module BSV
       #   UTXOs can't be reorged-away under us). The e2e harness's
       #   Phase 4 sets true so SDK can see the just-broadcast sweep
       #   outputs without waiting for a block.
+      # @param basket [String, nil] forwarded to +import_utxo+ per
+      #   discovered UTXO. Routes the imported funds into a named
+      #   basket (excluded from auto-funding by HLR #435's basket
+      #   filter). Default +nil+ → unbasketed pool (pre-#462 behaviour).
       # @return [Hash] { imported: Integer, utxos: Array<Hash> }
       def import_wallet(no_send: false, accept_delayed_broadcast: true,
-                        include_unconfirmed: false)
+                        include_unconfirmed: false, basket: nil)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
@@ -877,6 +881,7 @@ module BSV
 
         imported = unique_utxos.filter_map do |utxo|
           import_utxo(dtxid: utxo['tx_hash'], vout: utxo['tx_pos'],
+                      basket: basket,
                       no_send: no_send,
                       accept_delayed_broadcast: accept_delayed_broadcast)
         rescue BSV::Wallet::Error => e
