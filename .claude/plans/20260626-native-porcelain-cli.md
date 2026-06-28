@@ -142,7 +142,7 @@ Add:
   - `#read_binary_input(file: nil)` — reads from `$stdin.binmode` or `File.binread(path)`. The single home for BEEF-shaped input; subclasses can't forget `binmode`.
   - `#parse_pubkey_hex(str)` — wraps `BSV::PublicKey.from_hex`; raises `UsageError` with a clear message on failure. All ingest points for `--counterparty`, `--to=<root_key_hex>`, etc. go through this.
   - All files: `# frozen_string_literal: true` at top.
-- `CLI::Commands::<Verb>` — one class per command (9 classes — 6 porcelain + 3 operational, post-ADR-030 deferral of the plumbing layer). Each inherits `Base`, defines `#build_parser` and `#call(args)` (the boot `ctx` is passed via `#initialize`). Approximate size: 30-80 lines per class.
+- `CLI::Commands::<Verb>` — one class per command (8 classes — 6 porcelain + 2 operational, post-ADR-030 deferral of the plumbing layer and HLR #464 deferral of `transmit`). Each inherits `Base`, defines `#build_parser` and `#call(args)` (the boot `ctx` is passed via `#initialize`). Approximate size: 30-80 lines per class. (A ninth `Commands::Transmit` class returns post-HLR #464.)
 - Every command class lands with `frozen_string_literal: true` and passes `bundle exec rubocop lib/bsv/wallet/cli/` — no mass disables.
 
 Extend or keep:
@@ -164,7 +164,7 @@ The plan introduces no schema changes, but four new read patterns benefit from e
 
 | Command(s) | Query shape | Index relied on | Status |
 |------------|-------------|-----------------|--------|
-| `reject`, `transmit` (lookup phase) | `actions WHERE reference = ?` | `actions.reference UNIQUE` (`uuid` B-tree) | Index already present per `001_create_schema.rb` |
+| `reject` (and `transmit` post-HLR #464) | `actions WHERE reference = ?` | `actions.reference UNIQUE` (`uuid` B-tree) | Index already present per `001_create_schema.rb` |
 | `list actions --label=<name>` | `labels JOIN action_labels JOIN actions WHERE labels.label = ?` | `labels(label) UNIQUE` (already `labels_label_unique` in 001), `action_labels(label_id, action_id)` composite | Confirm `action_labels` composite before Phase 1; add to `001_create_schema.rb` if missing (pre-release, so schema lives in 001) |
 | `list outputs` (paginated) | `spendable_outputs` with `LIMIT`/`OFFSET` | Existing indices on `outputs` | Verify engine pushes `LIMIT` to SQL, not Ruby-side |
 
