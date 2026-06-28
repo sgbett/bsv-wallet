@@ -59,11 +59,10 @@ module BSV
 
             no_send = @options[:no_send] || false
             engine = @ctx[:engine]
-            result = engine.consolidate_step(
-              target_inputs: target_inputs,
-              no_send: no_send,
-              accept_delayed_broadcast: !no_send
-            )
+            # See sweep.rb for the +accept_delayed_broadcast+ rationale —
+            # engine default is +true+ (queue), ignored when +no_send+
+            # is true; pass-through is cleaner than +!no_send+.
+            result = engine.consolidate_step(target_inputs: target_inputs, no_send: no_send)
 
             if result.nil?
               emit_human "consolidate: pool too small (need #{target_inputs}+ spendable outputs)"

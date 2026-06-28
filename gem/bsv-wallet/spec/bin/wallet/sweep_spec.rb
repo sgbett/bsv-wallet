@@ -56,17 +56,17 @@ RSpec.describe BSV::Wallet::CLI::Commands::Sweep do
       allow(engine).to receive(:sweep).and_return(wtxid: fake_wtxid)
     end
 
-    it 'calls engine.sweep with the validated recipient' do
+    it 'calls engine.sweep with the validated recipient (engine default broadcast)' do
       command.call(["--to=#{valid_pubkey}"])
       expect(engine).to have_received(:sweep).with(
-        recipient: valid_pubkey, no_send: false, accept_delayed_broadcast: true
+        recipient: valid_pubkey, no_send: false
       )
     end
 
-    it '--no-send maps to no_send: true and disables delayed broadcast' do
+    it '--no-send maps to no_send: true' do
       command.call(["--to=#{valid_pubkey}", '--no-send'])
       expect(engine).to have_received(:sweep).with(
-        recipient: valid_pubkey, no_send: true, accept_delayed_broadcast: false
+        recipient: valid_pubkey, no_send: true
       )
     end
 

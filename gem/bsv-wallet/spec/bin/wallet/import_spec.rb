@@ -19,11 +19,20 @@ RSpec.describe BSV::Wallet::CLI::Commands::Import do
         .to raise_error(BSV::Wallet::CLI::UsageError, /no positional arguments/)
     end
 
-    it 'accepts no arguments (defaults)' do
+    it 'accepts no arguments (defaults: queued for daemon)' do
       expect { command.call([]) }.not_to raise_error
       expect(engine).to have_received(:import_wallet).with(
-        basket: nil, no_send: false, include_unconfirmed: false
+        basket: nil, no_send: false, accept_delayed_broadcast: true, include_unconfirmed: false
       )
+    end
+
+    # --basket= (empty value) would otherwise reach the engine, where
+    # the schema CHECK (basket name length 5-300) rejects it as a
+    # Sequel::CheckConstraintViolation. Catch at the CLI for an
+    # operator-actionable message pointing at the right alternative.
+    it 'rejects --basket= (empty) with omit-flag hint' do
+      expect { command.call(['--basket=']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /must be non-empty.*omit --basket/m)
     end
   end
 
@@ -42,6 +51,18 @@ RSpec.describe BSV::Wallet::CLI::Commands::Import do
       )
     end
 
+    it 'maps --inline to accept_delayed_broadcast: false (sync ARC)' do
+      command.call(['--inline'])
+      expect(engine).to have_received(:import_wallet).with(
+        hash_including(accept_delayed_broadcast: false)
+      )
+    end
+
+    it 'rejects --inline + --no-send as mutually exclusive' do
+      expect { command.call(['--inline', '--no-send']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /mutually exclusive/)
+    end
+
     it 'maps --include-unconfirmed to include_unconfirmed: true' do
       command.call(['--include-unconfirmed'])
       expect(engine).to have_received(:import_wallet).with(
@@ -49,10 +70,11 @@ RSpec.describe BSV::Wallet::CLI::Commands::Import do
       )
     end
 
-    it 'combines all flags' do
-      command.call(['--basket=staging', '--no-send', '--include-unconfirmed'])
+    it 'combines compatible flags' do
+      command.call(['--basket=staging', '--inline', '--include-unconfirmed'])
       expect(engine).to have_received(:import_wallet).with(
-        basket: 'staging', no_send: true, include_unconfirmed: true
+        basket: 'staging', no_send: false,
+        accept_delayed_broadcast: false, include_unconfirmed: true
       )
     end
   end

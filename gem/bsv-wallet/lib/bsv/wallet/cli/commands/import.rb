@@ -21,6 +21,14 @@ module BSV
         # confirmed). +--no-send+ keeps the internalising self-payment
         # built-and-signed but unsubmitted.
         #
+        # Broadcast mode: default is +:delayed+ (queue for daemon via OMQ,
+        # batching multi-UTXO scans to avoid an N+1 ARC round-trip per
+        # discovered UTXO). +--inline+ opts into synchronous per-UTXO
+        # broadcast (useful for small wallets wanting immediate
+        # confirmation, or e2e tests that need to see status before the
+        # next step). +--inline+ and +--no-send+ are mutually exclusive
+        # — they select different broadcast strategies, not modifiers.
+        #
         # Phase 3 scans the root P2PKH address only. HD/WBIKD-derived
         # receive addresses (#28 / future) would extend the scan
         # surface; engine support for that scanning is downstream.
@@ -30,11 +38,16 @@ module BSV
           def build_parser
             @options = {}
             OptionParser.new do |opts|
-              opts.banner = 'Usage: bin/wallet import [--basket=<name>] [--no-send] [--include-unconfirmed]'
+              opts.banner = 'Usage: bin/wallet import [--basket=<name>] [--inline|--no-send] [--include-unconfirmed]'
 
               opts.on('--basket=NAME',
                       'Route imported outputs into a named basket (excluded from auto-fund pool)') do |v|
                 @options[:basket] = v
+              end
+
+              opts.on('--inline',
+                      'Force synchronous per-UTXO broadcast (default: queue for daemon)') do
+                @options[:inline] = true
               end
 
               opts.on('--no-send',
@@ -53,18 +66,50 @@ module BSV
             parser.parse!(args)
             raise UsageError, "import takes no positional arguments (got #{args.length})" unless args.empty?
 
+            # +--basket=+ (empty value) is operator confusion: the schema
+            # rejects basket names shorter than 5 chars, so leaving this
+            # unguarded produces an uncaught Sequel::CheckConstraintViolation.
+            # Catch it here with a message that points at the right
+            # alternative (omit the flag entirely for unbasketed).
+            basket = @options[:basket]
+            if basket.is_a?(String) && basket.empty?
+              raise UsageError,
+                    '--basket=<name> must be non-empty ' \
+                    '(omit --basket entirely for the unbasketed pool)'
+            end
+
+            no_send = @options[:no_send] || false
+            inline = @options[:inline] || false
+            if no_send && inline
+              raise UsageError,
+                    'import: --no-send and --inline are mutually exclusive ' \
+                    '(they select different broadcast strategies)'
+            end
+
             engine = @ctx[:engine]
             result = engine.import_wallet(
-              basket: @options[:basket],
-              no_send: @options[:no_send] || false,
+              basket: basket,
+              no_send: no_send,
+              # +!inline+ collapses cleanly: default (neither flag) →
+              # +true+ (daemon-queued); +--inline+ → +false+ (sync ARC).
+              # When +no_send: true+, the engine ignores this — but the
+              # mutual-exclusion guard above means we never reach that
+              # combination anyway.
+              accept_delayed_broadcast: !inline,
               include_unconfirmed: @options[:include_unconfirmed] || false
             )
 
             count = result[:imported] || 0
+            broadcast_mode =
+              if no_send then 'no_send'
+              elsif inline then 'inline (sync ARC)'
+              else 'delayed (queued)'
+              end
+
             emit_human "imported:    #{count} UTXO#{'s' unless count == 1}"
-            emit_human "basket:      #{@options[:basket] || '(unbasketed pool)'}"
+            emit_human "basket:      #{basket || '(unbasketed pool)'}"
+            emit_human "broadcast:   #{broadcast_mode}"
             emit_human "include unconfirmed: #{@options[:include_unconfirmed] ? 'yes' : 'no'}"
-            emit_human "no_send:     #{@options[:no_send] ? 'yes' : 'no'}"
             0
           end
         end

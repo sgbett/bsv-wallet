@@ -43,17 +43,17 @@ RSpec.describe BSV::Wallet::CLI::Commands::Consolidate do
   describe 'engine integration (happy path)' do
     before { allow(engine).to receive(:consolidate_step).and_return(wtxid: fake_wtxid) }
 
-    it 'defaults --target-inputs to 20' do
+    it 'defaults --target-inputs to 20 (engine default broadcast)' do
       command.call([])
       expect(engine).to have_received(:consolidate_step).with(
-        target_inputs: 20, no_send: false, accept_delayed_broadcast: true
+        target_inputs: 20, no_send: false
       )
     end
 
-    it '--no-send maps to no_send: true and disables delayed broadcast' do
+    it '--no-send maps to no_send: true' do
       command.call(['--no-send'])
       expect(engine).to have_received(:consolidate_step).with(
-        hash_including(no_send: true, accept_delayed_broadcast: false)
+        hash_including(no_send: true)
       )
     end
 

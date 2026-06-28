@@ -58,11 +58,11 @@ module BSV
 
             no_send = @options[:no_send] || false
             engine = @ctx[:engine]
-            result = engine.sweep(
-              recipient: recipient,
-              no_send: no_send,
-              accept_delayed_broadcast: !no_send
-            )
+            # Engine defaults +accept_delayed_broadcast: true+ (queue for
+            # daemon push) and ignores it when +no_send+ is true. Omit
+            # rather than pass +!no_send+ — passing the negation is
+            # misleading "logic" for what's actually engine default.
+            result = engine.sweep(recipient: recipient, no_send: no_send)
 
             if result.nil?
               emit_human 'sweep:    no spendable outputs (nothing to sweep)'
