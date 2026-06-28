@@ -33,14 +33,21 @@ module BSV
       # The wallet's root P2PKH locking script bytes, derived from the
       # currently-set +identity_pubkey_hash+. Raises if no hash is set —
       # the migrator must populate the global before invoking any
-      # migration that reads this helper.
+      # migration that reads this helper. Callers like
+      # +Store#migrate!+ for a fresh wallet DB MUST pass
+      # +identity_pubkey_hash:+ at +Store.new+; daemon-style callers that
+      # boot against an already-migrated DB don't invoke this path
+      # (the migrator is a no-op when there are no pending migrations).
       #
       # @return [String] 25-byte binary P2PKH locking script
-      # @raise [RuntimeError] when +identity_pubkey_hash+ is unset
+      # @raise [BSV::Wallet::SchemaIntegrityError] when
+      #   +identity_pubkey_hash+ is unset
       def self.expected_root_script
         unless identity_pubkey_hash
-          raise 'BSV::Wallet::Migration.identity_pubkey_hash not set — ' \
-                'Store#migrate! must populate before any migration runs'
+          raise BSV::Wallet::SchemaIntegrityError,
+                'BSV::Wallet::Migration.identity_pubkey_hash not set — ' \
+                'Store.new must be passed +identity_pubkey_hash:+ before ' \
+                '+migrate!+ on a fresh DB (HLR #467)'
         end
 
         BSV::Script::Script.p2pkh_lock(identity_pubkey_hash).to_binary
