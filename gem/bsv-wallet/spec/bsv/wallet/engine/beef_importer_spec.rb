@@ -44,7 +44,18 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
 
   # Build a verifiable BEEF: proven ancestor + subject spending it via
   # OP_1 scripts (trivially valid for SDK verify).
-  def build_verifiable_beef(satoshis: 500, ancestor_satoshis: 600)
+  #
+  # The +output_script+ kwarg controls the subject's output locking script:
+  #
+  #   * +:op_true+  (default) — +\x51+ stub. Use when callers pass a
+  #     derivation triple to +basket_insertion+ / +wallet_payment+ (the
+  #     +spendable_recoverable+ CHECK accepts non-root + controls).
+  #   * +:root_p2pkh+ — the suite-pinned root P2PKH literal
+  #     (+TEST_ROOT_LOCKING_SCRIPT+). Use for tests that import without
+  #     a derivation triple (basket_insertion with no remittance), so
+  #     the no-controls + 'spendable' permutation lands on a structurally
+  #     valid root output (HLR #467).
+  def build_verifiable_beef(satoshis: 500, ancestor_satoshis: 600, output_script: :op_true)
     ancestor = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
     ancestor.add_output(BSV::Transaction::TransactionOutput.new(
                           satoshis: ancestor_satoshis,
@@ -60,9 +71,10 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
                            unlocking_script: BSV::Script::Script.from_binary(OP_TRUE)
                          ))
     subject_tx.inputs[0].source_transaction = ancestor
+    chosen_script = output_script == :root_p2pkh ? TEST_ROOT_LOCKING_SCRIPT : OP_TRUE
     subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
                             satoshis: satoshis,
-                            locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                            locking_script: BSV::Script::Script.from_binary(chosen_script)
                           ))
 
     beef = BSV::Transaction::Beef.new
@@ -555,7 +567,10 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       # checking that the proof was already saved at the moment of the
       # +proof_exists?+ call (which only +replace_known_ancestors!+
       # makes).
-      built = build_verifiable_beef
+      # The basket_insertion below carries no derivation triple, so the
+      # importer's 'root'-shim sets spendable_intent='spendable' and the
+      # subject's locking_script must be the wallet's root P2PKH (HLR #467).
+      built = build_verifiable_beef(output_script: :root_p2pkh)
       ancestor_wtxid = built[:ancestor].wtxid
 
       proof_existed_at_trim_check = nil

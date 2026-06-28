@@ -13,11 +13,12 @@ RSpec.describe BSV::Wallet::Store, :store do
                                                        locking_script: SecureRandom.random_bytes(25),
                                                        derivation_prefix: SecureRandom.uuid,
                                                        derivation_suffix: '1',
-                                                       sender_identity_key: 'self')
+                                                       sender_identity_key: 'self',
+                                                       spendable_intent: 'spendable')
     # The promotions row (intent='none') authorises the spendable row — this
     # funded source is an internal/incoming fixture (#307).
     BSV::Wallet::Store::Models::Promotion.create(action_id: source.id, intent: 'none', authorising_status: nil)
-    BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: source.id)
+    BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: source.id, spendable_intent: 'spendable')
     if basket
       basket_id = store.find_or_create_basket(name: basket)
       BSV::Wallet::Store::Models::OutputBasket.create(output_id: output.id, basket_id: basket_id, action_id: source.id)
@@ -419,13 +420,14 @@ RSpec.describe BSV::Wallet::Store, :store do
                                locking_script: SecureRandom.random_bytes(25),
                                basket: 'change', tags: %w[auto], description: 'change output',
                                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-                               sender_identity_key: 'self'
+                               sender_identity_key: 'self',
+                               spendable_intent: 'spendable'
                              },
                              {
                                satoshis: 200, vout: 1,
-                               locking_script: SecureRandom.random_bytes(25),
+                               locking_script: TEST_ROOT_LOCKING_SCRIPT,
                                basket: 'payments', tags: %w[payment outgoing], description: 'payment',
-                               output_type: 'root'
+                               spendable_intent: 'spendable'
                              }
                            ])
 
@@ -455,12 +457,13 @@ RSpec.describe BSV::Wallet::Store, :store do
                                satoshis: 500, vout: 0,
                                locking_script: SecureRandom.random_bytes(25),
                                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-                               sender_identity_key: 'self'
+                               sender_identity_key: 'self',
+                               spendable_intent: 'spendable'
                              },
                              {
                                satoshis: 300, vout: 1,
                                locking_script: SecureRandom.random_bytes(25),
-                               output_type: 'outbound'
+                               spendable_intent: 'none'
                              }
                            ])
 
@@ -548,7 +551,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
-          { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'outbound' }
+          { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), spendable_intent: 'none' }
         ]
       )
       BSV::Wallet::Store::Models::Broadcast.where(action_id: result[:id]).update(tx_status: 'QUEUED')
@@ -1436,7 +1439,9 @@ RSpec.describe BSV::Wallet::Store, :store do
     def create_source_output(wtxid:, satoshis:, vout:, locking_script: nil,
                              derivation_prefix: nil, derivation_suffix: nil,
                              sender_identity_key: nil)
-      locking_script ||= SecureRandom.random_bytes(25)
+      # Root outputs (no derivation triple) must use the per-wallet root
+      # P2PKH literal; derived outputs use a random non-root script.
+      locking_script ||= derivation_prefix ? SecureRandom.random_bytes(25) : TEST_ROOT_LOCKING_SCRIPT
       source_action = BSV::Wallet::Store::Models::Action.create(description: 'test action',
                                                                 broadcast_intent: 'none',
                                                                 wtxid: wtxid, raw_tx: SecureRandom.random_bytes(100))
@@ -1448,14 +1453,15 @@ RSpec.describe BSV::Wallet::Store, :store do
         derivation_prefix: derivation_prefix,
         derivation_suffix: derivation_suffix,
         sender_identity_key: sender_identity_key,
-        output_type: derivation_prefix ? nil : 'root'
+        spendable_intent: 'spendable'
       )
       # spendable.action_id is FK'd to promotions(action_id) (#307) — the
       # internal-path promotions row must precede the spendable row.
       BSV::Wallet::Store::Models::Promotion.create(action_id: source_action.id, intent: 'none', authorising_status: nil)
       BSV::Wallet::Store::Models::Spendable.create(
         output_id: output.id,
-        action_id: source_action.id
+        action_id: source_action.id,
+        spendable_intent: 'spendable'
       )
       output
     end
@@ -1558,12 +1564,12 @@ RSpec.describe BSV::Wallet::Store, :store do
       source_action = BSV::Wallet::Store::Models::Action.create(description: 'test action', broadcast_intent: 'none')
       output = BSV::Wallet::Store::Models::Output.create(
         action_id: source_action.id, satoshis: 500, vout: 0,
-        locking_script: SecureRandom.random_bytes(25),
-        output_type: 'root'
+        locking_script: TEST_ROOT_LOCKING_SCRIPT,
+        spendable_intent: 'spendable'
       )
       # spendable.action_id is FK'd to promotions(action_id) (#307).
       BSV::Wallet::Store::Models::Promotion.create(action_id: source_action.id, intent: 'none', authorising_status: nil)
-      BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: source_action.id)
+      BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: source_action.id, spendable_intent: 'spendable')
 
       action = store.create_action(
         action: { description: 'nil wtxid source' },
@@ -1807,7 +1813,8 @@ RSpec.describe BSV::Wallet::Store, :store do
         action_id: action.id, satoshis: 500, vout: 0,
         locking_script: SecureRandom.random_bytes(25),
         derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-        sender_identity_key: 'self'
+        sender_identity_key: 'self',
+        spendable_intent: 'spendable'
       )
 
       %w[QUEUED RECEIVED ANNOUNCED_TO_NETWORK SEEN_ON_NETWORK MINED].each do |status|

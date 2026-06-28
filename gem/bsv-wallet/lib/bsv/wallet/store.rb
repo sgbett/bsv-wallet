@@ -37,11 +37,16 @@ module BSV
     class Store
       include BSV::Wallet::Interface::Store
 
-      attr_reader :db
+      attr_reader :db, :identity_pubkey_hash
 
       # Factory: return a SQLite or Postgres instance based on the URL.
       #
       # @param url [String] database URL (sqlite:// or postgres://)
+      # @param identity_pubkey_hash [String, nil] 20-byte +hash160+ of the
+      #   wallet's identity pubkey. Required to migrate (the per-wallet
+      #   +outputs.spendable_recoverable+ CHECK embeds the WIF-derived
+      #   root P2PKH script as a literal — HLR #467). Reading specs that
+      #   never call +#migrate!+ may pass +nil+.
       # @param db_opts [Hash] extra options passed through to
       #   +Sequel.connect+. CLI tools omit this (Sequel default pool
       #   suffices for single-process, single-fiber use). The walletd
@@ -49,13 +54,14 @@ module BSV
       #   fiber inventory after enabling +Sequel.extension(:fiber_concurrency)+.
       #   See #268 + bin/walletd.
       # @return [BSV::Wallet::Store::SQLite, BSV::Wallet::Store::Postgres]
-      def self.connect(url, **db_opts)
+      def self.connect(url, identity_pubkey_hash: nil, **db_opts)
         klass = url.to_s.downcase.start_with?('postgres') ? Postgres : SQLite
-        klass.new(url: url, db_opts: db_opts)
+        klass.new(url: url, identity_pubkey_hash: identity_pubkey_hash, db_opts: db_opts)
       end
 
-      def initialize(url: nil, db: nil, db_opts: {})
+      def initialize(url: nil, db: nil, identity_pubkey_hash: nil, db_opts: {})
         @db = db || Sequel.connect(url, **db_opts)
+        @identity_pubkey_hash = identity_pubkey_hash
         # Set global so Sequel::Model(:table_name) calls in model class
         # bodies can resolve the database during autoload.
         Sequel::Model.db = @db
@@ -67,11 +73,61 @@ module BSV
         raise NotImplementedError
       end
 
+      # Run pending migrations against this wallet's database. Populates
+      # +BSV::Wallet::Migration.identity_pubkey_hash+ (and the matching
+      # +models::Output.expected_root_script+ class accessor) from
+      # +@identity_pubkey_hash+ so the per-wallet
+      # +outputs.spendable_recoverable+ CHECK literal can be built at
+      # +CREATE TABLE+ time. Resets the global in +ensure+ — the migrator
+      # is the only consumer of the global, and a leaked value across
+      # wallets would silently mis-bake the next wallet's schema.
       def migrate!(target: nil)
         Sequel.extension :migration
         migrations_path = File.expand_path('../../../db/migrations', __dir__)
+        if @identity_pubkey_hash
+          BSV::Wallet::Migration.identity_pubkey_hash = @identity_pubkey_hash
+          models::Output.expected_root_script = BSV::Wallet::Migration.expected_root_script
+        end
         Sequel::Migrator.run(@db, migrations_path, target: target)
         bind_models!
+      ensure
+        BSV::Wallet::Migration.identity_pubkey_hash = nil
+      end
+
+      # Verify the per-wallet +outputs.spendable_recoverable+ CHECK literal
+      # in the database matches the expected root P2PKH script for the WIF
+      # currently driving this wallet (HLR #467). Catches schema drift,
+      # restore-to-wrong-DB, and WIF rotation — any of which would let
+      # the wallet sign spends against a CHECK that no longer mirrors
+      # its identity.
+      #
+      # No-op on SQLite (pragma_check / sqlite_master parsing isn't
+      # round-trip stable across versions; the SQLite path is for fast
+      # logic-only specs that don't exercise the per-wallet CHECK).
+      #
+      # @raise [BSV::Wallet::SchemaIntegrityError] when the literal does
+      #   not match +identity_pubkey_hash+ or cannot be located.
+      def verify_schema!
+        return unless @db.database_type == :postgres
+        raise BSV::Wallet::SchemaIntegrityError, 'identity_pubkey_hash not set' unless @identity_pubkey_hash
+
+        expected = BSV::Script::Script.p2pkh_lock(@identity_pubkey_hash).to_binary
+        expected_hex = expected.unpack1('H*')
+
+        # pg_get_constraintdef formats the literal as +'\\x76a914...88ac'::bytea+
+        # inside the CHECK expression. Substring match avoids brittleness
+        # around quoting variations across PG versions.
+        defn = @db.fetch(
+          'SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint ' \
+          "WHERE conname = 'spendable_recoverable'"
+        ).first
+        raise BSV::Wallet::SchemaIntegrityError, 'spendable_recoverable CHECK not found' unless defn
+
+        return if defn[:def].include?(expected_hex)
+
+        raise BSV::Wallet::SchemaIntegrityError,
+              'spendable_recoverable CHECK literal does not match wallet identity ' \
+              "(expected hex=#{expected_hex})"
       end
 
       def disconnect
@@ -184,20 +240,27 @@ module BSV
           record_promotion(action_id: action_id, authorising_status: nil)
 
           outputs.map do |out|
+            intent = resolve_spendable_intent(out)
             output = models::Output.create(
               action_id: action_id,
               satoshis: out[:satoshis],
               vout: out[:vout],
               locking_script: out[:locking_script],
-              output_type: out[:output_type],
+              spendable_intent: intent,
               derivation_prefix: out[:derivation_prefix],
               derivation_suffix: out[:derivation_suffix],
               sender_identity_key: out[:sender_identity_key]
             )
 
-            wallet_owned = out[:derivation_prefix] || out[:output_type] == 'root'
             # INSERT … ON CONFLICT (output_id) DO NOTHING — idempotent / concurrency-safe.
-            models::Spendable.dataset.insert_conflict(target: :output_id).insert(output_id: output.id, action_id: action_id) if wallet_owned
+            # 'spendable' intent → row joins the UTXO set; 'none' → outbound,
+            # no spendable row (declarative composite-FK + CHECK on +spendable+
+            # would reject one anyway — HLR #467).
+            if intent == 'spendable'
+              models::Spendable.dataset.insert_conflict(target: :output_id).insert(
+                output_id: output.id, action_id: action_id, spendable_intent: 'spendable'
+              )
+            end
 
             write_output_associations(output: output, action_id: action_id, spec: out)
 
@@ -221,13 +284,14 @@ module BSV
 
           promoted = []
           models::Output.where(action_id: action_id).all.each do |output|
-            wallet_owned = output.derivation_prefix || output.output_type == 'root' || change_output?(output_id: output.id)
-            next unless wallet_owned
+            next unless output.spendable_intent.to_s == 'spendable'
 
             # INSERT … ON CONFLICT (output_id) DO NOTHING: concurrent Phase-4
             # promotion (duplicate ARC events / poll + SSE) is a no-op, not a
             # unique violation.
-            models::Spendable.dataset.insert_conflict(target: :output_id).insert(output_id: output.id, action_id: action_id)
+            models::Spendable.dataset.insert_conflict(target: :output_id).insert(
+              output_id: output.id, action_id: action_id, spendable_intent: 'spendable'
+            )
             promoted << output.id
           end
           promoted
@@ -388,7 +452,7 @@ module BSV
           id: record.id, action_id: record.action_id,
           satoshis: record.satoshis, vout: record.vout,
           locking_script: record.locking_script,
-          output_type: record.output_type,
+          spendable_intent: record.spendable_intent,
           derivation_prefix: record.derivation_prefix,
           derivation_suffix: record.derivation_suffix,
           sender_identity_key: record.sender_identity_key
@@ -547,17 +611,21 @@ module BSV
       # setup recreation, future +bsv-wallet destroy+ CLI). HLR #448.
       #
       # The query intentionally excludes:
-      #   * Root outputs (+output_type = 'root'+) — recoverable from the
+      #   * Root outputs (no derivation triple) — recoverable from the
       #     identity key alone, so destroying them costs only re-import.
       #   * Unsigned / aborted actions (+actions.wtxid IS NULL+) — no
       #     broadcast happened, so nothing on chain to orphan.
       #
       # @return [SweepableState]
       def sweepable_state
+        # Derived outputs are the at-risk set — derivation_prefix IS NOT NULL
+        # marks an output that requires the wallet's per-output controls to
+        # respend (BRC-42 / BRC-29). Roots carry no derivation triple
+        # (controls_all_or_nothing CHECK) and stay outside the at-risk count.
         row = @db[:spendable]
               .join(:outputs, id: Sequel[:spendable][:output_id])
               .join(:actions, id: Sequel[:outputs][:action_id])
-              .where(Sequel[:outputs][:output_type] => nil)
+              .exclude(Sequel[:outputs][:derivation_prefix] => nil)
               .exclude(Sequel[:actions][:wtxid] => nil)
               .select do
                 [Sequel.function(:count, Sequel[:outputs][:id]).as(:at_risk_outputs),
@@ -795,7 +863,9 @@ module BSV
             # INSERT … ON CONFLICT (output_id) DO NOTHING — the exclude() above
             # is a fast path; this makes concurrent calls race-safe, not a
             # unique violation.
-            models::Spendable.dataset.insert_conflict(target: :output_id).insert(output_id: output.id, action_id: action_id)
+            models::Spendable.dataset.insert_conflict(target: :output_id).insert(
+              output_id: output.id, action_id: action_id, spendable_intent: 'spendable'
+            )
           end
         end
       end
@@ -1215,6 +1285,7 @@ module BSV
             satoshis: chg[:satoshis],
             vout: chg[:vout],
             locking_script: chg[:locking_script],
+            spendable_intent: 'spendable',
             derivation_prefix: chg[:derivation_prefix],
             derivation_suffix: chg[:derivation_suffix],
             sender_identity_key: chg[:sender_identity_key]
@@ -1249,7 +1320,7 @@ module BSV
             satoshis: out[:satoshis],
             vout: out[:vout],
             locking_script: out[:locking_script],
-            output_type: out[:output_type],
+            spendable_intent: resolve_spendable_intent(out),
             derivation_prefix: out[:derivation_prefix],
             derivation_suffix: out[:derivation_suffix],
             sender_identity_key: out[:sender_identity_key]
@@ -1285,6 +1356,31 @@ module BSV
       # True when the output is a change output (has a change=true detail row).
       def change_output?(output_id:)
         models::OutputDetail.where(output_id: output_id, change: true).any?
+      end
+
+      # Translate an output spec hash to a +spendable_intent+ value.
+      #
+      # Preferred input is explicit +spendable_intent:+ stated by the caller
+      # (HLR #467). The legacy +output_type:+ shape is mapped here for
+      # back-compat during the migration window:
+      #   * +output_type: 'root'+     → +'spendable'+ (we own the root P2PKH)
+      #   * +output_type: 'outbound'+ → +'none'+      (counterparty's output)
+      #   * +output_type: nil+ + derivation triple    → +'spendable'+ (BRC-42 self)
+      #   * +output_type: nil+ + no derivation triple → +'none'+      (legacy outbound)
+      #
+      # Phases 4–5 remove the +output_type+ shape from all engine/CLI callers,
+      # leaving the explicit +spendable_intent:+ kwarg as the only input
+      # (this helper degrades to a passthrough at that point).
+      def resolve_spendable_intent(out)
+        explicit = out[:spendable_intent]
+        return explicit.to_s if explicit
+
+        case out[:output_type]
+        when 'root'     then 'spendable'
+        when 'outbound' then 'none'
+        else
+          out[:derivation_prefix] ? 'spendable' : 'none'
+        end
       end
 
       # Convert a value to binary. If already binary-encoded, return as-is;

@@ -29,14 +29,14 @@ RSpec.describe 'Schema migration', :store do
       end.to raise_error(Sequel::DatabaseError)
     end
 
-    it 'rejects invalid output_type values' do
+    it 'rejects invalid spendable_intent values' do
       action_id = insert_action(description: 'test action 12345')
       expect do
         db.transaction(savepoint: true) do
           db[:outputs].insert(
             action_id: action_id, satoshis: 1000, vout: 0,
             locking_script: Sequel.blob(valid_locking_script),
-            output_type: 'bogus'
+            spendable_intent: 'bogus'
           )
         end
       end.to raise_error(Sequel::DatabaseError)
@@ -60,11 +60,11 @@ RSpec.describe 'Schema migration', :store do
       expect(values).to eq(%w[delayed inline none])
     end
 
-    it 'output_type has the correct values' do
+    it 'spendable_intent has the correct values' do
       values = db.from(
-        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'output_type'")
+        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'spendable_intent'")
       ).select_map(:enumlabel)
-      expect(values).to eq(%w[root outbound])
+      expect(values).to eq(%w[spendable none])
     end
 
     # ARC's metamorph Status enum + IMMUTABLE (wallet's ArcStatus::TERMINAL).
@@ -100,10 +100,12 @@ RSpec.describe 'Schema migration', :store do
 
     it 'stores and retrieves binary locking_script on outputs' do
       action_id = insert_action(description: 'bytea test 12345')
+      # valid_locking_script is random — set spendable_intent='none' so the
+      # spendable_recoverable CHECK accepts it without matching the root literal.
       db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
         locking_script: Sequel.blob(valid_locking_script),
-        output_type: 'root'
+        spendable_intent: 'none'
       )
       row = db[:outputs].first
       expect(row[:locking_script].encoding).to eq(Encoding::BINARY)
@@ -149,7 +151,7 @@ RSpec.describe 'Schema migration', :store do
       output_id = db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
         locking_script: Sequel.blob(valid_locking_script),
-        output_type: 'root'
+        spendable_intent: 'none'
       )
       action2_id = insert_action(description: 'lock test consumer')
       db[:inputs].insert(action_id: action_id, output_id: output_id, vin: 0)
@@ -172,7 +174,7 @@ RSpec.describe 'Schema migration', :store do
       output_id = db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
         locking_script: Sequel.blob(valid_locking_script),
-        output_type: 'root'
+        spendable_intent: 'none'
       )
       lock_action_id = insert_action(description: 'cascade test lock')
       db[:inputs].insert(action_id: lock_action_id, output_id: output_id, vin: 0)
@@ -359,20 +361,31 @@ RSpec.describe 'Schema migration', :store do
       # production migrate! runs). Postgres uses native DDL with no rebuild, so
       # the shared, in-transaction db is fine there.
       if db.database_type == :sqlite
-        rt = BSV::Wallet::Store.connect('sqlite::memory:').db
-        Sequel::Migrator.run(rt, migrations_path)
+        rt = BSV::Wallet::Store.connect('sqlite::memory:', identity_pubkey_hash: TEST_IDENTITY_PUBKEY_HASH).db
+        BSV::Wallet::Migration.identity_pubkey_hash = TEST_IDENTITY_PUBKEY_HASH
+        begin
+          Sequel::Migrator.run(rt, migrations_path)
+        ensure
+          BSV::Wallet::Migration.identity_pubkey_hash = nil
+        end
       else
         rt = db
       end
 
       expect(rt.schema(:broadcasts).to_h).to have_key(:provider)
 
-      Sequel::Migrator.run(rt, migrations_path, target: 0)
-      expected_tables.each do |table|
-        expect(rt.table_exists?(table)).to be(false), "expected table #{table} to be gone after target: 0"
-      end
+      # The down block must run cleanly too. The 001 down drops every table.
+      BSV::Wallet::Migration.identity_pubkey_hash = TEST_IDENTITY_PUBKEY_HASH
+      begin
+        Sequel::Migrator.run(rt, migrations_path, target: 0)
+        expected_tables.each do |table|
+          expect(rt.table_exists?(table)).to be(false), "expected table #{table} to be gone after target: 0"
+        end
 
-      Sequel::Migrator.run(rt, migrations_path)
+        Sequel::Migrator.run(rt, migrations_path)
+      ensure
+        BSV::Wallet::Migration.identity_pubkey_hash = nil
+      end
       expect(rt.schema(:broadcasts).to_h).to have_key(:provider)
 
       rt.disconnect unless rt.equal?(db)

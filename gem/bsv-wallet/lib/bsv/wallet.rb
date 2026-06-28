@@ -37,6 +37,12 @@ module BSV
     # BRC-100 contract errors (Error, InvalidParameterError, etc.) come from bsv-sdk.
     require_relative 'wallet/errors'
 
+    # Migration-time wallet context (HLR #467). The per-wallet
+    # +outputs.spendable_recoverable+ CHECK embeds the WIF-derived root
+    # P2PKH script at +CREATE TABLE+ time; +Store#migrate!+ populates
+    # +Migration.identity_pubkey_hash+ before the migrator runs.
+    require_relative 'wallet/migration'
+
     # ARC tx_status classification sets (accepted / rejected / terminal).
     # Dependency-free single source of truth shared across Engine, the
     # background broadcast worker, and the Sequel models.

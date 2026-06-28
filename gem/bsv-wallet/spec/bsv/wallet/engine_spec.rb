@@ -865,7 +865,10 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'output persistence at stage time' do
       it 'writes outputs with no promotions row during deferred create_action' do
-        binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
+        # Non-root locking script — derived outputs (carrying the derivation
+        # triple) must use a non-root script after HLR #467 (root + controls
+        # is a structurally impossible combination).
+        binary_script = SecureRandom.random_bytes(25)
         create_result = engine.brc100.create_action(
           description: 'deferred promo',
           inputs: [],

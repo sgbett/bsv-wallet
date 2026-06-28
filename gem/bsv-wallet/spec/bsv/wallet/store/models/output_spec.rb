@@ -12,41 +12,54 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
     attrs[:derivation_prefix] ||= SecureRandom.uuid
     attrs[:derivation_suffix] ||= '1'
     attrs[:sender_identity_key] ||= 'self'
+    attrs[:spendable_intent] ||= 'spendable'
     output = described_class.create(action_id: action_id, satoshis: satoshis, vout: vout, **attrs)
     # spendable.action_id is FK'd to promotions(action_id) (#307) — the
     # promotions row must exist before the spendable row.
     unless BSV::Wallet::Store::Models::Promotion.where(action_id: action_id).any?
       BSV::Wallet::Store::Models::Promotion.create(action_id: action_id, intent: 'none', authorising_status: nil)
     end
-    BSV::Wallet::Store::Models::Spendable.create(output_id: output.id, action_id: action_id)
+    BSV::Wallet::Store::Models::Spendable.create(
+      output_id: output.id, action_id: action_id, spendable_intent: 'spendable'
+    )
     output
+  end
+
+  # Build a wallet-owned root output (locking_script matches the per-wallet
+  # root P2PKH literal, no derivation triple, spendable_intent='spendable')
+  # for tests that need a no-controls spendable row.
+  def create_root_output(action_id: action.id, satoshis: 1000, vout: 0)
+    described_class.create(
+      action_id: action_id, satoshis: satoshis, vout: vout,
+      locking_script: TEST_ROOT_LOCKING_SCRIPT,
+      spendable_intent: 'spendable'
+    )
   end
 
   describe 'creation' do
     it 'creates an immutable output record' do
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      output = create_root_output
       expect(output.id).to be_a(Integer)
       expect(output.satoshis).to eq(1000)
       expect(output.created_at).to be_a(Time)
     end
 
     it 'preserves binary locking_script' do
-      script = SecureRandom.random_bytes(25)
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: script, output_type: 'root')
+      output = create_root_output
       expect(output.reload.locking_script.encoding).to eq(Encoding::BINARY)
-      expect(output.locking_script).to eq(script)
+      expect(output.locking_script).to eq(TEST_ROOT_LOCKING_SCRIPT)
     end
 
     it 'enforces UNIQUE on action_id + vout' do
-      described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
-      expect { described_class.create(action_id: action.id, satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root') }
+      create_root_output(vout: 0)
+      expect { create_root_output(satoshis: 500, vout: 0) }
         .to raise_error(Sequel::UniqueConstraintViolation)
     end
   end
 
   describe 'associations' do
     it 'belongs to action' do
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      output = create_root_output
       expect(output.action).to eq(action)
     end
 
@@ -56,7 +69,7 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
     end
 
     it 'has one detail' do
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      output = create_root_output
       BSV::Wallet::Store::Models::OutputDetail.create(output_id: output.id, action_id: action.id, description: 'test output')
       expect(output.reload.detail.description).to eq('test output')
     end
@@ -69,7 +82,7 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
     end
 
     it 'has many tags' do
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      output = create_root_output
       tag = BSV::Wallet::Store::Models::Tag.create(tag: 'payment')
       BSV::Wallet::Store::Models::OutputTag.create(output_id: output.id, tag_id: tag.id)
       expect(output.reload.tags.map(&:tag)).to eq(['payment'])
@@ -90,7 +103,7 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
     end
 
     it 'returns false when not in spendable set' do
-      output = described_class.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      output = create_root_output
       expect(output.spendable?).to be false
     end
   end
@@ -99,7 +112,7 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
     it 'returns outputs that are spendable and not claimed' do
       create_spendable_output(vout: 0)
       create_spendable_output(vout: 1)
-      described_class.create(action_id: action.id, satoshis: 300, vout: 2, locking_script: SecureRandom.random_bytes(25), output_type: 'root') # not in spendable
+      create_root_output(satoshis: 300, vout: 2) # not in spendable
 
       expect(described_class.spendable.count).to eq(2)
     end

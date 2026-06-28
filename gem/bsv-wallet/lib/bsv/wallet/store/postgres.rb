@@ -9,7 +9,7 @@ module BSV
       # Handles Postgres's insert_conflict semantics where nil is
       # returned on DO NOTHING — truthy means this insert won.
       class Postgres < Store
-        def initialize(url: nil, db: nil, db_opts: {})
+        def initialize(url: nil, db: nil, identity_pubkey_hash: nil, db_opts: {})
           require_pg!
           super
         end
