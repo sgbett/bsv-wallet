@@ -22,16 +22,18 @@ The same axis is the core/conformance principle (`docs/reference/core-vs-conform
 ## Scope
 
 **Porcelain (6):** `balance`, `list`, `send`, `receive`, `import`, `reject`
-**Operational (3):** `sweep`, `consolidate`, `transmit`
+**Operational (2):** `sweep`, `consolidate`
+**Deferred to HLR #464:** `transmit`
 
-(Originally proposed a plumbing layer of `build`/`sign`/`broadcast`/`transmit`. Deferred — see ADR-030. The engine bundles action creation with publication; stateless CLI plumbing of those phases would violate principle-of-state. `transmit` survives as operational because it operates on a fully-committed action's BEEF, not on intermediate state.)
+(Originally proposed a plumbing layer of `build`/`sign`/`broadcast`/`transmit`. Deferred — see ADR-030. The engine bundles action creation with publication; stateless CLI plumbing of those phases would violate principle-of-state. `transmit` was reclassified as operational on the basis that it operates on a fully-committed action's BEEF, but Phase 4 scoping then surfaced a deeper layering issue — see Phase 4 deferral note below.)
 
 **Out of scope (follow-up issues):**
 - Lock / select_utxos commands (deferred — engine has no native lock API yet).
-- Recipient registry / phone-book resolution (`send <name>` → URI). For v1, `send` takes `<address> <sats>` (old-school BSV positional) and `transmit` requires explicit `--target=<uri>`.
+- Recipient registry / phone-book resolution (`send <name>` → URI). For v1, `send` takes `<address> <sats>` (old-school BSV positional). Once `transmit` lands (post-HLR #464), it will require explicit `--target=<uri>`.
 - BRC-100 plumbing bins (`create_action`, `list_outputs`, `internalize`) — deleted here per blank-slate; their replacement (`bin/brc100`) lives under #431. A temporary gap exists between this PR landing and #431 landing where shell-driven BRC-100 dispatch is unavailable; internal Ruby callers use `engine.brc100` directly in the interim.
 - **CLI plumbing layer** (`build`/`sign`/`broadcast` as separable verbs) — deferred per ADR-030. Returns as a follow-up after HLR #192 (noSend/sendWith reservation flow) provides the in-engine intermediate-state holding that plumbing-as-CLI requires.
 - **Failed-broadcast retry** — separate primitive against the `broadcasts` row (not the action). Tracked as a follow-up issue.
+- **`bin/wallet transmit` verb** — deferred to HLR #464. The Phase 4 scoping pass surfaced that `Engine::Transmission#transmit` conflates BEEF wire mechanics (engine-level) with BRC-29 envelope build (conformance-level). `bin/wallet transmit` should ship BEEF only (node-to-node); the BRC-29 envelope variant belongs in `bin/brc100` (HLR #431) once the engine split lands.
 
 ## Dispatcher Design
 
@@ -108,7 +110,12 @@ Three credential classes flow through the dispatcher; each has a safe-handling r
 |---------|------|-------------|-------|
 | `sweep` | `--to=<root_key_hex> [--no-send]` | `engine.sweep(recipient:, no_send:)` | Spendable → root-key P2PKH; blank-slate tool |
 | `consolidate` | `[--target-inputs=<n>] [--no-send]` | `engine.consolidate_step(target_inputs:, no_send:)` | Stays in spendable set; reduces UTXO count. `--no-send` forwards to engine's `no_send:` (default `false`, broadcasts inline). |
-| `transmit <reference>` | `--target=<uri> [--counterparty=<key>] [--with-identity]` | `engine.transmit_action(reference:, target:, counterparty: nil, with_identity: false)` | Delivers BEEF to peer endpoint. Operational verb (per ADR-030) — operates on a fully-committed action's BEEF, no state transition. Distinct domain from broadcast (BEEF→peer vs BEEF→miner per ADR-025). **Egress hardening:** URI scheme allow-list (`https` default; `http` requires `--insecure-transmit`); reject private/loopback/link-local/cloud-metadata ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `::1`, `fc00::/7`); resolve target host via `Resolv` + `IPAddr` before request. **Identity attachment is opt-in**: `--with-identity` attaches `sender_identity_key` to the BRC-29 envelope. Without the flag, transmit goes anonymous — prevents the wallet's identity key being correlated across every endpoint the operator transmits to (passive deanonymisation risk if `--target` is attacker-controlled or logged at the proxy). `--counterparty=<key>` accepts `self`, `anyone`, or hex pubkey per BRC-43. **Engine surface addition:** `engine.transmit_action(reference:, target:, counterparty: nil, with_identity: false)` wrapper (Phase 4) — looks up action by reference, gathers `outputs` from action storage, reads `sender_identity_key` from `key_deriver.identity_key` only if `with_identity: true`, applies egress policy to `target`, calls `@transmission.transmit(...)`. CLI stays a thin wrapper. |
+
+**Deferred to HLR #464:**
+
+| Command | Status |
+|---------|--------|
+| `transmit <reference>` | Phase 4 deferred to HLR #464. The Phase 4 scoping pass surfaced that `Engine::Transmission#transmit` conflates BEEF wire mechanics (engine-level — atomic BEEF build, BeefParty trim, egress validation, transmission row, ACK validation) with BRC-29 envelope build (conformance-level — `sender_identity_key` + `outputs[].derivation_prefix/suffix` insertion remittance). A pure node-to-node tx send only needs BEEF; the peer scans outputs themselves. The CLI verb follows once the engine split lands: `bin/wallet transmit` ships BEEF only; the BRC-29 envelope variant belongs in `bin/brc100` (HLR #431). |
 
 ## CLI Module Additions
 
@@ -135,7 +142,7 @@ Add:
   - `#read_binary_input(file: nil)` — reads from `$stdin.binmode` or `File.binread(path)`. The single home for BEEF-shaped input; subclasses can't forget `binmode`.
   - `#parse_pubkey_hex(str)` — wraps `BSV::PublicKey.from_hex`; raises `UsageError` with a clear message on failure. All ingest points for `--counterparty`, `--to=<root_key_hex>`, etc. go through this.
   - All files: `# frozen_string_literal: true` at top.
-- `CLI::Commands::<Verb>` — one class per command (9 classes — 6 porcelain + 3 operational, post-ADR-030 deferral of the plumbing layer). Each inherits `Base`, defines `#build_parser` and `#call(args)` (the boot `ctx` is passed via `#initialize`). Approximate size: 30-80 lines per class.
+- `CLI::Commands::<Verb>` — one class per command (8 classes — 6 porcelain + 2 operational, post-ADR-030 deferral of the plumbing layer and HLR #464 deferral of `transmit`). Each inherits `Base`, defines `#build_parser` and `#call(args)` (the boot `ctx` is passed via `#initialize`). Approximate size: 30-80 lines per class. (A ninth `Commands::Transmit` class returns post-HLR #464.)
 - Every command class lands with `frozen_string_literal: true` and passes `bundle exec rubocop lib/bsv/wallet/cli/` — no mass disables.
 
 Extend or keep:
@@ -145,8 +152,9 @@ Extend or keep:
 
 Engine surface additions (across phases):
 
-- **Phase 3** — `basket:` kwarg added to `engine.import_wallet`, forwarded to `import_utxo(basket:)` (which already accepts it). Without this, `wallet import --basket=<name>` is unimplementable.
-- **Phase 4** — `engine.transmit_action(reference:, target:, counterparty: nil, with_identity: false)`. Wraps `@transmission.transmit(...)` — looks up action by reference, gathers `outputs` from action's stored outputs, reads `sender_identity_key` from `key_deriver.identity_key` **only if** `with_identity: true` (passive-deanonymisation defence: anonymous transmission is the default), defaults `counterparty` to action's stored counterparty when omitted, applies egress policy to `target`, calls `Transmission#transmit(counterparty:, action_id:, outputs:, sender_identity_key:, endpoint: target)` (passing `nil` for `sender_identity_key` when `with_identity: false`). Without this wrapper, the CLI would need direct access to `@transmission` (no public reader) and would carry parameter-gathering + egress-policy logic (violates "no business logic in CLI" hygiene).
+- **Phase 3 (shipped)** — `basket:` kwarg added to `engine.import_wallet`, forwarded to `import_utxo(basket:)` (which already accepts it). Without this, `wallet import --basket=<name>` is unimplementable.
+
+(Originally planned a `engine.transmit_action` wrapper as the Phase 4 engine surface. Deferred to HLR #464 along with the verb — the wrapper's design questions all turned out to be conformance-layer concerns leaking into the engine primitive, which is the exact symptom HLR #464 addresses.)
 
 (`engine.broadcast_action` removed per ADR-030. The engine bundles persistence + publication; a separable publish primitive is engine work gated on HLR #192.)
 
@@ -156,7 +164,7 @@ The plan introduces no schema changes, but four new read patterns benefit from e
 
 | Command(s) | Query shape | Index relied on | Status |
 |------------|-------------|-----------------|--------|
-| `reject`, `transmit` (lookup phase) | `actions WHERE reference = ?` | `actions.reference UNIQUE` (`uuid` B-tree) | Index already present per `001_create_schema.rb` |
+| `reject` (and `transmit` post-HLR #464) | `actions WHERE reference = ?` | `actions.reference UNIQUE` (`uuid` B-tree) | Index already present per `001_create_schema.rb` |
 | `list actions --label=<name>` | `labels JOIN action_labels JOIN actions WHERE labels.label = ?` | `labels(label) UNIQUE` (already `labels_label_unique` in 001), `action_labels(label_id, action_id)` composite | Confirm `action_labels` composite before Phase 1; add to `001_create_schema.rb` if missing (pre-release, so schema lives in 001) |
 | `list outputs` (paginated) | `spendable_outputs` with `LIMIT`/`OFFSET` | Existing indices on `outputs` | Verify engine pushes `LIMIT` to SQL, not Ruby-side |
 
@@ -171,12 +179,13 @@ The plan introduces no schema changes, but four new read patterns benefit from e
 bin/balance, bin/create, bin/create_action, bin/derive, bin/import,
 bin/import_root_utxo, bin/internalize, bin/list_outputs, bin/lock,
 bin/receive, bin/reject, bin/select_utxos, bin/send, bin/sweep,
-bin/transmit, bin/consolidate
+bin/consolidate
 ```
 
 **bin/ scripts to keep:**
 - `bin/walletd` (daemon — orthogonal subsystem, inlines its own boot, unaffected)
 - `bin/brc100` (will land via #431 — out of scope here, mentioned for symmetry)
+- `bin/transmit` (kept in the interim — Phase 4 deferred to HLR #464; deletion moves to HLR #464's PR alongside the new `bin/wallet transmit` verb)
 
 **CLI-coupled specs to delete** (per replace-not-adapt; git history is the reference):
 - All `spec/bin/*_spec.rb` (CLI-level coverage of the deleted bins).
@@ -206,14 +215,14 @@ Each phase is one PR. Order matters — earlier phases unblock later ones.
 Each phase lands per-command unit specs in the SAME PR as the command (`spec/bin/wallet/<command>_spec.rb`). Phase 5 closes only the e2e rewrite. Rationale: deferring all specs to the final phase would leave earlier PRs shipping CLI surface against engine-only coverage. Co-located specs cost ~30 minutes per command and close the gap entirely.
 
 1. **Phase 1 — Dispatcher scaffolding + balance + list. DONE (PR #454, merged).** `bin/wallet` exists, global flag parsing works, `balance` and `list outputs/actions` route through it. Lands: `CLI::Dispatcher`, `GlobalOptions`, `parse_global_options`, `Commands::Base` (full contract per CLI Module Additions), `Commands::Balance`, `Commands::List`, plus the secrets foundation: `CLI::Secrets.redact` helper, `#inspect` overrides on `KeyDeriver` and `Engine`, secrets-policy enforcement in `parse_global_options`. Specs: `spec/bin/wallet/balance_spec.rb`, `list_spec.rb`, `dispatcher_spec.rb` (global-flag parsing), `commands/base_spec.rb` (contract), `secrets_spec.rb` (redaction + policy enforcement). Old `bin/balance`, `bin/list_outputs` deleted in same PR.
-2. **Phase 2 — Porcelain: send, receive.** Lands: `Commands::Send`, `Commands::Receive`, `send_spec.rb`, `receive_spec.rb`. `send` calls `engine.build_action(no_send: false, ...)` — atomic create+publish in one shot (the engine's structural design, per ADR-030). `receive` parses BEEF at the CLI boundary and calls `engine.import_beef`.
-3. **Phase 3 — Porcelain: import, reject + operational: sweep, consolidate.** Adds the remaining stateful porcelain + the two single-purpose operational verbs. Specs: `import_spec.rb`, `reject_spec.rb`, `sweep_spec.rb`, `consolidate_spec.rb`. Includes engine surface addition: `basket:` kwarg added to `engine.import_wallet` and forwarded to `import_utxo(basket:)`. Old bins `bin/import`, `bin/import_root_utxo`, `bin/reject`, `bin/sweep`, `bin/consolidate` deleted.
-4. **Phase 4 — Operational: transmit.** Adds the BEEF-to-peer verb. Includes engine surface addition: `engine.transmit_action(reference:, target:, counterparty: nil, with_identity: false)` wrapper (lookup + parameter gathering for `Transmission#transmit` + egress hardening: scheme allow-list, private-range/cloud-metadata blocklist, opt-in identity attachment). Specs: `transmit_spec.rb` (unit, distinct from e2e). Old `bin/transmit` deleted.
-5. **Phase 5 — E2E shape spec rewrite.** Rewritten `spec/e2e/transmit_spec.rb` against new `bin/wallet`. `wallet_actor.rb` rebuilt for the dispatcher's subcommand grammar. Per-command unit specs already exist from Phases 1–4 — Phase 5 closes only the e2e layer.
+2. **Phase 2 — Porcelain: send, receive. DONE (PR #459, merged).** Lands: `Commands::Send`, `Commands::Receive`, `send_spec.rb`, `receive_spec.rb`. `send` calls `engine.build_action(no_send: false, ...)` — atomic create+publish in one shot (the engine's structural design, per ADR-030). `receive` parses BEEF at the CLI boundary and calls `engine.import_beef`.
+3. **Phase 3 — Porcelain: import, reject + operational: sweep, consolidate. DONE (PR #463, merged).** Adds the remaining stateful porcelain + the two single-purpose operational verbs. Specs: `import_spec.rb`, `reject_spec.rb`, `sweep_spec.rb`, `consolidate_spec.rb`. Includes engine surface addition: `basket:` kwarg added to `engine.import_wallet` and forwarded to `import_utxo(basket:)`. Old bins `bin/import`, `bin/import_root_utxo`, `bin/reject`, `bin/sweep`, `bin/consolidate` deleted.
+4. **Phase 4 — Operational: transmit. DEFERRED to HLR #464.** Scoping pass exposed that `Engine::Transmission#transmit` conflates BEEF wire mechanics (engine-level) with BRC-29 envelope build (conformance-level); the design questions that surfaced (counterparty defaulting, outputs gathering, identity-attach opt-in) all turned out to be conformance-layer concerns leaking into the engine primitive. HLR #464 separates the layers; this verb returns once the split lands. `bin/wallet transmit` will ship BEEF only; the BRC-29 envelope variant belongs in `bin/brc100` (HLR #431). Old `bin/transmit` deletion also moves to HLR #464's PR (kept on master in the interim — unused, but harmless).
+5. **Phase 5 — E2E shape spec rewrite.** Rewritten `spec/e2e/transmit_spec.rb` against new `bin/wallet`. `wallet_actor.rb` rebuilt for the dispatcher's subcommand grammar. Per-command unit specs already exist from Phases 1–3 — Phase 5 closes only the e2e layer. Independent of Phase 4 (the e2e shape uses `engine.transmission.transmit` directly through `wallet_actor.rb`'s Ruby surface, not via a CLI verb).
 
-(Originally planned as six phases. Phase 2 was `engine.broadcast_action`; Phase 3 was the four plumbing verbs. Both removed per ADR-030 — the engine's create+publish bundling makes stateless CLI plumbing incompatible with principle-of-state until HLR #192 lands.)
+(Originally planned as six phases. Phase 2 was `engine.broadcast_action`; Phase 3 was the four plumbing verbs. Both removed per ADR-030 — the engine's create+publish bundling makes stateless CLI plumbing incompatible with principle-of-state until HLR #192 lands. Phase 4 transmit then deferred to HLR #464 — see Decisions.)
 
-Phases land in sequence — each builds on the dispatcher contract Phase 1 established.
+Phases land in sequence — each builds on the dispatcher contract Phase 1 established. Phase 5 may proceed without Phase 4 (independent surfaces).
 
 ## Verification
 
@@ -236,8 +245,7 @@ bin/wallet --wallet=alice reject <reference>
 bin/wallet --wallet=alice sweep --to=<root_key>
 bin/wallet --wallet=alice consolidate --target-inputs=10
 
-# Phase 4
-bin/wallet --wallet=alice transmit <reference> --target=https://peer.example/inbox --with-identity
+# Phase 4 — DEFERRED to HLR #464 (engine-vs-conformance split for transmit)
 ```
 
 Unit specs run fast: `cd gem/bsv-wallet && bundle exec rspec spec/bin/wallet/`.
@@ -253,6 +261,7 @@ Integration: `bundle exec rspec spec/e2e/transmit_spec.rb` (after Phase 5).
 4. **~~Plumbing layer kept~~ → REVERSED per ADR-030. Plumbing layer (`build`/`sign`/`broadcast`) is DEFERRED.** The architecture review (Pragmatic Enforcer position) flagged plumbing as speculative; we initially overrode that on "BSV vocabulary at verb level" grounds. Phase 2's attempt to extract `engine.broadcast_action` (PR #456) surfaced the structural reason the review was right: the engine bundles action persistence with publication (the publish step lives at the tail of `build_action`/`sign_action`, with the broadcasts row created in the same DB transaction as the signing artifacts). Stateless CLI plumbing (`wallet build` → exit → `wallet sign`) would persist the engine's intermediate state across process boundaries, violating principle-of-state (the staged-but-unsigned action's wtxid is a placeholder hash of unsigned bytes — schema-valid but semantically half-done). The fix is engine work: HLR #192's noSend/sendWith reservation flow provides in-engine intermediate-state holding without polluting the `actions` table. Plumbing CLI verbs return as a follow-up after #192 lands. `transmit` reclassified as operational (no intermediate state — operates on a committed action's BEEF). PR #456 closed; rationale and survival table recorded in ADR-030.
 5. **Per-command unit specs co-locate with the introducing phase.** Architecture review flagged a final-phase-only spec deferral as a multi-PR coverage gap; co-locating closes it at ~30 minutes per command. Phase 5 keeps only the e2e shape rewrite.
 6. **Secrets-on-the-CLI policy: env-only by default.** WIF via env or `--wif-file=<path>` mode-checked; refuse argv `--wif=` on TTY without `--allow-insecure-wif`. DB password via `.pgpass`; reject userinfo `:` in `--database-url`. `--env=<file>` permission/owner/symlink-checked before load. Output redaction via `Secrets.redact` over `--json` payloads and exception messages. Enforced in `parse_global_options`; every command inherits.
+7. **Phase 4 `transmit` deferred to HLR #464.** Scoping pass surfaced that `Engine::Transmission#transmit` conflates BEEF wire mechanics (engine-level — atomic BEEF build, BeefParty trim against peer-knowledge, egress validation, transmission row, ACK validation) with BRC-29 envelope build (conformance-level — `sender_identity_key` + `outputs[].derivation_prefix/suffix` insertion remittance for the peer's `internalize_action`). The trigger question was "why is transmit asking for `outputs:` at all?" — a pure node-to-node tx send only ships BEEF; the peer scans outputs themselves. Every Phase 4 design question (counterparty defaulting, outputs gathering, identity-attach opt-in, http allow-list plumbing) turned out to be a conformance-layer concern leaking through the engine primitive. HLR #464 separates the layers; `bin/wallet transmit` returns once the split lands as a thin BEEF-only verb. The BRC-29 envelope variant belongs in `bin/brc100` (HLR #431), not here. Phase 5 (e2e spec rewrite) is independent and can proceed without Phase 4.
 
 ## Follow-up Issues (to create)
 
@@ -263,6 +272,7 @@ Integration: `bundle exec rspec spec/e2e/transmit_spec.rb` (after Phase 5).
 - **Failed-broadcast retry verb** — operates on the `broadcasts` row, not the action. Different semantics from the plumbing layer; can land independently.
 - **Parser fuzz harness** for BEEF + `sign --spends` JSON under `spec/security/` (post-Phase 5 — the SDK is the BEEF parser, single audited source; fuzz harness is defence-in-depth, not blocking).
 - **`--batch` stdin-driven mode for shell-loop bulk patterns** — amortises engine boot cost across N references; revisit when boot-cost regressions become measurable.
+- **HLR #464** (open) — Separate BEEF transport from BRC-29 envelope in `Engine::Transmission`. Engine prerequisite for `bin/wallet transmit` (Phase 4) to return as a thin BEEF-only verb.
 
 ## Out of Scope (deliberate)
 
