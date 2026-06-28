@@ -846,7 +846,7 @@ module BSV
       #   outputs without waiting for a block.
       # @return [Hash] { imported: Integer, utxos: Array<Hash> }
       def import_wallet(no_send: false, accept_delayed_broadcast: true,
-                        include_unconfirmed: false)
+                        include_unconfirmed: false, basket: nil)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
@@ -877,6 +877,7 @@ module BSV
 
         imported = unique_utxos.filter_map do |utxo|
           import_utxo(dtxid: utxo['tx_hash'], vout: utxo['tx_pos'],
+                      basket: basket,
                       no_send: no_send,
                       accept_delayed_broadcast: accept_delayed_broadcast)
         rescue BSV::Wallet::Error => e
