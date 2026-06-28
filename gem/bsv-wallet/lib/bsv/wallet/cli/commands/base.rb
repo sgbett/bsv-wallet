@@ -214,21 +214,25 @@ module BSV
           end
 
           # Validate a basket name against the schema's DB CHECK rules
-          # (mirrors +baskets_name_length+ + +baskets_name_charset+ +
-          # +baskets_name_no_double_sp+ in +001_create_schema.rb+).
-          # Without this gate, invalid names reach the engine and bubble
-          # as +Sequel::CheckConstraintViolation+ — outside the
-          # dispatcher's never-raises-uncaught rescue chain.
+          # (mirrors all seven +baskets_name_*+ constraints in
+          # +001_create_schema.rb:266-272+). Without this gate, invalid
+          # names reach the engine and bubble as
+          # +Sequel::CheckConstraintViolation+ — outside the dispatcher's
+          # never-raises-uncaught rescue chain.
           #
-          # Native CLI deliberately stops at the schema floor, NOT the
-          # BRC-100 conformance layer. +BSV::Wallet::BRC100#validate_basket_name!+
-          # additionally rejects +'p '+ / +'admin'+ / +'default'+ / +' basket'+
-          # suffix names — those are spec-mandated for the BRC-100
-          # surface but native wallet vocabulary legitimately uses them
-          # (e.g. +'p wbikd'+ for WBIKD address slots per
-          # +project_outputs_immutability_violation+ memory). BRC-100
-          # CLI (+bin/brc100+, HLR #431) is the right place for the
-          # tighter rules.
+          # Schema floor (enforced here): length 5-300, lowercase ASCII
+          # letters/digits/spaces, no consecutive spaces, no leading or
+          # trailing space, not the literal +'default'+, no trailing
+          # +' basket'+ suffix. These are the DB CHECK constraints; every
+          # path that writes to +baskets+ obeys them.
+          #
+          # NOT enforced here (BRC-100 conformance layer only —
+          # +BSV::Wallet::BRC100#validate_basket_name!+): +'admin'+ prefix
+          # and +'p '+ prefix. Native +bin/wallet+ legitimately uses these
+          # for wallet-internal baskets (+'p wbikd'+ for WBIKD address
+          # slots per the WBIKD draft; +'admin *'+ for permission tokens
+          # per ADR-029); the sibling +bin/brc100+ surface (HLR #431) is
+          # where those tighter spec-mandated rules belong.
           BASKET_NAME_MIN = 5
           BASKET_NAME_MAX = 300
           BASKET_NAME_CHARSET = /\A[a-z0-9 ]+\z/
@@ -246,9 +250,17 @@ module BSV
                     "(got #{safe_preview(name)})"
             end
 
-            return unless name.include?('  ')
+            raise UsageError, '--basket=<name> must not contain consecutive spaces' if name.include?('  ')
 
-            raise UsageError, '--basket=<name> must not contain consecutive spaces'
+            raise UsageError, '--basket=<name> must not start with a space' if name.start_with?(' ')
+
+            raise UsageError, '--basket=<name> must not end with a space' if name.end_with?(' ')
+
+            raise UsageError, %(--basket=<name> must not end with " basket" (schema reservation)) if name.end_with?(' basket')
+
+            return unless name == 'default'
+
+            raise UsageError, %(--basket=<name> cannot be "default" (schema reservation))
           end
 
           # Defence against accidental secret disclosure in error

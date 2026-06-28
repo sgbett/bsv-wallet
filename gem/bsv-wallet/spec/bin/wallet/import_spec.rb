@@ -58,10 +58,36 @@ RSpec.describe BSV::Wallet::CLI::Commands::Import do
         .to raise_error(BSV::Wallet::CLI::UsageError, /consecutive spaces/)
     end
 
+    it 'rejects --basket with leading space (no-leading-space constraint)' do
+      expect { command.call(['--basket= leading']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /must not start with a space/)
+    end
+
+    it 'rejects --basket with trailing space (no-trailing-space constraint)' do
+      expect { command.call(['--basket=trailing ']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /must not end with a space/)
+    end
+
+    it 'rejects --basket=default (reserved name)' do
+      expect { command.call(['--basket=default']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /cannot be "default"/)
+    end
+
+    it 'rejects --basket ending in " basket" (reserved suffix)' do
+      expect { command.call(['--basket=todos basket']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /must not end with " basket"/)
+    end
+
     it 'accepts wallet-internal prefixed baskets that BRC-100 rejects (e.g. p wbikd)' do
       allow(engine).to receive(:import_wallet).and_return(imported: 0, utxos: [])
       expect { command.call(['--basket=p wbikd']) }.not_to raise_error
       expect(engine).to have_received(:import_wallet).with(hash_including(basket: 'p wbikd'))
+    end
+
+    it 'accepts wallet-internal admin baskets that BRC-100 rejects (e.g. admin foo)' do
+      allow(engine).to receive(:import_wallet).and_return(imported: 0, utxos: [])
+      expect { command.call(['--basket=admin foo']) }.not_to raise_error
+      expect(engine).to have_received(:import_wallet).with(hash_including(basket: 'admin foo'))
     end
   end
 
