@@ -158,17 +158,29 @@ module BSV
           # +binmode+ — text-mode reads would mangle BEEF bytes with
           # encoding errors or CRLF translation.
           #
+          # +max_bytes:+ bounds the read at source rather than after the
+          # fact. Without it, a 10 GiB stdin pipe slurps fully into
+          # memory before any caller-side size cap can fire — OOM before
+          # UsageError. Callers should pass +cap + 1+ so the returned
+          # bytesize signals "at or over the cap" unambiguously.
+          #
           # @param file [String, nil]
+          # @param max_bytes [Integer, nil] hard ceiling on bytes read
           # @return [String] binary content
-          def read_binary_input(file: nil)
-            if file
-              File.binread(file)
-            else
-              raise UsageError, 'no input on stdin (pipe BEEF bytes or use --file=<path>)' if $stdin.tty?
+          def read_binary_input(file: nil, max_bytes: nil)
+            bytes =
+              if file
+                max_bytes ? File.binread(file, max_bytes) : File.binread(file)
+              else
+                raise UsageError, 'no input on stdin (pipe BEEF bytes or use --file=<path>)' if $stdin.tty?
 
-              $stdin.binmode
-              $stdin.read
-            end
+                $stdin.binmode
+                max_bytes ? $stdin.read(max_bytes) : $stdin.read
+              end
+            # IO#read with a length returns nil at immediate EOF (empty
+            # file, closed stdin); without length it returns "". Normalise
+            # so callers can rely on +#bytesize+ / +#empty?+ unconditionally.
+            bytes || (+'').b
           end
 
           # Validate a hex-encoded compressed public key (66 chars,

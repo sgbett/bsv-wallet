@@ -332,6 +332,45 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       expect { command.call(["--file=#{path}"]) }
         .to raise_error(BSV::Wallet::CLI::UsageError, /must be a JSON object/)
     end
+
+    # satoshis is informational (engine reads BEEF), but the human
+    # summary sums it AFTER engine.import_beef has committed. Without
+    # up-front validation, a non-integer satoshis TypeErrors post-import,
+    # leaving the wallet in a "succeeded but crashed" state.
+    it 'raises UsageError when an envelope output is missing satoshis (fails before engine.import_beef)' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0,
+                                      derivation_prefix: 'p', derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "satoshis"/)
+      expect(engine).not_to have_received(:import_beef)
+    end
+
+    it 'raises UsageError when satoshis is a string' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: 'hundred',
+                                      derivation_prefix: 'p', derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "satoshis"/)
+      expect(engine).not_to have_received(:import_beef)
+    end
+
+    it 'raises UsageError when satoshis is negative' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: -100,
+                                      derivation_prefix: 'p', derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "satoshis"/)
+    end
   end
 
   describe 'raw BEEF path' do
@@ -428,6 +467,20 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       big = File.join(tmpdir, 'big.beef')
       File.binwrite(big, "\x00" * (33 * 1024 * 1024))
       expect { command.call(["--file=#{big}"]) }.to raise_error(BSV::Wallet::CLI::UsageError, /exceeds 32 MiB cap/)
+    end
+
+    # Cap must be enforced AT THE READ, not after — a 10 GiB adversarial
+    # pipe would otherwise OOM the process before the size check runs.
+    # File.binread(path, n) honours the limit; assert that what gets
+    # read is bounded at MAX_INPUT_BYTES + 1.
+    it 'reads at most MAX_INPUT_BYTES + 1 bytes from a file (bounded read at source)' do
+      huge = File.join(tmpdir, 'huge.beef')
+      File.binwrite(huge, "\x00" * (50 * 1024 * 1024))
+      cap = described_class::MAX_INPUT_BYTES
+      allow(File).to receive(:binread).and_call_original
+      expect { command.call(["--file=#{huge}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /exceeds 32 MiB cap/)
+      expect(File).to have_received(:binread).with(huge, cap + 1)
     end
   end
 end

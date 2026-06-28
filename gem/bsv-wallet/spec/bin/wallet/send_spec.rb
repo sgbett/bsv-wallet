@@ -56,6 +56,25 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
       end.to raise_error(BSV::Wallet::CLI::UsageError, /not recognised/)
     end
 
+    # If an operator mistypes a WIF (or anything else long) into the
+    # recipient slot, the unknown-recipient error must NOT echo the
+    # full value to stderr — that would persist secret material into
+    # shell history, CI logs, bug reports. Short values still pass
+    # through verbatim (too short to be a WIF).
+    it 'truncates long unknown recipients in the error message (defence against WIF echoing)' do
+      wif_lookalike = "L#{'a' * 51}" # 52 chars, WIF-shape
+      expect { command.call([wif_lookalike, '100']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError) do |error|
+          expect(error.message).not_to include(wif_lookalike)
+          expect(error.message).to include('52 chars')
+        end
+    end
+
+    it 'shows short unknown recipients verbatim (diagnostic for typos)' do
+      expect { command.call(%w[oops 100]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /"oops"/)
+    end
+
     # P2SH mainnet addresses lead with '3'; P2SH testnet with '2'. Both
     # are valid Base58Check but would produce an unspendable P2PKH lock
     # if the embedded 20-byte hash got wrapped in OP_DUP/OP_HASH160/.../

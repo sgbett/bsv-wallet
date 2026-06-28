@@ -81,13 +81,18 @@ module BSV
 
           private
 
-          # Read input from +--file+ or stdin, applying the size cap.
-          # Binmode throughout — BEEF is raw bytes.
+          # Read input from +--file+ or stdin with a bounded read at
+          # source: +MAX_INPUT_BYTES + 1+ caps the actual file/stdin
+          # consumption, so a 10 GiB adversarial pipe can't OOM the
+          # process before the size check fires. If the returned buffer
+          # is at the +1+ boundary, the input is larger than the cap
+          # (we just don't know how much larger) — that's enough to
+          # raise UsageError.
           def read_input
-            bytes = read_binary_input(file: @options[:file])
+            bytes = read_binary_input(file: @options[:file], max_bytes: MAX_INPUT_BYTES + 1)
             if bytes.bytesize > MAX_INPUT_BYTES
               raise UsageError,
-                    "receive input exceeds #{MAX_INPUT_BYTES / (1024 * 1024)} MiB cap (got #{bytes.bytesize} bytes)"
+                    "receive input exceeds #{MAX_INPUT_BYTES / (1024 * 1024)} MiB cap"
             end
             bytes
           end
@@ -155,7 +160,7 @@ module BSV
             emit_human 'kind:        envelope (BRC-29)'
             emit_human "sender:      #{sender_identity_key&.[](0..15)}..."
             emit_human "outputs:     #{pay_outputs.length}"
-            emit_human "total sats:  #{pay_outputs.sum { |o| o[:satoshis] || 0 }}"
+            emit_human "total sats:  #{pay_outputs.sum { |o| o[:satoshis] }}"
             emit_human "basket:      #{output_specs.first[:insertion_remittance][:basket] || '(unbasketed)'}"
           end
 
@@ -263,6 +268,18 @@ module BSV
                     "envelope output [#{idx}] missing or invalid \"vout\" " \
                     '(must be a non-negative integer; engine-side default-to-zero ' \
                     'could silently target the wrong output)'
+            end
+
+            # satoshis is informational (engine reads the BEEF's actual
+            # value), but the human-readable summary sums it AFTER
+            # engine.import_beef has already committed. Validating
+            # here means an invalid satoshis can't TypeError post-import
+            # and leak the "succeeded but crashed" state.
+            sats = out[:satoshis]
+            unless sats.is_a?(Integer) && sats >= 0
+              raise UsageError,
+                    "envelope output [#{idx}] missing or invalid \"satoshis\" " \
+                    '(must be a non-negative integer)'
             end
 
             { derivation_prefix: out[:derivation_prefix],
