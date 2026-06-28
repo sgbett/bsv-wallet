@@ -18,7 +18,7 @@
 
 ```sql
 CREATE TYPE broadcast_intent AS ENUM ('delayed', 'inline', 'none');
-CREATE TYPE output_type AS ENUM ('root', 'outbound');
+CREATE TYPE spendable_intent AS ENUM ('spendable', 'none');
 CREATE TYPE tx_status AS ENUM (
   'UNKNOWN', 'QUEUED', 'RECEIVED', 'STORED',
   'ANNOUNCED_TO_NETWORK', 'REQUESTED_BY_NETWORK', 'SENT_TO_NETWORK',
@@ -37,15 +37,14 @@ CREATE TYPE tx_status AS ENUM (
 
 The send path runs the full 4-phase lifecycle (lock → sign → broadcast → promote). The internal path runs Phases 1, 2, and 4 synchronously at create_action time — there is no Phase 3 because the transaction is never broadcast. See **Action Lifecycle** below for the database-level detail.
 
-**output_type:** Classifies outputs by ownership and derivation. Three constraint profiles:
+**spendable_intent (HLR #467):** Per-output, stated by the decision-maker at construction time. Replaces the conflated `output_type` column (which triple-served as kind tag, spendability discriminator, and inference target — the anti-pattern ADR-010 banned in code and HLR #467 removed from the schema). Two values, both decisions the caller already knows:
 
-| output_type | derivation fields | spendable allowed | use case |
-|-------------|:-:|:-:|---|
-| NULL | required | yes | derived output — wallet-owned via BRC-42 keys |
-| root | forbidden | yes | identity key — imported UTXOs, transitional shim |
-| outbound | forbidden | **no** (trigger enforced) | payment to others |
+| value | meaning | example |
+|---|---|---|
+| `spendable` | the wallet owns this output and it should join the UTXO set when promoted | BRC-42 self-payment, change output, imported root P2PKH |
+| `none` | the wallet must NOT track this output as spendable | outbound payment (base58 or BRC-29), provably-unspendable OP_RETURN |
 
-`change` is NOT in the enum. Change outputs are structurally identical to derived outputs (NULL type with derivation fields). The `change` flag is cosmetic metadata on `output_details`.
+The structural validity rules are enforced by two CHECKs together (`controls_all_or_nothing` + `spendable_recoverable`) — see the **outputs** table for the per-wallet literal mechanism and the 8-permutation matrix. See [`intent-and-outcomes.md`](intent-and-outcomes.md) for the principle the constraint encodes.
 
 ## Migration Order
 
@@ -263,7 +262,7 @@ BEGIN
   -- canonical-UTXO membership is gated by the absence of a promotions row,
   -- not by a column on outputs.
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,
-                       output_type, derivation_prefix, derivation_suffix,
+                       spendable_intent, derivation_prefix, derivation_suffix,
                        sender_identity_key)
   -- broadcasts row appears here too (intent != 'none'), pre-stamped for
   -- the daemon push-discovery loop
@@ -322,10 +321,10 @@ BEGIN
   -- Wallet-owned outputs join the UTXO set. The spendable.action_id FK
   -- to promotions(action_id) means this insert only succeeds because the
   -- promotions row was just written.
-  INSERT INTO spendable (output_id, action_id)
-    SELECT id, action_id FROM outputs
+  INSERT INTO spendable (output_id, action_id, spendable_intent)
+    SELECT id, action_id, spendable_intent FROM outputs
      WHERE action_id = ?
-       AND output_type IS DISTINCT FROM 'outbound'
+       AND spendable_intent = 'spendable'
        AND id NOT IN (SELECT output_id FROM spendable)
   -- If ARC returned MINED + merklePath:
   INSERT INTO blocks (height, merkle_root, block_hash)
@@ -341,7 +340,7 @@ On the **internal path** (`broadcast_intent = 'none'`), Phase 4 is committed ins
 **Database state after Phase 4 (send path):**
 - `outputs`: unchanged from Phase 2 — same rows, untouched.
 - `promotions`: one new row, `authorising_status = ` the broadcast's current tx_status. The row's existence IS the canonical-state fact (#307 / ADR-023).
-- `spendable`: new rows for wallet-owned outputs. Outbound outputs never get a spendable row (`prevent_outbound_spendable` trigger).
+- `spendable`: new rows for wallet-owned outputs. Outbound outputs never get a spendable row — declaratively gated by the composite FK `spendable(output_id, spendable_intent) → outputs(id, spendable_intent)` + CHECK `spendable_intent = 'spendable'` (HLR #467, [hot-path-design.md](hot-path-design.md)). No trigger on the hot path.
 - `tx_proofs`: proof created if ARC returned MINED (proof arrives for free).
 - `actions`: `tx_proof_id` set if proof arrived with broadcast response.
 
@@ -535,7 +534,7 @@ BEGIN
   -- on the eventual broadcast ACK in Phase 4 for promotions).
   UPDATE actions SET wtxid = ?, raw_tx = unsigned_tx WHERE id = ?
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,
-                       output_type, derivation_prefix, derivation_suffix,
+                       spendable_intent, derivation_prefix, derivation_suffix,
                        sender_identity_key)
   INSERT INTO output_baskets (output_id, basket_id, action_id)
   INSERT INTO output_details (output_id, action_id, change, description, ...)
@@ -605,11 +604,11 @@ BEGIN
   -- admits the internal disjunction), and spendable rows inserted in
   -- the same transaction. No Phase 3, no broadcasts row.
   INSERT INTO outputs (action_id, satoshis, vout, locking_script,
-                       output_type, derivation_prefix, derivation_suffix,
+                       spendable_intent, derivation_prefix, derivation_suffix,
                        sender_identity_key)
   INSERT INTO promotions (action_id, intent, authorising_status)
     VALUES (?, 'none', NULL)
-  INSERT INTO spendable (output_id, action_id)
+  INSERT INTO spendable (output_id, action_id, spendable_intent)
   INSERT INTO output_baskets (output_id, basket_id, action_id)
   INSERT INTO output_details (output_id, action_id, ...)
 COMMIT
@@ -678,7 +677,7 @@ end
 
 ## 6. Outputs
 
-The append-only log. A permanent record of every output the wallet has ever participated in — both wallet-owned outputs (with derivation data) and outbound payments (with `output_type = 'outbound'`).
+The append-only log. A permanent record of every output the wallet has ever participated in — both wallet-owned outputs (with derivation data) and outbound payments (`spendable_intent = 'none'`).
 
 **Write-once during canonical lifetime.** No per-row UPDATE happens, ever — the table has no mutable columns. Per-row DELETE happens *only* in cleanup paths (`abort_action`, `reject_action`, reaper) and *only* on rows whose parent action is being torn down in the same atomic transaction. Whether such a delete can reach a row is gated structurally: an output's parent action either has a `promotions` row (§7) — in which case it owns canonical UTXO membership and the cleanup paths refuse to touch it — or it doesn't, in which case the row never crossed the authorisation gate and tear-down is safe. Lifecycle exit at scale is partition drop, not per-row DELETE.
 
@@ -696,24 +695,33 @@ At scale, partition by id range. Old partitions where all outputs have been spen
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | locking_script | bytea | NOT NULL |
 | vout | integer | NOT NULL |
-| output_type | output_type | |
+| spendable_intent | spendable_intent | NOT NULL |
 | derivation_prefix | text | |
 | derivation_suffix | text | |
 | sender_identity_key | text | |
 
 **Constraints:**
-- `UNIQUE (action_id, vout)` — an output is uniquely identified by its position in the action that created it
-- `CHECK satoshis >= 0`
-- `CHECK vout >= 0`
-- `CHECK length(locking_script) >= 1`
-- Typed outputs (root, outbound) must NOT have derivation fields:
-  - `CHECK output_type IS NULL OR derivation_prefix IS NULL`
-  - `CHECK output_type IS NULL OR derivation_suffix IS NULL`
-  - `CHECK output_type IS NULL OR sender_identity_key IS NULL`
-- Derived outputs (NULL type) must have ALL derivation fields:
-  - `CHECK output_type IS NOT NULL OR derivation_prefix IS NOT NULL`
-  - `CHECK output_type IS NOT NULL OR derivation_suffix IS NOT NULL`
-  - `CHECK output_type IS NOT NULL OR sender_identity_key IS NOT NULL`
+- `UNIQUE (action_id, vout)` — an output is uniquely identified by its position in the action that created it.
+- `UNIQUE (id, spendable_intent)` — composite-FK target. Lets `spendable` denormalise `spendable_intent` and FK against it (the trigger-free replacement for `prevent_outbound_spendable`).
+- `CHECK satoshis >= 0`, `CHECK vout >= 0`, `CHECK length(locking_script) >= 1`.
+- `CHECK controls_all_or_nothing` — `derivation_prefix`/`derivation_suffix`/`sender_identity_key` are all set together or all absent together. Partial derivation is a malformed row.
+- `CHECK spendable_recoverable` — the per-wallet structural rule (HLR #467). The WIF-derived root P2PKH script (`OP_DUP OP_HASH160 {hash160(identity_key)} OP_EQUALVERIFY OP_CHECKSIG`) is embedded into the CHECK as a binary literal at migration time. The constraint admits exactly the four valid combinations of (root_pattern × controls_present × spendable_intent):
+
+  | root_pattern | controls_present | spendable_intent | valid? |
+  |---|---|---|---|
+  | T | F | `spendable` | ✓ — root P2PKH we own (chain UTXO) |
+  | F | F | `none` | ✓ — outbound base58 (recipient owns it) |
+  | F | T | `spendable` | ✓ — BRC-42 self-payment / change |
+  | F | T | `none` | ✓ — BRC-29 outbound via derivation to counterparty |
+  | T | F | `none` | ✗ — root-pattern → we own; `none` contradicts |
+  | T | T | * | ✗ — hash collision (~2⁻¹⁶⁰), reject as impossible |
+  | F | F | `spendable` | ✗ — no derivation, not root: no recoverable key |
+
+  The literal is wallet-specific: every wallet's `pg_dump` shows its own hash in the CHECK definition. Cross-wallet schema dumps differ by design (multi-user pattern per ADR-028). The hash is public information — it's the wallet's root P2PKH address visible on chain. WIF rotation = new wallet (the literal can't change without re-creating the table).
+
+  **Schema integrity:** `Store#verify_schema!` reads the CHECK definition from `pg_constraint` at boot and asserts the literal matches the currently-loaded WIF. Catches schema drift, restore-to-wrong-DB, and WIF rotation.
+
+  **App-layer mirror:** `Output#validate` encodes the same rule as a Sequel model validator so callers see clean field-level errors before the DB rejects. The two layers exist in parallel — the model surfaces the failure earlier with a per-field message, the DB is the structural backstop. See [`intent-and-outcomes.md`](intent-and-outcomes.md) for the principle and full rationale.
 
 **Canonical-state marker:** there isn't a column for it. An output is "in the canonical UTXO set" iff its parent action has a row in `promotions` (§7) and the output has a row in `spendable` (§8). The promotions row's existence IS the canonical-state fact (#307 / ADR-023). This replaces the earlier `outputs.promoted` boolean — which was a per-row UPDATE deviation from append-only — with row-existence in a separate table, gating UTXO membership declaratively.
 
@@ -822,6 +830,7 @@ The hot-path UTXO selection query scans this table (in memory), then PK-joins to
 | id | bigint | GENERATED ALWAYS AS IDENTITY PRIMARY KEY |
 | output_id | bigint | NOT NULL REFERENCES outputs (id) UNIQUE |
 | action_id | bigint | NOT NULL — two FKs (see Cascades below) |
+| spendable_intent | spendable_intent | NOT NULL — denormalised, see "No trigger on the hot path" below |
 
 **Indexes:**
 - The UNIQUE on `output_id` serves as the index (and enforces one spendable entry per output)
@@ -833,7 +842,7 @@ The hot-path UTXO selection query scans this table (in memory), then PK-joins to
 
 The two FKs are belt-and-braces. `Store#reject_action` exploits the second one — it deletes the promotions row first and the spendable rows fall out via cascade before the action delete fires. The first FK then handles any teardown path that goes straight at the action without touching promotions (e.g. abort, reaper).
 
-**Trigger:** `prevent_outbound_spendable` — BEFORE INSERT trigger rejects any row referencing an output with `output_type = 'outbound'`. The database itself prevents invalid state — outbound outputs (payments to others) can never appear in the UTXO set.
+**No trigger on the hot path (HLR #467 / [hot-path-design.md](hot-path-design.md)):** A spendable row's parent output must carry `spendable_intent = 'spendable'`. Two declarative constraints together enforce this — the row's own `CHECK spendable_intent = 'spendable'` and the composite FK `(output_id, spendable_intent) REFERENCES outputs(id, spendable_intent)`. Attempting to insert a spendable row pointing at an output whose `spendable_intent` is `'none'` violates the FK; attempting to mark the spendable row itself as `'none'` violates the CHECK. This replaces the prior `prevent_outbound_spendable` BEFORE INSERT trigger declaratively — no PL/pgSQL on the highest-frequency write path.
 
 **Note:** No timestamps — INSERT at output promotion, DELETE at spend/relinquish. The churn pattern is INSERT-heavy (~8 change outputs created per ~2 inputs consumed). Dead tuples from DELETEs are minimal and vacuum is trivial on a table this small.
 
@@ -866,7 +875,7 @@ Display and application metadata. Never queried in the UTXO selection hot path. 
 
 **Cascade:** `action_id ON DELETE CASCADE` — deleting an action automatically removes its output details.
 
-**`change` flag:** Cosmetic. Tells the UI "this output was change from a transaction you sent." Never indexed, never queried in the hot path. UTXO selection picks by satoshis and basket, never by change flag. Change outputs are structurally identical to derived outputs — `output_type` NULL with derivation fields.
+**`change` flag:** Cosmetic. Tells the UI "this output was change from a transaction you sent." Never indexed, never queried in the hot path. UTXO selection picks by satoshis and basket, never by change flag. Change outputs are structurally identical to other wallet-owned BRC-42 outputs — derivation triple set, `spendable_intent = 'spendable'`.
 
 **Note:** No timestamps — written at output creation, immutable.
 
@@ -1280,7 +1289,7 @@ LIMIT ? OFFSET ?;
 
 ## Resolved Design Questions
 
-- **`change` column placement:** On `output_details` (cosmetic display flag). Change outputs are structurally identical to derived outputs — `output_type` NULL with derivation fields. The `change` flag never participates in UTXO selection or constraints.
+- **`change` column placement:** On `output_details` (cosmetic display flag). Change outputs are structurally identical to other wallet-owned BRC-42 outputs — derivation triple set, `spendable_intent = 'spendable'`. The `change` flag never participates in UTXO selection or constraints.
 - **Soft delete:** Removed from baskets, labels, tags, certificates, action_labels, output_tags. Plain UNIQUE constraints replaced partial indexes. Hard delete for cleanup.
 - **`relinquishOutput`:** DELETE the `spendable` row (remove from UTXO set). DELETE the `output_baskets` row (remove from basket). The output row stays in the log.
 - **Default basket:** No basket assignment = default basket (implicit). `listOutputs(basket: 'default')` queries spendable outputs with no `output_baskets` row. `CHECK name != 'default'` prevents explicit creation of a 'default' basket entity.

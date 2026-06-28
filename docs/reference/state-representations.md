@@ -52,8 +52,8 @@ The goal is zero class-F. A/B/C are the compliant forms; D/E are legitimate when
 - **`sse_cursors.last_event_id`** — external stream position (ARC SSE); a cursor is current-value-only by nature.
 
 ### E — Value attributes (data, not lifecycle state)
-`actions`: `raw_tx`, `input_beef`, `reference`. `outputs`: `satoshis`, `vout`, `locking_script`, `output_type`*, `derivation_prefix/suffix`, `sender_identity_key`. `output_details`: `type`, `purpose`, `provided_by`, `description`, `custom_instructions`, `script_length/offset`. Plus `blocks.*`, `tx_proofs.merkle_path/raw_tx/block_index`, `certificates.*`, `certificate_fields.*`, `broadcasts.block_hash/height/merkle_path/provider/callback_token`, `settings.value`.
-<br>*`output_type` is an immutable classification attribute, not lifecycle state.
+`actions`: `raw_tx`, `input_beef`, `reference`. `outputs`: `satoshis`, `vout`, `locking_script`, `spendable_intent`*, `derivation_prefix/suffix`, `sender_identity_key`. `output_details`: `type`, `purpose`, `provided_by`, `description`, `custom_instructions`, `script_length/offset`. Plus `blocks.*`, `tx_proofs.merkle_path/raw_tx/block_index`, `certificates.*`, `certificate_fields.*`, `broadcasts.block_hash/height/merkle_path/provider/callback_token`, `settings.value`.
+<br>*`spendable_intent` is an immutable intent attribute stated by the decision-maker at construction time (HLR #467 / [`intent-and-outcomes.md`](intent-and-outcomes.md)), not lifecycle state. Replaces the conflated `output_type` column.
 
 ### F — Driftable flags (the anti-pattern — target is empty)
 - **`outputs.promoted` — RESOLVED (#307, ADR-022 / ADR-023).** A mutable boolean duplicating "is this canonical." Now class A: the per-action fact is the existence of a `promotions` row. This is the catalogue's headline result. *Absent by design in the live schema — never created.*

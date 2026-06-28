@@ -265,6 +265,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         outputs: [
           { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+            spendable_intent: 'spendable',
             basket: 'inbox', description: 'pending output' }
         ]
       )
@@ -396,6 +397,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         outputs: [
           { satoshis: 750, vout: 0, locking_script: SecureRandom.random_bytes(25),
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+            spendable_intent: 'spendable',
             basket: 'staged', tags: %w[awaiting], description: 'awaiting signAction' }
         ]
       )
@@ -485,7 +487,8 @@ RSpec.describe BSV::Wallet::Store, :store do
                                satoshis: 500, vout: 0,
                                locking_script: SecureRandom.random_bytes(25),
                                derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-                               sender_identity_key: 'self'
+                               sender_identity_key: 'self',
+                               spendable_intent: 'spendable'
                              }
                            ])
       output = BSV::Wallet::Store::Models::Output.first(action_id: result[:id])
@@ -509,7 +512,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         outputs: [
           { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
-            basket: 'inbox' }
+            spendable_intent: 'spendable', basket: 'inbox' }
         ]
       )
       BSV::Wallet::Store::Models::Broadcast.where(action_id: result[:id]).update(tx_status: 'QUEUED')
@@ -531,7 +534,8 @@ RSpec.describe BSV::Wallet::Store, :store do
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32), raw_tx: SecureRandom.random_bytes(100),
         outputs: [
           { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
-            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+            spendable_intent: 'spendable' }
         ]
       )
       BSV::Wallet::Store::Models::Broadcast.where(action_id: result[:id]).update(tx_status: 'QUEUED')
@@ -668,7 +672,8 @@ RSpec.describe BSV::Wallet::Store, :store do
       pending_outputs = [{
         satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
         derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-        sender_identity_key: 'self', basket: 'mybasket', tags: %w[urgent]
+        sender_identity_key: 'self', spendable_intent: 'spendable',
+        basket: 'mybasket', tags: %w[urgent]
       }]
       change_outputs = [{
         satoshis: 400, vout: 1, locking_script: SecureRandom.random_bytes(25),
@@ -715,7 +720,7 @@ RSpec.describe BSV::Wallet::Store, :store do
       pending_outputs = [{
         satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
         derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-        sender_identity_key: 'self'
+        sender_identity_key: 'self', spendable_intent: 'spendable'
       }]
       store.sign_action(
         action_id: result[:id], wtxid: SecureRandom.random_bytes(32),
@@ -749,7 +754,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         raw_tx: SecureRandom.random_bytes(100),
         outputs: [{ satoshis: 800, vout: 0, locking_script: SecureRandom.random_bytes(25),
                     derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-                    sender_identity_key: 'self' }]
+                    sender_identity_key: 'self', spendable_intent: 'spendable' }]
       )
       store.record_broadcast_result(action_id: x[:id], tx_status: 'QUEUED')
       x_output_id = BSV::Wallet::Store::Models::Output.where(action_id: x[:id]).select_map(:id).first
@@ -761,7 +766,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         raw_tx: SecureRandom.random_bytes(100),
         outputs: [{ satoshis: 700, vout: 0, locking_script: SecureRandom.random_bytes(25),
                     derivation_prefix: SecureRandom.uuid, derivation_suffix: '2',
-                    sender_identity_key: 'self' }]
+                    sender_identity_key: 'self', spendable_intent: 'spendable' }]
       )
       store.record_broadcast_result(action_id: y[:id], tx_status: 'QUEUED')
       y_output_id = BSV::Wallet::Store::Models::Output.where(action_id: y[:id]).select_map(:id).first
@@ -793,9 +798,11 @@ RSpec.describe BSV::Wallet::Store, :store do
         raw_tx: SecureRandom.random_bytes(100),
         outputs: [
           { satoshis: 900, vout: 0, locking_script: SecureRandom.random_bytes(25),
-            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+            sender_identity_key: 'self', spendable_intent: 'spendable' },
           { satoshis: 900, vout: 1, locking_script: SecureRandom.random_bytes(25),
-            derivation_prefix: SecureRandom.uuid, derivation_suffix: '2', sender_identity_key: 'self' }
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '2',
+            sender_identity_key: 'self', spendable_intent: 'spendable' }
         ]
       )
       store.record_broadcast_result(action_id: a[:id], tx_status: 'QUEUED')
@@ -807,7 +814,8 @@ RSpec.describe BSV::Wallet::Store, :store do
         action_id: b[:id], wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100),
         outputs: [{ satoshis: 800, vout: 0, locking_script: SecureRandom.random_bytes(25),
-                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '3', sender_identity_key: 'self' }]
+                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '3',
+                    sender_identity_key: 'self', spendable_intent: 'spendable' }]
       )
       store.record_broadcast_result(action_id: b[:id], tx_status: 'QUEUED')
       b_output_id = BSV::Wallet::Store::Models::Output.where(action_id: b[:id]).select_map(:id).first
@@ -818,7 +826,8 @@ RSpec.describe BSV::Wallet::Store, :store do
         action_id: c[:id], wtxid: SecureRandom.random_bytes(32),
         raw_tx: SecureRandom.random_bytes(100),
         outputs: [{ satoshis: 800, vout: 0, locking_script: SecureRandom.random_bytes(25),
-                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '4', sender_identity_key: 'self' }]
+                    derivation_prefix: SecureRandom.uuid, derivation_suffix: '4',
+                    sender_identity_key: 'self', spendable_intent: 'spendable' }]
       )
       store.record_broadcast_result(action_id: c[:id], tx_status: 'QUEUED')
       c_output_id = BSV::Wallet::Store::Models::Output.where(action_id: c[:id]).select_map(:id).first
@@ -862,7 +871,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         raw_tx: SecureRandom.random_bytes(100),
         outputs: [{ satoshis: 900, vout: 0, locking_script: SecureRandom.random_bytes(25),
                     derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-                    sender_identity_key: 'self' }]
+                    sender_identity_key: 'self', spendable_intent: 'spendable' }]
       )
       store.record_broadcast_result(action_id: parent[:id], tx_status: 'QUEUED')
       parent_output_id = BSV::Wallet::Store::Models::Output.where(action_id: parent[:id]).select_map(:id).first
@@ -903,7 +912,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         raw_tx: SecureRandom.random_bytes(100),
         outputs: [{ satoshis: 900, vout: 0, locking_script: SecureRandom.random_bytes(25),
                     derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-                    sender_identity_key: 'self' }]
+                    sender_identity_key: 'self', spendable_intent: 'spendable' }]
       )
       store.record_broadcast_result(action_id: parent[:id], tx_status: 'QUEUED')
       parent_output_id = BSV::Wallet::Store::Models::Output.where(action_id: parent[:id]).select_map(:id).first
@@ -934,7 +943,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         raw_tx: SecureRandom.random_bytes(100),
         outputs: [{ satoshis: 900, vout: 0, locking_script: SecureRandom.random_bytes(25),
                     derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-                    sender_identity_key: 'self' }]
+                    sender_identity_key: 'self', spendable_intent: 'spendable' }]
       )
       store.record_broadcast_result(action_id: parent[:id], tx_status: 'QUEUED')
       parent_output_id = BSV::Wallet::Store::Models::Output.where(action_id: parent[:id]).select_map(:id).first
@@ -973,7 +982,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         outputs: [{
           satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25),
           derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
-          sender_identity_key: 'self'
+          sender_identity_key: 'self', spendable_intent: 'spendable'
         }]
       )
       store.record_broadcast_result(action_id: result[:id], tx_status: 'QUEUED')
@@ -1071,7 +1080,7 @@ RSpec.describe BSV::Wallet::Store, :store do
         action_id: action[:id],
         outputs: [{ satoshis: 500, vout: 0, locking_script: "\x51".b,
                     derivation_prefix: 'test', derivation_suffix: '1',
-                    sender_identity_key: 'self' }]
+                    sender_identity_key: 'self', spendable_intent: 'spendable' }]
       )
 
       found = store.find_output(id: output_ids.first)
@@ -1134,11 +1143,14 @@ RSpec.describe BSV::Wallet::Store, :store do
       action = store.create_action(action: { description: 'source', broadcast_intent: :none })
       store.promote_action(action_id: action[:id], outputs: [
                              { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[payment],
-                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+                               spendable_intent: 'spendable' },
                              { satoshis: 300, vout: 1, locking_script: SecureRandom.random_bytes(25), basket: 'wallet', tags: %w[change],
-                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' },
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+                               spendable_intent: 'spendable' },
                              { satoshis: 100, vout: 2, locking_script: SecureRandom.random_bytes(25), basket: 'other',
-                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+                               spendable_intent: 'spendable' }
                            ])
     end
 
@@ -1171,7 +1183,8 @@ RSpec.describe BSV::Wallet::Store, :store do
       action = store.create_action(action: { description: 'source', broadcast_intent: :none })
       store.promote_action(action_id: action[:id], outputs: [
                              { satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25), basket: 'wallet',
-                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+                               derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+                               spendable_intent: 'spendable' }
                            ])
       output = BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).first
 
@@ -2218,7 +2231,8 @@ RSpec.describe BSV::Wallet::Store, :store do
 
   def stale_signed_outputs
     [{ satoshis: 500, vout: 0, locking_script: SecureRandom.random_bytes(25),
-       derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }]
+       derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+       spendable_intent: 'spendable' }]
   end
 
   describe '#stale_action_ids' do
@@ -2370,7 +2384,8 @@ RSpec.describe BSV::Wallet::Store, :store do
     let(:internal_action) { store.create_action(action: { description: 'internal', broadcast_intent: :none }) }
     let(:promote_spec) do
       [{ satoshis: 600, vout: 0, locking_script: SecureRandom.random_bytes(25),
-         derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }]
+         derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self',
+         spendable_intent: 'spendable' }]
     end
 
     it 'signs, proves, and promotes in one commit' do
