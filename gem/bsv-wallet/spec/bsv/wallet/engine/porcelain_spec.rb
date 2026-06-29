@@ -67,8 +67,21 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       out = result[:outputs].first
       expect(out[:satoshis]).to eq(5_000)
       expect(out[:vout]).to eq(0)
-      expect(out[:derivation_prefix]).to be_a(String)
-      expect(out[:derivation_suffix]).to eq('1')
+      expect(out[:derivation_prefix]).to be_a(String).and(satisfy { |s| !s.empty? })
+      expect(out[:derivation_suffix]).to be_a(String).and(satisfy { |s| !s.empty? })
+    end
+
+    it 'produces distinct derivation suffixes across consecutive calls' do
+      fund_wallet_for_auto(count: 2)
+
+      recipient_key = BSV::Primitives::PrivateKey.generate
+      recipient_identity = recipient_key.public_key.to_hex
+
+      first = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000)
+      second = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000)
+
+      expect(first[:outputs].first[:derivation_suffix])
+        .not_to eq(second[:outputs].first[:derivation_suffix])
     end
 
     it 'produces atomic_beef that can be parsed' do

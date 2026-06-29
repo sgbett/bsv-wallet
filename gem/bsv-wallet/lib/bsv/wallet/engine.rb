@@ -1049,7 +1049,7 @@ module BSV
         validate_recipient_key!(recipient)
 
         derivation_prefix = BSV::Wallet.random_derivation
-        derivation_suffix = '1'
+        derivation_suffix = BSV::Wallet.random_derivation
 
         derived_pub = @key_deriver.derive_public_key(
           protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
