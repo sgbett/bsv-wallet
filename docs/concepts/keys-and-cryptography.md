@@ -1,3 +1,9 @@
+---
+title: Keys & cryptography
+parent: Concepts
+nav_order: 8
+---
+
 # Keys & Cryptography
 
 All of the wallet's cryptography lives behind a single facade, `KeyDeriver`. The Engine never touches elliptic-curve primitives directly; it asks `KeyDeriver` for a derived key, a ciphertext, an HMAC, or a signature. This keeps the cryptographic surface small, auditable, and in one place.

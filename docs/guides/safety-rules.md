@@ -1,3 +1,9 @@
+---
+title: Safety rules
+parent: Guides
+nav_order: 4
+---
+
 # Safety Rules & Gotchas
 
 A few mechanisms behave in ways that look like bugs the first time you hit

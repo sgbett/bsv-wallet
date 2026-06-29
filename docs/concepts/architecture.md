@@ -1,3 +1,9 @@
+---
+title: Architecture
+parent: Concepts
+nav_order: 1
+---
+
 # Architecture
 
 The wallet is built as a set of layers with a strict dependency direction. Understanding that shape is the fastest way to understand the whole gem, because almost every design decision falls out of it.

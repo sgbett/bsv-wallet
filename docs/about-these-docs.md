@@ -1,3 +1,8 @@
+---
+title: About these docs
+nav_order: 2
+---
+
 # About these docs
 
 A short note on how this site is organised, so you know what to expect and where to look.

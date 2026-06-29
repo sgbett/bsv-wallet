@@ -1,3 +1,9 @@
+---
+title: Schema
+parent: Reference
+nav_order: 4
+---
+
 # Wallet Storage Schema — Clean-Room Design
 
 ## Design Principles

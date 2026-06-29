@@ -1,3 +1,9 @@
+---
+title: Transactions
+parent: Reference
+nav_order: 6
+---
+
 # Transaction egress: broadcast vs transmit
 
 There are **two** ways a signed transaction leaves the wallet, and conflating them is a recurring source of bugs (each "fix" to one wire shape silently broke the other). They are different *processes* with different recipients, wire formats, outcome taxonomies, and state. This document fixes the distinction.
@@ -136,6 +142,7 @@ The `wtxid` field MUST match the subject's dtxid. Mismatch → the wallet record
 `Network::PeerDelivery#deliver` returns a `Result` struct whose `outcome` is one of: `:delivered`, `:endpoint_policy_violation`, `:tls_failure`, `:dns_failure`, `:transport_error`, `:timeout`, `:non_200`, `:body_too_large`, `:malformed_ack`, `:wrong_acked_wtxid`. Each is a distinct symbol so an operator (or a future daemon) can choose a different remediation per case (alert vs. silent retry-eligible vs. mark-bad-endpoint). Only `:delivered` drives `mark_transmission_acked`.
 
 ## Endpoint policy / SSRF defence
+{: #endpoint-policy-ssrf-defence }
 
 `Network::EndpointPolicy` is the SSRF gate. The peer endpoint is caller- supplied — by construction the wallet's external attack surface — so the defaults are deliberately strict:
 

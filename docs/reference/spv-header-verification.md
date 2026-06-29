@@ -1,3 +1,9 @@
+---
+title: SPV header verification
+parent: Reference
+nav_order: 14
+---
+
 # SPV header verification — the `spv_headers` trust model
 
 How the wallet decides a merkle root is real. Settled in [ADR-032](../../.architecture/decisions/adrs/20260629_ADR-032-spv-header-trust-model.md) (HLR #335).

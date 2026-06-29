@@ -1,3 +1,9 @@
+---
+title: State boundaries
+parent: Reference
+nav_order: 2
+---
+
 # State Boundaries — SDK and Wallet
 
 A companion principle to [`principle-of-state.md`](principle-of-state.md). Where the principle of state defines *what* the wallet maintains (a database that is always in a valid state), this document defines *where* that maintenance lives — and, by negation, what cannot live there.

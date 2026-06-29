@@ -1,3 +1,9 @@
+---
+title: Core vs conformance
+parent: Reference
+nav_order: 11
+---
+
 # Core wallet vs BRC-100 conformance
 
 A load-bearing principle alongside [`principle-of-state.md`](principle-of-state.md) and [`state-boundaries.md`](state-boundaries.md). Where the principle of state defines *what* the wallet maintains (a schema-canonical database) and state-boundaries defines *where* statefulness can live (wallet, not SDK), this document defines *what concerns are part of the wallet at all*. It is the axis we apply to every BRC-100 concept that arrives at the wallet's boundary: is this part of being a Bitcoin wallet, or is this part of being a BRC-100 wallet-to-application interface?

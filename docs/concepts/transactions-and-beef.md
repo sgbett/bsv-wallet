@@ -1,3 +1,9 @@
+---
+title: Transactions & BEEF
+parent: Concepts
+nav_order: 3
+---
+
 # Transactions, BEEF & SPV
 
 A wallet that does not run a full node still has to answer one hard question about every payment it receives: *is this real?* This gem answers it with **SPV** (Simplified Payment Verification) over **BEEF** envelopes, and it does so **fail-closed** — if it cannot prove a payment, it rejects it.
@@ -28,8 +34,10 @@ Receiving is `internalize_action(tx:, outputs:, …)`, routed through `Engine::B
 
 The internalised action is `broadcast_intent: 'none'` — an [internal action](action-lifecycle.md) — and its outputs are promoted in the same transaction as the ancestor proofs are saved, because the payment has already been proven against the chain.
 
-!!! note "Fail-closed by construction"
-    There is no "accept unverified" path. If no chain tracker is configured, verification raises rather than waving the payment through. The wallet would rather refuse a real payment than admit a fake one.
+{: .note }
+> **Fail-closed by construction**
+>
+> There is no "accept unverified" path. If no chain tracker is configured, verification raises rather than waving the payment through. The wallet would rather refuse a real payment than admit a fake one.
 
 ## `trustSelf`: not re-proving what you already know
 

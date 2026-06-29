@@ -1,3 +1,9 @@
+---
+title: Installation
+parent: Getting Started
+nav_order: 1
+---
+
 # Installation & Configuration
 
 Everything environmental that the [Quickstart](quickstart.md) glosses over:
@@ -23,11 +29,13 @@ Requires Ruby >= 3.3.
 | `omq` | In-process message queue for daemon IPC |
 | `logger` | `BSV.logger` |
 
-!!! warning "Postgres needs `pg` in your own bundle"
-    `pg` is **not** a dependency of this gem — only `sqlite3` ships. When you
-    point the wallet at a Postgres URL, `Store::Postgres` requires `pg` lazily
-    and raises a friendly `LoadError` if it is missing. Add `gem 'pg'` to your
-    Gemfile to use Postgres.
+{: .warning }
+> **Postgres needs `pg` in your own bundle**
+>
+> `pg` is **not** a dependency of this gem — only `sqlite3` ships. When you
+> point the wallet at a Postgres URL, `Store::Postgres` requires `pg` lazily
+> and raises a friendly `LoadError` if it is missing. Add `gem 'pg'` to your
+> Gemfile to use Postgres.
 
 ## Backend selection
 

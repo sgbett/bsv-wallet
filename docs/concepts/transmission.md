@@ -1,3 +1,9 @@
+---
+title: Transmission
+parent: Concepts
+nav_order: 4
+---
+
 # Transmission: wallet-to-peer BEEF delivery
 
 Broadcast and transmission look superficially similar — both ship a transaction somewhere — but they are different operations with different recipients, different wire shapes, and different state. **Broadcast** ships Extended Format to the miner network for consensus validation; **transmission** ships Atomic BEEF to a *named peer* for SPV verification. The recipient's *job* fixes the wire shape, and the per-peer accounting that makes trimming possible is the deciding difference. It lives in its own domain.

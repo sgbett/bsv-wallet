@@ -1,3 +1,9 @@
+---
+title: Daemon
+parent: Concepts
+nav_order: 10
+---
+
 # The Daemon (`walletd`)
 
 Broadcasting a transaction and waiting for it to be mined is slow, and it can fail in ways that need patient retrying. Forcing the foreground caller to block on that would make the wallet unusable for anything high-throughput. So the wallet pushes all of it into an optional background process, `walletd`, and the foreground `Engine` simply records *intent* (a `:delayed` action) and returns immediately.

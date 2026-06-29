@@ -146,6 +146,12 @@ namespace :docs do # rubocop:disable Metrics/BlockLength
       next if fm['has_children']
       next if fm['parent'] || fm['nav_exclude']
 
+      # Top-level pages (directly under docs/, no subdirectory) are
+      # intentionally section-less peers of the section landings — they
+      # appear at the top level of the nav alongside Home. Allow them
+      # without a parent.
+      next if File.dirname(path) == docs_root
+
       errors << "#{path}: missing 'parent' or 'nav_exclude' — " \
                 'non-root, non-section pages must declare one or the other'
     end
@@ -177,9 +183,24 @@ namespace :docs do # rubocop:disable Metrics/BlockLength
       # links like /bsv-wallet/concepts/architecture/ resolve to
       # _site/concepts/architecture/. disable_external skips https://
       # links — those need network.
+      #
+      # Carve-outs (mirrors the carve-out gate the MkDocs workflow had):
+      #
+      # 1. Out-of-repo ../.architecture/ references are intentional
+      #    cross-links to ADRs/reviews that don't ship with the docs site.
+      #    They resolve on GitHub but htmlproofer cannot find them locally.
+      #
+      # 2. reference/external/ — vendored upstream specs (e.g. BRC-100)
+      #    contain sibling-BRC links (../wallet/0100.md, ../key-derivation/
+      #    0042.md, etc.) that we deliberately don't ship.
+      #
+      # 3. reference/drafts/ — drafts use the same cross-BRC link
+      #    convention; same rationale.
       sh 'BUNDLE_GEMFILE=Gemfile bundle exec htmlproofer _site ' \
          '--disable-external ' \
          '--swap-urls "^/bsv-wallet:" ' \
+         '--ignore-urls "/\\.architecture\\//" ' \
+         '--ignore-files "/_site/reference/(external|drafts)/" ' \
          '--ignore-empty-alt ' \
          '--ignore-missing-alt ' \
          '--allow-missing-href'

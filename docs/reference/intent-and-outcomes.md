@@ -1,3 +1,9 @@
+---
+title: Intent and outcomes
+parent: Reference
+nav_order: 13
+---
+
 # Intent and Outcomes
 
 A load-bearing principle of the wallet, alongside [`principle-of-state.md`](principle-of-state.md), [`state-boundaries.md`](state-boundaries.md), and [`core-vs-conformance.md`](core-vs-conformance.md). Each frames a different axis of the same design; this one frames *how decisions enter the schema*. The principle is named here because we have been applying it instinctively in places (`broadcast_intent`, ADR-019) and missing it in others (the `output_type`/`typed_no_*` inference, ADR-010); HLR #467 is the first schema fix driven by it.

@@ -1,3 +1,9 @@
+---
+title: "BRC draft: WBIKD"
+parent: Reference
+nav_order: 15
+---
+
 # BRC-XXXX: Legacy Address Generation via Wallet Basket Locking
 
 Simon Bettison (simon@bettison.org)

@@ -1,3 +1,9 @@
+---
+title: Hot-path design
+parent: Reference
+nav_order: 12
+---
+
 # Hot-path design — no triggers on per-row writes
 
 A small operational rule that flows from [`principle-of-state.md`](principle-of-state.md) (the schema enforces, always) and the throughput target (ADR-002 — design for scale). Both routes are legitimate forms of "enforcement stays in the database"; the choice between them is settled by where the rule sits.
