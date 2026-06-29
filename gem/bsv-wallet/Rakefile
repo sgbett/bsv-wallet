@@ -47,7 +47,7 @@ namespace :wallet do
   end
 end
 
-namespace :docs do
+namespace :docs do # rubocop:disable Metrics/BlockLength
   desc 'Generate YARD markdown into docs/reference/api/'
   task :generate do
     require 'fileutils'
@@ -63,10 +63,127 @@ namespace :docs do
     generate_reference_index(output_dir)
   end
 
-  desc 'Generate docs and serve locally with MkDocs'
-  task serve: :generate do
+  desc 'Build the Jekyll docs site'
+  task :build do
     project_root = File.expand_path('../..', __dir__)
-    Dir.chdir(project_root) { sh 'mkdocs serve' }
+    Dir.chdir(File.join(project_root, 'docs')) do
+      sh 'BUNDLE_GEMFILE=Gemfile bundle exec jekyll build'
+    end
+  end
+
+  desc 'Serve the Jekyll docs locally with live reload'
+  task :serve do
+    project_root = File.expand_path('../..', __dir__)
+    Dir.chdir(File.join(project_root, 'docs')) do
+      sh 'BUNDLE_GEMFILE=Gemfile bundle exec jekyll serve --livereload'
+    end
+  end
+
+  desc 'Lint docs frontmatter — asserts required keys on every hand-authored .md'
+  task :lint do # rubocop:disable Metrics/BlockLength
+    require 'yaml'
+
+    project_root = File.expand_path('../..', __dir__)
+    docs_root = File.join(project_root, 'docs')
+
+    # Exclude generated and non-content paths:
+    #   _site/        — Jekyll output, not source
+    #   reference/api/ — YARD-generated, no hand-authored frontmatter
+    #   vendor/       — CI bundler-cache lands gems here; their READMEs
+    #                   are not our docs
+    #   .bundle/      — Bundler config dir
+    #   README.md     — contributor meta-documentation, not a site page
+    excluded_prefixes = [
+      File.join(docs_root, '_site'),
+      File.join(docs_root, 'reference', 'api'),
+      File.join(docs_root, 'vendor'),
+      File.join(docs_root, '.bundle')
+    ]
+    excluded_files = [File.join(docs_root, 'README.md')]
+
+    md_files = Dir.glob(File.join(docs_root, '**', '*.md')).reject do |f|
+      # Add a trailing path separator to each prefix so the match is strict
+      # directory containment (e.g. `docs/vendor/x.md` matches `docs/vendor`
+      # but a hypothetical `docs/vendorized/x.md` would not).
+      excluded_prefixes.any? { |prefix| f.start_with?("#{prefix}/") } ||
+        excluded_files.include?(f)
+    end
+
+    errors = []
+
+    md_files.each do |path|
+      content = File.read(path)
+
+      unless content.start_with?('---')
+        errors << "#{path}: missing frontmatter block (file must begin with ---)"
+        next
+      end
+
+      fm_match = content.match(/\A---\s*\n(.*?)\n---/m)
+      unless fm_match
+        errors << "#{path}: malformed frontmatter (no closing ---)"
+        next
+      end
+
+      fm = YAML.safe_load(fm_match[1]) || {}
+
+      unless fm['title']
+        errors << "#{path}: missing required frontmatter key: title"
+        next
+      end
+
+      # nav_order is required for every nav-bearing page. Without it,
+      # just-the-docs falls back to alphabetical, which silently breaks the
+      # MkDocs nav order this migration preserves. Stubs hidden from nav
+      # (nav_exclude: true) and the root index are the only exemptions.
+      is_root_index = path == File.join(docs_root, 'index.md')
+      unless fm['nav_exclude'] || is_root_index || fm['nav_order']
+        errors << "#{path}: missing required frontmatter key: nav_order"
+        next
+      end
+
+      next if is_root_index
+      next if fm['has_children']
+      next if fm['parent'] || fm['nav_exclude']
+
+      errors << "#{path}: missing 'parent' or 'nav_exclude' — " \
+                'non-root, non-section pages must declare one or the other'
+    end
+
+    if errors.empty?
+      puts "docs:lint — #{md_files.size} file(s) checked, all OK"
+    else
+      errors.each { |e| warn e }
+      exit 1
+    end
+  end
+
+  desc 'Check internal links and anchors in the built site (offline)'
+  task :proofread do
+    # No Rake-level dependency on :build so CI can run them as separate
+    # steps without rebuilding twice. Callers (CI + local) are expected
+    # to have run `rake docs:build` first; surface a clear message
+    # rather than letting htmlproofer fail with an opaque "no files".
+    project_root = File.expand_path('../..', __dir__)
+    site_dir = File.join(project_root, 'docs/_site')
+    unless File.directory?(site_dir) && !Dir.empty?(site_dir)
+      abort "docs:proofread — #{site_dir} is missing or empty. " \
+            'Run `bundle exec rake docs:build` first.'
+    end
+
+    Dir.chdir(File.join(project_root, 'docs')) do
+      # html-proofer is Jekyll-aware: swap_urls strips the baseurl prefix
+      # (which is a URL concept, not a filesystem path) so root-relative
+      # links like /bsv-wallet/concepts/architecture/ resolve to
+      # _site/concepts/architecture/. disable_external skips https://
+      # links — those need network.
+      sh 'BUNDLE_GEMFILE=Gemfile bundle exec htmlproofer _site ' \
+         '--disable-external ' \
+         '--swap-urls "^/bsv-wallet:" ' \
+         '--ignore-empty-alt ' \
+         '--ignore-missing-alt ' \
+         '--allow-missing-href'
+    end
   end
 end
 
@@ -85,6 +202,16 @@ def generate_reference_index(output_dir)
   end
 
   File.open(File.join(output_dir, 'index.md'), 'w') do |f|
+    # Jekyll frontmatter — Jekyll only processes .md files with frontmatter
+    # as content pages; without it, this file is copied verbatim as .md and
+    # _site/reference/api/index.html never exists. The defaults block in
+    # _config.yml additionally keeps it out of the side nav and search index.
+    f.puts '---'
+    f.puts 'title: API Reference'
+    f.puts 'parent: Reference'
+    f.puts 'nav_order: 99'
+    f.puts '---'
+    f.puts
     f.puts '# API Reference'
     f.puts
     f.puts 'Auto-generated from source using [YARD](https://yardoc.org/).'

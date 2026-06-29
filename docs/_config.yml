@@ -1,0 +1,68 @@
+title: BSV Wallet
+description: >-
+  BRC-100 compliant BSV wallet in Ruby — Engine, storage adapters,
+  broadcast queue, and BRC-100 wire transceiver.
+
+url: "https://sgbett.github.io"
+baseurl: "/bsv-wallet"
+
+theme: just-the-docs
+color_scheme: bsv-ruby
+
+search_enabled: true
+
+# Mermaid diagram support (built-in to just-the-docs since 0.5).
+# Pinned to an exact version — not a floating major — so a CDN release
+# cannot silently change diagram rendering in a deployed site.
+mermaid:
+  version: "11.16.0"
+
+plugins:
+  - jekyll-redirect-from
+  - jekyll-relative-links
+
+# Make jekyll-relative-links process every .md, not just collections.
+relative_links:
+  enabled: true
+  collections: false
+
+# Trailing-slash URLs (e.g. /guides/sending-payments/) match the URL shape
+# produced by MkDocs, so existing links in README and external references
+# continue to resolve after the migration.
+permalink: pretty
+
+# Defaults — note these REPLACE the theme's defaults rather than merging
+# with them, so we must restore the `layout: default` setting that
+# just-the-docs would otherwise apply to all pages. Without it, Jekyll
+# renders pages as bare content (no <head>, no nav, no theme styling).
+#
+# The second scope excludes YARD-generated API output from both side-nav
+# and Lunr search index — YARD writes hundreds of per-class pages and
+# would otherwise bury hand-authored content and bloat the search index.
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+  - scope:
+      path: "reference/api"
+    values:
+      nav_exclude: true
+      search_exclude: true
+
+callouts:
+  note:
+    title: Note
+    color: blue
+  important:
+    title: Important
+    color: yellow
+  warning:
+    title: Warning
+    color: red
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - README.md
+  - requirements.txt
