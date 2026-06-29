@@ -116,6 +116,18 @@ bundle exec rake fixtures:rebuild[alice]   # sweep + drop + create + migrate
 bundle exec rake fixtures:fund[alice]      # send sats from :sdk
 ```
 
+`fixtures:rebuild` and `fixtures:fund` are deliberately split — `rebuild` is on-chain-neutral except for the wallet's own sweep-to-root, and `fund` is the only task that moves sats from `:sdk`. There is no bundled "rebuild and fund" path.
+
+After `fixtures:rebuild[sdk]`, sdk's database is empty but the on-chain root P2PKH UTXOs are preserved. Restore sdk's view of those funds via `bin/wallet`:
+
+```bash
+bin/wallet --wallet=sdk import   # rescan chain for root UTXOs and internalise
+```
+
+The same `import` command also works for `alice`/`bob`/`carol` if you want to pick up their pre-existing on-chain root funding alongside (or instead of) a fresh `fixtures:fund` top-up.
+
+`fixtures:rebuild_all` does **not** abort the fleet on a per-wallet failure — the loop catches the exception, logs which wallet failed, and continues. The task exits non-zero at the end if any wallet failed, listing them in the summary line; the operator triages from there rather than re-running the bulk variant.
+
 Wall time is chain-tip bound (~5-15 minutes for the full fleet). Requires `BSV_WALLET_POSTGRES` + `BSV_WALLET_WIF_<NAME>` in ENV, with `:sdk` carrying ≥ N·1m sats for the N target wallets. Drop+recreate over `DELETE FROM` because the per-wallet `outputs.spendable_recoverable` CHECK embeds the WIF-derived root P2PKH script; a fresh `CREATE DATABASE` rebakes the CHECK against the current WIF.
 
 ## Getting Started

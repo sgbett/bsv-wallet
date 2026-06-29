@@ -167,6 +167,21 @@ RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
     it 'raises when the wallet is not in the registry' do
       expect { rebuilder.fund(:never) }.to raise_error(ArgumentError, /:never is not registered/)
     end
+
+    it 'rejects zero sats' do
+      expect { rebuilder.fund(:alice, sats: 0) }
+        .to raise_error(ArgumentError, /sats must be a positive Integer/)
+    end
+
+    it 'rejects negative sats' do
+      expect { rebuilder.fund(:alice, sats: -100) }
+        .to raise_error(ArgumentError, /sats must be a positive Integer/)
+    end
+
+    it 'rejects non-Integer sats (e.g. a string from a rake arg)' do
+      expect { rebuilder.fund(:alice, sats: '500000') }
+        .to raise_error(ArgumentError, /sats must be a positive Integer/)
+    end
   end
 
   # Dispatcher tests intentionally stub the orchestrator's own
@@ -206,6 +221,29 @@ RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
       rebuilder.rebuild_all
 
       expect(rebuilder).not_to have_received(:rebuild).with(:w1) # rubocop:disable RSpec/SubjectStub
+    end
+
+    it 'returns an empty failures list when every wallet rebuilds cleanly' do
+      allow(rebuilder).to receive(:rebuild) # rubocop:disable RSpec/SubjectStub
+
+      expect(rebuilder.rebuild_all).to eq([])
+      expect(out.string).to include('rebuild_all: complete')
+    end
+
+    it 'catches a per-wallet failure, continues, and reports it at the end' do
+      allow(rebuilder).to receive(:rebuild) do |name| # rubocop:disable RSpec/SubjectStub
+        raise StandardError, 'sweep refused' if name == :alice
+      end
+
+      failures = rebuilder.rebuild_all
+
+      expect(failures.map(&:first)).to contain_exactly(:alice)
+      expect(failures.first.last).to be_a(StandardError)
+      # The other wallets still ran — proves loop continued past the failure.
+      expect(rebuilder).to have_received(:rebuild).with(:bob) # rubocop:disable RSpec/SubjectStub
+      expect(rebuilder).to have_received(:rebuild).with(:sdk) # rubocop:disable RSpec/SubjectStub
+      expect(out.string).to include('rebuild: alice: FAILED — StandardError: sweep refused')
+      expect(out.string).to include('rebuild_all: 1 of 3 wallet(s) failed')
     end
   end
 

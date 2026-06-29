@@ -114,15 +114,38 @@ module BSV
         # +SKIP_NAMES+ and any registered wallet whose WIF is missing.
         # Each wallet's +rebuild+ is independent — no special ordering
         # required (fund is a separate operation; no inter-wallet
-        # dependency during rebuild). Side-effecting — returns nil.
+        # dependency during rebuild).
+        #
+        # A failing wallet does NOT abort the fleet: the exception is
+        # logged and caught, the loop continues to the next wallet,
+        # and the final summary lists what failed. Caller (the rake
+        # task) exits non-zero when the returned array is non-empty.
+        # Rationale: an operator running the bulk variant after a
+        # wide change typically wants the rest of the fleet attempted
+        # even if one wallet's sweep refuses; the per-wallet failures
+        # surface at the end for triage.
+        #
+        # @return [Array<Array(Symbol, Exception)>] empty on success;
+        #   +[name, exception]+ pairs for each failed wallet otherwise.
         def rebuild_all
           targets = eligible_targets
           log "rebuild_all: targets = #{targets.inspect}"
 
-          targets.each { |name| rebuild(name) }
+          failures = []
+          targets.each do |name|
+            rebuild(name)
+          rescue StandardError => e
+            failures << [name, e]
+            log "rebuild: #{name}: FAILED — #{e.class}: #{e.message}"
+          end
 
-          log "rebuild_all: complete (#{targets.length} wallets)"
-          nil
+          if failures.empty?
+            log "rebuild_all: complete (#{targets.length} wallets)"
+          else
+            log "rebuild_all: #{failures.length} of #{targets.length} wallet(s) failed"
+            log "  failed: #{failures.map(&:first).inspect}"
+          end
+          failures
         end
 
         # Fund a wallet by sending +sats+ from +:sdk+ to its root P2PKH.
@@ -137,6 +160,8 @@ module BSV
           sym = name.to_sym
           raise ArgumentError, "fixture wallet :#{sym} is not registered" unless @registry[sym]
           raise ArgumentError, ':sdk is the funder and cannot fund itself' if sym == :sdk
+          raise ArgumentError, "sats must be a positive Integer (got #{sats.inspect})" \
+            unless sats.is_a?(Integer) && sats.positive?
 
           log "fund: #{sym}: sending #{sats} sats from :sdk..."
           fund_from_sdk!(sym, sats: sats)

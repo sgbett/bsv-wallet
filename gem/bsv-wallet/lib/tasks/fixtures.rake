@@ -39,7 +39,8 @@ namespace :fixtures do
   end
 
   desc 'Reset every registered dev wallet except :test (sweep + drop + create + migrate). ' \
-       'Does NOT fund. Set FORCE=1 to skip the confirmation prompt.'
+       'Does NOT fund. A per-wallet failure is logged and the loop continues; ' \
+       'task exits non-zero when any wallet failed. Set FORCE=1 to skip the confirmation prompt.'
   task :rebuild_all do
     BSV::Wallet::Fixtures.load_config_file!
 
@@ -50,7 +51,8 @@ namespace :fixtures do
       abort 'aborted: confirmation required'
     end
 
-    BSV::Wallet::Fixtures::Rebuilder.new.rebuild_all
+    failures = BSV::Wallet::Fixtures::Rebuilder.new.rebuild_all
+    exit(failures.empty? ? 0 : 1)
   end
 
   desc 'Fund a wallet by sending sats from :sdk to its root P2PKH. ' \
