@@ -436,6 +436,20 @@ RSpec.describe BSV::Wallet::BRC100 do
         expect(capture[:outputs].first[:spendable_intent]).to eq('none')
       end
 
+      # BRC-100 spec declares +spendable+ as Int8 (+0+/+1+) — accept the
+      # spec-binary form too, not just the Ruby boolean.
+      it 'translates :spendable=1 (Int8) to spendable_intent: "spendable"' do
+        outputs = [{ satoshis: 1000, locking_script: 'aa'.b, output_description: 'unit', spendable: 1 }]
+        brc100.create_action(description: 'spendable int 1', outputs: outputs)
+        expect(capture[:outputs].first[:spendable_intent]).to eq('spendable')
+      end
+
+      it 'translates :spendable=0 (Int8) to spendable_intent: "none"' do
+        outputs = [{ satoshis: 1000, locking_script: 'aa'.b, output_description: 'unit', spendable: 0 }]
+        brc100.create_action(description: 'spendable int 0', outputs: outputs)
+        expect(capture[:outputs].first[:spendable_intent]).to eq('none')
+      end
+
       it 'honours an explicit engine-vocab :spendable_intent and ignores :spendable' do
         # Idempotency: an internal porcelain caller bypassing the wrapper
         # might thread already-translated specs through; the wrapper must

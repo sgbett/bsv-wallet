@@ -496,12 +496,17 @@ module BSV
       #
       # Translation table:
       #
-      #   :spendable absent  → :spendable_intent 'spendable' (spec assumes
-      #                       self-owned outputs under createAction)
-      #   :spendable == true → :spendable_intent 'spendable'
-      #   :spendable == false → :spendable_intent 'none' (outbound — the
-      #                       recipient's output, never joins the wallet
-      #                       UTXO set)
+      #   :spendable absent     → :spendable_intent 'spendable' (spec assumes
+      #                           self-owned outputs under createAction)
+      #   :spendable true / 1   → :spendable_intent 'spendable'
+      #   :spendable false / 0  → :spendable_intent 'none' (outbound — the
+      #                           recipient's output, never joins the wallet
+      #                           UTXO set)
+      #
+      # The Int8 forms (+0+/+1+) honour BRC-100's spec-binary representation;
+      # the boolean forms accommodate Ruby callers and JSON deserialisers.
+      # Any other value (nil with the key present, strings, etc.) falls
+      # through to the spec default of 'spendable'.
       #
       # If a caller passes +:spendable_intent+ directly (engine-vocab —
       # e.g. internal porcelain bypassing this wrapper) we honour it as-is
@@ -516,7 +521,7 @@ module BSV
           next out unless out.is_a?(Hash)
           next out if out.key?(:spendable_intent)
 
-          intent = out.key?(:spendable) && out[:spendable] == false ? 'none' : 'spendable'
+          intent = out.key?(:spendable) && [false, 0].include?(out[:spendable]) ? 'none' : 'spendable'
           out.merge(spendable_intent: intent)
         end
       end
