@@ -70,6 +70,38 @@ RSpec.shared_context 'engine setup' do
   let(:privileged_key) { BSV::Primitives::PrivateKey.generate }
   let(:root_key) { BSV::Primitives::PrivateKey.generate }
 
+  # BRC-29 derivation lets. Strict-spec convention per HLR #460:
+  # +protocol_id+ is the canonical +BSV::Wallet::BRC29::PROTOCOL_ID+
+  # (aliasing +Auth::AuthFetch::PAYMENT_PROTOCOL_ID+ — +[2, '3241645161d8']+),
+  # and +key_id+ is the prefix/suffix joined by a single ASCII space via
+  # +BSV::Wallet::BRC29.key_id+. The atomic flip happened in #478.
+  #
+  # Prefix and suffix literals are base64url-only per
+  # +BSV::Wallet::BRC29.key_id+'s validation contract (whitespace and
+  # control bytes rejected). Human-readable strings like
+  # +'wallet payment'+ from the pre-#460 fixtures are no longer valid
+  # tokens — they'd raise +InvalidDerivationToken+ at the boundary.
+  let(:derivation_prefix) { 'walletPayment' }
+  let(:derivation_suffix) { 'suffix' }
+  let(:brc29_protocol_id) { BSV::Wallet::BRC29::PROTOCOL_ID }
+  let(:brc29_key_id) { BSV::Wallet::BRC29.key_id(derivation_prefix, derivation_suffix) }
+
+  # BRC-29 key-derivation helpers. +brc29_derivation_params+ holds the
+  # strict-spec composition once; private and public variants both splat it.
+  def brc29_derivation_params(prefix:, suffix:, counterparty:)
+    { protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+      key_id: BSV::Wallet::BRC29.key_id(prefix, suffix),
+      counterparty: counterparty }
+  end
+
+  def derive_brc29_private_key(prefix:, suffix:, counterparty:)
+    key_deriver.derive_private_key(**brc29_derivation_params(prefix: prefix, suffix: suffix, counterparty: counterparty))
+  end
+
+  def derive_brc29_public_key(prefix:, suffix:, counterparty:)
+    key_deriver.derive_public_key(**brc29_derivation_params(prefix: prefix, suffix: suffix, counterparty: counterparty))
+  end
+
   around do |example|
     STORE_DB.transaction(rollback: :always, auto_savepoint: true) do
       example.run
@@ -103,7 +135,7 @@ RSpec.shared_context 'engine setup' do
   end
 
   def fund_wallet(satoshis: 1000, count: 1, basket: nil,
-                  prefix: 'wallet payment', suffix: 'suffix',
+                  prefix: 'walletPayment', suffix: 'suffix',
                   sender_identity_key: 'self')
     # Pre-compute output specs so we can build a real source tx whose
     # outputs match the database promotion. Under strict
@@ -115,8 +147,8 @@ RSpec.shared_context 'engine setup' do
       out_suffix = count > 1 ? "#{suffix}#{i}" : suffix
 
       script = if key_deriver
-                 derived_key = key_deriver.derive_private_key(
-                   protocol_id: [2, prefix], key_id: out_suffix,
+                 derived_key = derive_brc29_private_key(
+                   prefix: prefix, suffix: out_suffix,
                    counterparty: sender_identity_key || 'self'
                  )
                  pubkey_hash = BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
@@ -188,6 +220,6 @@ RSpec.shared_context 'engine setup' do
   end
 
   def fund_reserve
-    fund_wallet(satoshis: 100_000, prefix: 'limp reserve', suffix: 'reserve', basket: 'reserve')
+    fund_wallet(satoshis: 100_000, prefix: 'limpReserve', suffix: 'reserve', basket: 'reserve')
   end
 end

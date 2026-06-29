@@ -17,16 +17,14 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   end
 
   def fund_wallet_for_auto(satoshis: 1_000_000, count: 1,
-                           prefix: 'wallet payment', suffix: 'autofund')
+                           prefix: 'walletPayment', suffix: 'autofund')
     outputs = count.times.map do |i|
       out_suffix = count > 1 ? "#{suffix}#{i}" : suffix
       # Derive per-output so the locking_script matches the per-output
       # derivation_suffix the wallet will later use to derive the
       # signing key. Sharing one key across outputs while varying the
       # suffix produces locking scripts the wallet cannot satisfy.
-      derived_key = key_deriver.derive_private_key(
-        protocol_id: [2, prefix], key_id: out_suffix, counterparty: 'self'
-      )
+      derived_key = derive_brc29_private_key(prefix: prefix, suffix: out_suffix, counterparty: 'self')
       script = p2pkh_locking_script_for(derived_key)
       {
         satoshis: satoshis, vout: i,
@@ -69,8 +67,21 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       out = result[:outputs].first
       expect(out[:satoshis]).to eq(5_000)
       expect(out[:vout]).to eq(0)
-      expect(out[:derivation_prefix]).to be_a(String)
-      expect(out[:derivation_suffix]).to eq('1')
+      expect(out[:derivation_prefix]).to be_a(String).and(satisfy { |s| !s.empty? })
+      expect(out[:derivation_suffix]).to be_a(String).and(satisfy { |s| !s.empty? })
+    end
+
+    it 'produces distinct derivation suffixes across consecutive calls' do
+      fund_wallet_for_auto(count: 2)
+
+      recipient_key = BSV::Primitives::PrivateKey.generate
+      recipient_identity = recipient_key.public_key.to_hex
+
+      first = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000)
+      second = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000)
+
+      expect(first[:outputs].first[:derivation_suffix])
+        .not_to eq(second[:outputs].first[:derivation_suffix])
     end
 
     it 'produces atomic_beef that can be parsed' do
@@ -427,24 +438,20 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         big_sats   = 500_000
         small_sats = 100_000
 
-        big_key = key_deriver.derive_private_key(
-          protocol_id: [2, 'topup prefix'], key_id: 'big', counterparty: 'self'
-        )
-        small_key = key_deriver.derive_private_key(
-          protocol_id: [2, 'topup prefix'], key_id: 'small', counterparty: 'self'
-        )
+        big_key = derive_brc29_private_key(prefix: 'topupPrefix', suffix: 'big', counterparty: 'self')
+        small_key = derive_brc29_private_key(prefix: 'topupPrefix', suffix: 'small', counterparty: 'self')
         register_funded_outputs(
           [
             { satoshis: big_sats, vout: 0, locking_script: p2pkh_locking_script_for(big_key).to_binary,
               basket: nil,
               # HLR #467 — explicit intent. BRC-42 self-derived funding outputs.
               spendable_intent: 'spendable',
-              derivation_prefix: 'topup prefix', derivation_suffix: 'big',
+              derivation_prefix: 'topupPrefix', derivation_suffix: 'big',
               sender_identity_key: 'self' },
             { satoshis: small_sats, vout: 1, locking_script: p2pkh_locking_script_for(small_key).to_binary,
               basket: nil,
               spendable_intent: 'spendable',
-              derivation_prefix: 'topup prefix', derivation_suffix: 'small',
+              derivation_prefix: 'topupPrefix', derivation_suffix: 'small',
               sender_identity_key: 'self' }
           ],
           description: 'topup funding'

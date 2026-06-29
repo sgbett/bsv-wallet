@@ -26,11 +26,13 @@ module BSV
         #
         # Envelope path: the sender shipped explicit derivation hints. Each
         # listed output gets imported via +engine.import_beef+ with the
-        # +wallet payment+ or +basket insertion+ protocol carrying the
+        # strict BRC-29 +wallet payment+ protocol carrying the
         # +derivation_prefix+ / +derivation_suffix+ / +sender_identity_key+
-        # in the appropriate remittance object. +--basket=<name>+ applies
-        # to envelope outputs only where the envelope itself omits a
-        # basket — silent override of the sender's intent requires
+        # in the +payment_remittance+ object. The spec's
+        # +paymentRemittance+ has no basket; +--basket=<name>+ rides at
+        # the top level of the output spec (engine-side sibling of
+        # +:protocol+) and applies only where the envelope itself omits
+        # a basket — silent override of the sender's intent requires
         # +--force-basket+.
         class Receive < Base
           MAX_INPUT_BYTES = 32 * 1024 * 1024 # 32 MiB hard refusal
@@ -144,11 +146,19 @@ module BSV
 
             output_specs = pay_outputs.map.with_index do |out, idx|
               validate_envelope_output!(out, idx)
+              # BRC-29 +wallet payment+ (HLR #460): the spec's
+              # +paymentRemittance+ triple is the derivation
+              # prefix/suffix + sender_identity_key. Engine reads
+              # +payment_remittance+ (snake_case ingress); +basket+ rides
+              # at the top level alongside +:protocol+ — the spec carries
+              # no basket on the wire, and the wallet's CLI fallback
+              # (+--basket+) stays available via the +effective_basket+
+              # resolver.
               {
                 output_index: out[:vout],
-                protocol: 'basket insertion',
-                insertion_remittance: {
-                  basket: effective_basket(envelope_basket: out[:basket]),
+                protocol: 'wallet payment',
+                basket: effective_basket(envelope_basket: out[:basket]),
+                payment_remittance: {
                   derivation_prefix: out[:derivation_prefix],
                   derivation_suffix: out[:derivation_suffix],
                   sender_identity_key: sender_identity_key
@@ -165,7 +175,7 @@ module BSV
             emit_human "sender:      #{sender_identity_key&.[](0..15)}..."
             emit_human "outputs:     #{pay_outputs.length}"
             emit_human "total sats:  #{pay_outputs.sum { |o| o[:satoshis] }}"
-            emit_human "basket:      #{output_specs.first[:insertion_remittance][:basket] || '(unbasketed)'}"
+            emit_human "basket:      #{output_specs.first[:basket] || '(unbasketed)'}"
           end
 
           # Raw BEEF path: parse, scan outputs for P2PKH locks to wallet's
@@ -286,13 +296,21 @@ module BSV
                     '(must be a non-negative integer)'
             end
 
+            # Defence in depth — the receive boundary is the untrusted
+            # ingress, so validate the BRC-29 derivation tokens against
+            # the same contract the send-side helper enforces. Without
+            # this, a malformed envelope passes here, propagates into
+            # +outputs+ via +import_beef+, and only blows up when the
+            # wallet later tries to spend the output (deep in
+            # +Engine::TxBuilder#derive_signing_key+) — stranding the
+            # UTXO. Translate the helper's exception into a clean
+            # boundary +UsageError+.
             { derivation_prefix: out[:derivation_prefix],
               derivation_suffix: out[:derivation_suffix] }.each do |field, value|
-              next if value.is_a?(String) && !value.empty?
-
+              BSV::Wallet::BRC29.validate_derivation_token!(value, role: field.to_s)
+            rescue BSV::Wallet::BRC29::InvalidDerivationToken => e
               raise UsageError,
-                    "envelope output [#{idx}] missing or invalid \"#{field}\" " \
-                    '(required for BRC-29 key recovery: must be a non-empty string)'
+                    "envelope output [#{idx}] invalid \"#{field}\": #{e.message}"
             end
           end
 

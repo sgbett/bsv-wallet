@@ -940,7 +940,9 @@ module BSV
         derivation_prefix = slot_info[:dtxid]
         derivation_suffix = slot_info[:vout].to_s
         derived_pub = @key_deriver.derive_public_key(
-          protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
+          protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+          key_id: BSV::Wallet::BRC29.key_id(derivation_prefix, derivation_suffix),
+          counterparty: 'self'
         )
         address = BSV::Primitives::PublicKey.from_bytes(derived_pub).address(network: @network_name)
 
@@ -976,7 +978,9 @@ module BSV
           derivation_suffix = slot_output[:vout].to_s
 
           derived_pub = @key_deriver.derive_public_key(
-            protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
+            protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+            key_id: BSV::Wallet::BRC29.key_id(derivation_prefix, derivation_suffix),
+            counterparty: 'self'
           )
           address = BSV::Primitives::PublicKey.from_bytes(derived_pub).address(network: @network_name)
 
@@ -1045,10 +1049,11 @@ module BSV
         validate_recipient_key!(recipient)
 
         derivation_prefix = BSV::Wallet.random_derivation
-        derivation_suffix = '1'
+        derivation_suffix = BSV::Wallet.random_derivation
 
         derived_pub = @key_deriver.derive_public_key(
-          protocol_id: [2, derivation_prefix], key_id: derivation_suffix,
+          protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+          key_id: BSV::Wallet::BRC29.key_id(derivation_prefix, derivation_suffix),
           counterparty: recipient, for_self: true
         )
         locking_script = BSV::Script::Script.p2pkh_lock(
@@ -1407,7 +1412,9 @@ module BSV
         prefix = BSV::Wallet.random_derivation
         suffix = '1'
         derived_pub = @key_deriver.derive_public_key(
-          protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
+          protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+          key_id: BSV::Wallet::BRC29.key_id(prefix, suffix),
+          counterparty: 'self'
         )
         script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(derived_pub)
@@ -1490,7 +1497,9 @@ module BSV
 
         # 2. Verify output matches our derived address
         derived_pub = @key_deriver.derive_public_key(
-          protocol_id: [2, derivation_prefix], key_id: derivation_suffix, counterparty: 'self'
+          protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+          key_id: BSV::Wallet::BRC29.key_id(derivation_prefix, derivation_suffix),
+          counterparty: 'self'
         )
         expected_hash = BSV::Primitives::Digest.hash160(derived_pub)
         return unless output.locking_script.p2pkh? &&

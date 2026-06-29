@@ -6,6 +6,29 @@ RSpec::Core::RakeTask.new(:spec)
 
 task default: :spec
 
+# Load tasks from lib/tasks/*.rake (operator plumbing — fixtures rebuild
+# lives there to keep the orchestration class unit-testable, with the
+# rake file as a thin wrapper).
+Dir.glob(File.expand_path('lib/tasks/*.rake', __dir__)).each { |t| load t }
+
+namespace :brc29 do
+  desc 'Refuse inline BRC-29 key_id composition outside lib/bsv/wallet/brc29.rb. ' \
+       'Run in CI to enforce that every send/receive site routes through BSV::Wallet::BRC29.key_id.'
+  task :guard do
+    pattern = 'key_id:[[:space:]]*"\#\{[^"]+\} \#\{'
+    matches = `git grep -nE '#{pattern}' -- 'lib' ':!lib/bsv/wallet/brc29.rb'`
+    if matches.strip.empty?
+      puts 'brc29:guard OK (no inline key_id composition outside brc29.rb)'
+    else
+      warn 'brc29:guard FAILED -- inline key_id interpolation detected outside ' \
+           'lib/bsv/wallet/brc29.rb. Route through BSV::Wallet::BRC29.key_id(prefix, suffix) ' \
+           'instead. Offending lines:'
+      warn matches
+      abort
+    end
+  end
+end
+
 namespace :wallet do
   desc 'Drain a wallet back to its root key (consolidate + on-chain sweep). ' \
        'Usage: rake wallet:cleanup[alice] or rake wallet:cleanup[alice,<root_pubkey_hex>]'

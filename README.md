@@ -84,6 +84,27 @@ rm -f ~/.bsv-wallet/*.db tmp/*.db   # or whichever DATABASE_URL paths you've use
 
 If `bundle exec rspec` starts failing with constraint/column errors after a `git pull`, this is almost always the cause. The wipe will become a non-issue once the wallet has actual deployments — at that point the project will switch to forward-only migrations.
 
+#### Rebuilding dev wallets after a convention flip
+
+A wider change — a derivation-convention flip, a CHECK-literal change, anything that leaves existing on-chain UTXOs unspendable under the new code — needs the funded dev fleet (`alice`/`bob`/`carol`/`sdk`/`w1`..`w5`) rebuilt before merge. The rake tasks below automate the destructive steps; the operator runs them once pre-merge against funded WIFs:
+
+```bash
+cd gem/bsv-wallet
+
+# Optional: sweep any wallet-side UTXOs back to root P2PKH manually before
+# rebuild_all runs (rebuild_all sweeps internally too, but a manual pass lets
+# you triage failures one wallet at a time).
+bundle exec rake wallet:cleanup[alice]
+
+# Drop, recreate, migrate, and refund every wallet. FORCE=1 skips confirmation.
+bundle exec rake fixtures:rebuild_all FORCE=1
+
+# Mechanical merge-gate. Exits non-zero on any failing wallet.
+bundle exec rake fixtures:verify
+```
+
+Wall time is chain-tip bound (~5-15 minutes for the full fleet). Requires `BSV_WALLET_POSTGRES` + `BSV_WALLET_WIF_<NAME>` in ENV, with `:sdk` carrying ≥ N·1m sats for the N target wallets. Drop+recreate over `DELETE FROM` because the per-wallet `outputs.spendable_recoverable` CHECK embeds the WIF-derived root P2PKH script; a fresh `CREATE DATABASE` rebakes the CHECK against the current WIF.
+
 ## Getting Started
 
 ### Requirements

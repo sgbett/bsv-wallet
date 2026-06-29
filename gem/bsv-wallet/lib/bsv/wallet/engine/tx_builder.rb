@@ -92,7 +92,9 @@ module BSV
             prefix = BSV::Wallet.random_derivation
             suffix = (i + 1).to_s
             pub = @key_deriver.derive_public_key(
-              protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
+              protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+              key_id: BSV::Wallet::BRC29.key_id(prefix, suffix),
+              counterparty: 'self'
             )
             script = BSV::Script::Script.p2pkh_lock(
               BSV::Primitives::Digest.hash160(pub)
@@ -360,12 +362,11 @@ module BSV
             return @key_deriver.root_private_key
           end
 
-          BSV.logger&.debug { "[Engine::TxBuilder] derive_signing_key: derived prefix=#{resolved[:derivation_prefix]}" }
           counterparty = resolved[:sender_identity_key] || 'self'
 
           @key_deriver.derive_private_key(
-            protocol_id: [2, resolved[:derivation_prefix]],
-            key_id: resolved[:derivation_suffix],
+            protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+            key_id: BSV::Wallet::BRC29.key_id(resolved[:derivation_prefix], resolved[:derivation_suffix]),
             counterparty: counterparty
           )
         end

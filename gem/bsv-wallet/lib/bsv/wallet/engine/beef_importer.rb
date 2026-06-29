@@ -320,6 +320,13 @@ module BSV
             spec[:derivation_prefix]  = rem[:derivation_prefix]
             spec[:derivation_suffix]  = rem[:derivation_suffix]
             spec[:sender_identity_key] = rem[:sender_identity_key]
+            # BRC-29 wallet payment carries no basket on the wire (the
+            # spec's +paymentRemittance+ is the derivation triple only).
+            # The wallet's own CLI can supply a basket as a top-level
+            # sibling of +:protocol+ — used by +bin/wallet receive
+            # --basket=<name>+ to route incoming BRC-29 funds. Engine
+            # consumers that don't need a basket simply omit the key.
+            spec[:basket] = out[:basket] if out[:basket]
           when :basket_insertion, 'basket insertion'
             rem = out[:insertion_remittance] || {}
             spec[:basket]              = rem[:basket]

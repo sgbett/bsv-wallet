@@ -78,7 +78,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       expect(engine).to have_received(:import_beef).with(
         hash_including(
           outputs: array_including(
-            hash_including(protocol: 'basket insertion')
+            hash_including(protocol: 'wallet payment')
           )
         )
       )
@@ -127,6 +127,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
     it 'forwards per-output derivation hints to engine.import_beef' do
       command.call(["--file=#{file}"])
+      # Strict BRC-29 (HLR #460): the +paymentRemittance+ triple stays in
+      # +payment_remittance+ (snake_case ingress); basket rides at the
+      # top level — the spec's +wallet payment+ carries no basket on the
+      # wire.
       expect(engine).to have_received(:import_beef).with(
         hash_including(
           tx: [beef_hex].pack('H*'),
@@ -134,9 +138,9 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
           outputs: [
             hash_including(
               output_index: 0,
-              protocol: 'basket insertion',
-              insertion_remittance: hash_including(
-                basket: 'received',
+              protocol: 'wallet payment',
+              basket: 'received',
+              payment_remittance: hash_including(
                 derivation_prefix: 'p1',
                 derivation_suffix: '1',
                 sender_identity_key: sender_key
@@ -144,7 +148,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
             ),
             hash_including(
               output_index: 1,
-              insertion_remittance: hash_including(
+              payment_remittance: hash_including(
                 derivation_prefix: 'p2',
                 derivation_suffix: '2'
               )
@@ -156,18 +160,11 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
     it '--basket fills envelope outputs only where envelope omits a basket' do
       command.call(["--file=#{file}", '--basket=fallback'])
-      call_args = engine.method(:import_beef).receiver # rubocop:disable Lint/UselessAssignment
-      engine.method_calls if engine.respond_to?(:method_calls)
-      # Direct check on the spy:
       expect(engine).to have_received(:import_beef).with(
         hash_including(
           outputs: [
-            hash_including(
-              insertion_remittance: hash_including(basket: 'received') # envelope wins
-            ),
-            hash_including(
-              insertion_remittance: hash_including(basket: 'fallback') # envelope omitted; CLI fills
-            )
+            hash_including(basket: 'received'),  # envelope wins
+            hash_including(basket: 'fallback')   # envelope omitted; CLI fills
           ]
         )
       )
@@ -178,12 +175,8 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       expect(engine).to have_received(:import_beef).with(
         hash_including(
           outputs: array_including(
-            hash_including(
-              insertion_remittance: hash_including(basket: 'override')
-            ),
-            hash_including(
-              insertion_remittance: hash_including(basket: 'override')
-            )
+            hash_including(basket: 'override'),
+            hash_including(basket: 'override')
           )
         )
       )
@@ -276,7 +269,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       path = File.join(tmpdir, 'bad.json')
       File.write(path, bad)
       expect { command.call(["--file=#{path}"]) }
-        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "derivation_prefix"/)
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_prefix".*must be a String/)
     end
 
     it 'raises UsageError when an envelope output is missing derivation_suffix' do
@@ -287,7 +280,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       path = File.join(tmpdir, 'bad.json')
       File.write(path, bad)
       expect { command.call(["--file=#{path}"]) }
-        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "derivation_suffix"/)
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_suffix".*must be a String/)
     end
 
     it 'raises UsageError when derivation_prefix is empty string' do
@@ -298,7 +291,40 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       path = File.join(tmpdir, 'bad.json')
       File.write(path, bad)
       expect { command.call(["--file=#{path}"]) }
-        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "derivation_prefix"/)
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_prefix".*must not be empty/)
+    end
+
+    it 'raises UsageError when derivation_prefix contains whitespace' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: 100,
+                                      derivation_prefix: 'abc def', derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_prefix".*outside the base64url subset/)
+    end
+
+    it 'raises UsageError when derivation_suffix contains a control byte' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: 100,
+                                      derivation_prefix: 'p', derivation_suffix: "x\x01y" }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_suffix".*outside the base64url subset/)
+    end
+
+    it 'raises UsageError when derivation_prefix exceeds the byte cap' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: 100,
+                                      derivation_prefix: 'A' * 129, derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_prefix".*exceeds 128-byte limit/)
     end
 
     # JSON faithfully decodes whatever shape the operator supplies —
