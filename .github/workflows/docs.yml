@@ -6,116 +6,98 @@ on:
     paths:
       - 'gem/**/lib/**'
       - 'docs/**'
-      - 'mkdocs.yml'
       - '.yardopts'
       - '.github/workflows/docs.yml'
+      - 'gem/bsv-wallet/Rakefile'
+      - 'Gemfile'
   pull_request:
+    branches: [master]
     paths:
       - 'gem/**/lib/**'
       - 'docs/**'
-      - 'mkdocs.yml'
       - '.yardopts'
       - '.github/workflows/docs.yml'
+      - 'gem/bsv-wallet/Rakefile'
+      - 'Gemfile'
   workflow_dispatch:
 
-# Default to read; only the deploy job (master push) escalates to write.
-# Per-job permissions confine `contents: write` to the gh-deploy step,
-# so a PR-modified workflow cannot push to the repo on a PR run.
-permissions:
-  contents: read
-
-env:
-  # Suppresses the noisy "MkDocs 2 is coming" banner so the carve-out gate
-  # below operates on real content warnings only.
-  DISABLE_MKDOCS_2_WARNING: 'true'
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
+      # configure-pages requires both — without them the build job fails
+      # before the artefact is uploaded. Same set as the deploy job below.
+      pages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Ruby
+      # YARD generation — uses the bsv-wallet gem's Rakefile (which is where
+      # the docs:* namespace lives). Ruby 3.4 across both setup-ruby steps
+      # matches docs/Gemfile.lock's RUBY VERSION pin (3.4.2). Splitting Ruby
+      # versions between the two steps would break bundle exec rake docs:*
+      # because rake resolves through the root Gemfile, whose gems were
+      # installed under the first setup-ruby's Ruby version.
+      - name: Set up Ruby (YARD)
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.4'
-          bundler-cache: true
           working-directory: gem/bsv-wallet
+          bundler-cache: true
 
       - name: Generate YARD markdown
         run: bundle exec rake docs:generate
         working-directory: gem/bsv-wallet
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      # Jekyll build — uses docs/Gemfile (separate bundler-cache key)
+      - name: Set up Ruby (Jekyll)
+        uses: ruby/setup-ruby@v1
         with:
-          python-version: '3.x'
-          cache: pip
-          cache-dependency-path: docs/requirements.txt
+          ruby-version: '3.4'
+          working-directory: docs
+          bundler-cache: true
 
-      - name: Install MkDocs dependencies
-        run: pip install -r docs/requirements.txt
+      - name: Build Jekyll site
+        run: bundle exec rake docs:build
+        working-directory: gem/bsv-wallet
 
-      - name: Build with carve-out gate
-        # The documented carve-out (see docs/about-these-docs.md): vendored
-        # upstream BRC pages link to siblings we haven't vendored, and
-        # selected docs/concepts/ and docs/reference/ pages cite
-        # ../../.architecture/ ADRs/reviews — both render correctly on
-        # GitHub but generate mkdocs link warnings. The gate fails only on
-        # warnings outside those known patterns, so a NEW genuine broken
-        # link surfaces instead of hiding in the noise.
-        run: |
-          set -e
-          # `set -e` does NOT propagate failure through `log=$(...)` — capture
-          # the exit status explicitly so a failing build doesn't fall through
-          # to the warning check and falsely pass.
-          log=$(mkdocs build 2>&1)
-          build_status=$?
-          echo "$log"
-          if [ $build_status -ne 0 ]; then
-            echo "::error::mkdocs build failed (exit $build_status)"
-            exit $build_status
-          fi
-          unexpected=$(echo "$log" | grep WARNING | grep -vE 'reference/external|reference/drafts|/\.architecture/' || true)
-          if [ -n "$unexpected" ]; then
-            echo ""
-            echo "::error::Unexpected mkdocs warnings (outside documented carve-out):"
-            echo "$unexpected"
-            exit 1
-          fi
+      - name: Lint docs frontmatter
+        run: bundle exec rake docs:lint
+        working-directory: gem/bsv-wallet
+
+      # Offline link + anchor check via html-proofer (Jekyll-aware: handles
+      # the baseurl prefix via swap_urls; lychee can't resolve root-relative
+      # URLs against a local _site tree).
+      - name: Check internal links
+        run: bundle exec rake docs:proofread
+        working-directory: gem/bsv-wallet
+
+      # Upload artefact for the deploy job — skipped on PR runs since
+      # the deploy job is also skipped (only push to master deploys).
+      - uses: actions/configure-pages@v5
+        if: github.event_name == 'push'
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'push'
+        with:
+          path: docs/_site
 
   deploy:
-    needs: build
+    # Only deploy on push to master. PR runs are dry-run only: they
+    # build, lint, and link-check the site without touching Pages.
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: build
     runs-on: ubuntu-latest
     permissions:
-      # gh-deploy commits to the gh-pages branch.
-      contents: write
-
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.4'
-          bundler-cache: true
-          working-directory: gem/bsv-wallet
-
-      - name: Generate YARD markdown
-        run: bundle exec rake docs:generate
-        working-directory: gem/bsv-wallet
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.x'
-          cache: pip
-          cache-dependency-path: docs/requirements.txt
-
-      - name: Install MkDocs dependencies
-        run: pip install -r docs/requirements.txt
-
-      - name: Deploy to GitHub Pages
-        run: mkdocs gh-deploy --force
+      - id: deployment
+        uses: actions/deploy-pages@v4
