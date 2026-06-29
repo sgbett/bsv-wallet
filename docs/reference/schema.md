@@ -62,13 +62,18 @@ Known block headers — the wallet's local view of the chain. One row per block 
 | height | integer | NOT NULL UNIQUE |
 | merkle_root | bytea | NOT NULL |
 | block_hash | bytea | |
+| header | bytea | |
 | created_at | timestamptz | NOT NULL DEFAULT now() |
 | updated_at | timestamptz | NOT NULL DEFAULT now() |
+
+**`header`:** The raw 80-byte block header. Nullable, and the nullability is the discriminator (#335): present ⇒ the row was parsed and PoW-validated locally — its presence *is* the "validated" signal, there is no status column; absent ⇒ a trusted-service row carrying only the `merkle_root` fetched from a chain-query Service. The `header_root_match` CHECK ties the header's embedded root (bytes 36..67, 0-indexed) to the indexed `merkle_root` column, so the two cannot drift — the header is the source, `merkle_root` the extracted answer.
 
 **Constraints:**
 - `CHECK height >= 0`
 - `CHECK length(merkle_root) = 32`
 - `CHECK block_hash IS NULL OR length(block_hash) = 32`
+- `CHECK header IS NULL OR length(header) = 80`
+- `CHECK header IS NULL OR substring(header from 37 for 32) = merkle_root` — the embedded merkle_root (1-indexed SQL offset 37, length 32) matches the column. (`substr(header, 37, 32)` on SQLite.)
 
 ```ruby
 class Wallet::Block < Sequel::Model
