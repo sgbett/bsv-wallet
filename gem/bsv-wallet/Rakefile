@@ -233,20 +233,37 @@ def generate_reference_index(output_dir)
     row['type'] == 'Module' ? modules << entry : classes << entry
   end
 
-  File.open(File.join(output_dir, 'index.md'), 'w') do |f|
-    # Jekyll frontmatter — Jekyll only processes .md files with frontmatter
-    # as content pages; without it, this file is copied verbatim as .md and
-    # _site/reference/api/index.html never exists. The defaults block in
-    # _config.yml additionally keeps it out of the side nav and search index.
+  File.open(File.join(output_dir, 'index.md'), 'w') do |f| # rubocop:disable Metrics/BlockLength
+    # Jekyll frontmatter — without it, Jekyll copies the file as static .md
+    # rather than processing it to HTML. The _config.yml `defaults:` block
+    # applies nav_exclude/search_exclude to ALL of reference/api/**; the
+    # index page explicitly overrides those so it appears as the
+    # API Reference entry under Reference. Per-class pages keep the
+    # excluded defaults (silent navigation, reachable via this index).
     f.puts '---'
     f.puts 'title: API Reference'
     f.puts 'parent: Reference'
     f.puts 'nav_order: 99'
+    f.puts 'nav_exclude: false'
+    f.puts 'search_exclude: false'
     f.puts '---'
     f.puts
     f.puts '# API Reference'
     f.puts
     f.puts 'Auto-generated from source using [YARD](https://yardoc.org/).'
+    f.puts
+    f.puts '{: .note }'
+    f.puts '> **Generated content**'
+    f.puts '>'
+    f.puts '> This page is overwritten by `rake docs:generate` with the live ' \
+           'module/class tree. Run it locally to populate the API reference:'
+    f.puts '>'
+    f.puts '> ```bash'
+    f.puts '> cd gem/bsv-wallet && bundle exec rake docs:generate'
+    f.puts '> ```'
+    f.puts '>'
+    f.puts '> Output lands in `docs/reference/api/` (sibling to the authored ' \
+           'reference docs in `docs/reference/`).'
     f.puts
     f.puts '## Modules'
     f.puts

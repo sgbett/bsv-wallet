@@ -46,7 +46,11 @@ jobs:
       - name: Set up Ruby (YARD)
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.4'
+          # Pinned to 3.4.2 to match docs/Gemfile.lock's RUBY VERSION; using
+          # the floating '3.4' would drift on patch releases and trigger a
+          # Bundler warning (or refusal) when the installed Ruby differs
+          # from the lockfile pin.
+          ruby-version: '3.4.2'
           working-directory: gem/bsv-wallet
           bundler-cache: true
 
@@ -58,7 +62,8 @@ jobs:
       - name: Set up Ruby (Jekyll)
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.4'
+          # Same patch pin as the YARD step (matches docs/Gemfile.lock).
+          ruby-version: '3.4.2'
           working-directory: docs
           bundler-cache: true
 
