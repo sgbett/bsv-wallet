@@ -120,5 +120,11 @@ module BSV
               'append-or-reject refused the overwrite (reorg evidence preserved)')
       end
     end
+
+    # Raised at boot when a configuration value is not recognised — e.g. an
+    # unknown +trust_model+ (a mistyped +BSV_WALLET_TRUST_MODEL+). A config
+    # mistake fails loud at boot rather than silently selecting a weaker
+    # default (#335; Copilot review on #488).
+    class ConfigurationError < Error; end
   end
 end

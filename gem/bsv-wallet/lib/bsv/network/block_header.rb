@@ -139,6 +139,13 @@ module BSV
       # @param hash [String, nil] optional display-hex block hash for round-trip verification
       # @return [BlockHeader, nil] the parsed header, or +nil+ if assembly or the integrity check fails
       def self.from_service_fields(version:, previousblockhash:, merkleroot:, time:, bits:, nonce:, hash: nil)
+        # +bits+ is the compact target as a hex string (WhatsOnChain form).
+        # Require exactly 8 hex digits: a shorter, longer, or non-hex value
+        # would otherwise be silently coerced by +to_i(16)+ and truncated to
+        # 32 bits by +pack('V')+, smuggling a *different* target past
+        # assembly. A malformed +bits+ is a malformed header — fail closed.
+        return unless bits.is_a?(String) && bits.match?(/\A\h{8}\z/)
+
         raw = [version].pack('V') +
               [previousblockhash].pack('H*').reverse +
               [merkleroot].pack('H*').reverse +

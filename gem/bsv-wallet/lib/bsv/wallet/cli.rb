@@ -135,8 +135,16 @@ module BSV
               network: network,
               checkpoint: BSV::Wallet.config.spv_checkpoint
             )
-          else
+          when :trusted_service
             BSV::Network::ChainTracker.new(store: store, services: network_services)
+          else
+            # Fail loud on an unrecognised trust_model rather than silently
+            # using the trusted-service path — a typo (e.g. +spv_header+)
+            # must not quietly weaken verification while the operator
+            # believes +spv_headers+ is active.
+            raise BSV::Wallet::ConfigurationError,
+                  "unknown trust_model #{BSV::Wallet.config.trust_model.inspect} " \
+                  '(expected :trusted_service or :spv_headers)'
           end
 
         # Limp threshold reads from BSV::Wallet.config (which Integer()s

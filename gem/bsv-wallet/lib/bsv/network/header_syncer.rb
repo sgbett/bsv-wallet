@@ -125,18 +125,22 @@ module BSV
       end
 
       # Fetch → validate → persist each height from tip+1 to target,
-      # stopping fail-closed at the first failure. Persists the run in one
-      # transaction so a partial fetch sequence commits atomically.
+      # stopping fail-closed at the first failure. Each header is persisted
+      # in its own atomic write (+Store#record_block_header+ wraps a
+      # +for_update+ transaction per row), so the loop deliberately does NOT
+      # hold one long-lived transaction across the network fetches — that
+      # would keep a connection and row locks open for up to +MAX_SYNC_SPAN+
+      # round-trips, inviting contention and timeouts. Partial progress is
+      # safe: +validated_tip+ is structural and gap-stopping, so a sync that
+      # stops early just leaves a shorter validated chain.
       def extend_chain!(target_height)
-        @store.db.transaction do
-          ((@tip_height + 1)..target_height).each do |height|
-            header = fetch_and_validate(height)
-            break unless header # fail-closed: stop, do not advance
+        ((@tip_height + 1)..target_height).each do |height|
+          header = fetch_and_validate(height)
+          break unless header # fail-closed: stop, do not advance
 
-            persist(height, header)
-            @tip_header = header
-            @tip_height = height
-          end
+          persist(height, header)
+          @tip_header = header
+          @tip_height = height
         end
       end
 

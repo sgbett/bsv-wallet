@@ -81,6 +81,29 @@ RSpec.describe BSV::Wallet::CLI do
       expect(boot_and_report_tracker('BSV_WALLET_TRUST_MODEL' => 'spv_headers'))
         .to eq('BSV::Network::SpvHeaderChainTracker')
     end
+
+    # A mistyped toggle (e.g. +spv_header+, missing the trailing s) must not
+    # silently fall back to the trusted-service tracker — that would weaken
+    # verification while the operator believes spv_headers is active. Boot
+    # fails loud instead (Copilot review on #488).
+    it 'fails loud on an unknown trust_model rather than silently downgrading' do
+      Dir.mktmpdir do |dir|
+        db_path = File.join(dir, 'trust.db')
+        wif = BSV::Primitives::PrivateKey.generate.to_wif
+        ruby_src = <<~RUBY
+          $LOAD_PATH.unshift(#{File.expand_path('../../lib', __dir__).inspect})
+          require 'bsv-wallet'
+          require 'bsv/wallet/cli'
+          BSV::Wallet::CLI.boot
+        RUBY
+        env = { 'WIF' => wif, 'DATABASE_URL' => "sqlite://#{db_path}",
+                'BSV_WALLET_TRUST_MODEL' => 'spv_header' }
+        _stdout, stderr, status = Open3.capture3(env, 'ruby', '-e', ruby_src)
+
+        expect(status.exitstatus).not_to eq(0)
+        expect(stderr).to match(/unknown trust_model/i)
+      end
+    end
   end
 
   # Per-wallet Postgres derivation moved to BSV::Wallet::Fixtures (#292).

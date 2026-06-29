@@ -291,15 +291,15 @@ RSpec.describe BSV::Network::BlockHeader do
         .to be_nil
     end
 
-    it 'does not certify a non-hex bits field as valid PoW' do
-      # +"not-hex".to_i(16)+ is 0 (Ruby parses no leading hex digits), so a
-      # garbage bits field assembles a header with bits == 0. That is a
-      # zero-mantissa target, so it decodes to nil and never passes PoW —
-      # the fail-closed posture holds even though assembly itself succeeds.
-      header = described_class.from_service_fields(**genesis_fields(bits: 'not-hex'))
-      expect(header.bits).to eq(0)
-      expect(header.target).to be_nil
-      expect(header.valid_pow?).to be(false)
+    it 'fails closed (nil) on a malformed bits field — not exactly 8 hex chars' do
+      # +bits+ must be exactly 8 hex digits (WhatsOnChain form). A non-hex,
+      # too-short, or too-long value is rejected at assembly rather than
+      # being silently coerced by +to_i(16)+ and truncated by +pack('V')+
+      # into a *different* (possibly easier) target (Copilot review on #488).
+      expect(described_class.from_service_fields(**genesis_fields(bits: 'not-hex'))).to be_nil
+      expect(described_class.from_service_fields(**genesis_fields(bits: '1d00ff'))).to be_nil       # 6 chars
+      expect(described_class.from_service_fields(**genesis_fields(bits: '1d00ffff00'))).to be_nil   # 10 chars
+      expect(described_class.from_service_fields(**genesis_fields(bits: 0x1d00ffff))).to be_nil     # not a String
     end
   end
 end
