@@ -6,24 +6,35 @@ module BSV
       # Rebuild dev-wallet databases from a clean slate. Operator
       # plumbing — not a runtime path.
       #
-      # The +fixtures:rebuild+ rake task is the operator surface; this
-      # class carries the orchestration so the rake wrapper stays a
-      # thin shim and the logic is unit-testable with stubbed
-      # boot/sweep/network calls.
+      # The +fixtures:*+ rake tasks are the operator surface; this class
+      # carries the orchestration so the rake wrappers stay thin shims
+      # and the logic is unit-testable with stubbed boot/sweep/network
+      # calls.
       #
-      # Three operations:
+      # Four operations — schema lifecycle is intentionally separate
+      # from on-chain mutation (no bundled "rebuild and fund" path —
+      # see #493 for the rationale):
       #
-      #   * +rebuild(name)+ — sweep current spendable UTXOs back to root,
-      #     +DROP DATABASE+ the wallet's Postgres database, +CREATE+ it,
-      #     re-run migrations, fund from +:sdk+ wallet.
+      #   * +rebuild(name)+ — sweep current spendable UTXOs back to the
+      #     wallet's own root, +DROP DATABASE+, +CREATE+, re-run
+      #     migrations. Leaves the wallet in clean-schema state with
+      #     zero rows. **Aborts if sweep fails** — an operator-visible
+      #     signal that the wallet held funds that couldn't be moved
+      #     (typically mid-convention-flip; investigation warranted).
       #
-      #   * +rebuild_all+ — iterate the registry; skip +:test+ (no WIF;
-      #     unit specs reset their own DB).
+      #   * +rebuild_all+ — iterate the registry; skip +:test+ (no WIF)
+      #     and any wallet whose WIF is missing.
       #
-      #   * +verify+ — for each registered wallet, assert post-refund state:
-      #     no spendable rows from the previous era + non-zero root balance
-      #     on chain. Returns the list of failing wallets (empty on success)
-      #     — caller exits non-zero on any failure.
+      #   * +fund(name, sats:)+ — send +sats+ from +:sdk+ to +name+'s
+      #     root P2PKH. Explicit, opt-in; never bundled with rebuild.
+      #     Rejects +:sdk+ (the funder cannot fund itself).
+      #
+      #   * +verify+ — for each registered wallet, assert no stale
+      #     spendable rows + non-zero root balance on chain. Returns
+      #     the failing-wallets list (empty on success) — caller exits
+      #     non-zero on any failure. The "non-zero root balance" check
+      #     is post-fund expectation: a freshly-rebuilt-but-unfunded
+      #     wallet will (correctly) fail verify.
       #
       # Drop+create over +DELETE FROM+ for three reasons (Database Architect
       # input on #480):
@@ -37,9 +48,9 @@ module BSV
       #   3. CASCADE FK ordering across promotions → spendable → outputs is
       #      non-trivial for a +DELETE+ sweep; +DROP DATABASE+ is atomic.
       #
-      # Wall time is chain-tip bound — sweep + fund are inline broadcasts.
-      # Expect ~5-15 minutes for the full +alice/bob/carol/sdk/w1+..+w5+
-      # fleet. One-shot pre-merge operation; not a CI loop.
+      # Wall time is chain-tip bound — sweep is an inline broadcast.
+      # Expect a minute or two per wallet. One-shot pre-release
+      # operation; not a CI loop.
       class Rebuilder
         # Default amount to fund each rebuilt wallet from +:sdk+ — matches
         # the CLAUDE.md convention that integration WIFs each carry
@@ -66,16 +77,24 @@ module BSV
           @fund_sats = fund_sats
         end
 
-        # Rebuild a single named wallet. Raises on hard failures (cannot
-        # reach Postgres, +:sdk+ not registered, etc.). Soft conditions
-        # (nothing to sweep, dust-only wallet) are logged and treated
-        # as no-ops. Side-effecting — returns nil.
+        # Rebuild a single named wallet's database to clean-schema
+        # state: sweep current spendable UTXOs back to the wallet's
+        # own root, +DROP DATABASE+, +CREATE+, re-run migrations.
+        # Side-effecting — returns nil.
+        #
+        # **Aborts on sweep failure.** If the wallet held spendable
+        # rows that the engine couldn't sign or broadcast (typically:
+        # mid-convention-flip, where derived keys can't be
+        # re-computed under the new convention), the exception is
+        # propagated up — the drop + create + migrate never run.
+        # Operator should investigate the failed sweep before
+        # blowing away the DB.
         def rebuild(name)
           sym = name.to_sym
           raise ArgumentError, "fixture wallet :#{sym} is not registered" unless @registry[sym]
 
           log "rebuild: #{sym}: sweeping..."
-          sweep_to_root_safe(sym)
+          sweep_to_root!(sym)
 
           db_name = postgres_db_name(sym)
           log "rebuild: #{sym}: dropping #{db_name}..."
@@ -87,38 +106,66 @@ module BSV
           log "rebuild: #{sym}: migrating..."
           migrate!(sym)
 
-          log "rebuild: #{sym}: funding #{@fund_sats} sats from :sdk..."
-          fund_from_sdk!(sym)
-
           log "rebuild: #{sym}: done"
           nil
         end
 
-        # Iterate the registry, rebuilding every entry except +SKIP_NAMES+
-        # and any registered wallet whose WIF is missing (typically +w1+..+w5+
-        # on a dev box that hasn't run the e2e harness to derive them).
-        # +:sdk+ is rebuilt by re-funding from itself — no-op fund step (we
-        # skip the sdk leg of the loop and the operator funds +:sdk+ externally).
-        # Side-effecting — returns nil.
+        # Iterate the registry, rebuilding every entry except
+        # +SKIP_NAMES+ and any registered wallet whose WIF is missing.
+        # Each wallet's +rebuild+ is independent — no special ordering
+        # required (fund is a separate operation; no inter-wallet
+        # dependency during rebuild).
+        #
+        # A failing wallet does NOT abort the fleet: the exception is
+        # logged and caught, the loop continues to the next wallet,
+        # and the final summary lists what failed. Caller (the rake
+        # task) exits non-zero when the returned array is non-empty.
+        # Rationale: an operator running the bulk variant after a
+        # wide change typically wants the rest of the fleet attempted
+        # even if one wallet's sweep refuses; the per-wallet failures
+        # surface at the end for triage.
+        #
+        # @return [Array<Array(Symbol, Exception)>] empty on success;
+        #   +[name, exception]+ pairs for each failed wallet otherwise.
         def rebuild_all
           targets = eligible_targets
           log "rebuild_all: targets = #{targets.inspect}"
 
-          # Process :sdk first so its fresh schema is in place before any
-          # other wallet tries to fund from it. :sdk is funded externally
-          # (mining / a sibling wallet) — the rebuild flow takes its
-          # current on-chain balance as given.
-          targets = ([:sdk] & targets) + (targets - [:sdk])
-
+          failures = []
           targets.each do |name|
-            if name == :sdk
-              rebuild_sdk
-            else
-              rebuild(name)
-            end
+            rebuild(name)
+          rescue StandardError => e
+            failures << [name, e]
+            log "rebuild: #{name}: FAILED — #{e.class}: #{e.message}"
           end
 
-          log "rebuild_all: complete (#{targets.length} wallets)"
+          if failures.empty?
+            log "rebuild_all: complete (#{targets.length} wallets)"
+          else
+            log "rebuild_all: #{failures.length} of #{targets.length} wallet(s) failed"
+            log "  failed: #{failures.map(&:first).inspect}"
+          end
+          failures
+        end
+
+        # Fund a wallet by sending +sats+ from +:sdk+ to its root P2PKH.
+        # Explicit, opt-in operation — never bundled with +rebuild+.
+        # Rejects +:sdk+ (the funder cannot fund itself).
+        # Side-effecting — returns nil.
+        #
+        # @param name [Symbol, String] target wallet name (must be
+        #   registered, must carry a WIF, must not be +:sdk+).
+        # @param sats [Integer] satoshis to send.
+        def fund(name, sats: @fund_sats)
+          sym = name.to_sym
+          raise ArgumentError, "fixture wallet :#{sym} is not registered" unless @registry[sym]
+          raise ArgumentError, ':sdk is the funder and cannot fund itself' if sym == :sdk
+          raise ArgumentError, "sats must be a positive Integer (got #{sats.inspect})" \
+            unless sats.is_a?(Integer) && sats.positive?
+
+          log "fund: #{sym}: sending #{sats} sats from :sdk..."
+          fund_from_sdk!(sym, sats: sats)
+          log "fund: #{sym}: done"
           nil
         end
 
@@ -170,38 +217,19 @@ module BSV
           end
         end
 
-        # +:sdk+ rebuild: sweep + drop + create + migrate, no re-fund.
-        # The funder is funded externally; we treat its on-chain balance
-        # as given and just refresh its database. Side-effecting —
-        # returns nil.
-        def rebuild_sdk
-          log 'rebuild: sdk: sweeping...'
-          sweep_to_root_safe(:sdk)
-
-          db_name = postgres_db_name(:sdk)
-          log "rebuild: sdk: dropping #{db_name}..."
-          drop_database!(db_name)
-
-          log "rebuild: sdk: creating #{db_name}..."
-          create_database!(db_name)
-
-          log 'rebuild: sdk: migrating...'
-          migrate!(:sdk)
-
-          log 'rebuild: sdk: re-importing root UTXOs from chain...'
-          import_root!(:sdk)
-
-          log 'rebuild: sdk: done'
-          nil
-        end
-
-        # Sweep the wallet's current spendable UTXOs back to its root
-        # P2PKH. Best-effort: missing WIF, empty pool, or any failure
-        # logs + continues — the subsequent +DROP DATABASE+ is the real
-        # blank-slate. Sweeping first salvages funds that would otherwise
-        # be orphaned (the new CHECK literal wouldn't recognise the old
-        # derived-key UTXOs).
-        def sweep_to_root_safe(name)
+        # Sweep the wallet's current spendable UTXOs back to its own
+        # root P2PKH. Re-raises on any failure — the caller (+rebuild+)
+        # halts before the irreversible drop. A wallet with no
+        # spendable rows returns +result[:sweep].nil?+ (no broadcast,
+        # logged as no-op); this is the only "soft" condition.
+        #
+        # Rationale for re-raising vs catch-and-continue: a sweep
+        # failure on a non-empty pool means signing or broadcast
+        # failed on real (or believed-real) funds. Dropping the DB
+        # without investigation discards the wallet's only memory of
+        # those rows. Better to surface the failure and let the
+        # operator decide.
+        def sweep_to_root!(name)
           ctx = boot_wallet(name)
           result = ctx[:engine].sweep_to_root
           if result[:sweep].nil?
@@ -210,8 +238,6 @@ module BSV
             dtxid = result[:sweep][:wtxid].reverse.unpack1('H*')
             log "  sweep: #{name}: dtxid=#{dtxid}"
           end
-        rescue StandardError => e
-          log "  sweep: #{name}: skipped (#{e.class}: #{e.message})"
         end
 
         def drop_database!(db_name)
@@ -244,15 +270,15 @@ module BSV
           boot_wallet(name)
         end
 
-        # Send +@fund_sats+ from +:sdk+ to the target wallet's root P2PKH.
-        # The target wallet's key is read off its fixture WIF; the funding
-        # output is locked to +hash160(target_identity_key_bytes)+ — the
-        # literal root address recoverable by +bin/wallet import+.
-        def fund_from_sdk!(name)
-          # Capture the target's root pubkey before swapping the global
-          # Sequel::Model.db over to :sdk — booting :sdk rebinds models
-          # to the funder's DB so any subsequent reads of the target's
-          # context would query the wrong wallet.
+        # Send +sats+ from +:sdk+ to the target wallet's root P2PKH.
+        # The target wallet's key is read off its fixture WIF; the
+        # funding output is locked to the wallet's root P2PKH hash —
+        # the literal address recoverable by +bin/wallet import+.
+        def fund_from_sdk!(name, sats:)
+          # Capture the target's root pubkey hash before swapping the
+          # global Sequel::Model.db over to :sdk — booting :sdk
+          # rebinds models to the funder's DB so any subsequent reads
+          # of the target's context would query the wrong wallet.
           target_ctx = boot_wallet(name)
           recipient_hash = target_ctx[:key_deriver].identity_pubkey_hash
           locking_script = BSV::Script::Script.p2pkh_lock(recipient_hash).to_binary
@@ -261,7 +287,7 @@ module BSV
           result = sdk_ctx[:engine].build_action(
             description: "fund #{name}",
             outputs: [
-              { satoshis: @fund_sats, locking_script: locking_script,
+              { satoshis: sats, locking_script: locking_script,
                 spendable_intent: 'none', output_description: "fund #{name} root" }
             ],
             no_send: false,
@@ -271,17 +297,6 @@ module BSV
 
           dtxid = result[:wtxid].reverse.unpack1('H*')
           log "  fund:  #{name}: dtxid=#{dtxid}"
-        end
-
-        # Re-import root UTXOs into the freshly-migrated +:sdk+ DB by
-        # scanning its on-chain root address. The drop+create wiped the
-        # action/output rows; +import_wallet+ rebuilds them from chain
-        # state so subsequent +fund_from_sdk!+ calls have spendable
-        # inputs to draw on.
-        def import_root!(name)
-          ctx = boot_wallet(name)
-          result = ctx[:engine].import_wallet(no_send: false, accept_delayed_broadcast: false)
-          log "  import: #{name}: imported #{result[:imported]} UTXO(s)"
         end
 
         # Boot the wallet through the shared CLI helper. Each call
