@@ -205,6 +205,12 @@ cd gem/bsv-wallet && bundle exec rspec
 cd gem/bsv-wallet && bundle exec rubocop
 ```
 
+## Changelog
+
+`gem/bsv-wallet/CHANGELOG.md` is curated **at release time, not in PRs**. A PR does **not** add a `## Unreleased` entry — the change is already durable in git history (`git log --first-parent master`), the closed HLR/issue, and the PR description. On the release commit the releaser curates those sources into a new version block.
+
+Format follows the SDK (`bsv-ruby-sdk` CHANGELOG): [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 1.1.0 + [SemVer](https://semver.org/spec/v2.0.0.html), version headers as `## <version> — <YYYY-MM-DD>` (em-dash, no brackets). Do **not** reintroduce a rolling `## Unreleased` accumulator — it drifts from the real history (the lesson of #508).
+
 ## Architecture Framework
 
 The `.architecture/` directory contains the AI Software Architect framework:
