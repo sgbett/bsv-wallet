@@ -5,7 +5,7 @@ require 'sequel'
 require 'bsv/wallet/cli'
 require 'bsv/wallet/fixtures/rebuilder'
 
-# Unit specs for the +fixtures:rebuild+ orchestration. Stubs the CLI
+# Unit specs for the +fixtures:*+ orchestration. Stubs the CLI
 # boot + the admin Sequel connection so the suite runs without a live
 # Postgres or chain provider.
 RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
@@ -45,12 +45,10 @@ RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
 
     sweep_result = { sweep: nil, consolidation_steps: 0 }
     build_action_result = { wtxid: ("\x00".b * 32) }
-    import_result = { imported: 0, utxos: [] }
     engine = instance_double(
       BSV::Wallet::Engine,
       sweep_to_root: sweep_result,
-      build_action: build_action_result,
-      import_wallet: import_result
+      build_action: build_action_result
     )
     # Network provider stub for the verify probe. Tests can override
     # http_success?/data via the +root_utxos+ kwarg.
@@ -83,7 +81,7 @@ RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
       stub_wallet_ctx(:sdk)
     end
 
-    it 'sweeps, drops, creates, migrates, and funds in order' do
+    it 'sweeps, drops, creates, and migrates in order — no funding' do
       drop_call = nil
       create_call = nil
       allow(admin_db).to receive(:run) do |sql|
@@ -95,21 +93,32 @@ RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
 
       expect(drop_call).to eq('DROP DATABASE IF EXISTS "bsv_wallet_alice" WITH (FORCE)')
       expect(create_call).to eq('CREATE DATABASE "bsv_wallet_alice"')
-      # +CLI.boot+ called for the target on sweep + drop-target migrate + fund-prep,
-      # plus :sdk for the build_action — that's the orchestration contract.
-      expect(BSV::Wallet::CLI).to have_received(:boot).with(wallet_name: 'alice').at_least(:once)
-      expect(BSV::Wallet::CLI).to have_received(:boot).with(wallet_name: 'sdk').at_least(:once)
+      expect(contexts[:alice][:engine]).to have_received(:sweep_to_root)
+      # +rebuild+ does not move funds — that is +fund+'s job.
+      expect(contexts[:sdk][:engine]).not_to have_received(:build_action)
     end
 
     it 'raises when the wallet is not in the registry' do
       expect { rebuilder.rebuild(:never) }.to raise_error(ArgumentError, /:never is not registered/)
     end
 
-    it 'continues past a sweep failure (best-effort)' do
-      allow(contexts[:alice][:engine]).to receive(:sweep_to_root).and_raise(StandardError, 'no provider')
+    it 'aborts when sweep raises (no drop, no create)' do
+      allow(contexts[:alice][:engine]).to receive(:sweep_to_root).and_raise(StandardError, 'cannot sign')
+
+      expect { rebuilder.rebuild(:alice) }.to raise_error(StandardError, 'cannot sign')
+      expect(admin_db).not_to have_received(:run)
+    end
+
+    it 'proceeds when the wallet has nothing to sweep' do
+      # sweep_to_root returns { sweep: nil } when the spendable pool
+      # is empty — soft signal, not an error. Drop+create+migrate still
+      # run.
+      allow(contexts[:alice][:engine]).to receive(:sweep_to_root)
+        .and_return(sweep: nil, consolidation_steps: 0)
 
       expect { rebuilder.rebuild(:alice) }.not_to raise_error
-      expect(out.string).to include('sweep: alice: skipped')
+      expect(admin_db).to have_received(:run).at_least(:twice)
+      expect(out.string).to include('sweep: alice: nothing to sweep')
     end
 
     it 'routes DROP/CREATE through the postgres admin DB, not the target' do
@@ -118,24 +127,53 @@ RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
       expect(Sequel).to have_received(:connect).with('postgres://postgres:postgres@localhost:5433/postgres').at_least(:once)
     end
 
-    it 'sends +fund_sats+ to the target root P2PKH from :sdk' do
+    it 'treats :sdk like any other wallet (no special dispatch, no fund)' do
+      rebuilder.rebuild(:sdk)
+
+      expect(contexts[:sdk][:engine]).to have_received(:sweep_to_root)
+      expect(contexts[:sdk][:engine]).not_to have_received(:build_action)
+    end
+  end
+
+  describe '#fund' do
+    before do
       stub_wallet_ctx(:alice, identity_key_bytes: ("\x02".b * 33))
       stub_wallet_ctx(:sdk)
+    end
 
-      rebuilder.rebuild(:alice)
+    it 'sends sats from :sdk to the target root P2PKH at the default amount' do
+      rebuilder.fund(:alice)
 
       expect(contexts[:sdk][:engine]).to have_received(:build_action) do |args|
         expect(args[:outputs].first[:satoshis]).to eq(1_000_000)
         expect(args[:outputs].first[:spendable_intent]).to eq('none')
       end
     end
+
+    it 'honours an explicit sats override' do
+      rebuilder.fund(:alice, sats: 250_000)
+
+      expect(contexts[:sdk][:engine]).to have_received(:build_action) do |args|
+        expect(args[:outputs].first[:satoshis]).to eq(250_000)
+      end
+    end
+
+    it 'rejects :sdk (cannot fund the funder from itself)' do
+      expect { rebuilder.fund(:sdk) }
+        .to raise_error(ArgumentError, /:sdk is the funder and cannot fund itself/)
+      expect(contexts[:sdk][:engine]).not_to have_received(:build_action)
+    end
+
+    it 'raises when the wallet is not in the registry' do
+      expect { rebuilder.fund(:never) }.to raise_error(ArgumentError, /:never is not registered/)
+    end
   end
 
   # Dispatcher tests intentionally stub the orchestrator's own
-  # +rebuild+/+rebuild_sdk+ entry points to assert the per-wallet
-  # dispatch loop. The unit under test here is +rebuild_all+'s
-  # iteration + skip-list logic, not the per-wallet body — the latter
-  # is covered by the +#rebuild+ block above.
+  # +rebuild+ entry point to assert the per-wallet dispatch loop. The
+  # unit under test here is +rebuild_all+'s iteration + skip-list
+  # logic, not the per-wallet body — the latter is covered by the
+  # +#rebuild+ block above.
   describe '#rebuild_all' do
     before do
       stub_wallet_ctx(:alice)
@@ -145,39 +183,25 @@ RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
 
     it 'skips :test (no WIF)' do
       allow(rebuilder).to receive(:rebuild) # rubocop:disable RSpec/SubjectStub
-      allow(rebuilder).to receive(:rebuild_sdk) # rubocop:disable RSpec/SubjectStub
 
       rebuilder.rebuild_all
 
       expect(rebuilder).not_to have_received(:rebuild).with(:test) # rubocop:disable RSpec/SubjectStub
     end
 
-    it 'processes :sdk first so subsequent funds have a fresh sdk DB' do
-      order = []
-      allow(rebuilder).to receive(:rebuild) { |n| order << [:rebuild, n] } # rubocop:disable RSpec/SubjectStub
-      allow(rebuilder).to receive(:rebuild_sdk) { order << [:rebuild_sdk] } # rubocop:disable RSpec/SubjectStub
-
-      rebuilder.rebuild_all
-
-      expect(order.first).to eq([:rebuild_sdk])
-      expect(order.map(&:last)).to include(:alice, :bob)
-    end
-
-    it 'invokes rebuild on every non-skipped wallet' do
+    it 'invokes rebuild on every non-skipped wallet, including :sdk' do
       allow(rebuilder).to receive(:rebuild) # rubocop:disable RSpec/SubjectStub
-      allow(rebuilder).to receive(:rebuild_sdk) # rubocop:disable RSpec/SubjectStub
 
       rebuilder.rebuild_all
 
       expect(rebuilder).to have_received(:rebuild).with(:alice) # rubocop:disable RSpec/SubjectStub
-      expect(rebuilder).to have_received(:rebuild).with(:bob) # rubocop:disable RSpec/SubjectStub
-      expect(rebuilder).to have_received(:rebuild_sdk).once # rubocop:disable RSpec/SubjectStub
+      expect(rebuilder).to have_received(:rebuild).with(:bob)   # rubocop:disable RSpec/SubjectStub
+      expect(rebuilder).to have_received(:rebuild).with(:sdk)   # rubocop:disable RSpec/SubjectStub
     end
 
     it 'skips registered wallets that carry no WIF (e.g. unconfigured w1..w5)' do
       registry.wallet :w1 # WIF intentionally absent
       allow(rebuilder).to receive(:rebuild) # rubocop:disable RSpec/SubjectStub
-      allow(rebuilder).to receive(:rebuild_sdk) # rubocop:disable RSpec/SubjectStub
 
       rebuilder.rebuild_all
 

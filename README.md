@@ -86,21 +86,34 @@ If `bundle exec rspec` starts failing with constraint/column errors after a `git
 
 #### Rebuilding dev wallets after a convention flip
 
-A wider change — a derivation-convention flip, a CHECK-literal change, anything that leaves existing on-chain UTXOs unspendable under the new code — needs the funded dev fleet (`alice`/`bob`/`carol`/`sdk`/`w1`..`w5`) rebuilt before merge. The rake tasks below automate the destructive steps; the operator runs them once pre-merge against funded WIFs:
+A wider change — a derivation-convention flip, a CHECK-literal change, anything that leaves existing on-chain UTXOs unspendable under the new code — needs the funded dev fleet (`alice`/`bob`/`carol`/`sdk`/`w1`..`w5`) rebuilt before merge. The rake tasks below cover the destructive steps; schema lifecycle and on-chain funding are deliberately separate tasks (no bundled "rebuild + fund" path — see #493).
 
 ```bash
 cd gem/bsv-wallet
 
-# Optional: sweep any wallet-side UTXOs back to root P2PKH manually before
-# rebuild_all runs (rebuild_all sweeps internally too, but a manual pass lets
-# you triage failures one wallet at a time).
-bundle exec rake wallet:cleanup[alice]
-
-# Drop, recreate, migrate, and refund every wallet. FORCE=1 skips confirmation.
+# 1. Reset every wallet's database to clean-schema state. Per wallet:
+#    sweep current spendable UTXOs back to that wallet's own root,
+#    DROP DATABASE, CREATE, migrate. Aborts on sweep failure — the
+#    operator should investigate before blowing away DB state.
 bundle exec rake fixtures:rebuild_all FORCE=1
 
-# Mechanical merge-gate. Exits non-zero on any failing wallet.
+# 2. Fund each non-:sdk wallet explicitly. Default 1_000_000 sats from
+#    :sdk. Override per call as needed.
+bundle exec rake fixtures:fund[alice]
+bundle exec rake fixtures:fund[bob,500000]
+bundle exec rake fixtures:fund[carol]
+
+# 3. Mechanical merge-gate. Verify each wallet has clean schema state
+#    AND a non-zero root balance on chain. Exits non-zero on any
+#    failing wallet.
 bundle exec rake fixtures:verify
+```
+
+For single-wallet operations, the same tasks accept a name:
+
+```bash
+bundle exec rake fixtures:rebuild[alice]   # sweep + drop + create + migrate
+bundle exec rake fixtures:fund[alice]      # send sats from :sdk
 ```
 
 Wall time is chain-tip bound (~5-15 minutes for the full fleet). Requires `BSV_WALLET_POSTGRES` + `BSV_WALLET_WIF_<NAME>` in ENV, with `:sdk` carrying ≥ N·1m sats for the N target wallets. Drop+recreate over `DELETE FROM` because the per-wallet `outputs.spendable_recoverable` CHECK embeds the WIF-derived root P2PKH script; a fresh `CREATE DATABASE` rebakes the CHECK against the current WIF.
