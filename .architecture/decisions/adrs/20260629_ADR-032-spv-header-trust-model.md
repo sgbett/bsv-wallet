@@ -33,7 +33,7 @@ Selected at the single boot seam (`cli.rb`), a third sibling on the SDK `Transac
 
 **Structural validity, no status column (ADR-003).** A header is "validated" iff its 80 bytes are present in `blocks.header` and it forms a PoW-valid chain back to the checkpoint — recomputable from the stored bytes, no `validated` flag. The `header_root_match` CHECK ties the embedded merkle root to the indexed `merkle_root` column so the two cannot drift. Header writes are append-or-reject: a validated row is never downgraded or overwritten, preserving the competing-header evidence #245's reorg handling will need.
 
-**Scope is the BEEF-ingress verification path only.** Because `Transaction::Tx#verify` runs through the chain tracker, ingress BEEF verification becomes trustless under `:spv_headers` with no further change. The `import_utxo` proof path (`fetch_proof_for_imported_utxo!`) does *not* run through `Tx#verify` and is **not** covered here — see Consequences / the import limitation.
+**Scope is the BEEF-ingress verification path only.** Because `Transaction::Tx#verify` runs through the chain tracker, ingress BEEF verification becomes trustless under `:spv_headers` with no further change. The `import_utxo` proof path (`fetch_proof_for_imported_utxo!`) does *not* run through `Tx#verify` and is **not** covered here — but imports are self-asserted ownership of the wallet's own coins, not the counterparty trust gap #335 closes (see Consequences).
 
 ## The residual — stated honestly
 
@@ -69,7 +69,7 @@ Delegate header validity to a purpose-built header service. **Rejected.** Still 
 ### Negative
 * **First-sync cost, bounded by checkpoint recency.** No bulk header endpoint exists (neither WhatsOnChain nor the SDK Chaintracks client has one), so the cold sync is N sequential per-height fetches from the checkpoint up to a proof's height. A `MAX_SYNC_SPAN` cap bounds it (and refuses the absurd heights a malicious service could feed — a DoS bound). **The shipped mainnet checkpoint must be refreshed toward the tip each release** or first-sync cost grows.
 * **The documented residual** (above) — a sole malicious service can still mount a low-difficulty-fork attack, worse on BSV than BTC. Closed by DAA / multi-source / P2P.
-* **The import limitation.** `import_utxo` still blind-trusts its merkle root under `:spv_headers` — its proof path does not run through `Tx#verify`. A known limitation of this iteration, tracked as #485; operators relying on `import_utxo` for trustlessness do not yet get it.
+* **Imports are self-asserted ownership, not a counterparty trust gap.** `import_utxo`'s proof path (`fetch_proof_for_imported_utxo!`) does not run through `Tx#verify`, so under `:spv_headers` an imported coin's merkle root is still taken from the service on faith. This is **not** the counterparty-deception risk #335 closes: imports concern the wallet's *own* coins, and the chain-query service gains nothing by lying about them. A fabricated import proof cannot cause loss — at worst the wallet briefly believes in a coin it cannot spend (the spend is rejected at broadcast), and any onward BEEF is rejected by the recipient's own SPV. The residual is a *consistency* asterisk on the `:spv_headers` label — the one place a service answer is still trusted — not an exploitable gap. Tracked at #485 as low-priority polish, should uniform `:spv_headers` behaviour be wanted.
 * **Legacy-import-below-checkpoint.** A proof at a height below the shipped checkpoint fails closed. New wallets are unaffected; importing genuinely old UTXOs under `:spv_headers` requires lowering the checkpoint via the `spv_checkpoint` override, or using `:trusted_service` for that import.
 
 ## Pragmatic Enforcer Analysis
@@ -95,7 +95,7 @@ The specialist review cut two speculative passengers and kept one defended escap
 * ADR-008 — binary internally, hex at boundaries; the wire/display byte-order convention the validator honours.
 * `docs/reference/spv-header-verification.md` — the trust-model axis, validation rigour, the residual, and the operational constraints.
 * HLR #335 — this requirement.
-* #485 — the deferred `import_utxo` routing (the import limitation).
+* #485 — `import_utxo` proof routing through the tracker: a `:spv_headers` consistency note (self-asserted ownership), not a security gap — see Consequences.
 * #245 — reorg recovery / cumulative-work fork-choice, building on this substrate.
 
 ## Unverified claims

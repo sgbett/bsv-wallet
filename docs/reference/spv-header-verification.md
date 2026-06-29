@@ -35,7 +35,7 @@ A header is "validated" iff its 80 bytes are present in `blocks.header` *and* it
 
 - **Refresh the checkpoint each release.** The shipped mainnet checkpoint (currently block 955000) must move toward the tip per release, or first-sync cost grows with the gap. It is a small, auditable trust root — `{height, 80-byte header}` — that self-verifies (`sha256d` of the header equals the known block hash).
 - **Legacy imports below the checkpoint.** A proof at a height below the checkpoint fails closed. New wallets are unaffected; to import genuinely old UTXOs under `:spv_headers`, lower the checkpoint via the `config.spv_checkpoint` override (`{ height:, header: }`), or use `:trusted_service` for that import.
-- **Imports are not yet covered.** `import_utxo` blind-trusts its merkle root even under `:spv_headers` — its proof path does not run through `Tx#verify`. Tracked as #485. Until then, `:spv_headers` makes *BEEF ingress* trustless, not imports.
+- **Imports are self-asserted, not a trust gap.** `import_utxo` concerns the wallet's *own* coins; its proof path does not run through `Tx#verify`, so even under `:spv_headers` an import's merkle root is taken from the service on faith. This is **not** the counterparty risk `:spv_headers` closes — a lying service gains nothing and cannot cause loss, only a brief belief in a coin the wallet cannot spend (rejected at broadcast; any onward BEEF is rejected by the recipient's own SPV). A consistency asterisk on the label, tracked as low-priority polish at #485.
 - **Mainnet only (phase-1).** No testnet checkpoint ships (the testnet 20-minute special-difficulty rule is out of scope); `Checkpoints.for(:testnet)` raises.
 
 ## See also
