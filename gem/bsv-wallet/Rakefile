@@ -1,6 +1,11 @@
 # frozen_string_literal: true
 
 require 'rspec/core/rake_task'
+# rspec/core/rake_task does not pull in Bundler, but the docs:* tasks below
+# call Bundler.with_unbundled_env. Without this require a bare `rake docs:build`
+# (run outside `bundle exec`) dies with `NameError: uninitialized constant
+# Bundler`. `bundle exec` masks the gap by loading Bundler itself.
+require 'bundler'
 
 RSpec::Core::RakeTask.new(:spec)
 

@@ -22,10 +22,11 @@ Auto-generated from source using [YARD](https://yardoc.org/).
 > Output lands in `docs/reference/api/` (sibling to the authored reference docs in `docs/reference/`).
 
 <!--
-Below this point, the module/class lists are appended by
-`generate_reference_index` in gem/bsv-wallet/Rakefile when
-`rake docs:generate` runs. The committed file is a placeholder
-so a fresh clone can build the site without first running
-docs:generate (which would otherwise leave broken links to
-per-class pages that aren't committed — only index.md is).
+This whole file is overwritten by `generate_reference_index` in
+gem/bsv-wallet/Rakefile when `rake docs:generate` runs — it opens the
+file with mode 'w' and rewrites the frontmatter, body, and the
+module/class lists. The committed file is a placeholder so a fresh
+clone can build the site without first running docs:generate (which
+would otherwise leave broken links to per-class pages that aren't
+committed — only index.md is).
 -->
