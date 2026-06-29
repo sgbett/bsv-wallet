@@ -452,6 +452,25 @@ RSpec.describe 'Schema migration', :store do
     ensure
       bad_store&.disconnect
     end
+
+    it 'restores Output.expected_root_script to prior value when migrate! raises' do
+      # Stand-in for whichever wallet was active before the failed migrate!.
+      # If the rescue branch didn't restore, this would be replaced by the
+      # failed wallet's expected script — and the next validator in the
+      # process would validate against the wrong wallet's literal.
+      prior_script = BSV::Script::Script.p2pkh_lock("\x55".b * 20).to_binary
+      BSV::Wallet::Store::Models::Output.expected_root_script = prior_script
+
+      bad_store = BSV::Wallet::Store.connect(
+        'sqlite::memory:', identity_pubkey_hash: ("\x66".b * 20)
+      )
+      allow(Sequel::Migrator).to receive(:run).and_raise(StandardError, 'simulated migration failure')
+
+      expect { bad_store.migrate! }.to raise_error(StandardError, /simulated migration failure/)
+      expect(BSV::Wallet::Store::Models::Output.expected_root_script).to eq(prior_script)
+    ensure
+      bad_store&.disconnect
+    end
   end
 
   describe 'cross-wallet contamination (per-instance threading)' do

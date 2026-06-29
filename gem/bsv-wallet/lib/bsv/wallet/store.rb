@@ -84,12 +84,19 @@ module BSV
       def migrate!(target: nil)
         Sequel.extension :migration
         migrations_path = File.expand_path('../../../db/migrations', __dir__)
+        # Capture so we can restore on failure — leaving a partially-migrated
+        # wallet's hash in the class accessor would silently poison validators
+        # for whatever wallet runs next in the same process.
+        prior_expected_root_script = models::Output.expected_root_script
         if @identity_pubkey_hash
           BSV::Wallet::Migration.identity_pubkey_hash = @identity_pubkey_hash
           models::Output.expected_root_script = BSV::Wallet::Migration.expected_root_script
         end
         Sequel::Migrator.run(@db, migrations_path, target: target)
         bind_models!
+      rescue StandardError
+        models::Output.expected_root_script = prior_expected_root_script
+        raise
       ensure
         BSV::Wallet::Migration.identity_pubkey_hash = nil
       end
