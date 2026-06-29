@@ -37,8 +37,10 @@ module E2E
       Integer(run_wallet('balance').strip, 10)
     end
 
-    def send(identity_key, sats)
-      run_wallet('send', identity_key, sats.to_s, '--broadcast=none')
+    def send(identity_key, sats, no_fee: false)
+      args = ['send', identity_key, sats.to_s, '--broadcast=none']
+      args << '--no-fee' if no_fee
+      run_wallet(*args)
     end
 
     def receive(envelope)

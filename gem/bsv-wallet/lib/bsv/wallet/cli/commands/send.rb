@@ -46,7 +46,8 @@ module BSV
           def build_parser
             @options = {}
             OptionParser.new do |opts|
-              opts.banner = 'Usage: bin/wallet send <recipient> <sats> [--broadcast=inline|async|none] [--description=<text>]'
+              opts.banner = 'Usage: bin/wallet send <recipient> <sats> [--broadcast=inline|async|none] ' \
+                            '[--description=<text>] [--fee-rate=<sats_per_kb> | --no-fee]'
 
               opts.on('--broadcast=MODE', %w[inline async none],
                       'Broadcast mode: inline (sync ARC), async (daemon-queued), or none (commit only). Default: inline') do |v|
@@ -57,6 +58,20 @@ module BSV
                       "Action description (default: 'cli-send')") do |v|
                 @options[:description] = v
               end
+
+              # HLR #489 — test-only knobs for off-chain balance specs.
+              # Production broadcasts inherit the wallet default; ARC
+              # rejects zero-fee tx so a stray +--no-fee+ in production
+              # fails at broadcast rather than silently underpaying.
+              opts.on('--fee-rate=SATS_PER_KB', Integer,
+                      'Fee rate in sats/kb (non-negative integer). Default: wallet config') do |v|
+                @options[:fee_rate] = v
+              end
+
+              opts.on('--no-fee',
+                      'Sugar for --fee-rate=0 (rejected by ARC; off-chain assertions only)') do
+                @options[:no_fee] = true
+              end
             end
           end
 
@@ -66,6 +81,7 @@ module BSV
             raise UsageError, 'send requires <recipient> <sats>' if recipient.nil? || sats_arg.nil?
 
             sats = parse_satoshis(sats_arg)
+            fee_rate = resolve_fee_rate
             kind = detect_recipient_kind(recipient)
 
             engine = @ctx[:engine]
@@ -90,9 +106,9 @@ module BSV
 
             case kind
             when :base58
-              call_base58(engine, recipient, sats, description, accept_delayed, no_send)
+              call_base58(engine, recipient, sats, description, accept_delayed, no_send, fee_rate)
             when :identity_key
-              call_identity_key(engine, recipient, sats, description, accept_delayed, no_send)
+              call_identity_key(engine, recipient, sats, description, accept_delayed, no_send, fee_rate)
             end
             0
           end
@@ -171,7 +187,7 @@ module BSV
 
           # No envelope on stdout — the recipient controls the
           # address-resolved key already and finds the output by chain scan.
-          def call_base58(engine, address, sats, description, accept_delayed, no_send)
+          def call_base58(engine, address, sats, description, accept_delayed, no_send, fee_rate)
             pubkey_hash = decode_base58_p2pkh!(address)
             locking_script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
 
@@ -191,7 +207,8 @@ module BSV
               ],
               accept_delayed_broadcast: accept_delayed,
               no_send: no_send,
-              randomize_outputs: false
+              randomize_outputs: false,
+              fee_rate: fee_rate
             )
 
             dtxid = result[:wtxid].reverse.unpack1('H*')
@@ -202,7 +219,7 @@ module BSV
             emit_human "dtxid:    #{dtxid}"
           end
 
-          def call_identity_key(engine, identity_key, sats, description, accept_delayed, no_send)
+          def call_identity_key(engine, identity_key, sats, description, accept_delayed, no_send, fee_rate)
             key_deriver = @ctx[:key_deriver]
             sender_identity_key = @ctx[:identity_key]
 
@@ -241,7 +258,8 @@ module BSV
               ],
               accept_delayed_broadcast: accept_delayed,
               no_send: no_send,
-              randomize_outputs: false
+              randomize_outputs: false,
+              fee_rate: fee_rate
             )
 
             dtxid = result[:wtxid].reverse.unpack1('H*')
@@ -274,6 +292,24 @@ module BSV
             return :async if accept_delayed
 
             :inline
+          end
+
+          # HLR #489 — collapse +--fee-rate+ / +--no-fee+ to the single
+          # +fee_rate+ value forwarded to the engine. Returns +nil+ when
+          # neither is set (engine inherits wallet default). The two
+          # flags together are rejected — pass one or the other.
+          # +--fee-rate=-1+ is also rejected here; +OptionParser+'s
+          # +Integer+ coercion catches non-integers earlier.
+          def resolve_fee_rate
+            raise UsageError, 'send accepts --fee-rate OR --no-fee, not both' if @options.key?(:fee_rate) && @options[:no_fee]
+
+            return 0 if @options[:no_fee]
+            return nil unless @options.key?(:fee_rate)
+
+            rate = @options[:fee_rate]
+            raise UsageError, "send --fee-rate must be a non-negative integer (got #{rate})" if rate.negative?
+
+            rate
           end
         end
       end

@@ -210,7 +210,15 @@ module BSV
                        lock_time: nil, version: nil, labels: nil,
                        sign_and_process: true, accept_delayed_broadcast: true,
                        no_send: false, change_count: nil,
-                       randomize_outputs: true, change_basket: nil)
+                       randomize_outputs: true, change_basket: nil,
+                       fee_rate: nil)
+        # +fee_rate:+ override (HLR #489 — test-only knob for off-chain
+        # balance assertions). When non-nil, +@fee_model+ and +@tx_builder+
+        # are swapped for the duration of this call, mirroring the
+        # +@bypass_limp_mode+ mutation-block pattern used elsewhere.
+        # Validates non-negative integer or raises +InvalidParameterError+.
+        prior_fee_state = swap_fee_model!(fee_rate)
+
         # Caller-supplied inputs: explicit array (possibly empty) — the
         # wallet does not extend this set. inputs: nil means "select for me".
         caller_supplied_inputs = !inputs.nil?
@@ -354,6 +362,8 @@ module BSV
         dispatch_broadcast(action.id, atomic_beef, intent: intent)
 
         { wtxid: built[:wtxid], atomic_beef: atomic_beef }
+      ensure
+        restore_fee_model!(prior_fee_state) if prior_fee_state
       end
 
       # Complete the deferred-signing flow: locate the parked action,
@@ -1044,7 +1054,8 @@ module BSV
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash] { wtxid:, atomic_beef:, sender_identity_key:, outputs: [{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }] }
-      def send_payment(recipient:, satoshis:, no_send: false, accept_delayed_broadcast: true)
+      def send_payment(recipient:, satoshis:, no_send: false, accept_delayed_broadcast: true,
+                       fee_rate: nil)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -1075,12 +1086,16 @@ module BSV
         # randomize_outputs: false guarantees the payment output stays at
         # index 0. Change outputs from +TxBuilder#build_change+ are appended
         # after caller outputs.
+        #
+        # +fee_rate:+ (HLR #489) is forwarded for off-chain balance specs
+        # that need a deterministic debit equal to +satoshis+ exactly.
+        # Production callers omit it and inherit the wallet default.
         result = build_action(
           description: "send #{satoshis} sats",
           outputs: [{ satoshis: satoshis, locking_script: locking_script,
                       spendable_intent: 'none' }],
           no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
-          randomize_outputs: false
+          randomize_outputs: false, fee_rate: fee_rate
         )
 
         {
@@ -1383,6 +1398,30 @@ module BSV
 
       def require_key_deriver!
         raise BSV::Wallet::Error.new('wallet has no key deriver configured', code: 2) unless @key_deriver
+      end
+
+      # Temporarily swap +@fee_model+ / +@tx_builder+ to honour a
+      # caller-supplied +fee_rate:+ on +#build_action+ (HLR #489). Returns
+      # the prior pair so +#restore_fee_model!+ can put them back, or
+      # +nil+ when no override was requested (so the +ensure+ branch is a
+      # no-op for the default code path). Validation lives here so every
+      # caller (direct or via +#send_payment+) hits the same gate.
+      def swap_fee_model!(fee_rate)
+        return nil if fee_rate.nil?
+        unless fee_rate.is_a?(Integer) && !fee_rate.negative?
+          raise BSV::Wallet::InvalidParameterError.new(
+            'fee_rate', "must be a non-negative integer, got #{fee_rate.inspect}"
+          )
+        end
+
+        prior = [@fee_model, @tx_builder]
+        @fee_model = BSV::Transaction::FeeModels::SatoshisPerKilobyte.new(value: fee_rate)
+        @tx_builder = TxBuilder.new(key_deriver: @key_deriver, fee_model: @fee_model)
+        prior
+      end
+
+      def restore_fee_model!(prior)
+        @fee_model, @tx_builder = prior
       end
 
       # Find an available WBIKD slot or create one via self-payment.

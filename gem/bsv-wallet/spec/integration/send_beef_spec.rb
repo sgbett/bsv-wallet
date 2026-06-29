@@ -20,25 +20,16 @@ RSpec.describe 'wallet send (BEEF handover)' do # rubocop:disable RSpec/Describe
   let!(:dst_funds) { dst.available_funds } # rubocop:disable RSpec/ScatteredLet
 
   before do # rubocop:disable RSpec/ScatteredSetup
-    envelope = src.send(dst.identity_key, sats)
+    # +no_fee: true+ pins the build to zero fee (HLR #489) so the sender
+    # debit is exactly +sats+ — the equality below is then both the
+    # observation and the regression guard for the HLR #467 bug (debit
+    # below +sats+ would mean the recipient output is still classified as
+    # sender-spendable). The action never broadcasts (+--broadcast=none+)
+    # so ARC's zero-fee rejection doesn't apply.
+    envelope = src.send(dst.identity_key, sats, no_fee: true)
     dst.receive(envelope)
   end
 
   it { expect(dst.available_funds).to eq(dst_funds + sats) }
-
-  it 'sender funds drop by the payment amount plus the broadcast fee (within tolerance)' do
-    # With HLR #467 in place +send.rb+ marks the outbound output
-    # +spendable_intent: 'none'+ at construction time (no inference from
-    # derivation columns); the engine cannot re-classify the recipient
-    # output as wallet-owned. The sender balance therefore drops by
-    # +sats + fee+. Fee at 100 sats/kb on a 1-in-2-out tx is in the
-    # 25-100 sat range; we allow 1000 sats of headroom above +sats+ to
-    # cover multi-input selection. The +>= sats+ lower bound is the
-    # load-bearing regression guard — debit below +sats+ means the
-    # recipient output is still being classified as sender-spendable
-    # (the HLR #467 bug).
-    debit = src_funds - src.available_funds
-    expect(debit).to be_within(1000).of(sats)
-    expect(debit).to be >= sats
-  end
+  it { expect(src.available_funds).to eq(src_funds - sats) }
 end
