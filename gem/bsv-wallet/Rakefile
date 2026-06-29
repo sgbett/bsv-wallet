@@ -111,7 +111,7 @@ namespace :docs do # rubocop:disable Metrics/BlockLength
 
     errors = []
 
-    md_files.each do |path|
+    md_files.each do |path| # rubocop:disable Metrics/BlockLength
       content = File.read(path)
 
       unless content.start_with?('---')
