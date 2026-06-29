@@ -296,13 +296,21 @@ module BSV
                     '(must be a non-negative integer)'
             end
 
+            # Defence in depth — the receive boundary is the untrusted
+            # ingress, so validate the BRC-29 derivation tokens against
+            # the same contract the send-side helper enforces. Without
+            # this, a malformed envelope passes here, propagates into
+            # +outputs+ via +import_beef+, and only blows up when the
+            # wallet later tries to spend the output (deep in
+            # +Engine::TxBuilder#derive_signing_key+) — stranding the
+            # UTXO. Translate the helper's exception into a clean
+            # boundary +UsageError+.
             { derivation_prefix: out[:derivation_prefix],
               derivation_suffix: out[:derivation_suffix] }.each do |field, value|
-              next if value.is_a?(String) && !value.empty?
-
+              BSV::Wallet::BRC29.validate_derivation_token!(value, role: field.to_s)
+            rescue BSV::Wallet::BRC29::InvalidDerivationToken => e
               raise UsageError,
-                    "envelope output [#{idx}] missing or invalid \"#{field}\" " \
-                    '(required for BRC-29 key recovery: must be a non-empty string)'
+                    "envelope output [#{idx}] invalid \"#{field}\": #{e.message}"
             end
           end
 

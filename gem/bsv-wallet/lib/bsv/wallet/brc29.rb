@@ -44,6 +44,16 @@ module BSV
         "#{prefix} #{suffix}"
       end
 
+      # Validate a BRC-29 derivation token (prefix or suffix) against the
+      # charset/length contract without composing a key_id. Used at
+      # untrusted boundaries (e.g. the CLI envelope ingress) to reject
+      # adversarial values at the boundary rather than letting them
+      # surface as InvalidDerivationToken mid-spend later.
+      #
+      # @param token [String] the derivation token to validate
+      # @param role [String] descriptor for error messages ('prefix' /
+      #   'suffix' / 'derivation_prefix' / etc.)
+      # @raise [InvalidDerivationToken] on any contract violation
       def self.validate_derivation_token!(token, role:)
         unless token.is_a?(String)
           raise InvalidDerivationToken,
@@ -67,7 +77,6 @@ module BSV
               "BRC-29 derivation #{role} contains characters outside the base64url subset " \
               "[A-Za-z0-9+/=_-] (got #{token.inspect})"
       end
-      private_class_method :validate_derivation_token!
     end
   end
 end

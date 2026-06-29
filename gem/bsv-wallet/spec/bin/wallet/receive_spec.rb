@@ -269,7 +269,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       path = File.join(tmpdir, 'bad.json')
       File.write(path, bad)
       expect { command.call(["--file=#{path}"]) }
-        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "derivation_prefix"/)
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_prefix".*must be a String/)
     end
 
     it 'raises UsageError when an envelope output is missing derivation_suffix' do
@@ -280,7 +280,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       path = File.join(tmpdir, 'bad.json')
       File.write(path, bad)
       expect { command.call(["--file=#{path}"]) }
-        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "derivation_suffix"/)
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_suffix".*must be a String/)
     end
 
     it 'raises UsageError when derivation_prefix is empty string' do
@@ -291,7 +291,40 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       path = File.join(tmpdir, 'bad.json')
       File.write(path, bad)
       expect { command.call(["--file=#{path}"]) }
-        .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "derivation_prefix"/)
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_prefix".*must not be empty/)
+    end
+
+    it 'raises UsageError when derivation_prefix contains whitespace' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: 100,
+                                      derivation_prefix: 'abc def', derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_prefix".*outside the base64url subset/)
+    end
+
+    it 'raises UsageError when derivation_suffix contains a control byte' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: 100,
+                                      derivation_prefix: 'p', derivation_suffix: "x\x01y" }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_suffix".*outside the base64url subset/)
+    end
+
+    it 'raises UsageError when derivation_prefix exceeds the byte cap' do
+      bad = JSON.generate(beef: beef_hex,
+                          sender_identity_key: sender_key,
+                          outputs: [{ vout: 0, satoshis: 100,
+                                      derivation_prefix: 'A' * 129, derivation_suffix: '1' }])
+      path = File.join(tmpdir, 'bad.json')
+      File.write(path, bad)
+      expect { command.call(["--file=#{path}"]) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /invalid "derivation_prefix".*exceeds 128-byte limit/)
     end
 
     # JSON faithfully decodes whatever shape the operator supplies —
