@@ -1053,6 +1053,8 @@ module BSV
       #   + return BEEF for peer-to-peer handoff without ever publishing."
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
+      # @param fee_rate [Integer, nil] sats/kb override for this call.
+      #   Default +nil+ (inherit wallet default — 100 sats/kb). HLR #489.
       # @return [Hash] { wtxid:, atomic_beef:, sender_identity_key:, outputs: [{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }] }
       def send_payment(recipient:, satoshis:, no_send: false, accept_delayed_broadcast: true,
                        fee_rate: nil)

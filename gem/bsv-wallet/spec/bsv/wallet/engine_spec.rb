@@ -1157,15 +1157,21 @@ RSpec.describe BSV::Wallet::Engine do
 
       it 'restores the engine default fee model even when the build raises' do
         prior_model = engine_with_keys.instance_variable_get(:@fee_model)
+        prior_builder = engine_with_keys.instance_variable_get(:@tx_builder)
 
+        # +sign_and_process: false+ with +inputs: nil+ trips a named
+        # parameter-combination guard inside +#build_action+ AFTER
+        # +swap_fee_model!+ has already mutated state. The method-level
+        # +ensure+ must restore both +@fee_model+ and +@tx_builder+.
         expect do
           engine_with_keys.build_action(
-            description: 'raising build',
-            inputs: [], outputs: [], fee_rate: 0 # empty outputs trip a downstream guard
+            description: 'raise after swap',
+            sign_and_process: false, fee_rate: 0
           )
-        end.to raise_error(StandardError)
+        end.to raise_error(BSV::Wallet::InvalidParameterError, /sign_and_process/)
 
         expect(engine_with_keys.instance_variable_get(:@fee_model)).to equal(prior_model)
+        expect(engine_with_keys.instance_variable_get(:@tx_builder)).to equal(prior_builder)
       end
 
       it 'rejects a negative fee_rate' do
