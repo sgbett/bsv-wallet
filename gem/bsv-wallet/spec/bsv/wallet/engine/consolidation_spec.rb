@@ -109,6 +109,46 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       end
     end
 
+    # Regression for the HLR #467 + sweep interaction: when the recipient
+    # is the wallet's own identity key, the sweep output's locking script
+    # is byte-identical to +Migration.expected_root_script+. Without the
+    # self-recipient detection +Engine#sweep+ added, the output spec
+    # would hard-code +spendable_intent: 'none'+ — yielding the
+    # (root_pattern=true, controls_present=false, intent='none')
+    # permutation (row 2 of the 8-permutation matrix, invalid). Both
+    # +Output#validate+ and the DB CHECK would reject, breaking the
+    # +sweep_to_root(recipient: nil)+ default — the "tidy my own wallet"
+    # operator workflow + +rake wallet:cleanup[alice]+.
+    #
+    # Tests stub +build_action+ to assert the intent value carried in
+    # without hitting the persistence layer (the suite's DB has its
+    # CHECK literal pinned to a fixture identity_pubkey_hash that
+    # doesn't match this spec's randomly-generated +key_deriver+; a
+    # full-stack assertion would require coordinated key setup).
+    context 'spendable_intent on the sweep output (HLR #467 self-recipient discriminator)' do
+      before { fund_with_outputs(satoshis: 10_000, count: 4) }
+
+      it 'is "spendable" when the recipient is the wallet itself (self-sweep)' do
+        allow(engine_with_keys).to receive(:build_action).and_return(wtxid: 'fake', atomic_beef: 'fake')
+
+        engine_with_keys.sweep(recipient: key_deriver.identity_key)
+
+        expect(engine_with_keys).to have_received(:build_action).with(
+          hash_including(outputs: array_including(hash_including(spendable_intent: 'spendable')))
+        )
+      end
+
+      it 'is "none" when the recipient is a third party' do
+        allow(engine_with_keys).to receive(:build_action).and_return(wtxid: 'fake', atomic_beef: 'fake')
+
+        engine_with_keys.sweep(recipient: recipient) # freshly-generated, not self
+
+        expect(engine_with_keys).to have_received(:build_action).with(
+          hash_including(outputs: array_including(hash_including(spendable_intent: 'none')))
+        )
+      end
+    end
+
     context 'when the wallet has no spendable outputs' do
       it 'returns nil' do
         expect(engine_with_keys.sweep(recipient: recipient)).to be_nil

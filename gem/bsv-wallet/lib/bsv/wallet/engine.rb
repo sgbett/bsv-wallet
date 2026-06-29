@@ -1171,9 +1171,8 @@ module BSV
         # literal P2PKH of that pubkey's hash160, so a future +import_wallet+
         # on the recipient side rediscovers it by scanning the root address.
         recipient_pub = [recipient].pack('H*')
-        locking_script = BSV::Script::Script.p2pkh_lock(
-          BSV::Primitives::Digest.hash160(recipient_pub)
-        ).to_binary
+        recipient_hash = BSV::Primitives::Digest.hash160(recipient_pub)
+        locking_script = BSV::Script::Script.p2pkh_lock(recipient_hash).to_binary
 
         # Compute the fee with the same FeeModel + templated-tx shape
         # +TxBuilder#build_change+ uses, so the funding loop's exact-fee
@@ -1192,19 +1191,23 @@ module BSV
         # the caller knows what they asked for.
         #
         # Wallet-vocab porcelain calls +#build_action+ directly (ADR-026 /
-        # ADR-027). +spendable_intent: 'none'+ marks the sweep output as
-        # the recipient's, not ours (HLR #467 / +intent-and-outcomes.md+):
-        # an outbound payment the wallet must not insert into its UTXO set.
-        # Per the principle, intent is stated explicitly — no inference from
-        # the absence of derivation fields. +send_payment+ follows the same
-        # shape.
+        # ADR-027). +spendable_intent+ depends on whether the recipient is
+        # the wallet itself (the +sweep_to_root+ default — "tidy my own
+        # wallet" case): the output is then a root P2PKH to our own
+        # identity, structurally wallet-owned, must be +'spendable'+ to
+        # satisfy the matrix's only valid root row (HLR #467 row 1).
+        # Anything else is outbound → +'none'+. Without this discriminator
+        # +sweep_to_root(recipient: nil)+ would write a row at row 2 of
+        # the matrix (root_pattern + no controls + +'none'+) — invalid,
+        # rejected by both the model validator and the DB CHECK.
+        intent = recipient_hash == @key_deriver.identity_pubkey_hash ? 'spendable' : 'none'
         @bypass_limp_mode = true
         begin
           build_action(
             description: 'sweep',
             inputs: input_specs,
             outputs: [{ satoshis: total - fee, locking_script: locking_script,
-                        spendable_intent: 'none' }],
+                        spendable_intent: intent }],
             no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
             randomize_outputs: false,
             change_count: 1
@@ -1420,15 +1423,22 @@ module BSV
         # protocol-reserved basket name (+p wbikd+) that the conformance
         # layer's +validate_basket_name!+ legitimately rejects from
         # application callers. Same Engine-direct pattern as +import_utxo+.
+        #
+        # Engine-direct callers must state +spendable_intent+ explicitly
+        # (HLR #467 — the BRC-100 wrapper's default-translation does not
+        # apply here). Slot output is a BRC-42 self-payment → +'spendable'+;
+        # OP_RETURN marker is provably unspendable → +'none'+.
         create_result = build_action(
           description: 'wbikd slot creation',
           accept_delayed_broadcast: false,
           outputs: [
             { satoshis: slot_sats, locking_script: script,
               basket: 'p wbikd',
+              spendable_intent: 'spendable',
               derivation_prefix: prefix, derivation_suffix: suffix,
               sender_identity_key: @key_deriver.identity_key },
-            { satoshis: 0, locking_script: op_return_script }
+            { satoshis: 0, locking_script: op_return_script,
+              spendable_intent: 'none' }
           ],
           randomize_outputs: false
         )
