@@ -65,7 +65,15 @@ namespace :fixtures do
     BSV::Wallet::Fixtures.load_config_file!
     rebuilder = BSV::Wallet::Fixtures::Rebuilder.new
     if args[:sats]
-      rebuilder.fund(name, sats: args[:sats].to_i)
+      # Strict parse — +to_i+ silently coerces +"500000abc"+ to
+      # +500000+ and +"abc"+ to +0+. For a task that broadcasts real
+      # funds, fail loud at the rake boundary instead.
+      sats = begin
+        Integer(args[:sats], 10)
+      rescue ArgumentError, TypeError
+        abort "fixtures:fund sats must be a base-10 integer (got #{args[:sats].inspect})"
+      end
+      rebuilder.fund(name, sats: sats)
     else
       rebuilder.fund(name)
     end
