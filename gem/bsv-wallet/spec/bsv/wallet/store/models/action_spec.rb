@@ -54,14 +54,16 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
 
     it 'has many outputs' do
       action = described_class.create(description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Store::Models::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
-      BSV::Wallet::Store::Models::Output.create(action_id: action.id, satoshis: 500, vout: 1, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      # Use unique non-root scripts so each output's vout differs and the
+      # spendable_recoverable CHECK doesn't trip on duplicate root literals.
+      BSV::Wallet::Store::Models::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), spendable_intent: 'none')
+      BSV::Wallet::Store::Models::Output.create(action_id: action.id, satoshis: 500, vout: 1, locking_script: SecureRandom.random_bytes(25), spendable_intent: 'none')
       expect(action.reload.outputs.count).to eq(2)
     end
 
     it 'has many inputs' do
       source = described_class.create(description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      output = BSV::Wallet::Store::Models::Output.create(action_id: source.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      output = BSV::Wallet::Store::Models::Output.create(action_id: source.id, satoshis: 1000, vout: 0, locking_script: TEST_ROOT_LOCKING_SCRIPT, spendable_intent: 'spendable')
       action = described_class.create(description: 'test action')
       BSV::Wallet::Store::Models::Input.create(action_id: action.id, output_id: output.id, vin: 0)
       expect(action.reload.inputs.count).to eq(1)
@@ -95,7 +97,7 @@ RSpec.describe BSV::Wallet::Store::Models::Action, :store do
       # :unproven now gates on the existence of a promotions row (#307) — the
       # post-broadcast-acceptance fact, not merely the presence of outputs.
       action = described_class.create(description: 'test action', wtxid: SecureRandom.random_bytes(32), raw_tx: raw_tx)
-      BSV::Wallet::Store::Models::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: SecureRandom.random_bytes(25), output_type: 'root')
+      BSV::Wallet::Store::Models::Output.create(action_id: action.id, satoshis: 1000, vout: 0, locking_script: TEST_ROOT_LOCKING_SCRIPT, spendable_intent: 'spendable')
       # Send-path promotion: the broadcasts row holds the authorising tx_status
       # that the promotions row's composite FK references.
       BSV::Wallet::Store::Models::Broadcast.create(action_id: action.id, intent: 'delayed', tx_status: 'QUEUED')

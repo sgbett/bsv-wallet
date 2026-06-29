@@ -102,6 +102,8 @@ The reasoning is recorded in `project_pubkey_hex_exception` (memory). The decisi
 
 Two design principles shape the wallet from the outside in. Both are documented in `docs/reference/`; the canonical wording lives there, this section is the at-a-glance summary for coding sessions. New behaviour that contradicts either is almost certainly wrong.
 
+**Hot-path rule:** No triggers on the hot path — see `docs/reference/hot-path-design.md` (denormalise + composite FK + CHECK instead). Intent stated explicitly, never inferred — see `docs/reference/intent-and-outcomes.md`.
+
 ### Principle of state
 
 > The database schema is the canonical source of truth for what is valid. All state-changing operations mutate the database atomically from one valid state to another. Invalid state is structurally impossible because the schema's constraints will reject it.

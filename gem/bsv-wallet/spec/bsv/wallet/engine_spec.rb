@@ -245,6 +245,10 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'attaches labels' do
+      # HLR #467 — outputs without derivation are outbound; use the
+      # BRC-100 +spendable: false+ flag (translates to engine
+      # +spendable_intent: 'none'+). OP_TRUE is a synthetic stand-in,
+      # not a wallet-owned address.
       engine.brc100.create_action(
         description: 'labeled action',
         inputs: [],
@@ -252,7 +256,7 @@ RSpec.describe BSV::Wallet::Engine do
         labels: %w[payment urgent],
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
-            output_description: 'output' }
+            output_description: 'output', spendable: false }
         ]
       )
 
@@ -665,6 +669,10 @@ RSpec.describe BSV::Wallet::Engine do
           satoshis: satoshis, vout: i,
           locking_script: script_binary,
           basket: nil,
+          # HLR #467 — explicit intent. These outputs back the wallet's
+          # spendable pool for the +#apply_spends+ suite; always
+          # +'spendable'+.
+          spendable_intent: 'spendable',
           derivation_prefix: prefix,
           derivation_suffix: out_suffix,
           sender_identity_key: sender_identity_key
@@ -687,7 +695,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'deferred p2pkh',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
-          outputs: [{ satoshis: 900, locking_script: output_script }]
+          outputs: [{ satoshis: 900, locking_script: output_script, spendable: false }]
         )
 
         reference = create_result[:signable_transaction][:reference]
@@ -734,7 +742,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'deferred caller',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
-          outputs: [{ satoshis: 900, locking_script: output_script }]
+          outputs: [{ satoshis: 900, locking_script: output_script, spendable: false }]
         )
 
         reference = create_result[:signable_transaction][:reference]
@@ -769,7 +777,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'deferred mixed',
           sign_and_process: false,
           inputs: output_ids.each_with_index.map { |id, i| { output_id: id, vin: i } },
-          outputs: [{ satoshis: 1800, locking_script: output_script }]
+          outputs: [{ satoshis: 1800, locking_script: output_script, spendable: false }]
         )
 
         reference = create_result[:signable_transaction][:reference]
@@ -809,7 +817,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'deferred valid caller',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
-          outputs: [{ satoshis: 900, locking_script: OP_TRUE }]
+          outputs: [{ satoshis: 900, locking_script: OP_TRUE, spendable: false }]
         )
 
         # Produce a genuinely-valid P2PKH unlock by signing the wallet's own
@@ -849,7 +857,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'deferred invalid',
           inputs: [],
           sign_and_process: false,
-          outputs: [{ satoshis: 0, locking_script: OP_TRUE }]
+          outputs: [{ satoshis: 0, locking_script: OP_TRUE, spendable: false }]
         )
 
         reference = create_result[:signable_transaction][:reference]
@@ -865,7 +873,10 @@ RSpec.describe BSV::Wallet::Engine do
 
     context 'output persistence at stage time' do
       it 'writes outputs with no promotions row during deferred create_action' do
-        binary_script = "\x76\xa9\x14".b + ("\x00" * 20).b + "\x88\xac".b
+        # Non-root locking script — derived outputs (carrying the derivation
+        # triple) must use a non-root script after HLR #467 (root + controls
+        # is a structurally impossible combination).
+        binary_script = SecureRandom.random_bytes(25)
         create_result = engine.brc100.create_action(
           description: 'deferred promo',
           inputs: [],
@@ -894,7 +905,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'deferred rawtx',
           inputs: [],
           sign_and_process: false,
-          outputs: [{ satoshis: 0, locking_script: OP_TRUE }]
+          outputs: [{ satoshis: 0, locking_script: OP_TRUE, spendable: false }]
         )
 
         action = store.find_action(reference: create_result[:signable_transaction][:reference])
@@ -946,7 +957,7 @@ RSpec.describe BSV::Wallet::Engine do
           description: 'deferred seqnum',
           sign_and_process: false,
           inputs: [{ output_id: output_id }],
-          outputs: [{ satoshis: 900, locking_script: output_script }]
+          outputs: [{ satoshis: 900, locking_script: output_script, spendable: false }]
         )
 
         reference = create_result[:signable_transaction][:reference]
@@ -970,7 +981,7 @@ RSpec.describe BSV::Wallet::Engine do
         sign_and_process: false,
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
-            output_description: 'output' }
+            output_description: 'output', spendable: false }
         ]
       )
 
@@ -1008,11 +1019,14 @@ RSpec.describe BSV::Wallet::Engine do
   # return shapes the wrap layer translates from.
   describe '#build_action (wallet-vocab primitive)' do
     it 'returns { wtxid:, atomic_beef: } on the synchronous path' do
+      # HLR #467 — engine vocab uses +spendable_intent:+ directly (not
+      # the BRC-100 +spendable:+ Int8 flag). BRC-42-derived output → spendable.
       result = engine.build_action(
         description: 'sync primitive',
         inputs: [],
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
+            spendable_intent: 'spendable',
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
             sender_identity_key: 'self' }
         ]
@@ -1027,7 +1041,7 @@ RSpec.describe BSV::Wallet::Engine do
       fund_wallet(satoshis: 100_000, basket: nil, suffix: 'do_build_no_send')
       result = engine_with_keys.build_action(
         description: 'no_send primitive',
-        outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
+        outputs: [{ satoshis: 10_000, locking_script: OP_TRUE, spendable_intent: 'none' }],
         no_send: true
       )
 
@@ -1044,6 +1058,7 @@ RSpec.describe BSV::Wallet::Engine do
         inputs: [], sign_and_process: false,
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
+            spendable_intent: 'spendable',
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
             sender_identity_key: 'self' }
         ]
@@ -1068,7 +1083,7 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet(satoshis: 100_000, basket: nil, suffix: 'change_basket_routes')
         engine_with_keys.build_action(
           description: 'change-into-basket',
-          outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
+          outputs: [{ satoshis: 10_000, locking_script: OP_TRUE, spendable_intent: 'none' }],
           no_send: true,
           change_basket: 'importedfunds'
         )
@@ -1091,7 +1106,7 @@ RSpec.describe BSV::Wallet::Engine do
         fund_wallet(satoshis: 100_000, basket: nil, suffix: 'change_basket_default')
         engine_with_keys.build_action(
           description: 'change-unbasketed',
-          outputs: [{ satoshis: 10_000, locking_script: OP_TRUE }],
+          outputs: [{ satoshis: 10_000, locking_script: OP_TRUE, spendable_intent: 'none' }],
           no_send: true
         )
 
@@ -1104,11 +1119,14 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#sign_action (wallet-vocab primitive)' do
     let(:deferred_reference) do
+      # HLR #467 — engine-vocab call, intent stated explicitly.
+      # BRC-42-derived output (wallet-owned) → +'spendable'+.
       result = engine.build_action(
         description: 'parked for sign primitive',
         inputs: [], sign_and_process: false,
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
+            spendable_intent: 'spendable',
             derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
             sender_identity_key: 'self' }
         ]
@@ -1143,12 +1161,14 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#abort_action (wallet-vocab primitive)' do
     let(:deferred_reference) do
+      # HLR #467 — engine-vocab call (no BRC-100 wrapper), so state intent
+      # directly. OP_TRUE is a synthetic outbound stand-in.
       result = engine.build_action(
         description: 'parked for abort primitive',
         inputs: [], sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: OP_TRUE,
-            output_description: 'output' }
+            output_description: 'output', spendable_intent: 'none' }
         ]
       )
       result[:signable][:reference]
@@ -1283,7 +1303,7 @@ RSpec.describe BSV::Wallet::Engine do
       engine.brc100.create_action(
         description: 'internal action',
         inputs: [],
-        outputs: [{ satoshis: 0, locking_script: OP_TRUE, output_description: 'out' }],
+        outputs: [{ satoshis: 0, locking_script: OP_TRUE, output_description: 'out', spendable: false }],
         no_send: true
       )
       action_id = store.send(:models)::Action.where(description: 'internal action').last.id
@@ -1299,15 +1319,15 @@ RSpec.describe BSV::Wallet::Engine do
       # within strict validate_for_handoff!'s output_total <= input_total.
       engine.brc100.create_action(
         description: 'payment action', inputs: [], no_send: true, labels: ['payment'],
-        outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x01".b }]
+        outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x01".b, spendable: false }]
       )
       engine.brc100.create_action(
         description: 'transfer action', inputs: [], no_send: true, labels: ['transfer'],
-        outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x02".b }]
+        outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x02".b, spendable: false }]
       )
       engine.brc100.create_action(
         description: 'both labels', inputs: [], no_send: true, labels: %w[payment transfer],
-        outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x03".b }]
+        outputs: [{ satoshis: 0, output_description: 'output', locking_script: "\x03".b, spendable: false }]
       )
     end
 
@@ -2547,7 +2567,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: outputs_by_id.each_with_index.map { |o, i| { output_id: o[:id], vin: i } },
           outputs: [
             { satoshis: 1400, locking_script: output_script,
-              output_description: 'combined', basket: 'payments' }
+              output_description: 'combined', basket: 'payments', spendable: false }
           ],
           randomize_outputs: false
         )
@@ -2600,11 +2620,11 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [{ output_id: output_id }],
           outputs: [
             { satoshis: 600, locking_script: caller_scripts[0],
-              output_description: 'first', basket: 'payments' },
+              output_description: 'first', basket: 'payments', spendable: false },
             { satoshis: 700, locking_script: caller_scripts[1],
-              output_description: 'second', basket: 'payments' },
+              output_description: 'second', basket: 'payments', spendable: false },
             { satoshis: 500, locking_script: caller_scripts[2],
-              output_description: 'third', basket: 'payments' }
+              output_description: 'third', basket: 'payments', spendable: false }
           ],
           randomize_outputs: false
         )
@@ -2642,7 +2662,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [{ output_id: output_id }],
           outputs: [
             { satoshis: 900, locking_script: output_script,
-              output_description: 'output', basket: 'wallet' }
+              output_description: 'output', basket: 'wallet', spendable: false }
           ],
           randomize_outputs: false
         )
@@ -2673,7 +2693,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [{ output_id: output_id }],
           outputs: [
             { satoshis: 900, locking_script: output_script,
-              output_description: 'output', basket: 'wallet' }
+              output_description: 'output', basket: 'wallet', spendable: false }
           ]
         )
 
@@ -2726,7 +2746,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [{ output_id: output_id }],
           outputs: [
             { satoshis: 900, locking_script: output_script,
-              output_description: 'output' }
+              output_description: 'output', spendable: false }
           ]
         )
 
@@ -2763,7 +2783,7 @@ RSpec.describe BSV::Wallet::Engine do
           inputs: [{ output_id: output_id }],
           outputs: [
             { satoshis: 900, locking_script: output_script,
-              output_description: 'output', basket: 'wallet' }
+              output_description: 'output', basket: 'wallet', spendable: false }
           ],
           randomize_outputs: false
         )

@@ -26,10 +26,19 @@ RSpec.describe 'wallet send (BEEF handover)' do # rubocop:disable RSpec/Describe
 
   it { expect(dst.available_funds).to eq(dst_funds + sats) }
 
-  it 'sender funds drop by at least the payment' do
-    pending 'for_self=true in send.rb derives the recipient output in self namespace, ' \
-            'so the engine treats the 10m output as still spendable by sender. ' \
-            'Strict-BRC-29 alignment (HLR #460) will fix.'
-    expect(src.available_funds).to be <= (src_funds - sats)
+  it 'sender funds drop by the payment amount plus the broadcast fee (within tolerance)' do
+    # With HLR #467 in place +send.rb+ marks the outbound output
+    # +spendable_intent: 'none'+ at construction time (no inference from
+    # derivation columns); the engine cannot re-classify the recipient
+    # output as wallet-owned. The sender balance therefore drops by
+    # +sats + fee+. Fee at 100 sats/kb on a 1-in-2-out tx is in the
+    # 25-100 sat range; we allow 1000 sats of headroom above +sats+ to
+    # cover multi-input selection. The +>= sats+ lower bound is the
+    # load-bearing regression guard — debit below +sats+ means the
+    # recipient output is still being classified as sender-spendable
+    # (the HLR #467 bug).
+    debit = src_funds - src.available_funds
+    expect(debit).to be_within(1000).of(sats)
+    expect(debit).to be >= sats
   end
 end

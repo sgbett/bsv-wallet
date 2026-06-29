@@ -159,13 +159,23 @@ module BSV
           # output values+positions)
           signing_keys.each { |idx, key| tx.sign(idx, key) }
 
-          # J. Build change_outputs specs for atomic store write
+          # J. Build change_outputs specs for atomic store write.
+          # +spendable_intent: 'spendable'+ — change outputs are BRC-42
+          # self-payments by construction (the key derived at step B is
+          # the wallet's own); they always join the canonical UTXO set on
+          # promotion. Intent is stated explicitly here (HLR #467 /
+          # +intent-and-outcomes.md+) rather than implied downstream by
+          # +Store#write_change_outputs+'s hardcoded value — the
+          # decision-maker (this builder, which knows the key is the
+          # wallet's) states intent at construction; Store consumes what
+          # the spec declares.
           change_output_specs = surviving_change.map do |co|
             ck = change_keys[change_tx_outputs.index(co)]
             spec = {
               satoshis: co.satoshis,
               vout: tx.outputs.index(co),
               locking_script: ck[:script].to_binary,
+              spendable_intent: 'spendable',
               derivation_prefix: ck[:prefix],
               derivation_suffix: ck[:suffix],
               sender_identity_key: @key_deriver.identity_key

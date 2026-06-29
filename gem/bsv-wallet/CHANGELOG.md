@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Schema (breaking, pre-release)
+
+- Removed `outputs.output_type` column. Spendability intent now expressed by
+  new `outputs.spendable_intent` ENUM (`'spendable' | 'none'`). See HLR #467
+  and `docs/reference/intent-and-outcomes.md`.
+- Per-wallet DB CHECK on outputs enforces structural recoverability — the
+  WIF-derived root P2PKH script is baked into the constraint at migration
+  time. Spendable outputs must either carry derivation controls or match
+  the root P2PKH pattern literally.
+- `prevent_outbound_spendable` trigger removed; replaced declaratively via
+  composite FK + CHECK on `spendable`. No triggers on the hot path
+  (see `docs/reference/hot-path-design.md`).
+- Operators with pre-existing test DBs must DROP and recreate them.
+
 ### Changed (breaking)
 
 - **`list_actions` response shape: derived status `:nosend` renamed to

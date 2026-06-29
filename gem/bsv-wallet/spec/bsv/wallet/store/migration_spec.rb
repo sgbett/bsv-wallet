@@ -29,14 +29,14 @@ RSpec.describe 'Schema migration', :store do
       end.to raise_error(Sequel::DatabaseError)
     end
 
-    it 'rejects invalid output_type values' do
+    it 'rejects invalid spendable_intent values' do
       action_id = insert_action(description: 'test action 12345')
       expect do
         db.transaction(savepoint: true) do
           db[:outputs].insert(
             action_id: action_id, satoshis: 1000, vout: 0,
             locking_script: Sequel.blob(valid_locking_script),
-            output_type: 'bogus'
+            spendable_intent: 'bogus'
           )
         end
       end.to raise_error(Sequel::DatabaseError)
@@ -60,11 +60,11 @@ RSpec.describe 'Schema migration', :store do
       expect(values).to eq(%w[delayed inline none])
     end
 
-    it 'output_type has the correct values' do
+    it 'spendable_intent has the correct values' do
       values = db.from(
-        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'output_type'")
+        Sequel.lit("pg_enum e JOIN pg_type t ON e.enumtypid = t.oid WHERE t.typname = 'spendable_intent'")
       ).select_map(:enumlabel)
-      expect(values).to eq(%w[root outbound])
+      expect(values).to eq(%w[spendable none])
     end
 
     # ARC's metamorph Status enum + IMMUTABLE (wallet's ArcStatus::TERMINAL).
@@ -100,10 +100,12 @@ RSpec.describe 'Schema migration', :store do
 
     it 'stores and retrieves binary locking_script on outputs' do
       action_id = insert_action(description: 'bytea test 12345')
+      # valid_locking_script is random — set spendable_intent='none' so the
+      # spendable_recoverable CHECK accepts it without matching the root literal.
       db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
         locking_script: Sequel.blob(valid_locking_script),
-        output_type: 'root'
+        spendable_intent: 'none'
       )
       row = db[:outputs].first
       expect(row[:locking_script].encoding).to eq(Encoding::BINARY)
@@ -149,7 +151,7 @@ RSpec.describe 'Schema migration', :store do
       output_id = db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
         locking_script: Sequel.blob(valid_locking_script),
-        output_type: 'root'
+        spendable_intent: 'none'
       )
       action2_id = insert_action(description: 'lock test consumer')
       db[:inputs].insert(action_id: action_id, output_id: output_id, vin: 0)
@@ -172,7 +174,7 @@ RSpec.describe 'Schema migration', :store do
       output_id = db[:outputs].insert(
         action_id: action_id, satoshis: 1000, vout: 0,
         locking_script: Sequel.blob(valid_locking_script),
-        output_type: 'root'
+        spendable_intent: 'none'
       )
       lock_action_id = insert_action(description: 'cascade test lock')
       db[:inputs].insert(action_id: lock_action_id, output_id: output_id, vin: 0)
@@ -359,23 +361,166 @@ RSpec.describe 'Schema migration', :store do
       # production migrate! runs). Postgres uses native DDL with no rebuild, so
       # the shared, in-transaction db is fine there.
       if db.database_type == :sqlite
-        rt = BSV::Wallet::Store.connect('sqlite::memory:').db
-        Sequel::Migrator.run(rt, migrations_path)
+        rt = BSV::Wallet::Store.connect('sqlite::memory:', identity_pubkey_hash: TEST_IDENTITY_PUBKEY_HASH).db
+        BSV::Wallet::Migration.identity_pubkey_hash = TEST_IDENTITY_PUBKEY_HASH
+        begin
+          Sequel::Migrator.run(rt, migrations_path)
+        ensure
+          BSV::Wallet::Migration.identity_pubkey_hash = nil
+        end
       else
         rt = db
       end
 
       expect(rt.schema(:broadcasts).to_h).to have_key(:provider)
 
-      Sequel::Migrator.run(rt, migrations_path, target: 0)
-      expected_tables.each do |table|
-        expect(rt.table_exists?(table)).to be(false), "expected table #{table} to be gone after target: 0"
-      end
+      # The down block must run cleanly too. The 001 down drops every table.
+      BSV::Wallet::Migration.identity_pubkey_hash = TEST_IDENTITY_PUBKEY_HASH
+      begin
+        Sequel::Migrator.run(rt, migrations_path, target: 0)
+        expected_tables.each do |table|
+          expect(rt.table_exists?(table)).to be(false), "expected table #{table} to be gone after target: 0"
+        end
 
-      Sequel::Migrator.run(rt, migrations_path)
+        Sequel::Migrator.run(rt, migrations_path)
+      ensure
+        BSV::Wallet::Migration.identity_pubkey_hash = nil
+      end
       expect(rt.schema(:broadcasts).to_h).to have_key(:provider)
 
       rt.disconnect unless rt.equal?(db)
+    end
+  end
+
+  # --- HLR #467 lifecycle + cross-wallet contamination ---
+  #
+  # Two specs guard against silent mis-baking of the per-wallet
+  # +outputs.spendable_recoverable+ CHECK literal:
+  #
+  # 1. Lifecycle: +Migration.identity_pubkey_hash+ is the migration-only
+  #    bridge between the +Store+ instance and the +CREATE TABLE+ DDL.
+  #    +Store#migrate!+ populates it before invoking +Sequel::Migrator+,
+  #    then resets to +nil+ in +ensure+. The +ensure+ branch must fire on
+  #    success and failure equally; otherwise a failed migration would
+  #    leak one wallet's hash into a second wallet's schema.
+  #
+  # 2. Cross-wallet contamination: booting wallet A then wallet B in the
+  #    same process must produce distinct CHECK literals on each. The
+  #    threading is per-instance — +Output.expected_root_script+ is set
+  #    by the most recent +migrate!+ — so a legitimate root-shape insert
+  #    against wallet B succeeds even after wallet A booted first.
+  describe 'Migration.identity_pubkey_hash lifecycle' do
+    # Both specs construct a throwaway Store against an isolated in-memory
+    # SQLite DB. Because +Store.new+ has the side-effect
+    # +Sequel::Model.db = @db+, the suite's +STORE_DB+ must be reinstated
+    # before any later spec runs. The +ensure+ block + +Output.expected_root_script+
+    # restore is what isolates these tests from the suite.
+    around do |example|
+      original_model_db = Sequel::Model.db
+      original_expected_root = BSV::Wallet::Store::Models::Output.expected_root_script
+      example.run
+    ensure
+      Sequel::Model.db = original_model_db
+      BSV::Wallet::Store::Models::Output.expected_root_script = original_expected_root
+      # +Store.new+ also calls +bind_models!+ in +migrate!+ — re-bind to
+      # the suite's +STORE_DB+ so any per-class +klass.dataset = throwaway_db[...]+
+      # binding done by the throwaway store is undone.
+      STORE_INSTANCE.send(:bind_models!)
+    end
+
+    it 'resets to nil after a successful migrate!' do
+      # Postgres can't migrate twice into the suite-pinned DB without a
+      # rebuild; SQLite is the natural fit and the lifecycle is backend-
+      # agnostic.
+      rt_store = BSV::Wallet::Store.connect(
+        'sqlite::memory:', identity_pubkey_hash: ("\x33".b * 20)
+      )
+      rt_store.migrate!
+      expect(BSV::Wallet::Migration.identity_pubkey_hash).to be_nil
+    ensure
+      rt_store&.disconnect
+    end
+
+    it 'resets to nil even when migrate! raises (ensure branch fires)' do
+      bad_store = BSV::Wallet::Store.connect(
+        'sqlite::memory:', identity_pubkey_hash: ("\x44".b * 20)
+      )
+      allow(Sequel::Migrator).to receive(:run).and_raise(StandardError, 'simulated migration failure')
+
+      expect { bad_store.migrate! }.to raise_error(StandardError, /simulated migration failure/)
+      expect(BSV::Wallet::Migration.identity_pubkey_hash).to be_nil
+    ensure
+      bad_store&.disconnect
+    end
+
+    it 'restores Output.expected_root_script to prior value when migrate! raises' do
+      # Stand-in for whichever wallet was active before the failed migrate!.
+      # If the rescue branch didn't restore, this would be replaced by the
+      # failed wallet's expected script — and the next validator in the
+      # process would validate against the wrong wallet's literal.
+      prior_script = BSV::Script::Script.p2pkh_lock("\x55".b * 20).to_binary
+      BSV::Wallet::Store::Models::Output.expected_root_script = prior_script
+
+      bad_store = BSV::Wallet::Store.connect(
+        'sqlite::memory:', identity_pubkey_hash: ("\x66".b * 20)
+      )
+      allow(Sequel::Migrator).to receive(:run).and_raise(StandardError, 'simulated migration failure')
+
+      expect { bad_store.migrate! }.to raise_error(StandardError, /simulated migration failure/)
+      expect(BSV::Wallet::Store::Models::Output.expected_root_script).to eq(prior_script)
+    ensure
+      bad_store&.disconnect
+    end
+  end
+
+  describe 'cross-wallet contamination (per-instance threading)' do
+    # Same isolation rationale as the lifecycle block above —
+    # +Store.new+ rebinds +Sequel::Model.db+ as a side-effect, so this
+    # block must reinstate the suite's binding on the way out.
+    around do |example|
+      original_model_db = Sequel::Model.db
+      original_expected_root = BSV::Wallet::Store::Models::Output.expected_root_script
+      example.run
+    ensure
+      Sequel::Model.db = original_model_db
+      BSV::Wallet::Store::Models::Output.expected_root_script = original_expected_root
+      # +Store.new+ also calls +bind_models!+ in +migrate!+ — re-bind to
+      # the suite's +STORE_DB+ so any per-class +klass.dataset = throwaway_db[...]+
+      # binding done by the throwaway store is undone.
+      STORE_INSTANCE.send(:bind_models!)
+    end
+
+    it "boots two wallets in one process; wallet B's root output is accepted by wallet B's CHECK" do
+      hash_a = ("\x55".b * 20)
+      hash_b = ("\x66".b * 20)
+
+      store_a = BSV::Wallet::Store.connect('sqlite::memory:', identity_pubkey_hash: hash_a)
+      store_a.migrate!
+
+      store_b = BSV::Wallet::Store.connect('sqlite::memory:', identity_pubkey_hash: hash_b)
+      store_b.migrate!
+
+      # Output.expected_root_script reflects the *most recent* migrate!
+      # (wallet B). Wallet B's root script must validate; wallet A's root
+      # script must NOT (it would have validated had threading leaked).
+      root_b = BSV::Script::Script.p2pkh_lock(hash_b).to_binary
+      root_a = BSV::Script::Script.p2pkh_lock(hash_a).to_binary
+
+      ok_output = BSV::Wallet::Store::Models::Output.new(
+        action_id: 1, satoshis: 1000, vout: 0,
+        locking_script: root_b, spendable_intent: 'spendable'
+      )
+      expect(ok_output.valid?).to be(true), "expected wallet B's root to be valid; errors=#{ok_output.errors.full_messages}"
+
+      contaminated = BSV::Wallet::Store::Models::Output.new(
+        action_id: 1, satoshis: 1000, vout: 0,
+        locking_script: root_a, spendable_intent: 'spendable'
+      )
+      expect(contaminated.valid?).to be(false),
+                                     'wallet A root must NOT pass wallet B validation — threading is per-instance'
+    ensure
+      store_a&.disconnect
+      store_b&.disconnect
     end
   end
 end

@@ -29,20 +29,23 @@ RSpec.describe 'Store#sweepable_state (#448)', :store do
   end
 
   # Build a derived (BRC-42-shaped) output spec for promote_action. Derived
-  # outputs have no output_type and carry the prefix/suffix/sender triple.
+  # outputs carry the prefix/suffix/sender triple and a non-root locking
+  # script with spendable_intent='spendable'.
   def derived_output(vout:, sats: 1000)
     { satoshis: sats, vout: vout,
       locking_script: SecureRandom.random_bytes(25),
       derivation_prefix: SecureRandom.uuid, derivation_suffix: vout.to_s,
-      sender_identity_key: 'self' }
+      sender_identity_key: 'self',
+      spendable_intent: 'spendable' }
   end
 
-  # Root output — output_type = 'root', no derivation fields. These are
-  # recoverable from the identity key alone and the guard ignores them.
+  # Root output — locking script matches the per-wallet root P2PKH literal,
+  # no derivation fields. These are recoverable from the identity key alone
+  # and the guard ignores them.
   def root_output(vout:, sats: 1000)
     { satoshis: sats, vout: vout,
-      locking_script: SecureRandom.random_bytes(25),
-      output_type: 'root' }
+      locking_script: TEST_ROOT_LOCKING_SCRIPT,
+      spendable_intent: 'spendable' }
   end
 
   describe 'empty wallet' do

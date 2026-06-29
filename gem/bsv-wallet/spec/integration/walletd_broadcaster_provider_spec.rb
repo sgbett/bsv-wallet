@@ -25,6 +25,13 @@ require 'bsv/wallet/daemon'
 
 RSpec.describe 'walletd broadcaster.provider end-to-end', :postgres do # rubocop:disable RSpec/DescribeClass
   let(:database_url) { ENV.fetch('DATABASE_URL') }
+  # walletd-style boot: no identity_pubkey_hash is passed because walletd
+  # is a broadcast/proof daemon, not an action-creation surface (per HLR
+  # #467 — Migration.expected_root_script raises SchemaIntegrityError on
+  # fresh DBs without it). Safe here because DATABASE_URL points at a DB
+  # already migrated by the CLI; +migrate!+ is a no-op when there are no
+  # pending migrations and the per-wallet CHECK literal is therefore not
+  # re-built.
   let(:store) { BSV::Wallet::Store.connect(database_url).tap(&:migrate!) }
 
   # Zero-input transaction with a single OP_TRUE output. Two reasons:

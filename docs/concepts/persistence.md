@@ -90,7 +90,7 @@ The schema is where the wallet's most important rules are made unbreakable. Thes
 
 **Immutable outputs (with the named deviation).** `outputs.action_id` is `NOT NULL` with an `ON DELETE RESTRICT` foreign key. An output cannot be orphaned or silently deleted at the schema level; cleaning it up requires the dependent action to be removed first, which forces the failure-bounded delete path described above.
 
-**Outbound outputs are never spendable.** A `BEFORE INSERT` trigger (`prevent_outbound_spendable`) forbids a `spendable` row for any output typed `outbound`. The pool *cannot* be handed an output that was paid away.
+**Outbound outputs are never spendable.** HLR #467 makes this declarative: `spendable` denormalises `spendable_intent` from its parent output, pins it to `'spendable'` via CHECK, and FKs the pair against `outputs(id, spendable_intent)`. Either guard alone catches the violation — the pool *cannot* be handed an output the wallet stated `spendable_intent: 'none'` for, with zero PL/pgSQL on the hot path (see [`reference/hot-path-design.md`](../reference/hot-path-design.md)).
 
 **Received history is never deleted.** A `BEFORE DELETE` trigger (`prevent_internal_action_delete`) blocks deleting an internal action (`broadcast_intent = 'none'`) that has a `promotions` row. A `CHECK` can't express this — checks don't fire on `DELETE` — so a trigger is the only mechanism. The promotions-row test is what distinguishes a canonical internal action (deletion forbidden) from an ephemeral zero-output WBIKD lock (deletable).
 
@@ -121,9 +121,9 @@ The schema ships as **three ordered migrations**. The split is functional, not h
 
 | # | Migration | What it establishes |
 |---|-----------|---------------------|
-| 001 | `create_schema` | Every table in its end-state shape, the ARC `tx_status` enum, the `broadcast_intent` and `output_type` enums, and the intent / promotion gating CHECKs that are inseparable from the CREATE TABLE statements. Includes `sse_cursors`, `promotions`, `transmissions`, `transmission_txids` and the `broadcasts.provider` column inline rather than as later additions. |
+| 001 | `create_schema` | Every table in its end-state shape, the ARC `tx_status` enum, the `broadcast_intent` and `spendable_intent` enums (the latter replacing the former `output_type` per HLR #467), and the intent / promotion / spendability gating CHECKs that are inseparable from the CREATE TABLE statements. Includes `sse_cursors`, `promotions`, `transmissions`, `transmission_txids` and the `broadcasts.provider` column inline rather than as later additions. |
 | 002 | `action_id_cascade` | Adds denormalised `action_id` FK columns on the leaf tables with `ON DELETE CASCADE`, so an aborted action's rows are reclaimed cleanly without an application-side delete sweep. |
-| 003 | `schema_constraints` | All length, range, and parity checks; the BRC-43 hex CHECK on `transmissions.counterparty`; the two triggers (`prevent_outbound_spendable`, `prevent_internal_action_delete`). |
+| 003 | `schema_constraints` | All length, range, and parity checks; the BRC-43 hex CHECK on `transmissions.counterparty`; the `prevent_internal_action_delete` trigger. The former `prevent_outbound_spendable` trigger was removed in HLR #467 in favour of a declarative composite-FK + CHECK on `spendable` (see [`hot-path-design.md`](../reference/hot-path-design.md)). |
 
 `migrate!` runs them idempotently at boot, so a fresh database and an existing one converge on the same shape. Once the gem ships post-release, the policy flips: schema changes will land as additive, ordered migrations again.
 

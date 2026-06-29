@@ -12,57 +12,28 @@
 #
 # Trigger inventory (each pair: function + trigger):
 #
-#   1. prevent_outbound_spendable / check_outbound_spendable
-#      Invariant: an output with output_type='outbound' must never have a
-#      spendable row. Outbound outputs aren't ours.
-#      Trigger type: BEFORE INSERT on spendable.
-#
-#   2. prevent_internal_action_delete / check_internal_action_delete
+#   1. prevent_internal_action_delete / check_internal_action_delete
 #      Invariant: an internal-path action (broadcast_intent='none') with a
 #      promotions row owns canonical received UTXO history; cannot be deleted.
 #      Trigger type: BEFORE DELETE on actions. A CHECK can't express delete-
 #      side invariants (CHECKs fire on INSERT/UPDATE, never DELETE).
 #
-# Both triggers raise with the check_violation ERRCODE on Postgres so
-# Sequel maps them to Sequel::CheckConstraintViolation — the same exception
+# Historical note (HLR #467, ADR-031): the +prevent_outbound_spendable+
+# trigger (an INSERT-side guard for outbound-vs-spendable) used to live
+# here. It was dropped in favour of a declarative replacement — the
+# composite FK +spendable(output_id, spendable_intent) → outputs(id,
+# spendable_intent)+ plus +CHECK spendable_intent = 'spendable'+ — under
+# the "no triggers on the hot path" rule (docs/reference/hot-path-design.md).
+#
+# The remaining trigger raises with the check_violation ERRCODE on Postgres
+# so Sequel maps it to Sequel::CheckConstraintViolation — the same exception
 # class CHECK constraints produce, keeping the error-handling surface uniform.
 
 Sequel.migration do
   up do
     postgres = database_type == :postgres
 
-    # --- 1. outbound-spendable guard ---
-    if postgres
-      run <<~SQL
-        CREATE FUNCTION prevent_outbound_spendable() RETURNS trigger AS $$
-        BEGIN
-          IF EXISTS (SELECT 1 FROM outputs WHERE id = NEW.output_id AND output_type = 'outbound') THEN
-            RAISE EXCEPTION 'spendable row forbidden for outbound output %', NEW.output_id
-              USING ERRCODE = 'check_violation';
-          END IF;
-          RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql;
-      SQL
-      run <<~SQL
-        CREATE TRIGGER check_outbound_spendable
-          BEFORE INSERT ON spendable
-          FOR EACH ROW
-          EXECUTE FUNCTION prevent_outbound_spendable();
-      SQL
-    else
-      run <<~SQL
-        CREATE TRIGGER check_outbound_spendable
-          BEFORE INSERT ON spendable
-          FOR EACH ROW
-          WHEN (SELECT output_type FROM outputs WHERE id = NEW.output_id) = 'outbound'
-        BEGIN
-          SELECT RAISE(ABORT, 'spendable row forbidden for outbound output');
-        END;
-      SQL
-    end
-
-    # --- 2. internal-action-delete guard ---
+    # --- 1. internal-action-delete guard ---
     if postgres
       run <<~SQL
         CREATE FUNCTION prevent_internal_action_delete() RETURNS trigger AS $$
@@ -102,11 +73,8 @@ Sequel.migration do
     if postgres
       run 'DROP TRIGGER IF EXISTS check_internal_action_delete ON actions'
       run 'DROP FUNCTION IF EXISTS prevent_internal_action_delete()'
-      run 'DROP TRIGGER IF EXISTS check_outbound_spendable ON spendable'
-      run 'DROP FUNCTION IF EXISTS prevent_outbound_spendable()'
     else
       run 'DROP TRIGGER IF EXISTS check_internal_action_delete'
-      run 'DROP TRIGGER IF EXISTS check_outbound_spendable'
     end
   end
 end

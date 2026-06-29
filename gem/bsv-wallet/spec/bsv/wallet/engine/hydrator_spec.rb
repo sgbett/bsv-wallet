@@ -159,7 +159,7 @@ RSpec.describe BSV::Wallet::Engine::Hydrator do
         action_id: source_action[:id],
         outputs: [{
           satoshis: 5000, vout: 0, locking_script: OP_TRUE.b,
-          output_type: 'outbound'
+          spendable_intent: 'none'
         }]
       )
 

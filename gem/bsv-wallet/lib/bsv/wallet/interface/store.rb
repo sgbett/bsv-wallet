@@ -74,9 +74,12 @@ module BSV
         # @param raw_tx [String] binary-encoded signed transaction
         # @param outputs [Array<Hash>] optional caller-declared outputs to write
         #   atomically with no promotions row yet. Each: :satoshis, :vout,
-        #   :locking_script, :output_type, :derivation_prefix,
-        #   :derivation_suffix, :sender_identity_key, :basket, :tags,
-        #   :description, :custom_instructions
+        #   :locking_script, :spendable_intent (required — 'spendable' or
+        #   'none', stated explicitly per HLR #467 /
+        #   +docs/reference/intent-and-outcomes.md+; inferring from
+        #   derivation presence is no longer accepted),
+        #   :derivation_prefix, :derivation_suffix, :sender_identity_key,
+        #   :basket, :tags, :description, :custom_instructions
         # @param change_outputs [Array<Hash>] optional change outputs to write
         #   atomically with no promotions row yet. Each: :satoshis, :vout,
         #   :locking_script, :derivation_prefix, :derivation_suffix,
@@ -127,7 +130,11 @@ module BSV
         #   unlocking scripts
         # @param outputs [Array<Hash>] caller's declared outputs to persist
         #   with no promotions row yet. Each: :satoshis, :vout, :locking_script,
-        #   :output_type, :derivation_prefix, :derivation_suffix,
+        #   :spendable_intent (required — 'spendable' or 'none', stated
+        #   explicitly per HLR #467 /
+        #   +docs/reference/intent-and-outcomes.md+; inferring from
+        #   derivation presence is no longer accepted),
+        #   :derivation_prefix, :derivation_suffix,
         #   :sender_identity_key, :basket, :tags, :description,
         #   :custom_instructions
         def stage_action(action_id:, wtxid:, raw_tx:, outputs: [])

@@ -17,7 +17,11 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     )
     outputs = count.times.map do |i|
       { satoshis: satoshis, vout: i, locking_script: script.to_binary,
-        basket: nil, derivation_prefix: 'limp test',
+        basket: nil,
+        # HLR #467 — explicit intent. These are BRC-42 self-derived funding
+        # outputs, wallet-owned by construction.
+        spendable_intent: 'spendable',
+        derivation_prefix: 'limp test',
         derivation_suffix: count > 1 ? "fund#{i}" : 'fund',
         sender_identity_key: 'self' }
     end
@@ -88,7 +92,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect do
         engine_with_keys.brc100.create_action(
           description: 'limp blocked',
-          outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25) }],
+          outputs: [{ satoshis: 1000, locking_script: SecureRandom.random_bytes(25), spendable: false }],
           no_send: true
         )
       end.to raise_error(BSV::Wallet::LimpModeError)
@@ -131,7 +135,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect do
         engine_with_keys.brc100.create_action(
           description: 'limp headroom',
-          outputs: [{ satoshis: 60_000, locking_script: SecureRandom.random_bytes(25) }],
+          outputs: [{ satoshis: 60_000, locking_script: SecureRandom.random_bytes(25), spendable: false }],
           no_send: true
         )
       end.to raise_error(BSV::Wallet::LimpModeError)
@@ -143,7 +147,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
       result = engine_with_keys.brc100.create_action(
         description: 'limp within headroom',
-        outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25) }],
+        outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25), spendable: false }],
         no_send: true
       )
       expect(result[:txid]).to be_a(String)

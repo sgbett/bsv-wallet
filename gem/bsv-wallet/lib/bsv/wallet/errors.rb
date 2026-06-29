@@ -92,5 +92,17 @@ module BSV
               'wallet-vs-chain divergence — cascade rolled back')
       end
     end
+
+    # Raised by Store#verify_schema! when the per-wallet
+    # +outputs.spendable_recoverable+ CHECK literal recovered from the
+    # database does not match the WIF currently driving the wallet (HLR
+    # #467). Catches schema drift, restore-to-wrong-DB, and WIF rotation
+    # — any of which would let the wallet sign spends against a CHECK
+    # that no longer mirrors its identity.
+    class SchemaIntegrityError < Error
+      def initialize(message = 'schema integrity check failed')
+        super
+      end
+    end
   end
 end

@@ -60,7 +60,7 @@ The wallet's invariants are enforced first in application code and *again* in th
 
 | Invariant | Application rule | Database guard |
 |-----------|------------------|----------------|
-| Outbound outputs are never spendable | pool never selects them | `prevent_outbound_spendable` trigger forbids a `spendable` row for an outbound output |
+| Outbound outputs are never spendable | pool never selects them | Declarative composite FK `spendable(output_id, spendable_intent) → outputs(id, spendable_intent)` + `CHECK spendable_intent = 'spendable'` (HLR #467 — no trigger on the hot path) |
 | Received history is never deleted | `abort_action` refuses promoted outputs; `reject_action` refuses internal actions | `prevent_internal_action_delete` trigger blocks deleting an internal action with a `promotions` row |
 | Outputs are immutable | no code mutates `outputs.action_id` | FK `ON DELETE RESTRICT` + `NOT NULL` on `outputs.action_id` |
 | A broadcast row's intent tracks its action | set once, never changed | composite FK `broadcasts(action_id, intent) → actions(id, broadcast_intent)` with `ON UPDATE RESTRICT`, plus a `CHECK (intent != 'none')` |
