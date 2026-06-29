@@ -126,8 +126,8 @@ module BSV
 
       # Fetch → validate → persist each height from tip+1 to target,
       # stopping fail-closed at the first failure. Each header is persisted
-      # in its own atomic write (+Store#record_block_header+ wraps a
-      # +for_update+ transaction per row), so the loop deliberately does NOT
+      # in its own atomic write (+Store#record_block_header+ is a single
+      # +INSERT ... ON CONFLICT+ upsert), so the loop deliberately does NOT
       # hold one long-lived transaction across the network fetches — that
       # would keep a connection and row locks open for up to +MAX_SYNC_SPAN+
       # round-trips, inviting contention and timeouts. Partial progress is
