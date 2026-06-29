@@ -248,9 +248,7 @@ module BSV
           # to the funder's DB so any subsequent reads of the target's
           # context would query the wrong wallet.
           target_ctx = boot_wallet(name)
-          target_identity_key_bytes = target_ctx[:key_deriver].identity_key_bytes
-
-          recipient_hash = BSV::Primitives::Digest.hash160(target_identity_key_bytes)
+          recipient_hash = target_ctx[:key_deriver].identity_pubkey_hash
           locking_script = BSV::Script::Script.p2pkh_lock(recipient_hash).to_binary
 
           sdk_ctx = boot_wallet(:sdk)

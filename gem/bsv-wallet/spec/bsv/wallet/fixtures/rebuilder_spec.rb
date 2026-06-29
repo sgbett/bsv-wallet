@@ -35,7 +35,10 @@ RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
 
   def stub_wallet_ctx(name, identity_key_bytes: "\x00".b * 33, root_address: "1#{name}root",
                       spendable_count: 0, root_utxos: [{ 'value' => 1_000_000 }])
-    key_deriver = instance_double(BSV::Wallet::KeyDeriver, identity_key_bytes: identity_key_bytes)
+    identity_pubkey_hash = BSV::Primitives::Digest.hash160(identity_key_bytes)
+    key_deriver = instance_double(BSV::Wallet::KeyDeriver,
+                                  identity_key_bytes: identity_key_bytes,
+                                  identity_pubkey_hash: identity_pubkey_hash)
     public_key = instance_double(BSV::Primitives::PublicKey, address: root_address)
     private_key = instance_double(BSV::Primitives::PrivateKey, public_key: public_key)
     allow(key_deriver).to receive(:root_private_key).and_return(private_key)

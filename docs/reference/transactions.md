@@ -166,7 +166,7 @@ Failure between record and ACK — transport error, timeout, mismatched wtxid, a
 
 ## BRC-29 derivation convention
 
-Every BRC-29-shaped payment derivation in the wallet — outbound to a counterparty *or* internal self-payment that uses the same protocol envelope — composes its BRC-42 invoice number from the spec-mandated literals. The protocol identifier is `[2, '3241645161d8']` (security level 2, the BRC-29 magic) and the key id is `"#{derivation_prefix} #{derivation_suffix}"` — a single ASCII space between the two tokens, per the spec invoice-number format ([BRC-29 §Key Derivation Scheme](https://github.com/bitcoin-sv/BRCs/blob/master/payments/0029.md#key-derivation-scheme)).
+Every BRC-29-shaped payment derivation in the wallet — outbound to a counterparty *or* internal self-payment that uses the same protocol envelope — composes its BRC-43 invoice number from the spec-mandated literals. The protocol identifier is `[2, '3241645161d8']` (security level 2, the BRC-29 magic) and the key id is `"#{derivation_prefix} #{derivation_suffix}"` — a single ASCII space between the two tokens, per the spec invoice-number format ([BRC-29 §Key Derivation Scheme](https://github.com/bitcoin-sv/BRCs/blob/master/payments/0029.md#key-derivation-scheme)). The composed string is the input the [BRC-42](https://github.com/bitcoin-sv/BRCs/blob/master/key-derivation/0042.md) derivation algorithm consumes.
 
 Two symbols are the only sanctioned producers:
 

@@ -15,7 +15,7 @@ namespace :brc29 do
   desc 'Refuse inline BRC-29 key_id composition outside lib/bsv/wallet/brc29.rb. ' \
        'Run in CI to enforce that every send/receive site routes through BSV::Wallet::BRC29.key_id.'
   task :guard do
-    pattern = 'key_id:\s*"\#\{[^"]+\} \#\{'
+    pattern = 'key_id:[[:space:]]*"\#\{[^"]+\} \#\{'
     matches = `git grep -nE '#{pattern}' -- 'lib' ':!lib/bsv/wallet/brc29.rb'`
     if matches.strip.empty?
       puts 'brc29:guard OK (no inline key_id composition outside brc29.rb)'
