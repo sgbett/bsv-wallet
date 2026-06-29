@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-# Gemfile for the Jekyll docs site — kept separate from the SDK root Gemfile
-# so gem-development dependencies stay clean.
+# Gemfile for the Jekyll docs site — kept separate from the wallet gem's
+# Gemfile (gem/bsv-wallet/) so gem-development dependencies stay clean.
 #
 # Lockfile policy: docs/Gemfile.lock IS committed. This is a deployable
 # application (GitHub Pages), not a library. Pinning the lockfile ensures
@@ -26,7 +26,7 @@ gem 'jekyll-relative-links', '= 0.6.1'
 
 group :development do
   # Jekyll-aware link checker — handles baseurl via swap_urls (lychee can't
-  # resolve root-relative URLs like /bsv-ruby-sdk/... against a local _site
+  # resolve root-relative URLs like /bsv-wallet/... against a local _site
   # tree, since baseurl is a URL concept not a filesystem path).
   gem 'html-proofer', '~> 5.0'
 end

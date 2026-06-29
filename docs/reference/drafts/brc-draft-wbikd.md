@@ -1,7 +1,7 @@
 ---
 title: "BRC draft: WBIKD"
-parent: Reference
-nav_order: 15
+nav_exclude: true
+search_exclude: true
 ---
 
 # BRC-XXXX: Legacy Address Generation via Wallet Basket Locking
