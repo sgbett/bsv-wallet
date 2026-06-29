@@ -68,6 +68,9 @@ module BSV
 
     # Network services (porcelain routing layer over SDK providers)
     require_relative 'network/services'
+    # Pure 80-byte header parser + PoW validator (HLR #335). I/O-free;
+    # required before chain_tracker, which is its eventual consumer.
+    require_relative 'network/block_header'
     require_relative 'network/chain_tracker'
     require_relative 'network/broadcaster'
     require_relative 'network/sse_listener'
