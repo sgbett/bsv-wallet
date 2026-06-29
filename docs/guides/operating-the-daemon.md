@@ -1,3 +1,9 @@
+---
+title: Operating the daemon
+parent: Guides
+nav_order: 3
+---
+
 # Operating the Daemon
 
 `walletd` is the background runtime that turns queued work into on-chain

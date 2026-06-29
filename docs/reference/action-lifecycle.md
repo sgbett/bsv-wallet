@@ -1,3 +1,9 @@
+---
+title: Action lifecycle
+parent: Reference
+nav_order: 5
+---
+
 # Action lifecycle — atomic states and crash recovery
 
 The wallet's action flows are **not** single atomic transactions. Each is a chain of independent atomic Store transactions (each its own `@db.transaction`), sometimes with non-atomic gaps between them. The **principle of state** requires every gap to leave the database in a *valid* state that some mechanism either completes or reclaims — no intermediate state may be left with no recovery owner.

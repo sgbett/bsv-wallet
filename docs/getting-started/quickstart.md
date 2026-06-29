@@ -1,3 +1,9 @@
+---
+title: Quickstart
+parent: Getting Started
+nav_order: 2
+---
+
 # Quickstart
 
 From nothing to a first on-chain payment. This is the happy path;
@@ -117,12 +123,14 @@ bin/create alice <bob_identity_key> 500 --no-send \
 On the recipient side, `bin/receive` reads the JSON envelope on stdin and
 internalises the outputs.
 
-!!! warning "Gotchas to know about"
-    - **Limp mode** blocks all outbound spend below 50,000 sats. Set
-      `LIMP_THRESHOLD` (or `c.limp_threshold` in `~/.bsv-wallet/config.rb`)
-      to lift the floor.
-    - **`no_send` defaults to `false`** (broadcast). Pass `no_send: true`
-      to build a BEEF envelope without publishing — the shape `bin/create`
-      uses for the peer pipe.
-    - **One wallet per process** — never boot two in the same process.
-      Each `bin/` script is its own OS process for this reason.
+{: .warning }
+> **Gotchas to know about**
+>
+> - **Limp mode** blocks all outbound spend below 50,000 sats. Set
+>   `LIMP_THRESHOLD` (or `c.limp_threshold` in `~/.bsv-wallet/config.rb`)
+>   to lift the floor.
+> - **`no_send` defaults to `false`** (broadcast). Pass `no_send: true`
+>   to build a BEEF envelope without publishing — the shape `bin/create`
+>   uses for the peer pipe.
+> - **One wallet per process** — never boot two in the same process.
+>   Each `bin/` script is its own OS process for this reason.

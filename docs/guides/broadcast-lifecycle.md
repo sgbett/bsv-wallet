@@ -1,3 +1,9 @@
+---
+title: Broadcast lifecycle
+parent: Guides
+nav_order: 2
+---
+
 # Broadcast Lifecycle
 
 How an action goes from "create" to a confirmed, spendable output. This is

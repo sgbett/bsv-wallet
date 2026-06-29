@@ -1,3 +1,9 @@
+---
+title: State representations
+parent: Reference
+nav_order: 3
+---
+
 # State Representations — conformance catalogue
 
 A living register of **every place the schema represents state**, classified against the wallet's load-bearing principle that *state is read, not stored* (see [`principle-of-state.md`](principle-of-state.md), and the decisions [ADR-003 schema-as-canonical-state](../../.architecture/decisions/adrs/20260505_ADR-003-schema-as-canonical-state.md) and [ADR-022 state-as-a-fk-row](../../.architecture/decisions/adrs/20260610_ADR-022-state-as-a-fk-row.md)).

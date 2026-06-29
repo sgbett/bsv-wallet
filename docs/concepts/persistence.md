@@ -1,3 +1,9 @@
+---
+title: Persistence
+parent: Concepts
+nav_order: 5
+---
+
 # Persistence
 
 The wallet keeps all of its state in a relational database, accessed through [Sequel](https://sequel.jeremyevans.net/). Two things make the persistence layer distinctive: structural state is the **single source of truth** — what the principle of state names as canonical — and the schema pushes a surprising amount of the wallet's safety down into database constraints and triggers rather than trusting application code alone.

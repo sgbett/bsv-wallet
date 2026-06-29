@@ -5,9 +5,18 @@ AllCops:
   TargetRubyVersion: 3.3
   NewCops: enable
   SuggestExtensions: false
+  # NOTE: setting Exclude here replaces RuboCop's defaults (vendor/**/*,
+  # tmp/**/*, node_modules/**/*, .git/**/*). Re-list them explicitly so
+  # CI bundler-cache (which lands gems under vendor/bundle/) does not get
+  # scanned and trip on third-party .rubocop.yml requires.
   Exclude:
     - 'Rakefile'
     - 'bin/**/*'
+    - 'docs/**/*'
+    - 'vendor/**/*'
+    - 'tmp/**/*'
+    - 'node_modules/**/*'
+    - '.git/**/*'
 
 Style/Documentation:
   Enabled: false

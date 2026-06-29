@@ -1,3 +1,9 @@
+---
+title: SSE
+parent: Reference
+nav_order: 9
+---
+
 BSV Arcade uses Server-Sent Events (SSE) as a lightweight, real-time bridge to track Bitcoin transaction status from submission through its entire lifecycle on the network. [1]
 
 ## Core Mechanism

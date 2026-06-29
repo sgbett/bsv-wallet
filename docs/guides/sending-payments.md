@@ -1,13 +1,21 @@
+---
+title: Sending payments
+parent: Guides
+nav_order: 1
+---
+
 # Sending Payments
 
 Task recipes for the wallet porcelain. Each call returns a hash; per-keyword
 detail and the lower-level BRC-100 methods are in the
 [API reference](../reference/api/index.md).
 
-!!! warning "`no_send` defaults to `false`"
-    Every method here broadcasts by default (matching BRC-100). Pass
-    `no_send: true` to build and sign without publishing, returning a BEEF
-    envelope for peer-to-peer handoff. See [Safety Rules](safety-rules.md).
+{: .warning }
+> **`no_send` defaults to `false`**
+>
+> Every method here broadcasts by default (matching BRC-100). Pass
+> `no_send: true` to build and sign without publishing, returning a BEEF
+> envelope for peer-to-peer handoff. See [Safety Rules](safety-rules.md).
 
 ## Send a payment
 

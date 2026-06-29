@@ -1,3 +1,9 @@
+---
+title: Action lifecycle
+parent: Concepts
+nav_order: 2
+---
+
 # The action lifecycle
 
 In BRC-100 an **action** is a transaction together with the wallet's intentions for it. It is the central object the wallet manages, and the way this gem models its lifecycle is one of its defining characteristics: an action moves through a sequence of phases, and its *status* is read back out of the database structure rather than stored.

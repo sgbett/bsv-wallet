@@ -15,6 +15,9 @@
 /.bundle/
 /vendor/bundle
 Gemfile.lock
+# docs/Gemfile.lock IS committed (deployable application policy; see
+# docs/README.md). Negate the broad Gemfile.lock rule above.
+!docs/Gemfile.lock
 
 # macOS
 .DS_Store

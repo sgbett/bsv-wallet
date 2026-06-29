@@ -1,3 +1,9 @@
+---
+title: Principle of state
+parent: Reference
+nav_order: 1
+---
+
 # Principle of State
 
 A load-bearing principle of the wallet (see also [`state-boundaries.md`](state-boundaries.md) for its sibling). The design of every table, every constraint, every transaction boundary, every collaborator defers to this. Subsequent design choices either follow it or are mistakes.

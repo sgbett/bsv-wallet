@@ -1,3 +1,9 @@
+---
+title: Network
+parent: Concepts
+nav_order: 11
+---
+
 # Network Layer
 
 The wallet talks to the outside world through three concrete services in the `BSV::Network::*` namespace, plus a long-lived SSE consumer. They divide cleanly by purpose: chain queries (`Services`), broadcast (`Broadcaster`), block headers (`ChainTracker`), and status push (`SSEListener`). Each is its own seam; the wallet never mixes the responsibilities.

@@ -1,3 +1,9 @@
+---
+title: Events
+parent: Reference
+nav_order: 7
+---
+
 # Events — wire format and taxonomy
 
 > Canonical reference for the wallet's structured-event emission. The line format, the payload conventions, and the taxonomy below are normative — specs cite this page, and operator tooling parses against it.

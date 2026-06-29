@@ -1,3 +1,9 @@
+---
+title: BRC-100 conformance
+parent: Reference
+nav_order: 10
+---
+
 # BRC-100 conformance register
 
 A living register of every BRC-100 concept and our stance on it. Companion to [`core-vs-conformance.md`](core-vs-conformance.md), which states the load-bearing principle this register applies. The register is the per-element classification; the principle is what governs each row.

@@ -1,3 +1,9 @@
+---
+title: Events
+parent: Concepts
+nav_order: 6
+---
+
 # Events & observability
 
 A long-running daemon that quietly broadcasts and resolves transactions in the background is only trustworthy if you can *see* what it is doing. The wallet emits a small, structured **event taxonomy** through one choke point — `BSV::Wallet.emit` — and fans each event out to as many as three destinations: a human-facing logger, an opt-in machine-readable log, and an in-process observer registry that other components subscribe to.

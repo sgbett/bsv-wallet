@@ -1,3 +1,9 @@
+---
+title: Resilience & recovery
+parent: Concepts
+nav_order: 9
+---
+
 # Resilience & Recovery
 
 A wallet holds value, so the interesting failures are not "the feature didn't work" but "the process died at the worst possible moment" or "the network contradicted what we believed". This gem is built around the assumption that those things *will* happen, and most of its more unusual design choices are there to make them survivable.

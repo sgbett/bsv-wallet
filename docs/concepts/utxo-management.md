@@ -1,3 +1,9 @@
+---
+title: UTXO management
+parent: Concepts
+nav_order: 7
+---
+
 # UTXO Management
 
 A wallet that sends often lives or dies by how it manages its UTXO set. This gem treats the spendable set as something to be actively *shaped* — kept at a healthy count, split for parallelism, replenished as it drains, and consolidated when it fragments. This page covers selection, locking, change generation, the pool-growth strategy, and the consolidation and sweep operations.
