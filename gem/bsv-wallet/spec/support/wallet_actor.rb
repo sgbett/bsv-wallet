@@ -58,7 +58,14 @@ module E2E
     def ensure_env!
       env_key = "BSV_WALLET_WIF_#{@name.to_s.upcase}"
 
-      if ENV[env_key].to_s.strip.empty? && @name.to_s.match?(/\Aw\d+\z/)
+      # Derivation table is bounded — +WalletDerivation::WALLET_NAMES+
+      # currently defines w1..w5. Names matching the +wN+ shape but
+      # outside the table (e.g. +:w6+) fall through to the standard
+      # +Fixtures+ lookup, which raises a clear "fixture has no WIF"
+      # error if the env var is also unset. The earlier regex-based check
+      # would have run the derivation and hit a generic +KeyError+ from
+      # +Hash#fetch+ — harder to diagnose.
+      if ENV[env_key].to_s.strip.empty? && WalletDerivation::WALLET_NAMES.include?(@name.to_s)
         sdk_wif = ENV.fetch('BSV_WALLET_WIF_SDK') do
           raise "BSV_WALLET_WIF_SDK required to derive #{@name}"
         end
