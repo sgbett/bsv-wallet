@@ -83,14 +83,18 @@ module BSV
         abort missing_wif_message(wallet_name) if wif.nil? || wif.empty?
         db_url ||= default_sqlite_url(wallet_name)
 
-        store = BSV::Wallet::Store.connect(db_url)
+        # KeyDeriver comes first — Store needs +identity_pubkey_hash+ for the
+        # per-wallet +outputs.spendable_recoverable+ CHECK literal at migration
+        # time (HLR #467).
+        private_key = BSV::Primitives::PrivateKey.from_wif(wif)
+        key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
+
+        store = BSV::Wallet::Store.connect(db_url, identity_pubkey_hash: key_deriver.identity_pubkey_hash)
         store.migrate!
+        store.verify_schema! # HLR #467 — fail fast on schema/WIF mismatch (restore-to-wrong-DB, drift)
         db = store.db
 
         utxo_pool = BSV::Wallet::Store::UTXOPool.new(store: store)
-
-        private_key = BSV::Primitives::PrivateKey.from_wif(wif)
-        key_deriver = BSV::Wallet::KeyDeriver.new(private_key: private_key)
 
         # Two providers, distinct roles:
         # - GorillaPool (Arcade protocol — bsv-sdk 0.22.0+) serves broadcast.

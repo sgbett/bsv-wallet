@@ -725,7 +725,7 @@ module BSV
 
         output = tx.outputs[vout]
         locking_script = output.locking_script
-        root_hash = @key_deriver.root_private_key.public_key.hash160
+        root_hash = @key_deriver.identity_pubkey_hash
 
         unless locking_script.p2pkh? && locking_script.chunks[2].data == root_hash
           raise BSV::Wallet::InvalidParameterError.new('vout', 'output is not P2PKH to the wallet root key')
@@ -782,7 +782,8 @@ module BSV
           @hydrator&.proof_arrived(wtxid: wtxid, raw_tx: raw_tx, merkle_path: merkle_path_binary)
           output_ids = @store.promote_action(
             action_id: import_action[:id],
-            outputs: [{ satoshis: satoshis, vout: vout, locking_script: locking_script.to_binary, output_type: 'root' }]
+            outputs: [{ satoshis: satoshis, vout: vout, locking_script: locking_script.to_binary,
+                        spendable_intent: 'spendable' }]
           )
           imported_output_id = output_ids.first
         end
@@ -1038,7 +1039,7 @@ module BSV
       #   + return BEEF for peer-to-peer handoff without ever publishing."
       # @param accept_delayed_broadcast [Boolean] only consulted when
       #   +no_send+ is false. Default true (queue for the daemon to push).
-      # @return [Hash] { beef:, sender_identity_key:, outputs: [{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }] }
+      # @return [Hash] { wtxid:, atomic_beef:, sender_identity_key:, outputs: [{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }] }
       def send_payment(recipient:, satoshis:, no_send: false, accept_delayed_broadcast: true)
         require_key_deriver!
         validate_recipient_key!(recipient)
@@ -1054,22 +1055,35 @@ module BSV
           BSV::Primitives::Digest.hash160(derived_pub)
         ).to_binary
 
+        # Wallet-vocab porcelain calls +#build_action+ directly (ADR-026 /
+        # ADR-027): Engine is the primitive; BRC-100 wraps Engine. Routing
+        # +send_payment+ through +brc100.create_action+ was a pre-existing
+        # inversion the HLR #467 sweep corrected.
+        #
+        # +spendable_intent: 'none'+ is the explicit "this output is the
+        # counterparty's, not ours" marker per HLR #467 /
+        # +intent-and-outcomes.md+ — no inference from the absence of
+        # derivation fields. Change outputs (added by +TxBuilder#build_change+)
+        # carry +spendable_intent: 'spendable'+ at their own construction
+        # site; they are not declared here.
+        #
         # randomize_outputs: false guarantees the payment output stays at
-        # index 0. Change outputs from TxBuilder#build_change are
-        # appended after caller outputs.
-        result = brc100.create_action(
+        # index 0. Change outputs from +TxBuilder#build_change+ are appended
+        # after caller outputs.
+        result = build_action(
           description: "send #{satoshis} sats",
-          outputs: [{ satoshis: satoshis, locking_script: locking_script }],
+          outputs: [{ satoshis: satoshis, locking_script: locking_script,
+                      spendable_intent: 'none' }],
           no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
           randomize_outputs: false
         )
 
         {
-          # :txid is the subject wtxid (wire-order binary) — the BRC-100
-          # spec boundary name, not a byte-order indicator. Surfaced so
-          # callers can log/track the tx without re-parsing the BEEF.
-          txid: result[:txid],
-          beef: result[:tx],
+          # +:wtxid+ is the subject wtxid (wire-order binary). Wallet vocab —
+          # +Engine#build_action+ returns +:wtxid+ / +:atomic_beef+; BRC-100
+          # callers wrap to +:txid+ / +:tx+ at the conformance boundary.
+          wtxid: result[:wtxid],
+          atomic_beef: result[:atomic_beef],
           sender_identity_key: @key_deriver.identity_key,
           outputs: [{
             vout: 0, # relies on randomize_outputs: false — see above
@@ -1107,7 +1121,12 @@ module BSV
         merged = (smallest + largest).uniq { |o| o[:id] }
         input_specs = merged.each_with_index.map { |o, i| { output_id: o[:id], vin: i } }
 
-        brc100.create_action(
+        # Wallet-vocab porcelain calls +#build_action+ directly (ADR-026 /
+        # ADR-027); no caller outputs (the +TxBuilder#build_change+ change
+        # output is the consolidated self-payment) so no +spendable_intent+
+        # is declared here — TxBuilder marks change as +'spendable'+
+        # internally.
+        build_action(
           description: 'consolidation',
           inputs: input_specs,
           outputs: [],
@@ -1152,9 +1171,8 @@ module BSV
         # literal P2PKH of that pubkey's hash160, so a future +import_wallet+
         # on the recipient side rediscovers it by scanning the root address.
         recipient_pub = [recipient].pack('H*')
-        locking_script = BSV::Script::Script.p2pkh_lock(
-          BSV::Primitives::Digest.hash160(recipient_pub)
-        ).to_binary
+        recipient_hash = BSV::Primitives::Digest.hash160(recipient_pub)
+        locking_script = BSV::Script::Script.p2pkh_lock(recipient_hash).to_binary
 
         # Compute the fee with the same FeeModel + templated-tx shape
         # +TxBuilder#build_change+ uses, so the funding loop's exact-fee
@@ -1172,19 +1190,24 @@ module BSV
         # takes the balance below the limp threshold. Bypass the guard here;
         # the caller knows what they asked for.
         #
-        # The output spec omits +derivation_prefix+ / +sender_identity_key+:
-        # those would make the wallet treat the sweep target as its own
-        # BRC-42 owned output (output_type NULL + derivation = ownership
-        # marker per docs/reference/schema.md §6 Outputs). For an outbound
-        # payment we want +output_type = 'outbound'+ so the wallet doesn't
-        # insert a +spendable+ row for it. send_payment follows the same
-        # convention.
+        # Wallet-vocab porcelain calls +#build_action+ directly (ADR-026 /
+        # ADR-027). +spendable_intent+ depends on whether the recipient is
+        # the wallet itself (the +sweep_to_root+ default — "tidy my own
+        # wallet" case): the output is then a root P2PKH to our own
+        # identity, structurally wallet-owned, must be +'spendable'+ to
+        # satisfy the matrix's only valid root row (HLR #467 row 1).
+        # Anything else is outbound → +'none'+. Without this discriminator
+        # +sweep_to_root(recipient: nil)+ would write a row at row 2 of
+        # the matrix (root_pattern + no controls + +'none'+) — invalid,
+        # rejected by both the model validator and the DB CHECK.
+        intent = recipient_hash == @key_deriver.identity_pubkey_hash ? 'spendable' : 'none'
         @bypass_limp_mode = true
         begin
-          brc100.create_action(
+          build_action(
             description: 'sweep',
             inputs: input_specs,
-            outputs: [{ satoshis: total - fee, locking_script: locking_script }],
+            outputs: [{ satoshis: total - fee, locking_script: locking_script,
+                        spendable_intent: intent }],
             no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
             randomize_outputs: false,
             change_count: 1
@@ -1400,15 +1423,22 @@ module BSV
         # protocol-reserved basket name (+p wbikd+) that the conformance
         # layer's +validate_basket_name!+ legitimately rejects from
         # application callers. Same Engine-direct pattern as +import_utxo+.
+        #
+        # Engine-direct callers must state +spendable_intent+ explicitly
+        # (HLR #467 — the BRC-100 wrapper's default-translation does not
+        # apply here). Slot output is a BRC-42 self-payment → +'spendable'+;
+        # OP_RETURN marker is provably unspendable → +'none'+.
         create_result = build_action(
           description: 'wbikd slot creation',
           accept_delayed_broadcast: false,
           outputs: [
             { satoshis: slot_sats, locking_script: script,
               basket: 'p wbikd',
+              spendable_intent: 'spendable',
               derivation_prefix: prefix, derivation_suffix: suffix,
               sender_identity_key: @key_deriver.identity_key },
-            { satoshis: 0, locking_script: op_return_script }
+            { satoshis: 0, locking_script: op_return_script,
+              spendable_intent: 'none' }
           ],
           randomize_outputs: false
         )
@@ -1482,6 +1512,7 @@ module BSV
           outputs: [{
             satoshis: output.satoshis, vout: vout,
             locking_script: output.locking_script.to_binary,
+            spendable_intent: 'spendable',
             derivation_prefix: derivation_prefix,
             derivation_suffix: derivation_suffix,
             sender_identity_key: @key_deriver.identity_key,

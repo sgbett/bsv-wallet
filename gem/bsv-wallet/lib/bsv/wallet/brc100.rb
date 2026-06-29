@@ -85,6 +85,20 @@ module BSV
       # @return [Hash] either { txid:, tx: } (signed),
       #   { signable_transaction: { tx:, reference: } } (deferred), or
       #   { txid:, tx:, no_send_change: } (internal path with no_send: true).
+      #
+      # Per-output +spendable_intent+ translation (HLR #467 /
+      # +docs/reference/intent-and-outcomes.md+, +docs/reference/core-vs-conformance.md+):
+      # Engine requires every output spec to state +:spendable_intent+
+      # explicitly; this conformance wrapper bridges from the BRC-100 vocabulary
+      # by accepting an optional +:spendable+ flag per output (the spec's Int8
+      # representation, +false+ / +true+ / absent) and defaulting absent
+      # entries to +'spendable'+. The BRC-100 spec assumes self-owned outputs
+      # under +createAction+ — the default reflects that assumption. Callers
+      # that need to declare an outbound output (recipient-owned, never joins
+      # the wallet UTXO set) set +spendable: false+ and the wrapper translates
+      # to +spendable_intent: 'none'+. The default is at the conformance layer
+      # only; the engine surface itself still demands explicit intent so no
+      # inference re-enters the data path.
       def create_action(description:, input_beef: nil, inputs: nil, outputs: nil,
                         lock_time: nil, version: nil, labels: nil,
                         sign_and_process: true, accept_delayed_broadcast: true,
@@ -93,8 +107,8 @@ module BSV
                         randomize_outputs: true, originator: nil)
         validate_description!(description)
         validate_create_action_params!(inputs: inputs, outputs: outputs)
-        validate_output_ownership!(outputs)
         outputs = normalize_and_validate_outputs_baskets(outputs)
+        outputs = translate_outputs_spendable_intent(outputs)
 
         # +originator+, +return_txid_only+, +trust_self+ stay at BRC100
         # per ADR-026 decisions 5/7 — BRC-100 vocabulary that doesn't
@@ -448,36 +462,6 @@ module BSV
                                                      'present (at least one input or output required)')
       end
 
-      # Validate output_type declarations against locking scripts.
-      #
-      # If output_type is 'root', the locking script must be P2PKH to the
-      # wallet's identity key. Other output_type values are not validated here.
-      def validate_output_ownership!(outputs)
-        return unless outputs && @engine.key_deriver
-
-        root_hash = nil
-        outputs.each_with_index do |out, idx|
-          next unless out[:output_type] == 'root'
-
-          script = BSV::Wallet::Engine::TxBuilder.resolve_locking_script(out[:locking_script])
-          unless script.p2pkh?
-            raise BSV::Wallet::InvalidParameterError.new(
-              "outputs[#{idx}].output_type",
-              "'root' requires a P2PKH script"
-            )
-          end
-
-          root_hash ||= BSV::Primitives::Digest.hash160(@engine.key_deriver.identity_key_bytes)
-          pubkey_hash = script.chunks[2].data
-          next if pubkey_hash == root_hash
-
-          raise BSV::Wallet::InvalidParameterError.new(
-            "outputs[#{idx}].output_type",
-            "'root' but script does not match identity key"
-          )
-        end
-      end
-
       def validate_reference!(reference)
         return if reference.is_a?(String) && reference.match?(BSV::Wallet::Engine::UUID_RE)
 
@@ -500,6 +484,45 @@ module BSV
           normalised = normalize_basket_name(out[:basket])
           validate_basket_name!(normalised)
           out.merge(basket: normalised)
+        end
+      end
+
+      # Translate the BRC-100 +:spendable+ Int8 flag (per output) into the
+      # engine's required +:spendable_intent+ enum. Per HLR #467 /
+      # +docs/reference/intent-and-outcomes.md+, every output spec that
+      # crosses into Engine must state intent explicitly; this wrapper
+      # carries the responsibility for BRC-100 callers, which the spec
+      # allows to omit the field.
+      #
+      # Translation table:
+      #
+      #   :spendable absent     → :spendable_intent 'spendable' (spec assumes
+      #                           self-owned outputs under createAction)
+      #   :spendable true / 1   → :spendable_intent 'spendable'
+      #   :spendable false / 0  → :spendable_intent 'none' (outbound — the
+      #                           recipient's output, never joins the wallet
+      #                           UTXO set)
+      #
+      # The Int8 forms (+0+/+1+) honour BRC-100's spec-binary representation;
+      # the boolean forms accommodate Ruby callers and JSON deserialisers.
+      # Any other value (nil with the key present, strings, etc.) falls
+      # through to the spec default of 'spendable'.
+      #
+      # If a caller passes +:spendable_intent+ directly (engine-vocab —
+      # e.g. internal porcelain bypassing this wrapper) we honour it as-is
+      # and ignore +:spendable+; this keeps the wrapper idempotent and
+      # avoids overriding a deliberate engine-vocab caller. Non-Hash
+      # entries pass through unchanged (validators downstream will reject
+      # them).
+      def translate_outputs_spendable_intent(outputs)
+        return outputs if outputs.nil?
+
+        outputs.map do |out|
+          next out unless out.is_a?(Hash)
+          next out if out.key?(:spendable_intent)
+
+          intent = out.key?(:spendable) && [false, 0].include?(out[:spendable]) ? 'none' : 'spendable'
+          out.merge(spendable_intent: intent)
         end
       end
 

@@ -11,22 +11,24 @@ module BSV
         #
         # Polymorphic on recipient shape:
         #
-        #   send <base58_address> <sats>  # vanilla P2PKH; no envelope output
-        #   send <identity_key_hex> <sats>  # BRC-29 derivation; envelope to stdout
+        #   send <base58_address> <sats>    # P2PKH; no envelope output
+        #   send <identity_key_hex> <sats>  # BRC-29 derivation; envelope on stdout
         #
-        # Per ADR-030, this verb is atomic create+publish. The engine bundles
-        # persistence with publication; there is no separate "now broadcast it"
-        # step. +--broadcast=inline+ maps to sync ARC dispatch;
-        # +--broadcast=async+ to daemon-queued via OMQ hint.
+        # Broadcast modes (+--broadcast=MODE+):
         #
-        # Base58 path emits no envelope — the recipient already controls
-        # the address-resolved key by definition.
+        #   inline (default) — sync ARC dispatch
+        #   async            — daemon-queued via OMQ hint
+        #   none             — no broadcast; action committed, BEEF emitted
+        #                      (identity-key path) for peer-to-peer handoff
         #
-        # Identity-key path emits a JSON envelope to stdout carrying the
-        # BEEF + per-output derivation hints, because the recipient needs
-        # them to recover the private key for the BRC-42-derived output.
-        # Envelope shape is wallet-internal (see +BRC29_PROTOCOL_LEVEL+
-        # below); strict-BRC-29 alignment is a follow-up.
+        # The +none+ mode uses the engine's +no_send: true+ path. The action
+        # is still fully persisted in one atomic step — stays consistent with
+        # ADR-030 (no cross-CLI intermediate state).
+        #
+        # Identity-key envelope carries the BEEF, the subject dtxid, the
+        # sender identity key, and per-output BRC-29 derivation hints (the
+        # recipient needs them to recover the derived private key).
+        # Envelope shape is wallet-internal; strict-BRC-29 alignment in #460.
         class Send < Base
           # Wallet-internal payment derivation convention, shared with
           # engine.rb + tx_builder.rb pay-side and receive-side:
@@ -53,10 +55,10 @@ module BSV
           def build_parser
             @options = {}
             OptionParser.new do |opts|
-              opts.banner = 'Usage: bin/wallet send <recipient> <sats> [--broadcast=inline|async] [--description=<text>]'
+              opts.banner = 'Usage: bin/wallet send <recipient> <sats> [--broadcast=inline|async|none] [--description=<text>]'
 
-              opts.on('--broadcast=MODE', %w[inline async],
-                      'Broadcast mode: inline (sync ARC) or async (daemon-queued). Default: inline') do |v|
+              opts.on('--broadcast=MODE', %w[inline async none],
+                      'Broadcast mode: inline (sync ARC), async (daemon-queued), or none (commit only). Default: inline') do |v|
                 @options[:broadcast] = v.to_sym
               end
 
@@ -77,16 +79,39 @@ module BSV
 
             engine = @ctx[:engine]
             accept_delayed = @options[:broadcast] == :async
+            no_send = @options[:broadcast] == :none
             description = @options[:description] || 'cli-send'
+
+            # +--broadcast=none+ on the base58 path is a dead-end: the base58
+            # recipient has no envelope to receive (no derivation columns,
+            # no BEEF emitted on stdout) and there is no +bin/wallet
+            # broadcast+ verb to publish the staged action later (the
+            # plumbing layer is deferred per ADR-030 pending HLR #192).
+            # Only the identity-key path has a peer-handoff route under
+            # +--broadcast=none+.
+            if kind == :base58 && no_send
+              raise UsageError,
+                    'send --broadcast=none requires an identity-key recipient ' \
+                    '(base58 has no peer-handoff envelope; staged actions cannot ' \
+                    'be published later because the plumbing layer is deferred ' \
+                    '— see ADR-030, HLR #192)'
+            end
 
             case kind
             when :base58
-              call_base58(engine, recipient, sats, description, accept_delayed)
+              call_base58(engine, recipient, sats, description, accept_delayed, no_send)
             when :identity_key
-              call_identity_key(engine, recipient, sats, description, accept_delayed)
+              call_identity_key(engine, recipient, sats, description, accept_delayed, no_send)
             end
             0
           end
+
+          BROADCAST_LABELS = {
+            async: 'async (queued)',
+            none: 'none (no broadcast)',
+            inline: 'inline (sync)'
+          }.freeze
+          private_constant :BROADCAST_LABELS
 
           private
 
@@ -155,18 +180,26 @@ module BSV
 
           # No envelope on stdout — the recipient controls the
           # address-resolved key already and finds the output by chain scan.
-          def call_base58(engine, address, sats, description, accept_delayed)
+          def call_base58(engine, address, sats, description, accept_delayed, no_send)
             pubkey_hash = decode_base58_p2pkh!(address)
             locking_script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
 
+            # +spendable_intent: 'none'+ marks the output as the recipient's,
+            # not ours (HLR #467 / +intent-and-outcomes.md+): an outbound
+            # payment the wallet must not insert into its UTXO set. Intent
+            # is stated explicitly — no inference from the absence of
+            # derivation fields. Change outputs (added by
+            # +TxBuilder#build_change+) carry +'spendable'+ at their own
+            # construction site.
             result = engine.build_action(
               description: description,
               outputs: [
                 { satoshis: sats, locking_script: locking_script,
+                  spendable_intent: 'none',
                   output_description: 'payment' }
               ],
               accept_delayed_broadcast: accept_delayed,
-              no_send: false,
+              no_send: no_send,
               randomize_outputs: false
             )
 
@@ -174,11 +207,11 @@ module BSV
             emit_human 'kind:     base58'
             emit_human "to:       #{address}"
             emit_human "sats:     #{sats}"
-            emit_human "broadcast: #{accept_delayed ? 'async (queued)' : 'inline (sync)'}"
+            emit_human "broadcast: #{BROADCAST_LABELS[broadcast_mode(accept_delayed, no_send)]}"
             emit_human "dtxid:    #{dtxid}"
           end
 
-          def call_identity_key(engine, identity_key, sats, description, accept_delayed)
+          def call_identity_key(engine, identity_key, sats, description, accept_delayed, no_send)
             key_deriver = @ctx[:key_deriver]
             sender_identity_key = @ctx[:identity_key]
 
@@ -193,23 +226,33 @@ module BSV
               BSV::Primitives::Digest.hash160(derived_pub)
             ).to_binary
 
+            # +spendable_intent: 'none'+ — outbound BRC-29 payment to the
+            # counterparty; the derivation triple is recipient-side material
+            # the recipient needs to reconstruct the spending key, not a
+            # signal that the wallet owns the output (HLR #467 /
+            # +intent-and-outcomes.md+). Derivation columns are retained as
+            # provenance and are harmless under the new structural CHECK.
             result = engine.build_action(
               description: description,
               outputs: [
                 { satoshis: sats,
                   locking_script: locking_script,
+                  spendable_intent: 'none',
                   derivation_prefix: prefix,
                   derivation_suffix: PAYMENT_SUFFIX,
                   sender_identity_key: sender_identity_key,
                   output_description: 'BRC-29 payment' }
               ],
               accept_delayed_broadcast: accept_delayed,
-              no_send: false,
+              no_send: no_send,
               randomize_outputs: false
             )
 
+            dtxid = result[:wtxid].reverse.unpack1('H*')
+
             envelope = {
               beef: result[:atomic_beef].unpack1('H*'),
+              dtxid: dtxid,
               sender_identity_key: sender_identity_key,
               outputs: [
                 { vout: 0, satoshis: sats,
@@ -222,13 +265,19 @@ module BSV
             # the key. Default-redact would defeat the BRC-29 protocol.
             emit_json envelope, redact: false
 
-            dtxid = result[:wtxid].reverse.unpack1('H*')
             emit_human 'kind:     identity-key (BRC-29)'
             emit_human "to:       #{identity_key[0..15]}..."
             emit_human "sats:     #{sats}"
-            emit_human "broadcast: #{accept_delayed ? 'async (queued)' : 'inline (sync)'}"
+            emit_human "broadcast: #{BROADCAST_LABELS[broadcast_mode(accept_delayed, no_send)]}"
             emit_human "dtxid:    #{dtxid}"
             emit_human 'envelope: emitted on stdout for recipient'
+          end
+
+          def broadcast_mode(accept_delayed, no_send)
+            return :none if no_send
+            return :async if accept_delayed
+
+            :inline
           end
         end
       end

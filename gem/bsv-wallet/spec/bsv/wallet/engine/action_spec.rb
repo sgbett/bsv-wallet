@@ -97,27 +97,95 @@ RSpec.describe BSV::Wallet::Engine::Action do
   end
 
   describe '.build_output_specs' do
-    it 'marks outputs without derivation data as outbound' do
-      specs = described_class.build_output_specs([
-                                                   { satoshis: 100, locking_script: OP_TRUE }
-                                                 ])
-      expect(specs.first).to include(satoshis: 100, vout: 0, output_type: 'outbound')
-    end
-
-    it 'leaves output_type nil when derivation_prefix is present (BRC-100 normal)' do
+    # HLR #467: explicit +spendable_intent+ is required on every output;
+    # inferring from derivation presence is gone (cf.
+    # +docs/reference/intent-and-outcomes.md+).
+    it "passes a caller's spendable_intent: 'none' through unchanged" do
       specs = described_class.build_output_specs([
                                                    { satoshis: 100, locking_script: OP_TRUE,
+                                                     spendable_intent: 'none' }
+                                                 ])
+      expect(specs.first).to include(satoshis: 100, vout: 0, spendable_intent: 'none')
+    end
+
+    it "passes a caller's spendable_intent: 'spendable' (BRC-42 self) through unchanged" do
+      specs = described_class.build_output_specs([
+                                                   { satoshis: 100, locking_script: OP_TRUE,
+                                                     spendable_intent: 'spendable',
                                                      derivation_prefix: 'p', derivation_suffix: 's' }
                                                  ])
-      expect(specs.first).to include(output_type: nil, derivation_prefix: 'p', derivation_suffix: 's')
+      expect(specs.first).to include(spendable_intent: 'spendable',
+                                     derivation_prefix: 'p', derivation_suffix: 's')
+    end
+
+    it 'raises InvalidParameterError when spendable_intent is missing' do
+      expect do
+        described_class.build_output_specs([
+                                             { satoshis: 100, locking_script: OP_TRUE }
+                                           ])
+      end.to raise_error(BSV::Wallet::InvalidParameterError, /spendable_intent.*HLR #467/m)
     end
 
     it 'honours an explicit vout mapping' do
       specs = described_class.build_output_specs(
-        [{ satoshis: 100, locking_script: OP_TRUE }, { satoshis: 200, locking_script: OP_TRUE }],
+        [
+          { satoshis: 100, locking_script: OP_TRUE, spendable_intent: 'none' },
+          { satoshis: 200, locking_script: OP_TRUE, spendable_intent: 'none' }
+        ],
         { 0 => 3, 1 => 2 }
       )
       expect(specs.map { |s| s[:vout] }).to eq([3, 2])
+    end
+
+    # --- Engine-surface 8-permutation matrix (HLR #467) ---
+    #
+    # Third driver in the triad (DB CHECK -> constraints_spec.rb;
+    # model validate -> models/output_spec.rb; engine surface -> here).
+    # +build_output_specs+ is intentionally narrow: it requires
+    # +:spendable_intent+ and passes everything else through verbatim, so
+    # the engine surface doesn't see the matrix as four-valid-four-invalid
+    # directly. The contract is the pass-through: each cell's
+    # +spendable_intent+ + +derivation_*+ shape arrives on the emitted
+    # spec exactly as written. The downstream model/DB layers (covered by
+    # the sibling matrices) then accept or reject. Co-locating the matrix
+    # here proves that the engine surface threads every permutation through
+    # without mutation — the inversion in HLR #467 (intent stated, never
+    # inferred) holds for all eight permutations symmetrically.
+    describe '8-permutation pass-through' do
+      # [label, controls_present, intent]
+      # We omit root_pattern from this driver — the engine surface doesn't
+      # inspect the locking script. The matrix's 8 cells collapse to 4 here
+      # (controls x intent), each exercised against an arbitrary script.
+      matrix = [
+        ['no_controls + spendable', false, 'spendable'],
+        ['no_controls + none',      false, 'none'],
+        ['controls + spendable',    true,  'spendable'],
+        ['controls + none',         true,  'none']
+      ]
+
+      matrix.each do |label, controls, intent|
+        it "passes [#{label}] through to the emitted spec verbatim" do
+          out = { satoshis: 100, locking_script: OP_TRUE, spendable_intent: intent }
+          if controls
+            out[:derivation_prefix] = 'p'
+            out[:derivation_suffix] = 's'
+            out[:sender_identity_key] = 'self'
+          end
+
+          specs = described_class.build_output_specs([out])
+
+          expect(specs.first).to include(spendable_intent: intent)
+          if controls
+            expect(specs.first).to include(derivation_prefix: 'p',
+                                           derivation_suffix: 's',
+                                           sender_identity_key: 'self')
+          else
+            expect(specs.first[:derivation_prefix]).to be_nil
+            expect(specs.first[:derivation_suffix]).to be_nil
+            expect(specs.first[:sender_identity_key]).to be_nil
+          end
+        end
+      end
     end
   end
 
@@ -177,7 +245,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: OP_TRUE,
-            output_description: 'output' }
+            output_description: 'output', spendable: false }
         ]
       )
       reference = create_result[:signable_transaction][:reference]
@@ -196,7 +264,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
         sign_and_process: false,
         outputs: [
           { satoshis: 500, locking_script: OP_TRUE,
-            output_description: 'output' }
+            output_description: 'output', spendable: false }
         ]
       )
       reference = create_result[:signable_transaction][:reference]

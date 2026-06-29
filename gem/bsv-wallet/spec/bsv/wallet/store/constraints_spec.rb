@@ -10,14 +10,19 @@ require_relative 'shared_context'
 
 RSpec.describe 'Schema constraints', :postgres, :store do
   # Helper: create a valid output for FK references.
-  # Defaults to root output (no derivation fields). Pass derivation
-  # fields and output_type: nil for a derived output.
-  def create_output(action_id:, satoshis: 1000, vout: 0, output_type: 'root',
+  # Defaults to a wallet-owned root P2PKH (locking_script matches the
+  # per-wallet +spendable_recoverable+ literal, no derivation triple).
+  # Pass +spendable_intent: 'none'+ + a non-root +locking_script+ for an
+  # outbound output. Pass derivation_prefix/suffix/sender for a BRC-42
+  # derived output.
+  def create_output(action_id:, satoshis: 1000, vout: 0,
+                    spendable_intent: 'spendable', locking_script: nil,
                     derivation_prefix: nil, derivation_suffix: nil, sender_identity_key: nil)
+    script = locking_script || (derivation_prefix.nil? ? TEST_ROOT_LOCKING_SCRIPT : valid_locking_script)
     db[:outputs].insert(
       action_id: action_id, satoshis: satoshis, vout: vout,
-      locking_script: Sequel.blob(valid_locking_script),
-      output_type: output_type,
+      locking_script: Sequel.blob(script),
+      spendable_intent: spendable_intent,
       derivation_prefix: derivation_prefix,
       derivation_suffix: derivation_suffix,
       sender_identity_key: sender_identity_key
@@ -252,7 +257,19 @@ RSpec.describe 'Schema constraints', :postgres, :store do
       action_id = insert_action
       expect do
         db.transaction(savepoint: true) do
-          db[:outputs].insert(action_id: action_id, satoshis: 1000, vout: 0, locking_script: nil)
+          db[:outputs].insert(action_id: action_id, satoshis: 1000, vout: 0,
+                              locking_script: nil, spendable_intent: 'none')
+        end
+      end.to raise_error(Sequel::NotNullConstraintViolation)
+    end
+
+    it 'rejects NULL spendable_intent' do
+      action_id = insert_action
+      expect do
+        db.transaction(savepoint: true) do
+          db[:outputs].insert(action_id: action_id, satoshis: 1000, vout: 0,
+                              locking_script: Sequel.blob(valid_locking_script),
+                              spendable_intent: nil)
         end
       end.to raise_error(Sequel::NotNullConstraintViolation)
     end
@@ -263,7 +280,8 @@ RSpec.describe 'Schema constraints', :postgres, :store do
         db.transaction(savepoint: true) do
           db[:outputs].insert(
             action_id: action_id, satoshis: -1, vout: 0,
-            locking_script: Sequel.blob(valid_locking_script)
+            locking_script: Sequel.blob(valid_locking_script),
+            spendable_intent: 'none'
           )
         end
       end.to raise_error(Sequel::CheckConstraintViolation)
@@ -275,7 +293,8 @@ RSpec.describe 'Schema constraints', :postgres, :store do
         db.transaction(savepoint: true) do
           db[:outputs].insert(
             action_id: action_id, satoshis: 1000, vout: -1,
-            locking_script: Sequel.blob(valid_locking_script)
+            locking_script: Sequel.blob(valid_locking_script),
+            spendable_intent: 'none'
           )
         end
       end.to raise_error(Sequel::CheckConstraintViolation)
@@ -287,136 +306,173 @@ RSpec.describe 'Schema constraints', :postgres, :store do
         db[:outputs].insert(
           action_id: action_id, satoshis: 0, vout: 0,
           locking_script: Sequel.blob("\x6a".b),
-          output_type: 'root'
+          spendable_intent: 'none'
         )
       end.not_to raise_error
     end
   end
 
-  # --- outputs (derivation cross-column constraints) ---
+  # --- outputs: 8-permutation matrix (HLR #467 / intent-and-outcomes.md) ---
+  #
+  # Three properties of an outputs row:
+  #   * root_pattern: locking_script matches the wallet's WIF-derived root P2PKH
+  #   * controls_present: derivation_prefix/suffix/sender_identity_key all set
+  #   * spendable_intent: 'spendable' | 'none'
+  #
+  # Two CHECKs together (controls_all_or_nothing, spendable_recoverable)
+  # encode the 4 valid / 4 invalid split. Table-driven matrix asserts each
+  # row hits the expected constraint by name.
+  describe 'outputs 8-permutation matrix' do
+    let(:root_script) { TEST_ROOT_LOCKING_SCRIPT }
+    let(:non_root_script) { SecureRandom.random_bytes(25) }
 
-  describe 'outputs derivation constraints' do
-    it 'rejects derived output (NULL output_type) without derivation_prefix' do
+    matrix = [
+      # [label, root_pattern, controls, intent, want, constraint]
+      ['root + no_controls + spendable',  true,  false, 'spendable', :ok, nil],
+      ['root + no_controls + none',       true,  false, 'none',      :reject, 'spendable_recoverable'],
+      ['root + controls + spendable',     true,  true,  'spendable', :reject, 'spendable_recoverable'],
+      ['root + controls + none',          true,  true,  'none',      :reject, 'spendable_recoverable'],
+      ['nonroot + no_controls + spendable', false, false, 'spendable', :reject, 'spendable_recoverable'],
+      ['nonroot + no_controls + none',    false, false, 'none',      :ok, nil],
+      ['nonroot + controls + spendable',  false, true,  'spendable', :ok, nil],
+      ['nonroot + controls + none',       false, true,  'none',      :ok, nil]
+    ]
+
+    matrix.each_with_index do |(label, root, controls, intent, want, constraint), idx|
+      it "permutation [#{label}] is #{want}#{" (#{constraint})" if constraint}" do
+        action_id = insert_action
+        attrs = {
+          action_id: action_id, satoshis: 1000, vout: idx,
+          locking_script: Sequel.blob(root ? root_script : non_root_script),
+          spendable_intent: intent
+        }
+        attrs.merge!(derivation_prefix: 'p', derivation_suffix: 's', sender_identity_key: 'self') if controls
+        if want == :ok
+          expect { db[:outputs].insert(attrs) }.not_to raise_error
+        else
+          expect do
+            db.transaction(savepoint: true) { db[:outputs].insert(attrs) }
+          end.to raise_error(Sequel::CheckConstraintViolation, /#{constraint}/)
+        end
+      end
+    end
+
+    it 'rejects partial derivation triple (controls_all_or_nothing)' do
       action_id = insert_action
       expect do
         db.transaction(savepoint: true) do
-          create_output(action_id: action_id, output_type: nil,
-                        derivation_prefix: nil, derivation_suffix: 'suffix',
-                        sender_identity_key: 'self')
+          db[:outputs].insert(
+            action_id: action_id, satoshis: 1000, vout: 0,
+            locking_script: Sequel.blob(non_root_script),
+            spendable_intent: 'spendable',
+            derivation_prefix: 'p', derivation_suffix: 's', sender_identity_key: nil
+          )
         end
-      end.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
-    it 'rejects derived output (NULL output_type) without sender_identity_key' do
-      action_id = insert_action
-      expect do
-        db.transaction(savepoint: true) do
-          create_output(action_id: action_id, output_type: nil,
-                        derivation_prefix: 'prefix', derivation_suffix: 'suffix',
-                        sender_identity_key: nil)
-        end
-      end.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
-    it 'rejects root output with derivation_prefix set' do
-      action_id = insert_action
-      expect do
-        db.transaction(savepoint: true) do
-          create_output(action_id: action_id, output_type: 'root',
-                        derivation_prefix: 'should not be here')
-        end
-      end.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
-    it 'rejects root output with sender_identity_key set' do
-      action_id = insert_action
-      expect do
-        db.transaction(savepoint: true) do
-          create_output(action_id: action_id, output_type: 'root',
-                        sender_identity_key: 'should not be here')
-        end
-      end.to raise_error(Sequel::CheckConstraintViolation)
-    end
-
-    it 'allows root output with no derivation fields' do
-      action_id = insert_action
-      expect do
-        create_output(action_id: action_id, output_type: 'root')
-      end.not_to raise_error
-    end
-
-    it 'allows derived output with all derivation fields' do
-      action_id = insert_action
-      expect do
-        create_output(action_id: action_id, output_type: nil,
-                      derivation_prefix: 'prefix', derivation_suffix: 'suffix',
-                      sender_identity_key: 'self')
-      end.not_to raise_error
-    end
-
-    it 'allows outbound output with no derivation fields' do
-      action_id = insert_action
-      expect do
-        create_output(action_id: action_id, output_type: 'outbound')
-      end.not_to raise_error
-    end
-
-    it 'rejects outbound output with derivation_prefix set' do
-      action_id = insert_action
-      expect do
-        db.transaction(savepoint: true) do
-          create_output(action_id: action_id, output_type: 'outbound',
-                        derivation_prefix: 'should not be here')
-        end
-      end.to raise_error(Sequel::CheckConstraintViolation)
+      end.to raise_error(Sequel::CheckConstraintViolation, /controls_all_or_nothing/)
     end
   end
 
-  # --- spendable (pure membership) ---
-
+  # --- spendable (pure membership; declarative composite-FK replacement) ---
+  #
+  # Trigger-free replacement for prevent_outbound_spendable: spendable has
+  # its own +spendable_intent+ column with a composite FK to
+  # outputs(id, spendable_intent) plus a CHECK pinning it to 'spendable'.
+  # Inserting a spendable row whose outputs row carries
+  # +spendable_intent='none'+ violates the composite FK; carrying
+  # +spendable_intent='none'+ on the spendable row itself violates the
+  # CHECK. No triggers on the hot path (HLR #467, hot-path-design.md).
   describe 'spendable' do
     # spendable.action_id is FK'd to promotions(action_id) (#307) — a spendable
-    # row cannot exist without a promotions row for the same action. These
-    # use an internal-path promotion (intent='none', NULL status).
+    # row cannot exist without a promotions row for the same action.
     it 'allows thin spendable row for root output' do
       action_id = insert_action(broadcast_intent: 'none')
-      output_id = create_output(action_id: action_id, output_type: 'root')
+      output_id = create_output(action_id: action_id)
       db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: nil)
       expect do
-        db[:spendable].insert(output_id: output_id, action_id: action_id)
+        db[:spendable].insert(output_id: output_id, action_id: action_id, spendable_intent: 'spendable')
       end.not_to raise_error
     end
 
     it 'allows thin spendable row for derived output' do
       action_id = insert_action(broadcast_intent: 'none')
-      output_id = create_output(action_id: action_id, output_type: nil,
+      output_id = create_output(action_id: action_id,
                                 derivation_prefix: 'prefix', derivation_suffix: 'suffix',
                                 sender_identity_key: 'self')
       db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: nil)
       expect do
-        db[:spendable].insert(output_id: output_id, action_id: action_id)
+        db[:spendable].insert(output_id: output_id, action_id: action_id, spendable_intent: 'spendable')
       end.not_to raise_error
     end
 
     it 'rejects a spendable row with no promotions row (FK to promotions)' do
       action_id = insert_action(broadcast_intent: 'none')
-      output_id = create_output(action_id: action_id, output_type: 'root')
+      output_id = create_output(action_id: action_id)
       expect do
         db.transaction(savepoint: true) do
-          db[:spendable].insert(output_id: output_id, action_id: action_id)
+          db[:spendable].insert(output_id: output_id, action_id: action_id, spendable_intent: 'spendable')
         end
       end.to raise_error(Sequel::ForeignKeyConstraintViolation)
     end
 
-    it 'rejects spendable row for outbound output' do
+    it 'rejects spendable row for outbound output (composite FK; no trigger)' do
       action_id = insert_action(broadcast_intent: 'none')
-      output_id = create_output(action_id: action_id, output_type: 'outbound')
+      output_id = create_output(action_id: action_id, spendable_intent: 'none',
+                                locking_script: SecureRandom.random_bytes(25))
       db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: nil)
       expect do
         db.transaction(savepoint: true) do
-          db[:spendable].insert(output_id: output_id, action_id: action_id)
+          db[:spendable].insert(output_id: output_id, action_id: action_id, spendable_intent: 'spendable')
         end
-      end.to raise_error(Sequel::DatabaseError, /spendable row forbidden for outbound output/)
+      end.to raise_error(Sequel::ForeignKeyConstraintViolation,
+                         /spendable_output_id_spendable_intent_fkey/)
+    end
+
+    it "rejects spendable_intent='none' on the spendable row itself (CHECK)" do
+      action_id = insert_action(broadcast_intent: 'none')
+      output_id = create_output(action_id: action_id)
+      db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: nil)
+      expect do
+        db.transaction(savepoint: true) do
+          db[:spendable].insert(output_id: output_id, action_id: action_id, spendable_intent: 'none')
+        end
+      end.to raise_error(Sequel::CheckConstraintViolation, /spendable_intent_must_be_spendable/)
+    end
+  end
+
+  # --- per-wallet schema integrity (HLR #467) ---
+  #
+  # The spendable_recoverable CHECK carries the WIF-derived root P2PKH script
+  # as a binary literal. Store#verify_schema! reads the literal from
+  # pg_constraint and asserts it matches the currently-loaded WIF.
+  describe 'per-wallet schema integrity' do
+    it 'verify_schema! passes when the literal matches the wallet identity' do
+      expect { store.verify_schema! }.not_to raise_error
+    end
+
+    it 'verify_schema! raises SchemaIntegrityError when constructed with a different hash' do
+      # Reach for the live test DB via the suite-pinned STORE_INSTANCE rather
+      # than re-resolving through Fixtures (other specs may have rebound the
+      # :test fixture). Use db: + reuse the connection so we don't open a
+      # second one or trip transaction-around-the-example reuse rules.
+      wrong_store = BSV::Wallet::Store::Postgres.new(
+        db: STORE_DB, identity_pubkey_hash: ("\x11".b * 20)
+      )
+      expect { wrong_store.verify_schema! }
+        .to raise_error(BSV::Wallet::SchemaIntegrityError, /does not match wallet identity/)
+    end
+
+    it 'rejects a root-shape insert for a different wallet (CHECK on the literal)' do
+      action_id = insert_action
+      foreign_root = BSV::Script::Script.p2pkh_lock("\x22".b * 20).to_binary
+      expect do
+        db.transaction(savepoint: true) do
+          db[:outputs].insert(
+            action_id: action_id, satoshis: 1000, vout: 0,
+            locking_script: Sequel.blob(foreign_root),
+            spendable_intent: 'spendable'
+          )
+        end
+      end.to raise_error(Sequel::CheckConstraintViolation, /spendable_recoverable/)
     end
   end
 
@@ -477,9 +533,9 @@ RSpec.describe 'Schema constraints', :postgres, :store do
     # the promotions row removes the dependent spendable row.
     it 'cascades to spendable when the promotions row is deleted (ON DELETE CASCADE)' do
       action_id = insert_action(broadcast_intent: 'none')
-      output_id = create_output(action_id: action_id, output_type: 'root')
+      output_id = create_output(action_id: action_id)
       db[:promotions].insert(action_id: action_id, intent: 'none', authorising_status: nil)
-      db[:spendable].insert(output_id: output_id, action_id: action_id)
+      db[:spendable].insert(output_id: output_id, action_id: action_id, spendable_intent: 'spendable')
       expect(db[:spendable].where(output_id: output_id).count).to eq(1)
 
       db[:promotions].where(action_id: action_id).delete

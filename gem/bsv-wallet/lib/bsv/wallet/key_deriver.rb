@@ -108,6 +108,20 @@ module BSV
         @identity_key_bytes ||= @root_key.public_key.compressed
       end
 
+      # Returns the +hash160+ of the compressed identity public key — the
+      # 20-byte binary used as the wallet's root P2PKH pubkey hash. This is
+      # the single source of truth for the wallet's identity hash; the
+      # per-wallet +outputs.spendable_recoverable+ CHECK is built from this
+      # value at migration time (see +BSV::Wallet::Migration+, HLR #467).
+      # Crypto-op callers (engine root-script construction, BRC-29 receive
+      # validation) should reach for this accessor rather than recomputing
+      # +hash160(identity_key_bytes)+ inline.
+      #
+      # @return [String] 20-byte binary +hash160+ of the identity pubkey
+      def identity_pubkey_hash
+        @identity_pubkey_hash ||= @root_key.public_key.hash160
+      end
+
       # Derive a child public key using BRC-42.
       #
       # In normal mode (for_self: false), derives OUR child public key that

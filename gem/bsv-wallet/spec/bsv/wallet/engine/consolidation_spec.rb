@@ -29,6 +29,10 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         satoshis: satoshis + i, vout: i,
         locking_script: script.to_binary,
         basket: nil,
+        # HLR #467: every output spec states intent explicitly. Test
+        # fixtures here build BRC-42 self-derived outputs — wallet-owned,
+        # so always +'spendable'+.
+        spendable_intent: 'spendable',
         derivation_prefix: prefix,
         derivation_suffix: '1',
         sender_identity_key: 'self'
@@ -42,11 +46,14 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       before { fund_with_outputs(satoshis: 5_000, count: 25) }
 
       it 'consumes 20 smallest + 1 largest inputs and emits one self-payment' do
+        # HLR #467 / ADR-026 / ADR-027: +consolidate_step+ is wallet-vocab
+        # porcelain — calls +#build_action+ directly, returns wallet vocab
+        # (+:wtxid+ / +:atomic_beef+).
         result = engine_with_keys.consolidate_step(target_inputs: 20)
         expect(result).not_to be_nil
-        expect(result[:txid]).to be_a(String)
+        expect(result[:wtxid]).to be_a(String)
 
-        action = store.find_action(wtxid: result[:txid])
+        action = store.find_action(wtxid: result[:wtxid])
         input_rows = BSV::Wallet::Store::Models::Input.where(action_id: action[:id]).all
         expect(input_rows.length).to eq(21)
 
@@ -80,11 +87,14 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       before { fund_with_outputs(satoshis: 10_000, count: 4) }
 
       it 'consumes every spendable output and emits one recipient output' do
+        # HLR #467 / ADR-026 / ADR-027: +sweep+ is wallet-vocab porcelain —
+        # calls +#build_action+ directly, returns wallet vocab (+:wtxid+ /
+        # +:atomic_beef+).
         result = engine_with_keys.sweep(recipient: recipient)
         expect(result).not_to be_nil
-        expect(result[:txid]).to be_a(String)
+        expect(result[:wtxid]).to be_a(String)
 
-        action = store.find_action(wtxid: result[:txid])
+        action = store.find_action(wtxid: result[:wtxid])
         input_rows = BSV::Wallet::Store::Models::Input.where(action_id: action[:id]).all
         expect(input_rows.length).to eq(4)
 
@@ -96,6 +106,46 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         # The recipient output is the largest of the caller+change set.
         biggest = output_rows.max_by(&:satoshis)
         expect(biggest.satoshis).to be > (40_000 - 200) # 4 × 10k inputs - fee
+      end
+    end
+
+    # Regression for the HLR #467 + sweep interaction: when the recipient
+    # is the wallet's own identity key, the sweep output's locking script
+    # is byte-identical to +Migration.expected_root_script+. Without the
+    # self-recipient detection +Engine#sweep+ added, the output spec
+    # would hard-code +spendable_intent: 'none'+ — yielding the
+    # (root_pattern=true, controls_present=false, intent='none')
+    # permutation (row 2 of the 8-permutation matrix, invalid). Both
+    # +Output#validate+ and the DB CHECK would reject, breaking the
+    # +sweep_to_root(recipient: nil)+ default — the "tidy my own wallet"
+    # operator workflow + +rake wallet:cleanup[alice]+.
+    #
+    # Tests stub +build_action+ to assert the intent value carried in
+    # without hitting the persistence layer (the suite's DB has its
+    # CHECK literal pinned to a fixture identity_pubkey_hash that
+    # doesn't match this spec's randomly-generated +key_deriver+; a
+    # full-stack assertion would require coordinated key setup).
+    context 'spendable_intent on the sweep output (HLR #467 self-recipient discriminator)' do
+      before { fund_with_outputs(satoshis: 10_000, count: 4) }
+
+      it 'is "spendable" when the recipient is the wallet itself (self-sweep)' do
+        allow(engine_with_keys).to receive(:build_action).and_return(wtxid: 'fake', atomic_beef: 'fake')
+
+        engine_with_keys.sweep(recipient: key_deriver.identity_key)
+
+        expect(engine_with_keys).to have_received(:build_action).with(
+          hash_including(outputs: array_including(hash_including(spendable_intent: 'spendable')))
+        )
+      end
+
+      it 'is "none" when the recipient is a third party' do
+        allow(engine_with_keys).to receive(:build_action).and_return(wtxid: 'fake', atomic_beef: 'fake')
+
+        engine_with_keys.sweep(recipient: recipient) # freshly-generated, not self
+
+        expect(engine_with_keys).to have_received(:build_action).with(
+          hash_including(outputs: array_including(hash_including(spendable_intent: 'none')))
+        )
       end
     end
 
@@ -118,8 +168,11 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   # wiring rather than re-broadcasting in a unit spec.
   describe '#sweep_to_root' do
     it 'loops consolidate_step until nil, then sweeps to the root P2PKH' do
-      allow(engine_with_keys).to receive(:consolidate_step).and_return({ txid: 'a' }, { txid: 'b' }, nil)
-      allow(engine_with_keys).to receive(:sweep).and_return({ txid: 'z' })
+      # HLR #467 / ADR-026: +consolidate_step+ and +sweep+ return wallet
+      # vocab (+:wtxid+ / +:atomic_beef+) — calls through +#build_action+
+      # directly. The mock shapes track the real return.
+      allow(engine_with_keys).to receive(:consolidate_step).and_return({ wtxid: 'a' }, { wtxid: 'b' }, nil)
+      allow(engine_with_keys).to receive(:sweep).and_return({ wtxid: 'z' })
 
       result = engine_with_keys.sweep_to_root
 
@@ -127,11 +180,11 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         .with(target_inputs: 20, no_send: false, accept_delayed_broadcast: false).exactly(3).times
       expect(engine_with_keys).to have_received(:sweep)
         .with(recipient: key_deriver.identity_key, no_send: false, accept_delayed_broadcast: false)
-      expect(result).to eq(consolidation_steps: 2, sweep: { txid: 'z' })
+      expect(result).to eq(consolidation_steps: 2, sweep: { wtxid: 'z' })
     end
 
     it 'defaults the recipient to the wallet identity key' do
-      allow(engine_with_keys).to receive_messages(consolidate_step: nil, sweep: { txid: 'z' })
+      allow(engine_with_keys).to receive_messages(consolidate_step: nil, sweep: { wtxid: 'z' })
 
       engine_with_keys.sweep_to_root
 
@@ -141,7 +194,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
     it 'honors an explicit recipient override' do
       override = BSV::Primitives::PrivateKey.generate.public_key.to_hex
-      allow(engine_with_keys).to receive_messages(consolidate_step: nil, sweep: { txid: 'z' })
+      allow(engine_with_keys).to receive_messages(consolidate_step: nil, sweep: { wtxid: 'z' })
 
       engine_with_keys.sweep_to_root(recipient: override)
 

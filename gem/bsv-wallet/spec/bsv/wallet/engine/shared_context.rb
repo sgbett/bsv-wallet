@@ -129,6 +129,10 @@ RSpec.shared_context 'engine setup' do
         satoshis: satoshis, vout: i,
         locking_script: script,
         basket: basket,
+        # HLR #467: every output spec states intent explicitly. Test
+        # fixtures here build BRC-42 self-derived outputs — wallet-owned,
+        # so always +'spendable'+.
+        spendable_intent: 'spendable',
         derivation_prefix: prefix,
         derivation_suffix: out_suffix,
         sender_identity_key: sender_identity_key

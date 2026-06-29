@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require 'bsv-wallet'
-require_relative '../../../lib/bsv/wallet/cli'
+require_relative '../../lib/bsv/wallet/cli'
 require_relative 'wallet_derivation'
 
 module E2E

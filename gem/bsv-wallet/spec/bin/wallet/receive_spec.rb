@@ -93,10 +93,11 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       allow(command).to receive(:parse_beef_subject).and_return(
         instance_double(BSV::Transaction::Tx, outputs: [])
       )
-      allow(key_deriver).to receive(:root_private_key).and_return(
-        instance_double(BSV::Primitives::PrivateKey,
-                        public_key: instance_double(BSV::Primitives::PublicKey, compressed: ("\x00" * 33).b))
-      )
+      # HLR #467: the CLI consumes +KeyDeriver#identity_pubkey_hash+
+      # (the wallet's root P2PKH hash) directly — no more inline
+      # +hash160(compressed)+ round-trip.
+      allow(key_deriver).to receive(:identity_pubkey_hash)
+        .and_return(("\x00" * 20).b)
 
       expect { command.call(["--file=#{file}"]) }.to output(/no outputs matching/).to_stderr
     end
@@ -399,11 +400,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
     before do
       allow(engine).to receive(:import_beef).and_return({})
-      allow(BSV::Primitives::Digest).to receive(:hash160).with(matching_pubkey).and_return("\x55" * 20)
-      allow(key_deriver).to receive(:root_private_key).and_return(
-        instance_double(BSV::Primitives::PrivateKey,
-                        public_key: instance_double(BSV::Primitives::PublicKey, compressed: matching_pubkey))
-      )
+      # HLR #467: the CLI consumes +KeyDeriver#identity_pubkey_hash+ —
+      # the canonical 20-byte wallet root hash, set to +matching_pubkey+'s
+      # hash160 so the scanner recognises matching outputs.
+      allow(key_deriver).to receive(:identity_pubkey_hash).and_return("\x55" * 20)
     end
 
     it 'imports outputs whose P2PKH lock matches the wallet root pubkey hash' do

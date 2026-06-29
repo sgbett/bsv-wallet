@@ -402,6 +402,77 @@ RSpec.describe BSV::Wallet::BRC100 do
       end
     end
 
+    # HLR #467 — per-output +spendable_intent+ translation at the BRC-100
+    # boundary. Engine requires every output spec to state intent explicitly;
+    # the wrapper supplies a default and translates the BRC-100 spec's
+    # +:spendable+ Int8 flag. See +docs/reference/intent-and-outcomes.md+.
+    describe '#create_action — spendable_intent translation (HLR #467)' do
+      let(:capture) { { outputs: nil } }
+
+      before do
+        cap = capture
+        allow(fake_engine).to receive(:build_action) do |**kw|
+          cap[:outputs] = kw[:outputs]
+          { wtxid: 'wtxid', atomic_beef: 'beef' }
+        end
+        allow(fake_engine).to receive(:key_deriver).and_return(nil)
+      end
+
+      it 'defaults absent :spendable to spendable_intent: "spendable"' do
+        outputs = [{ satoshis: 1000, locking_script: 'aa'.b, output_description: 'unit' }]
+        brc100.create_action(description: 'spendable default', outputs: outputs)
+        expect(capture[:outputs].first[:spendable_intent]).to eq('spendable')
+      end
+
+      it 'translates :spendable=true to spendable_intent: "spendable"' do
+        outputs = [{ satoshis: 1000, locking_script: 'aa'.b, output_description: 'unit', spendable: true }]
+        brc100.create_action(description: 'spendable true', outputs: outputs)
+        expect(capture[:outputs].first[:spendable_intent]).to eq('spendable')
+      end
+
+      it 'translates :spendable=false to spendable_intent: "none"' do
+        outputs = [{ satoshis: 1000, locking_script: 'aa'.b, output_description: 'unit', spendable: false }]
+        brc100.create_action(description: 'spendable false', outputs: outputs)
+        expect(capture[:outputs].first[:spendable_intent]).to eq('none')
+      end
+
+      # BRC-100 spec declares +spendable+ as Int8 (+0+/+1+) — accept the
+      # spec-binary form too, not just the Ruby boolean.
+      it 'translates :spendable=1 (Int8) to spendable_intent: "spendable"' do
+        outputs = [{ satoshis: 1000, locking_script: 'aa'.b, output_description: 'unit', spendable: 1 }]
+        brc100.create_action(description: 'spendable int 1', outputs: outputs)
+        expect(capture[:outputs].first[:spendable_intent]).to eq('spendable')
+      end
+
+      it 'translates :spendable=0 (Int8) to spendable_intent: "none"' do
+        outputs = [{ satoshis: 1000, locking_script: 'aa'.b, output_description: 'unit', spendable: 0 }]
+        brc100.create_action(description: 'spendable int 0', outputs: outputs)
+        expect(capture[:outputs].first[:spendable_intent]).to eq('none')
+      end
+
+      it 'honours an explicit engine-vocab :spendable_intent and ignores :spendable' do
+        # Idempotency: an internal porcelain caller bypassing the wrapper
+        # might thread already-translated specs through; the wrapper must
+        # not silently override an explicit intent declaration.
+        outputs = [{ satoshis: 1000, locking_script: 'aa'.b,
+                     output_description: 'unit',
+                     spendable: false, spendable_intent: 'spendable' }]
+        brc100.create_action(description: 'explicit wins', outputs: outputs)
+        expect(capture[:outputs].first[:spendable_intent]).to eq('spendable')
+      end
+
+      it 'translates each output independently in a multi-output array' do
+        outputs = [
+          { satoshis: 1000, locking_script: 'aa'.b, output_description: 'self' },
+          { satoshis: 500,  locking_script: 'bb'.b, output_description: 'outbound', spendable: false },
+          { satoshis: 250,  locking_script: 'cc'.b, output_description: 'self-explicit', spendable: true }
+        ]
+        brc100.create_action(description: 'mixed', outputs: outputs)
+        expect(capture[:outputs].map { |o| o[:spendable_intent] })
+          .to eq(%w[spendable none spendable])
+      end
+    end
+
     describe '#internalize_action — only on basket-insertion protocol' do
       let(:capture) { { outputs: nil } }
 

@@ -138,6 +138,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
           hash_including(
             satoshis: 1000,
             locking_script: instance_of(String),
+            # HLR #467 — every output spec states intent explicitly.
+            # Base58 send is an outbound payment to the recipient's address;
+            # the wallet never holds the output, so +'none'+.
+            spendable_intent: 'none',
             output_description: 'payment'
           )
         ),
@@ -156,6 +160,12 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
       expect(engine).to have_received(:build_action).with(
         hash_including(accept_delayed_broadcast: true)
       )
+    end
+
+    it 'rejects --broadcast=none on base58 (dead-end action — no peer-handoff envelope, no broadcast verb)' do
+      expect { command.call([base58_address, '1000', '--broadcast=none']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /requires an identity-key recipient/)
+      expect(engine).not_to have_received(:build_action)
     end
 
     it 'forwards --description' do
@@ -198,6 +208,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
           outputs: array_including(
             hash_including(
               satoshis: 5000,
+              # HLR #467 — explicit intent. Identity-key (BRC-29) send is
+              # an outbound payment; the derivation triple is recipient-side
+              # provenance, not a signal that the wallet owns the output.
+              spendable_intent: 'none',
               derivation_prefix: 'deadbeef0000',
               derivation_suffix: '1',
               sender_identity_key: identity_key
@@ -217,6 +231,22 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
 
     it 'envelope carries the sender_identity_key' do
       expect { command.call([identity_key, '5000']) }.to output(/"sender_identity_key":"#{identity_key}"/).to_stdout
+    end
+
+    it 'envelope carries the dtxid' do
+      expected_dtxid = fake_wtxid.reverse.unpack1('H*')
+      expect { command.call([identity_key, '5000']) }.to output(/"dtxid":"#{expected_dtxid}"/).to_stdout
+    end
+
+    it 'maps --broadcast=none to no_send: true on the identity-key path' do
+      command.call([identity_key, '5000', '--broadcast=none'])
+      expect(engine).to have_received(:build_action).with(
+        hash_including(no_send: true, accept_delayed_broadcast: false)
+      )
+    end
+
+    it 'still emits the envelope when --broadcast=none' do
+      expect { command.call([identity_key, '5000', '--broadcast=none']) }.to output(/"beef":/).to_stdout
     end
   end
 end

@@ -52,7 +52,7 @@ Sequel.migration do
     c[:timestamptz] = postgres ? :timestamptz : :datetime
     c[:broadcast_intent] = postgres ? :broadcast_intent : :text
     c[:tx_status] = postgres ? :tx_status : :text
-    c[:output_type] = postgres ? :output_type : :text
+    c[:spendable_intent] = postgres ? :spendable_intent : :text
     c[:now] = postgres ? Sequel.function(:now) : Sequel::CURRENT_TIMESTAMP
 
     # ARC tx_status vocabulary, per
@@ -72,7 +72,11 @@ Sequel.migration do
       extension :pg_enum
       create_enum(:broadcast_intent, %w[delayed inline none])
       create_enum(:tx_status, arc_tx_statuses)
-      create_enum(:output_type, %w[root outbound])
+      # spendable_intent: 'spendable' means the wallet asserts it can spend
+      # this output (root P2PKH or BRC-42 derived); 'none' means it cannot
+      # (BRC-29 outbound payment, base58 to counterparty). The intent is
+      # stated explicitly, not inferred from outcomes (HLR #467 / ADR-031).
+      create_enum(:spendable_intent, %w[spendable none])
     end
 
     # 1. blocks — known block headers (chain tracker's local view)
@@ -282,14 +286,34 @@ Sequel.migration do
     #     padding.
     #   * vout (integer, 4b) slots into 4 of those 6 padding bytes with no
     #     padding of its own.
-    #   * output_type (enum/text, 2b) consumes the remaining 2b of
+    #   * spendable_intent (enum/text, 2b) consumes the remaining 2b of
     #     locking_script's padding window, sitting next to vout for the
-    #     semantic affinity ("structural role of this output").
+    #     semantic affinity ("intent for this output").
     #   * sender_identity_key, derivation_prefix, derivation_suffix (text,
     #     ~18b each) follow. End-of-tuple padding is MAXALIGN regardless.
     # No updated_at — outputs are immutable; rows never change after insert.
     # Outputs is the wallet's largest-cardinality table; a few bytes per
     # row compounds at scale.
+    #
+    # Two structural constraints together enforce the 8-permutation matrix
+    # (root_pattern × controls_present × spendable_intent — see HLR #467 /
+    # docs/reference/intent-and-outcomes.md):
+    #
+    #   * +controls_all_or_nothing+ — the BRC-42/BRC-29 derivation triple
+    #     (+derivation_prefix+ / +derivation_suffix+ / +sender_identity_key+)
+    #     is either complete or entirely absent. No partial state.
+    #   * +spendable_recoverable+ — the row encodes a recoverable spending
+    #     key, or honestly admits it cannot. The per-wallet literal is the
+    #     +hash160(identity_pubkey)+ baked into the P2PKH script at
+    #     migration time by +BSV::Wallet::Migration.expected_root_script+
+    #     (single source of truth: +BSV::Script::Script.p2pkh_lock+).
+    #
+    # Per-wallet literal mechanism: the CHECK is wallet-specific by design —
+    # cross-wallet schema dumps differ in the embedded hash. The hash is
+    # public information (the wallet's root P2PKH address appears on chain),
+    # so embedding it in the schema leaks nothing. WIF rotation is treated
+    # as a new wallet — the CHECK is tied to the WIF for the wallet's
+    # lifetime. See +docs/reference/intent-and-outcomes.md+.
     create_table(:outputs) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
@@ -298,26 +322,66 @@ Sequel.migration do
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :locking_script, c[:bytea], null: false
       column :vout, :integer, null: false
-      column :output_type, c[:output_type]
+      column :spendable_intent, c[:spendable_intent], null: false
       column :sender_identity_key, :text
       column :derivation_prefix, :text
       column :derivation_suffix, :text
 
       unique %i[action_id vout]
+      # Composite-FK target: spendable(output_id, spendable_intent) →
+      # outputs(id, spendable_intent). With a CHECK on +spendable+ requiring
+      # +spendable_intent = 'spendable'+, an outbound output (intent='none')
+      # cannot have a spendable row — declarative replacement for the
+      # dropped +prevent_outbound_spendable+ trigger (no triggers on the
+      # hot path; mirrors the +broadcasts(action_id, intent)+ pattern).
+      unique %i[id spendable_intent]
 
       constraint(:satoshis_range,        'satoshis >= 0')
       constraint(:vout_range,            'vout >= 0')
       constraint(:locking_script_min,    'length(locking_script) >= 1')
-      # Typed outputs (root, outbound) carry no derivation params.
-      constraint(:typed_no_prefix,       'output_type IS NULL OR derivation_prefix IS NULL')
-      constraint(:typed_no_suffix,       'output_type IS NULL OR derivation_suffix IS NULL')
-      constraint(:typed_no_sender,       'output_type IS NULL OR sender_identity_key IS NULL')
-      # Derived outputs (output_type NULL) require the full derivation triple.
-      constraint(:derived_needs_prefix,  'output_type IS NOT NULL OR derivation_prefix IS NOT NULL')
-      constraint(:derived_needs_suffix,  'output_type IS NOT NULL OR derivation_suffix IS NOT NULL')
-      constraint(:derived_needs_sender,  'output_type IS NOT NULL OR sender_identity_key IS NOT NULL')
-      # SQLite gets a CHECK to mirror the Postgres output_type ENUM.
-      constraint(:output_type_values, "output_type IS NULL OR output_type IN ('root', 'outbound')") unless postgres
+
+      # SQLite gets a CHECK to mirror the Postgres spendable_intent ENUM.
+      unless postgres
+        constraint(:spendable_intent_values,
+                   "spendable_intent IN ('spendable', 'none')")
+      end
+
+      # The BRC-42/BRC-29 derivation triple is set together or absent
+      # together. Partial state would mean an output that claims to be
+      # derived but cannot in fact be re-derived from chain artefacts.
+      constraint(
+        :controls_all_or_nothing,
+        '(derivation_prefix IS NULL AND derivation_suffix IS NULL AND sender_identity_key IS NULL) ' \
+        'OR (derivation_prefix IS NOT NULL AND derivation_suffix IS NOT NULL AND sender_identity_key IS NOT NULL)'
+      )
+
+      # Per-wallet structural recoverability CHECK with a binary literal —
+      # the WIF-derived root P2PKH script bytes, populated at migration
+      # time from +BSV::Wallet::Migration.expected_root_script+.
+      #
+      # Valid permutations (locking_script vs root, controls present,
+      # spendable_intent):
+      #   * root + no controls + 'spendable' — root P2PKH UTXO we own
+      #   * non-root + no controls + 'none' — outbound base58 / OP_RETURN
+      #   * non-root + controls + (either intent) — BRC-42 self-payment
+      #     ('spendable') or BRC-29 outbound to counterparty ('none')
+      #
+      # Invalid (rejected):
+      #   * root + controls (hash collision, ~2^-160 — treat as impossible)
+      #   * root + no controls + 'none' (we own it; 'none' contradicts)
+      #   * non-root + no controls + 'spendable' (no way to spend it)
+      root_script_lit = Sequel.blob(BSV::Wallet::Migration.expected_root_script)
+      constraint(
+        :spendable_recoverable,
+        Sequel.lit(
+          '(locking_script = ? AND derivation_prefix IS NULL AND spendable_intent = ?) ' \
+          'OR (locking_script <> ? AND derivation_prefix IS NULL AND spendable_intent = ?) ' \
+          'OR (locking_script <> ? AND derivation_prefix IS NOT NULL)',
+          root_script_lit, 'spendable',
+          root_script_lit, 'none',
+          root_script_lit
+        )
+      )
     end
 
     # 7. spendable — the UTXO set
@@ -327,11 +391,37 @@ Sequel.migration do
     # and never mutated.
     # A second FK to promotions(action_id) is added at the bottom of this
     # migration — promotions doesn't exist yet at spendable creation time.
+    #
+    # spendable_intent denormalised here so the composite FK to
+    # outputs(id, spendable_intent) + CHECK +spendable_intent = 'spendable'+
+    # enforces "an outbound output cannot have a spendable row" purely
+    # declaratively. Mirrors the +broadcasts(action_id, intent) →
+    # actions(id, broadcast_intent)+ pattern. Replaced the trigger-based
+    # +prevent_outbound_spendable+ guard (HLR #467 — no triggers on the
+    # hot path).
     create_table(:spendable) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres
       foreign_key :output_id, :outputs, type: :bigint, null: false, unique: true
       foreign_key :action_id, :actions, type: :bigint, null: false, on_delete: :cascade
+      column :spendable_intent, c[:spendable_intent], null: false, default: 'spendable'
+
+      # Composite FK: spendable(output_id, spendable_intent) →
+      # outputs(id, spendable_intent). The intent on a spendable row must
+      # match the intent on its referenced outputs row — paired with the
+      # CHECK below, this rejects spendable rows for 'none' outputs.
+      foreign_key %i[output_id spendable_intent], :outputs,
+                  key: %i[id spendable_intent]
+
+      constraint(
+        :spendable_intent_must_be_spendable,
+        "spendable_intent = 'spendable'"
+      )
+      # SQLite ENUM-equivalent CHECK (mirrors outputs.spendable_intent_values).
+      unless postgres
+        constraint(:spendable_intent_values,
+                   "spendable_intent IN ('spendable', 'none')")
+      end
     end
 
     # 8. output_details — display and application metadata (1:1 sidecar)
@@ -685,7 +775,7 @@ Sequel.migration do
 
     if postgres
       extension :pg_enum
-      drop_enum(:output_type)
+      drop_enum(:spendable_intent)
       drop_enum(:tx_status)
       drop_enum(:broadcast_intent)
     end

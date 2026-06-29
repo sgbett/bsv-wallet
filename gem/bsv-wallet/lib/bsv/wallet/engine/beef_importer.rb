@@ -305,8 +305,14 @@ module BSV
         # under +:payment_remittance+; +:basket_insertion+ under
         # +:insertion_remittance+ (with the basket-insertion "no derivation
         # means root-key ownership" convention).
+        #
+        # Both protocols ingest wallet-bound outputs (the whole point of
+        # +internalizeAction+), so +spendable_intent+ is set to +'spendable'+
+        # explicitly per HLR #467 / +docs/reference/intent-and-outcomes.md+ —
+        # never inferred from the presence of derivation fields downstream.
         def resolve_internalize_output(out)
-          spec = { satoshis: out[:satoshis] || 0, vout: out[:output_index] || 0 }
+          spec = { satoshis: out[:satoshis] || 0, vout: out[:output_index] || 0,
+                   spendable_intent: 'spendable' }
 
           case out[:protocol]
           when :wallet_payment, 'wallet payment'
@@ -322,11 +328,11 @@ module BSV
             spec[:derivation_prefix]   = rem[:derivation_prefix]
             spec[:derivation_suffix]   = rem[:derivation_suffix]
             spec[:sender_identity_key] = rem[:sender_identity_key]
-            # Basket insertion protocol: no derivation fields means root-key
-            # ownership — a protocol-level semantic, not a guess from a missing
-            # column. The 'root' output_type shim is retained verbatim here
-            # pending #60 (which replaces the inference with explicit typing).
-            spec[:output_type] = 'root' unless rem[:derivation_prefix]
+            # Basket insertion: no derivation triple → root-key ownership
+            # (locking script matches the wallet's per-instance root P2PKH;
+            # enforced declaratively by +outputs.spendable_recoverable+).
+            # The +spendable_intent: 'spendable'+ above already encodes the
+            # ownership — no separate marker required.
           end
 
           spec
