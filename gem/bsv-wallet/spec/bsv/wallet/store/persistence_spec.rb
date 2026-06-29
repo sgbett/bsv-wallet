@@ -1003,10 +1003,16 @@ RSpec.describe BSV::Wallet::Store, :store do
     end
 
     it 'rejects inserting an output with NULL action_id' do
+      # Provide spendable_intent so the Output model's pre-checks pass
+      # (HLR #467) — this test exercises the DB-level FK on action_id,
+      # NOT the model's enum validation. Without an explicit intent the
+      # model bails at +validate_spendable_recoverable+'s enum guard
+      # before the INSERT is attempted.
       expect do
         BSV::Wallet::Store::Models::Output.create(
           action_id: nil, satoshis: 100, vout: 0,
           locking_script: SecureRandom.random_bytes(25),
+          spendable_intent: 'spendable',
           derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
           sender_identity_key: 'self'
         )
