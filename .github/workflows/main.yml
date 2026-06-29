@@ -16,6 +16,11 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
+      # paths-filter needs a checkout on `push` events: with no working copy it
+      # falls back to local git and dies with `fatal: not a git repository`,
+      # failing every push to master. On `pull_request` it diffs via the API and
+      # needs no checkout — hence the gap went unnoticed on PRs. Keep this step.
+      - uses: actions/checkout@v7
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         id: filter
         with:
