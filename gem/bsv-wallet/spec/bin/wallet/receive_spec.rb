@@ -78,7 +78,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       expect(engine).to have_received(:import_beef).with(
         hash_including(
           outputs: array_including(
-            hash_including(protocol: 'basket insertion')
+            hash_including(protocol: 'wallet payment')
           )
         )
       )
@@ -127,6 +127,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
     it 'forwards per-output derivation hints to engine.import_beef' do
       command.call(["--file=#{file}"])
+      # Strict BRC-29 (HLR #460): the +paymentRemittance+ triple stays in
+      # +payment_remittance+ (snake_case ingress); basket rides at the
+      # top level — the spec's +wallet payment+ carries no basket on the
+      # wire.
       expect(engine).to have_received(:import_beef).with(
         hash_including(
           tx: [beef_hex].pack('H*'),
@@ -134,9 +138,9 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
           outputs: [
             hash_including(
               output_index: 0,
-              protocol: 'basket insertion',
-              insertion_remittance: hash_including(
-                basket: 'received',
+              protocol: 'wallet payment',
+              basket: 'received',
+              payment_remittance: hash_including(
                 derivation_prefix: 'p1',
                 derivation_suffix: '1',
                 sender_identity_key: sender_key
@@ -144,7 +148,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
             ),
             hash_including(
               output_index: 1,
-              insertion_remittance: hash_including(
+              payment_remittance: hash_including(
                 derivation_prefix: 'p2',
                 derivation_suffix: '2'
               )
@@ -156,18 +160,11 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
     it '--basket fills envelope outputs only where envelope omits a basket' do
       command.call(["--file=#{file}", '--basket=fallback'])
-      call_args = engine.method(:import_beef).receiver # rubocop:disable Lint/UselessAssignment
-      engine.method_calls if engine.respond_to?(:method_calls)
-      # Direct check on the spy:
       expect(engine).to have_received(:import_beef).with(
         hash_including(
           outputs: [
-            hash_including(
-              insertion_remittance: hash_including(basket: 'received') # envelope wins
-            ),
-            hash_including(
-              insertion_remittance: hash_including(basket: 'fallback') # envelope omitted; CLI fills
-            )
+            hash_including(basket: 'received'),  # envelope wins
+            hash_including(basket: 'fallback')   # envelope omitted; CLI fills
           ]
         )
       )
@@ -178,12 +175,8 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       expect(engine).to have_received(:import_beef).with(
         hash_including(
           outputs: array_including(
-            hash_including(
-              insertion_remittance: hash_including(basket: 'override')
-            ),
-            hash_including(
-              insertion_remittance: hash_including(basket: 'override')
-            )
+            hash_including(basket: 'override'),
+            hash_including(basket: 'override')
           )
         )
       )

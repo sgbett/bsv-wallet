@@ -9,7 +9,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   metadata[:skip_reserve] = true
 
   def fund_wallet_limp(satoshis:, count: 1)
-    derived_key = derive_brc29_private_key(prefix: 'limp test', suffix: 'fund', counterparty: 'self')
+    derived_key = derive_brc29_private_key(prefix: 'limpTest', suffix: 'fund', counterparty: 'self')
     script = BSV::Script::Script.p2pkh_lock(
       BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
     )
@@ -19,7 +19,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         # HLR #467 — explicit intent. These are BRC-42 self-derived funding
         # outputs, wallet-owned by construction.
         spendable_intent: 'spendable',
-        derivation_prefix: 'limp test',
+        derivation_prefix: 'limpTest',
         derivation_suffix: count > 1 ? "fund#{i}" : 'fund',
         sender_identity_key: 'self' }
     end

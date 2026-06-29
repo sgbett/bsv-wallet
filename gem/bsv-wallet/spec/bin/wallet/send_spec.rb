@@ -183,19 +183,27 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
   describe 'identity-key path' do
     let(:derived_pubkey) { "\u0002#{"\x42" * 32}".b }
 
+    # Strict BRC-29 (HLR #460 Q3): both derivation prefix AND suffix are
+    # random per-output. The CLI calls +BSV::Wallet.random_derivation+
+    # twice (prefix, then suffix); stubbed return values give the
+    # matchers deterministic literals while still exercising the
+    # two-call sequence.
+    let(:stub_prefix) { 'deadbeef0000' }
+    let(:stub_suffix) { 'cafef00d1234' }
+
     before do
-      allow(BSV::Wallet).to receive(:random_derivation).and_return('deadbeef0000')
+      allow(BSV::Wallet).to receive(:random_derivation).and_return(stub_prefix, stub_suffix)
       allow(key_deriver).to receive(:derive_public_key).and_return(derived_pubkey)
       allow(engine).to receive(:build_action).and_return(
         wtxid: fake_wtxid, atomic_beef: fake_atomic_beef
       )
     end
 
-    it 'derives a recipient pubkey via BRC-42 with BRC-29 protocol level' do
+    it 'derives a recipient pubkey via strict BRC-29 (PROTOCOL_ID + composed key_id)' do
       command.call([identity_key, '5000'])
       expect(key_deriver).to have_received(:derive_public_key).with(
-        protocol_id: [2, 'deadbeef0000'],
-        key_id: '1',
+        protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+        key_id: BSV::Wallet::BRC29.key_id(stub_prefix, stub_suffix),
         counterparty: identity_key,
         for_self: true
       )
@@ -212,8 +220,8 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
               # an outbound payment; the derivation triple is recipient-side
               # provenance, not a signal that the wallet owns the output.
               spendable_intent: 'none',
-              derivation_prefix: 'deadbeef0000',
-              derivation_suffix: '1',
+              derivation_prefix: stub_prefix,
+              derivation_suffix: stub_suffix,
               sender_identity_key: identity_key
             )
           )
@@ -226,7 +234,11 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
     end
 
     it 'envelope carries the derivation prefix/suffix for recipient recovery' do
-      expect { command.call([identity_key, '5000']) }.to output(/"derivation_prefix":"deadbeef0000"/).to_stdout
+      expect { command.call([identity_key, '5000']) }.to output(/"derivation_prefix":"#{stub_prefix}"/).to_stdout
+    end
+
+    it 'envelope carries the random per-output derivation suffix' do
+      expect { command.call([identity_key, '5000']) }.to output(/"derivation_suffix":"#{stub_suffix}"/).to_stdout
     end
 
     it 'envelope carries the sender_identity_key' do
@@ -248,5 +260,32 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
     it 'still emits the envelope when --broadcast=none' do
       expect { command.call([identity_key, '5000', '--broadcast=none']) }.to output(/"beef":/).to_stdout
     end
+
+    # HLR #460 Q3 acceptance: per-output suffix uniqueness. Two
+    # consecutive sends must request distinct derivation_suffix values so
+    # the recipient's BRC-29 key recovery never collides on the same
+    # +(prefix, suffix)+ pair across payments.
+    it 'generates a fresh derivation_suffix on each send (per-output randomness)' do
+      # Restore the unstubbed +random_derivation+ so +SecureRandom+ drives
+      # prefix/suffix and we observe the values the CLI actually emitted.
+      allow(BSV::Wallet).to receive(:random_derivation).and_call_original
+      first  = capture_envelope_output { command.call([identity_key, '5000']) }
+      second = capture_envelope_output { command.call([identity_key, '5000']) }
+
+      expect(first.fetch('derivation_suffix')).not_to eq(second.fetch('derivation_suffix'))
+      expect(first.fetch('derivation_prefix')).not_to eq(second.fetch('derivation_prefix'))
+    end
+  end
+
+  # Re-parse the first +outputs+ entry of the JSON envelope the CLI
+  # prints to stdout. Used by the per-output randomness assertion above.
+  def capture_envelope_output
+    require 'json'
+    original = $stdout
+    $stdout = StringIO.new
+    yield
+    JSON.parse($stdout.string)['outputs'].first
+  ensure
+    $stdout = original
   end
 end

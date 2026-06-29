@@ -19,10 +19,13 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
 
   # BRC-29 derivation helper. Mirrors the shared_context helper used by
   # engine specs; lives here because tx_builder_spec runs without the
-  # engine setup context. #478's atomic flip changes only this body.
+  # engine setup context. Strict-spec convention per HLR #460 — the
+  # canonical +BSV::Wallet::BRC29::PROTOCOL_ID+ + +BRC29.key_id+ joiner.
   def derive_brc29_private_key(prefix:, suffix:, counterparty:)
     key_deriver.derive_private_key(
-      protocol_id: [2, prefix], key_id: suffix, counterparty: counterparty
+      protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+      key_id: BSV::Wallet::BRC29.key_id(prefix, suffix),
+      counterparty: counterparty
     )
   end
 
@@ -31,7 +34,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
   # the root key to derive the private key whose public key hash matches
   # the locking script — TxBuilder rederives the same key at signing
   # time.
-  def resolved_p2pkh_input(vin:, satoshis: 5_000, derivation_prefix: 'wallet payment',
+  def resolved_p2pkh_input(vin:, satoshis: 5_000, derivation_prefix: 'walletPayment',
                            derivation_suffix: nil, sender_identity_key: 'self')
     derivation_suffix ||= "s-#{SecureRandom.hex(4)}"
     derived = if derivation_prefix.nil?

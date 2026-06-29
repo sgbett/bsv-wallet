@@ -28,18 +28,9 @@ module BSV
         # Identity-key envelope carries the BEEF, the subject dtxid, the
         # sender identity key, and per-output BRC-29 derivation hints (the
         # recipient needs them to recover the derived private key).
-        # Envelope shape is wallet-internal; strict-BRC-29 alignment in #460.
+        # Envelope shape is wallet-internal; on-wire BRC-29 strict-spec
+        # carrier deferred to a future +bin/brc100+ CLI (HLR #460 Q1).
         class Send < Base
-          # Wallet-internal payment derivation convention, shared with
-          # engine.rb + tx_builder.rb pay-side and receive-side:
-          # +protocol_id: [LEVEL, prefix]+, +key_id: SUFFIX+. Internal
-          # round-trip works (send here pairs with receive's envelope
-          # path). NOT strict BRC-29: the spec mandates
-          # +protocol_id: [2, '3241645161d8']+, +key_id: "<prefix> <suffix>"+
-          # — wallet-wide alignment tracked in HLR #460.
-          BRC29_PROTOCOL_LEVEL = 2
-          PAYMENT_SUFFIX = '1'
-
           # P2PKH address version bytes: mainnet 0x00, testnet 0x6f.
           # P2SH addresses (0x05 mainnet, 0xc4 testnet) are explicitly
           # rejected — Phase 2 only supports P2PKH, and building a P2PKH
@@ -215,10 +206,15 @@ module BSV
             key_deriver = @ctx[:key_deriver]
             sender_identity_key = @ctx[:identity_key]
 
+            # Strict BRC-29: per-output derivation prefix AND suffix are
+            # both random (HLR #460 Q3). The spec composes
+            # +key_id = "<prefix> <suffix>"+ — a fixed suffix collapses
+            # the per-output uniqueness the spec is reaching for.
             prefix = BSV::Wallet.random_derivation
+            suffix = BSV::Wallet.random_derivation
             derived_pub = key_deriver.derive_public_key(
-              protocol_id: [BRC29_PROTOCOL_LEVEL, prefix],
-              key_id: PAYMENT_SUFFIX,
+              protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+              key_id: BSV::Wallet::BRC29.key_id(prefix, suffix),
               counterparty: identity_key,
               for_self: true
             )
@@ -239,7 +235,7 @@ module BSV
                   locking_script: locking_script,
                   spendable_intent: 'none',
                   derivation_prefix: prefix,
-                  derivation_suffix: PAYMENT_SUFFIX,
+                  derivation_suffix: suffix,
                   sender_identity_key: sender_identity_key,
                   output_description: 'BRC-29 payment' }
               ],
@@ -257,7 +253,7 @@ module BSV
               outputs: [
                 { vout: 0, satoshis: sats,
                   derivation_prefix: prefix,
-                  derivation_suffix: PAYMENT_SUFFIX }
+                  derivation_suffix: suffix }
               ]
             }
             # +redact: false+ — derivation_prefix/suffix are the WHOLE

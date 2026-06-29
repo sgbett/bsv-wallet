@@ -638,7 +638,7 @@ RSpec.describe BSV::Wallet::Engine do
       BSV::Script::Script.p2pkh_lock(pubkey_hash)
     end
 
-    def derive_key(prefix: 'wallet payment', suffix: 'suffix1', counterparty: 'self')
+    def derive_key(prefix: 'walletPayment', suffix: 'suffix1', counterparty: 'self')
       derive_brc29_private_key(prefix: prefix, suffix: suffix, counterparty: counterparty)
     end
 
@@ -650,7 +650,7 @@ RSpec.describe BSV::Wallet::Engine do
     # BEEF must verify, which a stub unlocking script cannot satisfy
     # against a P2PKH lock. OP_TRUE accepts any unlocking.
     def fund_wallet_with_keys(satoshis: 1000, count: 1,
-                              prefix: 'wallet payment', suffix: 'suffix1',
+                              prefix: 'walletPayment', suffix: 'suffix1',
                               sender_identity_key: 'self', op_true_lock: false)
       outputs = count.times.map do |i|
         out_suffix = i.zero? ? suffix : "#{suffix}-#{i}"
@@ -824,7 +824,7 @@ RSpec.describe BSV::Wallet::Engine do
         # rebuilds from the identical staged raw_tx, so this unlock is valid
         # for the final transaction.
         unsigned = parse_beef_tx(create_result[:signable_transaction][:tx])
-        signing_key = derive_brc29_private_key(prefix: 'wallet payment', suffix: 'suffix1', counterparty: 'self')
+        signing_key = derive_brc29_private_key(prefix: 'walletPayment', suffix: 'suffix1', counterparty: 'self')
         unsigned.inputs[0].unlocking_script_template = BSV::Transaction::P2PKH.new(signing_key)
         unsigned.sign(0, signing_key)
         valid_unlock = unsigned.inputs[0].unlocking_script.to_binary
@@ -2476,7 +2476,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     # Helper: derive a key matching the engine's derivation
-    def derive_key(prefix: 'wallet payment', suffix: 'suffix', counterparty: 'self')
+    def derive_key(prefix: 'walletPayment', suffix: 'suffix', counterparty: 'self')
       derive_brc29_private_key(prefix: prefix, suffix: suffix, counterparty: counterparty)
     end
 
@@ -2576,7 +2576,7 @@ RSpec.describe BSV::Wallet::Engine do
 
         # Verify each input signature using the matching derivation suffix
         %w[multi0 multi1 multi2].each_with_index do |suffix, i|
-          derived = derive_brc29_private_key(prefix: 'wallet payment', suffix: suffix, counterparty: 'self')
+          derived = derive_brc29_private_key(prefix: 'walletPayment', suffix: suffix, counterparty: 'self')
           parsed.inputs[i].source_satoshis = 500
           parsed.inputs[i].source_locking_script = p2pkh_locking_script_for(derived)
           expect(parsed.verify_input(i)).to be true

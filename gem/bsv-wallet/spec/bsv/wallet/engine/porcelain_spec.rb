@@ -17,7 +17,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   end
 
   def fund_wallet_for_auto(satoshis: 1_000_000, count: 1,
-                           prefix: 'wallet payment', suffix: 'autofund')
+                           prefix: 'walletPayment', suffix: 'autofund')
     outputs = count.times.map do |i|
       out_suffix = count > 1 ? "#{suffix}#{i}" : suffix
       # Derive per-output so the locking_script matches the per-output
@@ -425,20 +425,20 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         big_sats   = 500_000
         small_sats = 100_000
 
-        big_key = derive_brc29_private_key(prefix: 'topup prefix', suffix: 'big', counterparty: 'self')
-        small_key = derive_brc29_private_key(prefix: 'topup prefix', suffix: 'small', counterparty: 'self')
+        big_key = derive_brc29_private_key(prefix: 'topupPrefix', suffix: 'big', counterparty: 'self')
+        small_key = derive_brc29_private_key(prefix: 'topupPrefix', suffix: 'small', counterparty: 'self')
         register_funded_outputs(
           [
             { satoshis: big_sats, vout: 0, locking_script: p2pkh_locking_script_for(big_key).to_binary,
               basket: nil,
               # HLR #467 — explicit intent. BRC-42 self-derived funding outputs.
               spendable_intent: 'spendable',
-              derivation_prefix: 'topup prefix', derivation_suffix: 'big',
+              derivation_prefix: 'topupPrefix', derivation_suffix: 'big',
               sender_identity_key: 'self' },
             { satoshis: small_sats, vout: 1, locking_script: p2pkh_locking_script_for(small_key).to_binary,
               basket: nil,
               spendable_intent: 'spendable',
-              derivation_prefix: 'topup prefix', derivation_suffix: 'small',
+              derivation_prefix: 'topupPrefix', derivation_suffix: 'small',
               sender_identity_key: 'self' }
           ],
           description: 'topup funding'
