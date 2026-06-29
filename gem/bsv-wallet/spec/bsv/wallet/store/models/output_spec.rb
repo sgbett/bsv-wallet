@@ -263,6 +263,47 @@ RSpec.describe BSV::Wallet::Store::Models::Output, :store do
       end
     end
 
+    describe 'pre-checks (before structural matrix)' do
+      it 'flags missing expected_root_script with a configuration-error message' do
+        original = described_class.expected_root_script
+        described_class.expected_root_script = nil
+        output = described_class.new(
+          action_id: action.id, satoshis: 1000, vout: 0,
+          locking_script: SecureRandom.random_bytes(25),
+          spendable_intent: 'spendable'
+        )
+
+        expect(output.valid?).to be(false)
+        expect(output.errors[:spendable_intent].first).to include('expected_root_script not configured')
+        expect(output.errors[:spendable_intent].first).to include('Store.new(identity_pubkey_hash:)')
+      ensure
+        described_class.expected_root_script = original
+      end
+
+      it 'flags unrecognised spendable_intent values with a field-level message' do
+        output = described_class.new(
+          action_id: action.id, satoshis: 1000, vout: 0,
+          locking_script: SecureRandom.random_bytes(25),
+          spendable_intent: 'garbage'
+        )
+
+        expect(output.valid?).to be(false)
+        expect(output.errors[:spendable_intent].first).to include('must be one of: spendable, none')
+        expect(output.errors[:spendable_intent].first).to include('garbage')
+      end
+
+      it 'flags nil spendable_intent with a field-level message' do
+        output = described_class.new(
+          action_id: action.id, satoshis: 1000, vout: 0,
+          locking_script: SecureRandom.random_bytes(25),
+          spendable_intent: nil
+        )
+
+        expect(output.valid?).to be(false)
+        expect(output.errors[:spendable_intent].first).to include('must be one of: spendable, none')
+      end
+    end
+
     describe 'save behaviour' do
       it 'raises Sequel::ValidationFailed when an invalid output is saved' do
         output = build_output(root: true, controls: false, intent: 'none')

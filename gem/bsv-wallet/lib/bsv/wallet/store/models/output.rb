@@ -121,9 +121,35 @@ module BSV
           # else fails. No +case/in+ — the codebase has no precedent for
           # pattern matching and a flat predicate is more searchable.
           def validate_spendable_recoverable
+            # Pre-check: model can't validate without the wallet's expected
+            # root script. Without this guard, +root_match+ would silently
+            # be +false+ for every output (any value vs nil never matches),
+            # so a legitimate root P2PKH output would fail the structural
+            # check with a misleading "invalid combination" message.
+            unless self.class.expected_root_script
+              errors.add(:spendable_intent,
+                         'Output.expected_root_script not configured — ' \
+                         'Store.new(identity_pubkey_hash:) must run before ' \
+                         'Output validation (HLR #467 / intent-and-outcomes.md)')
+              return
+            end
+
+            intent = spendable_intent.to_s
+            # Pre-check: +spendable_intent+ must be a recognised enum value.
+            # Without this, the third disjunct below (+!root_match && controls_set+)
+            # would accept any intent value — including +nil+ or garbage —
+            # punting the failure to the DB's NOT NULL / ENUM rejection
+            # (opaque +Sequel::NotNullConstraintViolation+) rather than a
+            # clean field-level message at the model boundary.
+            unless %w[spendable none].include?(intent)
+              errors.add(:spendable_intent,
+                         "must be one of: spendable, none (got #{intent.inspect}) " \
+                         '(HLR #467 / intent-and-outcomes.md)')
+              return
+            end
+
             root_match   = locking_script == self.class.expected_root_script
             controls_set = !derivation_prefix.nil?
-            intent       = spendable_intent.to_s
 
             valid =
               (root_match  && !controls_set && intent == 'spendable') ||
