@@ -215,9 +215,15 @@ module BSV
         end
 
         def drop_database!(db_name)
+          # The wallet's own Sequel::Model.db pool (from +boot_wallet+
+          # earlier in +rebuild+) still holds a connection to this DB,
+          # so a plain DROP races on +PG::ObjectInUse+. +WITH (FORCE)+
+          # (Postgres 13+) terminates active sessions atomically before
+          # dropping — covers our own pool and any stray operator
+          # session (psql, GUI client) without a separate dance.
           admin_db = open_admin_connection
           begin
-            admin_db.run(%(DROP DATABASE IF EXISTS "#{db_name}"))
+            admin_db.run(%(DROP DATABASE IF EXISTS "#{db_name}" WITH (FORCE)))
           ensure
             admin_db.disconnect
           end

@@ -93,7 +93,7 @@ RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
 
       rebuilder.rebuild(:alice)
 
-      expect(drop_call).to eq('DROP DATABASE IF EXISTS "bsv_wallet_alice"')
+      expect(drop_call).to eq('DROP DATABASE IF EXISTS "bsv_wallet_alice" WITH (FORCE)')
       expect(create_call).to eq('CREATE DATABASE "bsv_wallet_alice"')
       # +CLI.boot+ called for the target on sweep + drop-target migrate + fund-prep,
       # plus :sdk for the build_action — that's the orchestration contract.
