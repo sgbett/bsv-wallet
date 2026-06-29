@@ -99,6 +99,36 @@ Display: "Pre-flight checks passed."
 
 ---
 
+## Step 2b: spv_headers Checkpoint Freshness (advisory — #335)
+
+The opt-in `:spv_headers` trust model validates from a hard-coded mainnet
+checkpoint (`MAINNET_HEIGHT` in `gem/bsv-wallet/lib/bsv/network/checkpoints.rb`).
+It should be refreshed toward the tip periodically — a stale checkpoint only
+makes a fresh wallet's *first* `:spv_headers` verification slower (the cold
+header-sync runs from the checkpoint up to the proof height, bounded by
+`MAX_SYNC_SPAN`). This is **advisory**: staleness degrades first-sync latency,
+it does not break anything — never abort the release on it.
+
+```bash
+CHECKPOINT=$(grep -oE 'MAINNET_HEIGHT\s*=\s*[0-9_]+' gem/bsv-wallet/lib/bsv/network/checkpoints.rb | grep -oE '[0-9_]+$' | tr -d '_')
+TIP=$(curl -s --max-time 15 https://api.whatsonchain.com/v1/bsv/main/chain/info | grep -oE '"blocks":[0-9]+' | grep -oE '[0-9]+$')
+echo "checkpoint=${CHECKPOINT:-unknown} tip=${TIP:-unavailable} gap=$(( ${TIP:-0} - ${CHECKPOINT:-0} ))"
+```
+
+If the gap exceeds ~25,000 blocks (≈ half a year), recommend refreshing before
+tagging:
+
+> Advisory: the `:spv_headers` mainnet checkpoint (height `$CHECKPOINT`) is
+> ~`$GAP` blocks behind the tip. Consider refreshing it: fetch a recent,
+> safely-final block's header fields (WhatsOnChain `/block/height/<h>`), update
+> `MAINNET_HEIGHT` + `MAINNET_HEADER_FIELDS` in `checkpoints.rb` (the self-verify
+> in `checkpoints_spec.rb` confirms the new anchor), and re-run `spec/bsv/network`.
+> See `docs/reference/spv-header-verification.md`. Not a blocker — continue.
+
+If the tip lookup fails (offline / rate-limited), note it and continue.
+
+---
+
 ## Step 3: Already-Released Checks
 
 **Check 1 — Tag does not already exist:**

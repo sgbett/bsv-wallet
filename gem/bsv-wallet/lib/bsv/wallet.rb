@@ -73,7 +73,17 @@ module BSV
 
     # Network services (porcelain routing layer over SDK providers)
     require_relative 'network/services'
+    # Pure 80-byte header parser + PoW validator (HLR #335). I/O-free;
+    # required before chain_tracker, which is its eventual consumer.
+    require_relative 'network/block_header'
     require_relative 'network/chain_tracker'
+    # Opt-in PoW-validated header trust model (HLR #335). Checkpoints is the
+    # baked-in trust anchor; HeaderSyncer extends a validated chain from it;
+    # SpvHeaderChainTracker answers merkle-root questions from that chain.
+    # All three sit atop +block_header+, required above.
+    require_relative 'network/checkpoints'
+    require_relative 'network/header_syncer'
+    require_relative 'network/spv_header_chain_tracker'
     require_relative 'network/broadcaster'
     require_relative 'network/sse_listener'
     # Wallet→peer BEEF delivery (#385 Task 5, #390). EndpointPolicy is

@@ -44,3 +44,4 @@ Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 | 30 | [ADR-028](20260624_ADR-028-per-user-databases-multi-user-primitive.md) | 2026-06-24 | Accepted | Per-user databases as the multi-user isolation primitive (forward direction; ADR-007 complement) |
 | 31 | [ADR-029](20260624_ADR-029-originator-deferral-dbap-direction.md) | 2026-06-24 | Accepted | Originator deferral and DBAP direction — PushDrop permission tokens in admin baskets when implemented |
 | 32 | [ADR-031](20260628_ADR-031-intent-and-outcomes.md) | 2026-06-28 | Accepted | Intent stated explicitly; outcomes persisted as rows; never reverse-engineer intent from outcomes (HLR #467) |
+| 33 | [ADR-032](20260629_ADR-032-spv-header-trust-model.md) | 2026-06-29 | Accepted | Opt-in SPV header trust model — PoW-validated headers vs trusted-service roots (HLR #335) |

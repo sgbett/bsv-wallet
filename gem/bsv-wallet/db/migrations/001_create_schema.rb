@@ -86,12 +86,27 @@ Sequel.migration do
       column :height, :integer, null: false, unique: true
       column :merkle_root, c[:bytea], null: false
       column :block_hash, c[:bytea]
+      # The raw 80-byte block header, present iff this row was PoW-validated
+      # locally (#335). Its presence is the structural "validated" signal —
+      # there is no status column. Absent ⇒ a trusted-service row carrying
+      # only the merkle_root fetched from a chain-query Service.
+      column :header, c[:bytea]
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
       constraint(:height_range, 'height >= 0')
       constraint(:merkle_root_length, 'length(merkle_root) = 32')
       constraint(:block_hash_length, 'block_hash IS NULL OR length(block_hash) = 32')
+      # A header is exactly 80 bytes. Nullable: the trusted-service path
+      # stores merkle_root alone.
+      constraint(:header_length, 'header IS NULL OR length(header) = 80')
+      # The merkle_root embedded in the header (bytes 36..67, 0-indexed) must
+      # equal the indexed merkle_root column — the header is the source, the
+      # column is the extracted answer, and they cannot disagree. The 1-indexed
+      # SQL offset is 37, length 32. Postgres and SQLite spell substring
+      # differently, so branch on the in-scope +postgres+ guard.
+      embedded_root = postgres ? 'substring(header from 37 for 32)' : 'substr(header, 37, 32)'
+      constraint(:header_root_match, "header IS NULL OR #{embedded_root} = merkle_root")
     end
 
     # 2. tx_proofs — merkle inclusion proofs (settlement evidence)

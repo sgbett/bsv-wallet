@@ -750,10 +750,49 @@ module BSV
 
       # --- Block Headers ---
 
-      def record_block_header(height:, merkle_root:, block_hash: nil)
+      # Persist a +blocks+ row, append-or-reject (#335).
+      #
+      # The +blocks+ table carries two row flavours distinguished by the
+      # +header+ column. A *trusted-service* row (header NULL) records only
+      # the +merkle_root+ a chain-query Service handed back. A *validated*
+      # row (header present, the raw 80 bytes) is one whose PoW the wallet
+      # checked locally — its presence is the structural "this height is
+      # validated" signal (there is no status column). The
+      # +header_root_match+ CHECK ties the indexed +merkle_root+ to the
+      # bytes the header embeds, so the two can never disagree.
+      #
+      # Append-or-reject preserves the validated chain as evidence (and the
+      # competing-header reorg trace, #245):
+      #
+      # - Passing +header:+ writes/upgrades a validated row. At an
+      #   already-validated height carrying a *different* header, this
+      #   raises {CompetingBlockHeaderError} rather than overwriting — a
+      #   fork at an occupied height is reorg evidence to investigate, not
+      #   an upsert to silently win. The same header re-presented is an
+      #   idempotent no-op. A header-NULL row at that height is *upgraded*
+      #   in place (trusted → validated).
+      # - The trusted-service path (no +header:+) may still refresh
+      #   +merkle_root+ / +block_hash+, but its update is scoped to
+      #   header-NULL rows: it can never downgrade a header-bearing row to
+      #   NULL, nor mutate the +merkle_root+ a validated header pins (which
+      #   would trip +header_root_match+).
+      #
+      # @param height [Integer]
+      # @param merkle_root [String] 32 wire bytes (or hex; coerced)
+      # @param block_hash [String, nil] 32 wire bytes (or hex; coerced)
+      # @param header [String, nil] raw 80-byte header — present ⇒ validated row
+      # @raise [BSV::Wallet::CompetingBlockHeaderError] on a conflicting validated header
+      def record_block_header(height:, merkle_root:, block_hash: nil, header: nil)
         root_bin = to_binary(merkle_root)
         hash_bin = block_hash ? to_binary(block_hash) : nil
+        header_bin = header ? to_binary(header) : nil
 
+        return record_validated_header(height, root_bin, hash_bin, header_bin) if header_bin
+
+        # Trusted-service path: upsert merkle_root / block_hash, but never
+        # touch +header+ and only update rows where +header+ is NULL — a
+        # validated row stays untouched (no downgrade, no merkle_root drift
+        # against its pinned header).
         update_fields = { merkle_root: Sequel.blob(root_bin) }
         update_fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
 
@@ -761,7 +800,9 @@ module BSV
         insert_fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
 
         models::Block.dataset
-                     .insert_conflict(target: :height, update: update_fields)
+                     .insert_conflict(target: :height,
+                                      update: update_fields,
+                                      update_where: { Sequel[:blocks][:header] => nil })
                      .insert(insert_fields)
       end
 
@@ -772,8 +813,52 @@ module BSV
         { height: record.height, merkle_root: record.merkle_root, block_hash: record.block_hash }
       end
 
+      # The raw 80-byte header at +height+, or +nil+ when the height holds
+      # no row or only a trusted-service (header-NULL) row. The presence of
+      # a non-nil return is the "this height is locally validated" signal.
+      #
+      # @param height [Integer]
+      # @return [String, nil] the 80 raw wire bytes, or nil
+      def header_at(height:)
+        models::Block.where(height: height).get(:header)
+      end
+
       def max_block_height
         models::Block.max(:height)
+      end
+
+      # Highest height of the contiguous run of *validated* (header-present)
+      # rows that starts at +from_height+ (the checkpoint) — the validated
+      # tip (#335).
+      #
+      # Structural and gap-stopping: a header-island sitting above a missing
+      # height is NOT the validated tip. Walks the ascending set of
+      # header-present heights at/above +from_height+ and returns the last
+      # height before the first break in the +h, h+1, h+2, …+ sequence.
+      # Returns +nil+ when +from_height+ itself is not validated (the chain
+      # has not even been seeded).
+      #
+      # @param from_height [Integer] the checkpoint height (run anchor)
+      # @return [Integer, nil] the validated tip, or +nil+ if unseeded
+      def validated_tip(from_height:)
+        # Iterate the ascending header-present heights and stop at the first
+        # gap, rather than materialising the whole run into an array — the
+        # contiguous chain can grow long on a wallet whose checkpoint has
+        # drifted far below the tip.
+        tip = nil
+        models::Block
+          .where(height: from_height..)
+          .exclude(header: nil)
+          .order(:height)
+          .select(:height)
+          .each do |row|
+            h = row[:height]
+            break if tip.nil? && h != from_height # from_height itself not validated → unseeded
+            break if tip && h != tip + 1          # gap — the run ends at the previous height
+
+            tip = h
+          end
+        tip
       end
 
       # --- Settings ---
@@ -1379,6 +1464,43 @@ module BSV
         return value if value.encoding == Encoding::BINARY
 
         [value].pack('H*')
+      end
+
+      # Write (or upgrade to) a validated, header-bearing +blocks+ row.
+      # Append-or-reject at an occupied height — see {#record_block_header}.
+      #
+      # A single +INSERT ... ON CONFLICT+ — atomic, so it avoids the
+      # read-then-write race the previous +for_update+ check left open (two
+      # writers both seeing no row and racing on +create+, one hitting a
+      # unique violation that, in +:spv_headers+ mode, would fail a
+      # verification closed):
+      #   * no row            → INSERT the validated row.
+      #   * row, header NULL  → UPGRADE in place (trusted → validated),
+      #                         realigning merkle_root / block_hash so
+      #                         +header_root_match+ holds (the +update_where+).
+      #   * row, header set   → +update_where+ excludes it, so DO NOTHING; the
+      #                         post-read then no-ops (same header) or raises
+      #                         (a different, competing header = reorg evidence).
+      def record_validated_header(height, root_bin, hash_bin, header_bin)
+        insert_fields = { height: height, merkle_root: Sequel.blob(root_bin),
+                          header: Sequel.blob(header_bin) }
+        insert_fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
+
+        update_fields = { merkle_root: Sequel.blob(root_bin), header: Sequel.blob(header_bin) }
+        update_fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
+
+        models::Block.dataset
+                     .insert_conflict(target: :height, update: update_fields,
+                                      update_where: { Sequel[:blocks][:header] => nil })
+                     .insert(insert_fields)
+
+        # The row now carries a header. If it differs from ours, a competing
+        # header was already validated at this height — reorg evidence the
+        # upsert deliberately left intact (#245), never an overwrite. The
+        # read-back is race-free: a header-bearing row is immutable (the
+        # +update_where+ above never touches one).
+        stored = models::Block.where(height: height).get(:header)
+        raise BSV::Wallet::CompetingBlockHeaderError, height unless stored == header_bin
       end
 
       def broadcast_to_hash(record)

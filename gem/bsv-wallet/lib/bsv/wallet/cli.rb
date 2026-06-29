@@ -121,7 +121,31 @@ module BSV
           providers: [broadcast_provider],
           store: store
         )
-        chain_tracker = BSV::Network::ChainTracker.new(store: store, services: network_services)
+        # Chain-validity trust model (HLR #335). Default :trusted_service
+        # keeps today's behaviour (trust the chain-query Service's merkle
+        # root); :spv_headers opts in to a locally-validated, PoW-checked
+        # header chain. cli.rb is the single tracker-construction seam —
+        # walletd boots through it, so no daemon change is needed.
+        chain_tracker =
+          case BSV::Wallet.config.trust_model
+          when :spv_headers
+            BSV::Network::SpvHeaderChainTracker.new(
+              store: store,
+              services: network_services,
+              network: network,
+              checkpoint: BSV::Wallet.config.spv_checkpoint
+            )
+          when :trusted_service
+            BSV::Network::ChainTracker.new(store: store, services: network_services)
+          else
+            # Fail loud on an unrecognised trust_model rather than silently
+            # using the trusted-service path — a typo (e.g. +spv_header+)
+            # must not quietly weaken verification while the operator
+            # believes +spv_headers+ is active.
+            raise BSV::Wallet::ConfigurationError,
+                  "unknown trust_model #{BSV::Wallet.config.trust_model.inspect} " \
+                  '(expected :trusted_service or :spv_headers)'
+          end
 
         # Limp threshold reads from BSV::Wallet.config (which Integer()s
         # the LIMP_THRESHOLD env var at Config#initialize, raising a
