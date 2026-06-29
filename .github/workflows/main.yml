@@ -93,6 +93,11 @@ jobs:
         run: bundle exec rubocop
         working-directory: gem/bsv-wallet
 
+      - name: BRC-29 inline key_id guard
+        if: matrix.ruby == '3.4'
+        run: bundle exec rake brc29:guard
+        working-directory: gem/bsv-wallet
+
   integration:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name == 'push' || !github.event.pull_request.head.repo.fork) }}

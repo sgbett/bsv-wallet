@@ -58,6 +58,11 @@ module BSV
     # Required eagerly so files can `using BSV::Wallet::Txid` at load time.
     require_relative 'wallet/txid'
 
+    # BRC-29 payment derivation primitives (PROTOCOL_ID + validated key_id).
+    # Required eagerly: PROTOCOL_ID delegates to BSV::Auth::AuthFetch and
+    # call sites reference the constant at load time, not lazily.
+    require_relative 'wallet/brc29'
+
     # Key derivation (BRC-42/43)
     autoload :KeyDeriver, 'bsv/wallet/key_deriver'
 
