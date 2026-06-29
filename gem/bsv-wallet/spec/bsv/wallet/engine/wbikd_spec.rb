@@ -122,9 +122,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         suffix = addr_result[:derivation_suffix]
 
         # Build a real transaction paying to this address
-        derived_pub = key_deriver.derive_public_key(
-          protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
-        )
+        derived_pub = derive_brc29_public_key(prefix: prefix, suffix: suffix, counterparty: 'self')
         locking_script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(derived_pub)
         )
@@ -164,9 +162,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         address = addr_result[:address]
 
         # Build tx paying to the WBIKD address
-        derived_pub = key_deriver.derive_public_key(
-          protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
-        )
+        derived_pub = derive_brc29_public_key(prefix: prefix, suffix: suffix, counterparty: 'self')
         locking_script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(derived_pub)
         )
@@ -211,9 +207,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         locked_count = slots_before[:total]
 
         # Build tx
-        derived_pub = key_deriver.derive_public_key(
-          protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
-        )
+        derived_pub = derive_brc29_public_key(prefix: prefix, suffix: suffix, counterparty: 'self')
         locking_script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(derived_pub)
         )
@@ -250,9 +244,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
         expect(engine_net.list_receive_addresses.length).to eq(1)
 
-        derived_pub = key_deriver.derive_public_key(
-          protocol_id: [2, prefix], key_id: suffix, counterparty: 'self'
-        )
+        derived_pub = derive_brc29_public_key(prefix: prefix, suffix: suffix, counterparty: 'self')
         locking_script = BSV::Script::Script.p2pkh_lock(
           BSV::Primitives::Digest.hash160(derived_pub)
         )
@@ -341,9 +333,9 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       result = engine_with_keys.generate_receive_address
 
       # Re-derive the address from the returned params
-      derived_pub = key_deriver.derive_public_key(
-        protocol_id: [2, result[:derivation_prefix]],
-        key_id: result[:derivation_suffix],
+      derived_pub = derive_brc29_public_key(
+        prefix: result[:derivation_prefix],
+        suffix: result[:derivation_suffix],
         counterparty: 'self'
       )
       re_derived_address = BSV::Primitives::PublicKey.from_bytes(derived_pub)

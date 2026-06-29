@@ -9,9 +9,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   metadata[:skip_reserve] = true
 
   def fund_wallet_limp(satoshis:, count: 1)
-    derived_key = key_deriver.derive_private_key(
-      protocol_id: [2, 'limp test'], key_id: 'fund', counterparty: 'self'
-    )
+    derived_key = derive_brc29_private_key(prefix: 'limp test', suffix: 'fund', counterparty: 'self')
     script = BSV::Script::Script.p2pkh_lock(
       BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
     )

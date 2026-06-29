@@ -24,9 +24,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       # derivation_suffix the wallet will later use to derive the
       # signing key. Sharing one key across outputs while varying the
       # suffix produces locking scripts the wallet cannot satisfy.
-      derived_key = key_deriver.derive_private_key(
-        protocol_id: [2, prefix], key_id: out_suffix, counterparty: 'self'
-      )
+      derived_key = derive_brc29_private_key(prefix: prefix, suffix: out_suffix, counterparty: 'self')
       script = p2pkh_locking_script_for(derived_key)
       {
         satoshis: satoshis, vout: i,
@@ -427,12 +425,8 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         big_sats   = 500_000
         small_sats = 100_000
 
-        big_key = key_deriver.derive_private_key(
-          protocol_id: [2, 'topup prefix'], key_id: 'big', counterparty: 'self'
-        )
-        small_key = key_deriver.derive_private_key(
-          protocol_id: [2, 'topup prefix'], key_id: 'small', counterparty: 'self'
-        )
+        big_key = derive_brc29_private_key(prefix: 'topup prefix', suffix: 'big', counterparty: 'self')
+        small_key = derive_brc29_private_key(prefix: 'topup prefix', suffix: 'small', counterparty: 'self')
         register_funded_outputs(
           [
             { satoshis: big_sats, vout: 0, locking_script: p2pkh_locking_script_for(big_key).to_binary,

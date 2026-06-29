@@ -17,6 +17,15 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
   # about signing) and as a non-P2PKH input for custom-spend specs.
   let(:op_true) { "\x51".b }
 
+  # BRC-29 derivation helper. Mirrors the shared_context helper used by
+  # engine specs; lives here because tx_builder_spec runs without the
+  # engine setup context. #478's atomic flip changes only this body.
+  def derive_brc29_private_key(prefix:, suffix:, counterparty:)
+    key_deriver.derive_private_key(
+      protocol_id: [2, prefix], key_id: suffix, counterparty: counterparty
+    )
+  end
+
   # Build a resolved input hash backed by an actual P2PKH output the
   # key_deriver can sign. The derivation_prefix / suffix combine with
   # the root key to derive the private key whose public key hash matches
@@ -28,8 +37,8 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
     derived = if derivation_prefix.nil?
                 key_deriver.root_private_key
               else
-                key_deriver.derive_private_key(
-                  protocol_id: [2, derivation_prefix], key_id: derivation_suffix,
+                derive_brc29_private_key(
+                  prefix: derivation_prefix, suffix: derivation_suffix,
                   counterparty: sender_identity_key
                 )
               end

@@ -70,6 +70,34 @@ RSpec.shared_context 'engine setup' do
   let(:privileged_key) { BSV::Primitives::PrivateKey.generate }
   let(:root_key) { BSV::Primitives::PrivateKey.generate }
 
+  # BRC-29 derivation lets. Names point at the future BRC-29 convention
+  # (#460 / #478); values intentionally keep the OLD-convention shape so
+  # this refactor stays value-preserving. The atomic flip in #478 changes
+  # only the +brc29_protocol_id+ / +brc29_key_id+ bodies — to
+  # +BSV::Wallet::BRC29::PROTOCOL_ID+ and
+  # +BSV::Wallet::BRC29.key_id(derivation_prefix, derivation_suffix)+
+  # respectively.
+  let(:derivation_prefix) { 'wallet payment' }
+  let(:derivation_suffix) { 'suffix' }
+  let(:brc29_protocol_id) { [2, derivation_prefix] }
+  let(:brc29_key_id) { derivation_suffix }
+
+  # BRC-29 key-derivation helpers. +brc29_derivation_params+ holds the
+  # +protocol_id+ / +key_id+ composition once; private and public variants
+  # both splat it. #478's atomic flip changes only that single body — the
+  # private/public wrappers stay as-is.
+  def brc29_derivation_params(prefix:, suffix:, counterparty:)
+    { protocol_id: [2, prefix], key_id: suffix, counterparty: counterparty }
+  end
+
+  def derive_brc29_private_key(prefix:, suffix:, counterparty:)
+    key_deriver.derive_private_key(**brc29_derivation_params(prefix: prefix, suffix: suffix, counterparty: counterparty))
+  end
+
+  def derive_brc29_public_key(prefix:, suffix:, counterparty:)
+    key_deriver.derive_public_key(**brc29_derivation_params(prefix: prefix, suffix: suffix, counterparty: counterparty))
+  end
+
   around do |example|
     STORE_DB.transaction(rollback: :always, auto_savepoint: true) do
       example.run
@@ -115,8 +143,8 @@ RSpec.shared_context 'engine setup' do
       out_suffix = count > 1 ? "#{suffix}#{i}" : suffix
 
       script = if key_deriver
-                 derived_key = key_deriver.derive_private_key(
-                   protocol_id: [2, prefix], key_id: out_suffix,
+                 derived_key = derive_brc29_private_key(
+                   prefix: prefix, suffix: out_suffix,
                    counterparty: sender_identity_key || 'self'
                  )
                  pubkey_hash = BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)

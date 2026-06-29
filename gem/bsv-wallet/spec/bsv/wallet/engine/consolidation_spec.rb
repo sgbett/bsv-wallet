@@ -16,9 +16,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
   # Each output goes to a fresh BRC-42-derived self-address so the engine
   # can sign them when consolidation / sweep needs to.
   def fund_with_outputs(satoshis:, count:, prefix: 'funded')
-    derived_key = key_deriver.derive_private_key(
-      protocol_id: [2, prefix], key_id: '1', counterparty: 'self'
-    )
+    derived_key = derive_brc29_private_key(prefix: prefix, suffix: '1', counterparty: 'self')
     pubkey_hash = BSV::Primitives::Digest.hash160(derived_key.public_key.compressed)
     script = BSV::Script::Script.p2pkh_lock(pubkey_hash)
 
