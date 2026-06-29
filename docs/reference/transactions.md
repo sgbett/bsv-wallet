@@ -164,6 +164,73 @@ Failure between record and ACK — transport error, timeout, mismatched wtxid, a
 
 `bin/transmit` is the porcelain. It mirrors the verb symmetry of `bin/create` (build the action + BEEF) and `bin/receive` (consume the BEEF into a wallet) — a `bin/create | bin/transmit | bin/receive` pipe, with `bin/transmit` carrying `--to <identity_key>` and `--endpoint <url>`. See `bin/transmit --help` for the current flag set.
 
+## BRC-29 derivation convention
+
+Every BRC-29-shaped payment derivation in the wallet — outbound to a counterparty *or* internal self-payment that uses the same protocol envelope — composes its BRC-42 invoice number from the spec-mandated literals. The protocol identifier is `[2, '3241645161d8']` (security level 2, the BRC-29 magic) and the key id is `"#{derivation_prefix} #{derivation_suffix}"` — a single ASCII space between the two tokens, per the spec invoice-number format ([BRC-29 §Key Derivation Scheme](https://github.com/bitcoin-sv/BRCs/blob/master/payments/0029.md#key-derivation-scheme)).
+
+Two symbols are the only sanctioned producers:
+
+- `BSV::Wallet::BRC29::PROTOCOL_ID` — the protocol identifier. Currently aliases `BSV::Auth::AuthFetch::PAYMENT_PROTOCOL_ID`; if/when the SDK moves the constant out of the `AuthFetch` namespace (one consumer of BRC-29, not its owner) the alias absorbs the move.
+- `BSV::Wallet::BRC29.key_id(prefix, suffix)` — the only sanctioned `key_id` composer. Inline `"#{prefix} #{suffix}"` at call sites is banned. The helper validates each token against the base64url subset `[A-Za-z0-9+/=_-]`, rejects empty tokens, and caps each at 128 bytes. The validation is a cryptographic correctness primitive, not defensive padding: an NBSP or two-space typo would silently parse on the sender side and break key recovery on the receiver — the failure surfaces only as an unspendable output, no exception.
+
+The same protocol identifier is reused for internal self-payments — change outputs, WBIKD slot derivation, sweep self-pays — because the wallet uses one BRC-42 protocol envelope for all P2PKH derivation rather than minting a parallel internal-only protocol. The `counterparty` parameter is what distinguishes the two regimes.
+
+| Site | Role | `counterparty` |
+|---|---|---|
+| `Engine#send_payment` | Outbound BRC-29 payment | `recipient` identity key |
+| `Engine::TxBuilder#derive_signing_key` | Spending an inbound BRC-29 output | `sender_identity_key` (or `'self'` for internal-origin) |
+| `CLI::Commands::Send#call_identity_key` | Outbound BRC-29 payment (CLI) | `recipient` identity key |
+| `Engine::TxBuilder#build_change` | Change output back to wallet | `'self'` |
+| `Engine#create_wbikd_receive_address` | WBIKD slot derivation | `'self'` |
+| `Engine#list_receive_addresses` | WBIKD slot enumeration | `'self'` |
+| `Engine#find_or_create_wbikd_slot` | WBIKD slot creation | `'self'` |
+| `Engine#internalize_wbikd_utxo` | WBIKD UTXO recovery | `'self'` |
+
+The first three are BRC-29 payments in the spec sense — the counterparty is the recipient or sender identity key. The remaining five are internal self-payments riding on the same protocol envelope.
+
+## Wallet-internal envelope shape
+
+The JSON shape `bin/wallet send <identity_key>` emits on stdout, and `bin/wallet receive` consumes from stdin, is wallet-internal:
+
+```json
+{
+  "beef":                "<hex>",
+  "dtxid":               "<dtxid>",
+  "sender_identity_key": "<hex>",
+  "outputs": [
+    { "vout": 0, "satoshis": 1234,
+      "derivation_prefix": "<prefix>", "derivation_suffix": "<suffix>",
+      "basket": "<optional>" }
+  ]
+}
+```
+
+It is not the spec's `{ derivationPrefix, derivationSuffix, transaction: <base64 AtomicBEEF> }` shape ([BRC-29 §Current Payment Message Construction](https://github.com/bitcoin-sv/BRCs/blob/master/payments/0029.md#current-payment-message-construction)). It is snake_case, the BEEF is hex (not base64), it carries `sender_identity_key` at the top level, and `outputs` is an array — multi-output payments are first-class. The current shape was kept deliberately:
+
+- The native CLI pipe (`bin/wallet send … | bin/wallet receive`) is the canonical surface and is not a ts-stack carrier; pulling it toward the BRC-100/ts-stack envelope shape would lose the agnosticism we want from the native CLI.
+- The strict-spec envelope is reserved for a future `bin/brc100` CLI carrier — the place where ts-stack interop will live.
+- The spec itself defers the outer envelope: BRC-29 §Current Payment Message Construction explicitly notes that "the exact outer envelope may be defined by the higher-level protocol carrying the payment, such as BRC-105 for HTTP service monetization." The wallet's snake_case JSON is one such higher-level protocol — a *wallet-CLI carrier*, scoped to the native pipe.
+
+The BRC-29 spec compliance lives at the **derivation layer** (protocol identifier, invoice number composition, counterparty) — that is what makes a payment cross-compatible. The envelope is the transport choice on top, and the strict-spec transport is a separate, deferrable concern.
+
+## Threat model (CLI BRC-29 receive)
+
+**Sender identity is unauthenticated.** The CLI receive path shape-validates `sender_identity_key` — checks the compressed pubkey hex shape — but performs no cryptographic signature check. An on-path attacker who substitutes their own identity key in the envelope (rewriting the same `beef`) causes the receiver to derive the BRC-42 child key for the *attacker's* identity, not the genuine sender's. The receiver's import then targets an output whose locking-script pubkey hash matches a key the attacker can spend — funds delivered to the attacker on next broadcast. The wallet-internal envelope is therefore suitable for *trusted-channel* delivery only (a piped stdin/stdout under one operator's control, or a hand-copied JSON file). Wire-level use over an untrusted network needs BRC-31 transport authentication wrapping the envelope; that is a follow-up HLR (TBD).
+
+**Derivation token entropy is sufficient where both tokens are random.** `BSV::Wallet.random_derivation` produces eight cryptographically random bytes (64 bits) per token, base64-encoded to a 12-character string. The outbound CLI BRC-29 path (`CLI::Commands::Send#call_identity_key`) draws both prefix and suffix from `random_derivation`, giving 128 bits of combined per-output entropy — ample for output unlinkability against a chain-watching observer. `Engine#send_payment` (the engine-side porcelain used by integration tests and stress harnesses) still uses a static suffix `'1'`; that is a residual privacy gap on the engine entry point, tracked alongside the Q3 work that landed only at the CLI sites in #460. Internal self-payment sites use deterministic suffixes (`vout.to_s`, `(i+1).to_s` for change indexing, static `'1'` for WBIKD); their counterparty is `'self'`, so no third party can derive the locking-script pubkey hash from a public input regardless, and the entropy concern does not apply at those sites.
+
+**`paymentRemittance` is engine-internal, not wire shape.** The receiver's `internalize_action` call shape — `protocol: 'wallet payment'` plus the `payment_remittance: { derivation_prefix, derivation_suffix, sender_identity_key }` triple — matches the BRC-29 spec's `internalizeAction` example exactly ([BRC-29 §Recipient Validation](https://github.com/bitcoin-sv/BRCs/blob/master/payments/0029.md#recipient-validation)). It is the call shape between `CLI::Commands::Receive` and `Engine::BeefImporter`, not a wire shape — the wire envelope is the JSON above. The distinction matters: a future strict-spec wire envelope (per the bullet below) would still emit the same `payment_remittance` triple to the engine at the internalize boundary.
+
+## Future work
+
+Tracked as follow-up HLRs filed post-merge of #460:
+
+- Strict BRC-29 wire envelope (camelCase, base64 BEEF, `paymentRemittance` triple per the spec) for a `bin/brc100` CLI carrier — Q1 of #460 deferred (follow-up issue TBD).
+- BRC-31 transport authentication of the wallet-internal envelope — closes the sender-identity-unauthenticated gap above (follow-up issue TBD).
+- Move SDK `PAYMENT_PROTOCOL_ID` out of `BSV::Auth::AuthFetch::*` — `AuthFetch` is one consumer of BRC-29, not its owner; a BRC-29 namespace would be the right home. `BSV::Wallet::BRC29::PROTOCOL_ID` is the wallet seam for that move (follow-up issue TBD).
+- Identity-key case canonicalisation on receive — downcase inbound hex before DB compare. Pre-existing latent issue, surfaced more by BRC-29 (follow-up issue TBD).
+- Extend suffix randomisation to `Engine#send_payment` — the engine-side porcelain still uses static `'1'`; #460 Q3 scoped randomisation to the four CLI sites only. Closes the entropy gap at the engine entry point (follow-up issue TBD).
+
 ## References
 
 - Format specs: BRC-12 (Raw Transaction), BRC-62 (BEEF), BRC-74 (BUMP), BRC-95 (Atomic BEEF), BRC-67 (SPV). EF (Extended Format) inlines per-input source satoshis + locking script onto the raw tx; it is the ARC submission shape, not a peer-interchange format.
