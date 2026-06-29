@@ -1111,6 +1111,85 @@ RSpec.describe BSV::Wallet::Engine do
         expect(BSV::Wallet::Store::Models::Basket.first(name: 'importedfunds')).to be_nil
       end
     end
+
+    # HLR #489 — caller-supplied +fee_rate:+ swaps the engine's fee model
+    # for the duration of one +#build_action+ call. Test-only knob: lets
+    # off-chain balance specs (+spec/integration/send_beef_spec.rb+) pin
+    # the debit to exactly the payment amount. Mutation is restored on
+    # every exit path (success, exception, early return).
+    context 'fee_rate: overrides the wallet default for one call' do
+      def change_satoshis_of(action_wtxid)
+        action_row = store.find_action(wtxid: action_wtxid)
+        change_output_ids = BSV::Wallet::Store::Models::OutputDetail.where(change: true)
+                                                                    .select_map(:output_id)
+        BSV::Wallet::Store::Models::Output
+          .where(action_id: action_row[:id], id: change_output_ids)
+          .sum(:satoshis)
+      end
+
+      it 'zero fee_rate produces change equal to inputs minus caller outputs (exact)' do
+        fund_wallet(satoshis: 100_000, basket: nil, suffix: 'fee_rate_zero')
+        result = engine_with_keys.build_action(
+          description: 'zero-fee build',
+          outputs: [{ satoshis: 10_000, locking_script: OP_TRUE, spendable_intent: 'none' }],
+          no_send: true,
+          fee_rate: 0
+        )
+
+        expect(change_satoshis_of(result[:wtxid])).to eq(90_000)
+      end
+
+      it 'restores the engine default fee model after the call' do
+        prior_model = engine_with_keys.instance_variable_get(:@fee_model)
+        prior_builder = engine_with_keys.instance_variable_get(:@tx_builder)
+
+        fund_wallet(satoshis: 100_000, basket: nil, suffix: 'fee_rate_restore')
+        engine_with_keys.build_action(
+          description: 'restore probe',
+          outputs: [{ satoshis: 10_000, locking_script: OP_TRUE, spendable_intent: 'none' }],
+          no_send: true,
+          fee_rate: 0
+        )
+
+        expect(engine_with_keys.instance_variable_get(:@fee_model)).to equal(prior_model)
+        expect(engine_with_keys.instance_variable_get(:@tx_builder)).to equal(prior_builder)
+      end
+
+      it 'restores the engine default fee model even when the build raises' do
+        prior_model = engine_with_keys.instance_variable_get(:@fee_model)
+        prior_builder = engine_with_keys.instance_variable_get(:@tx_builder)
+
+        # +sign_and_process: false+ with +inputs: nil+ trips a named
+        # parameter-combination guard inside +#build_action+ AFTER
+        # +swap_fee_model!+ has already mutated state. The method-level
+        # +ensure+ must restore both +@fee_model+ and +@tx_builder+.
+        expect do
+          engine_with_keys.build_action(
+            description: 'raise after swap',
+            sign_and_process: false, fee_rate: 0
+          )
+        end.to raise_error(BSV::Wallet::InvalidParameterError, /sign_and_process/)
+
+        expect(engine_with_keys.instance_variable_get(:@fee_model)).to equal(prior_model)
+        expect(engine_with_keys.instance_variable_get(:@tx_builder)).to equal(prior_builder)
+      end
+
+      it 'rejects a negative fee_rate' do
+        expect do
+          engine.build_action(
+            description: 'reject', inputs: [], outputs: [], fee_rate: -1
+          )
+        end.to raise_error(BSV::Wallet::InvalidParameterError, /non-negative integer/)
+      end
+
+      it 'rejects a non-integer fee_rate' do
+        expect do
+          engine.build_action(
+            description: 'reject', inputs: [], outputs: [], fee_rate: '0'
+          )
+        end.to raise_error(BSV::Wallet::InvalidParameterError, /non-negative integer/)
+      end
+    end
   end
 
   describe '#sign_action (wallet-vocab primitive)' do

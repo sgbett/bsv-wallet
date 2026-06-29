@@ -114,6 +114,23 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect(BSV::Wallet::Store::Models::Spendable.where(output_id: output.id).any?)
         .to be(false)
     end
+
+    # HLR #489 — +send_payment+ forwards +fee_rate:+ verbatim into
+    # +#build_action+. The engine-level coverage of swap/restore lives in
+    # +engine_spec.rb+; this is the pass-through contract.
+    it 'forwards fee_rate: into #build_action' do
+      allow(engine_with_keys).to receive(:build_action).and_return(
+        wtxid: 'x' * 32, atomic_beef: 'beef'
+      )
+
+      engine_with_keys.send_payment(
+        recipient: BSV::Primitives::PrivateKey.generate.public_key.to_hex,
+        satoshis: 5_000, fee_rate: 50
+      )
+
+      expect(engine_with_keys).to have_received(:build_action)
+        .with(hash_including(fee_rate: 50))
+    end
   end
 
   # --- auto-fund (underlying machinery for send_payment) ---

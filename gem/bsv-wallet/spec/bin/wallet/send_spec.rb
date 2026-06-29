@@ -147,7 +147,9 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
         ),
         accept_delayed_broadcast: false,
         no_send: false,
-        randomize_outputs: false
+        randomize_outputs: false,
+        # HLR #489 — +nil+ means "inherit wallet default" (100 sats/kb).
+        fee_rate: nil
       )
     end
 
@@ -177,6 +179,50 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
 
     it 'prints human-readable summary to stderr' do
       expect { command.call([base58_address, '1000']) }.to output(/kind:\s+base58/).to_stderr
+    end
+
+    # HLR #489 — +--fee-rate+ / +--no-fee+ forward through to the engine.
+    # +fee_rate: nil+ means "inherit wallet default", anything else
+    # constructs a one-shot fee model for the duration of +build_action+.
+    describe '--fee-rate / --no-fee' do
+      it 'defaults fee_rate to nil (engine uses wallet default)' do
+        command.call([base58_address, '1000'])
+        expect(engine).to have_received(:build_action).with(hash_including(fee_rate: nil))
+      end
+
+      it 'forwards --fee-rate=50' do
+        command.call([base58_address, '1000', '--fee-rate=50'])
+        expect(engine).to have_received(:build_action).with(hash_including(fee_rate: 50))
+      end
+
+      it 'forwards --fee-rate=0' do
+        command.call([base58_address, '1000', '--fee-rate=0'])
+        expect(engine).to have_received(:build_action).with(hash_including(fee_rate: 0))
+      end
+
+      it 'treats --no-fee as sugar for --fee-rate=0' do
+        command.call([base58_address, '1000', '--no-fee'])
+        expect(engine).to have_received(:build_action).with(hash_including(fee_rate: 0))
+      end
+
+      it 'rejects --fee-rate and --no-fee together' do
+        expect { command.call([base58_address, '1000', '--fee-rate=50', '--no-fee']) }
+          .to raise_error(BSV::Wallet::CLI::UsageError, /not both/)
+        expect(engine).not_to have_received(:build_action)
+      end
+
+      it 'rejects a negative --fee-rate' do
+        expect { command.call([base58_address, '1000', '--fee-rate=-1']) }
+          .to raise_error(BSV::Wallet::CLI::UsageError, /non-negative integer/)
+        expect(engine).not_to have_received(:build_action)
+      end
+
+      it 'rejects a non-integer --fee-rate (OptionParser type coercion)' do
+        # +OptionParser+'s +Integer+ coercion raises before our handler runs.
+        expect { command.call([base58_address, '1000', '--fee-rate=abc']) }
+          .to raise_error(OptionParser::InvalidArgument)
+        expect(engine).not_to have_received(:build_action)
+      end
     end
   end
 
