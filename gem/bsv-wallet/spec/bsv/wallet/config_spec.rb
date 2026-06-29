@@ -130,6 +130,42 @@ RSpec.describe BSV::Wallet::Config do
         expect(described_class.new.hints_socket).to eq('/tmp/foo.sock')
       end
     end
+
+    it 'BSV_WALLET_TRUST_MODEL → trust_model (symbol), defaults to :trusted_service' do
+      with_env('BSV_WALLET_TRUST_MODEL' => nil) do
+        expect(described_class.new.trust_model).to eq(:trusted_service)
+      end
+      with_env('BSV_WALLET_TRUST_MODEL' => 'spv_headers') do
+        expect(described_class.new.trust_model).to eq(:spv_headers)
+      end
+    end
+
+    it 'spv_checkpoint defaults to nil (gem-baked checkpoint used unless overridden)' do
+      expect(described_class.new.spv_checkpoint).to be_nil
+    end
+  end
+
+  describe '.parse_trust_model' do
+    it 'nil → :trusted_service (opt-in is the exception)' do
+      expect(described_class.parse_trust_model(nil)).to eq(:trusted_service)
+    end
+
+    it 'blank / whitespace-only → :trusted_service (avoids the "".to_sym → :"" trap)' do
+      expect(described_class.parse_trust_model('')).to eq(:trusted_service)
+      expect(described_class.parse_trust_model('   ')).to eq(:trusted_service)
+    end
+
+    it '"spv_headers" → :spv_headers' do
+      expect(described_class.parse_trust_model('spv_headers')).to eq(:spv_headers)
+    end
+
+    it 'strips surrounding whitespace' do
+      expect(described_class.parse_trust_model('  spv_headers  ')).to eq(:spv_headers)
+    end
+
+    it 'passes a Symbol through' do
+      expect(described_class.parse_trust_model(:spv_headers)).to eq(:spv_headers)
+    end
   end
 
   describe 'BSV::Wallet module surface (config / configure / load_config_file!)' do

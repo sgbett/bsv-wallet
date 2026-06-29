@@ -39,6 +39,21 @@ module BSV
       # +:mainnet+ or +:testnet+.
       attr_accessor :network
 
+      # Chain-validity trust model (HLR #335). +:trusted_service+ (default)
+      # trusts a chain-query Service's merkle-root answer outright;
+      # +:spv_headers+ opts in to a locally-validated, PoW-checked header
+      # chain anchored at a baked-in checkpoint. Selected at +CLI.boot+ to
+      # pick the chain tracker; an unset/blank +BSV_WALLET_TRUST_MODEL+
+      # leaves today's trusted-service behaviour unchanged.
+      attr_accessor :trust_model
+
+      # Optional +spv_headers+ checkpoint override: +{ height:, header: }+
+      # (a {BSV::Network::BlockHeader} or raw 80 bytes). +nil+ (default)
+      # uses the gem-baked {BSV::Network::Checkpoints} anchor for the
+      # network. Minimal seam for tests / operators pinning their own
+      # anchor; end users never need it.
+      attr_accessor :spv_checkpoint
+
       # Limp mode threshold (sats). Below this, outbound is blocked.
       attr_accessor :limp_threshold
 
@@ -71,6 +86,8 @@ module BSV
         @database_url     = ENV.fetch('DATABASE_URL', nil)
         @wif              = ENV.fetch('WIF', nil)
         @network          = self.class.parse_network(ENV.fetch('BSV_WALLET_NETWORK', nil))
+        @trust_model      = self.class.parse_trust_model(ENV.fetch('BSV_WALLET_TRUST_MODEL', nil))
+        @spv_checkpoint   = nil
         @limp_threshold   = Integer(ENV.fetch('LIMP_THRESHOLD', '50000'))
         @daemon_pool_size = Integer(ENV.fetch('BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS', '16'))
         @tx_cache_size    = Integer(ENV.fetch('BSV_WALLET_TX_CACHE_SIZE', '20000'))
@@ -90,6 +107,20 @@ module BSV
       # @return [Symbol]
       def self.parse_network(value)
         return :mainnet if value.nil? || value.to_s.strip.empty?
+
+        value.to_s.strip.to_sym
+      end
+
+      # Normalise a trust-model string to a Symbol. Blank, whitespace-only,
+      # or nil input → +:trusted_service+ (today's behaviour — opt-in is
+      # the exception, not the default). Mirrors {.parse_network}, dodging
+      # the +"".to_sym → :""+ trap so an +export BSV_WALLET_TRUST_MODEL=+
+      # in a shell does not select an empty-symbol model.
+      #
+      # @param value [String, Symbol, nil]
+      # @return [Symbol]
+      def self.parse_trust_model(value)
+        return :trusted_service if value.nil? || value.to_s.strip.empty?
 
         value.to_s.strip.to_sym
       end

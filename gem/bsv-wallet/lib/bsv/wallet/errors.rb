@@ -104,5 +104,21 @@ module BSV
         super
       end
     end
+
+    # Raised by Store#record_block_header when a validated (header-bearing)
+    # +blocks+ row already exists at the target height carrying a
+    # *different* 80-byte header (HLR #335). The wallet's locally-validated
+    # header chain is append-or-reject: a competing header at an occupied,
+    # already-validated height is fork / reorg evidence to preserve and
+    # investigate (#245), never an upsert to silently overwrite.
+    class CompetingBlockHeaderError < Error
+      attr_reader :height
+
+      def initialize(height)
+        @height = height
+        super("competing block header at already-validated height #{height}; " \
+              'append-or-reject refused the overwrite (reorg evidence preserved)')
+      end
+    end
   end
 end

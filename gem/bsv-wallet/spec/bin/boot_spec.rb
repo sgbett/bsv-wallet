@@ -46,6 +46,43 @@ RSpec.describe BSV::Wallet::CLI do
     end
   end
 
+  # Chain-validity trust model selection (HLR #335). cli.rb:124 is the
+  # single tracker-construction seam; assert the boot path wires the right
+  # tracker for each +trust_model+. Subprocess-isolated like the smoke test
+  # above (keeps Sequel::Model.db out of the parent process).
+  describe '.boot trust_model selection (#335)' do
+    def boot_and_report_tracker(env)
+      Dir.mktmpdir do |dir|
+        db_path = File.join(dir, 'trust.db')
+        wif = BSV::Primitives::PrivateKey.generate.to_wif
+
+        ruby_src = <<~RUBY
+          $LOAD_PATH.unshift(#{File.expand_path('../../lib', __dir__).inspect})
+          require 'bsv-wallet'
+          require 'bsv/wallet/cli'
+          ctx = BSV::Wallet::CLI.boot
+          puts ctx[:engine].chain_tracker.class.name
+        RUBY
+
+        full_env = { 'WIF' => wif, 'DATABASE_URL' => "sqlite://#{db_path}" }.merge(env)
+        stdout, stderr, status = Open3.capture3(full_env, 'ruby', '-e', ruby_src)
+        raise "boot failed:\n#{stderr}\n#{stdout}" unless status.exitstatus.zero?
+
+        stdout.strip
+      end
+    end
+
+    it 'selects ChainTracker by default (trusted_service) — behaviour unchanged' do
+      expect(boot_and_report_tracker('BSV_WALLET_TRUST_MODEL' => nil))
+        .to eq('BSV::Network::ChainTracker')
+    end
+
+    it 'selects SpvHeaderChainTracker iff trust_model=spv_headers' do
+      expect(boot_and_report_tracker('BSV_WALLET_TRUST_MODEL' => 'spv_headers'))
+        .to eq('BSV::Network::SpvHeaderChainTracker')
+    end
+  end
+
   # Per-wallet Postgres derivation moved to BSV::Wallet::Fixtures (#292).
   # See spec/bsv/wallet/fixtures_spec.rb.
 
