@@ -162,11 +162,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
       )
     end
 
-    it 'maps --broadcast=none to no_send: true' do
-      command.call([base58_address, '1000', '--broadcast=none'])
-      expect(engine).to have_received(:build_action).with(
-        hash_including(no_send: true, accept_delayed_broadcast: false)
-      )
+    it 'rejects --broadcast=none on base58 (dead-end action — no peer-handoff envelope, no broadcast verb)' do
+      expect { command.call([base58_address, '1000', '--broadcast=none']) }
+        .to raise_error(BSV::Wallet::CLI::UsageError, /requires an identity-key recipient/)
+      expect(engine).not_to have_received(:build_action)
     end
 
     it 'forwards --description' do

@@ -82,6 +82,21 @@ module BSV
             no_send = @options[:broadcast] == :none
             description = @options[:description] || 'cli-send'
 
+            # +--broadcast=none+ on the base58 path is a dead-end: the base58
+            # recipient has no envelope to receive (no derivation columns,
+            # no BEEF emitted on stdout) and there is no +bin/wallet
+            # broadcast+ verb to publish the staged action later (the
+            # plumbing layer is deferred per ADR-030 pending HLR #192).
+            # Only the identity-key path has a peer-handoff route under
+            # +--broadcast=none+.
+            if kind == :base58 && no_send
+              raise UsageError,
+                    'send --broadcast=none requires an identity-key recipient ' \
+                    '(base58 has no peer-handoff envelope; staged actions cannot ' \
+                    'be published later because the plumbing layer is deferred ' \
+                    '— see ADR-030, HLR #192)'
+            end
+
             case kind
             when :base58
               call_base58(engine, recipient, sats, description, accept_delayed, no_send)
