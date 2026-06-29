@@ -301,5 +301,13 @@ RSpec.describe BSV::Network::BlockHeader do
       expect(described_class.from_service_fields(**genesis_fields(bits: '1d00ffff00'))).to be_nil   # 10 chars
       expect(described_class.from_service_fields(**genesis_fields(bits: 0x1d00ffff))).to be_nil     # not a String
     end
+
+    it 'masks an out-of-range integer field (pack V), so a wrong header fails the round-trip' do
+      # pack('V') never raises — it masks to 32 bits. A malformed version /
+      # time / nonce therefore assembles a *wrong* header, which the round-trip
+      # against the supplied block hash rejects (nil) rather than certifying.
+      expect(described_class.from_service_fields(**genesis_fields(version: 2**40, hash: genesis_block_hash_display)))
+        .to be_nil
+    end
   end
 end

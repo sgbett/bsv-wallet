@@ -501,10 +501,18 @@ module BSV
         # 64-char hex strings. Already-binary values (Encoding::BINARY)
         # are stored as-is; hex strings are packed to binary.
         #
+        # When +header+ (the raw 80-byte PoW-validated header, #335) is given,
+        # the write is append-or-reject: a validated row is never downgraded
+        # or overwritten, and a competing header at an already-validated
+        # height raises {CompetingBlockHeaderError}. When +header+ is nil (the
+        # trusted-service path) only merkle_root / block_hash are upserted and
+        # any existing validated row is left untouched.
+        #
         # @param height [Integer] block height
         # @param merkle_root [String] 32-byte binary or 64-char hex string
         # @param block_hash [String, nil] 32-byte binary or 64-char hex string
-        def record_block_header(height:, merkle_root:, block_hash: nil)
+        # @param header [String, nil] raw 80-byte validated header (wire order)
+        def record_block_header(height:, merkle_root:, block_hash: nil, header: nil)
           raise NotImplementedError
         end
 
@@ -520,6 +528,27 @@ module BSV
         #
         # @return [Integer, nil]
         def max_block_height
+          raise NotImplementedError
+        end
+
+        # The raw 80-byte header at +height+, or +nil+ when the height holds
+        # no row or only a trusted-service (header-NULL) row. A non-nil return
+        # is the "this height is locally PoW-validated" signal (#335).
+        #
+        # @param height [Integer]
+        # @return [String, nil] the 80 raw wire bytes, or nil
+        def header_at(height:)
+          raise NotImplementedError
+        end
+
+        # Highest height of the contiguous run of validated (header-present)
+        # rows starting at +from_height+ (the checkpoint) — the +:spv_headers+
+        # validated tip (#335). Structural and gap-stopping: a header-island
+        # above a gap is not the tip.
+        #
+        # @param from_height [Integer]
+        # @return [Integer, nil] the validated tip, or nil if unseeded
+        def validated_tip(from_height:)
           raise NotImplementedError
         end
 

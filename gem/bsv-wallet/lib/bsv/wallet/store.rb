@@ -841,20 +841,23 @@ module BSV
       # @param from_height [Integer] the checkpoint height (run anchor)
       # @return [Integer, nil] the validated tip, or +nil+ if unseeded
       def validated_tip(from_height:)
-        heights = models::Block
-                  .where(height: from_height..)
-                  .exclude(header: nil)
-                  .order(:height)
-                  .select_map(:height)
-        return if heights.empty?
-        return unless heights.first == from_height
+        # Iterate the ascending header-present heights and stop at the first
+        # gap, rather than materialising the whole run into an array — the
+        # contiguous chain can grow long on a wallet whose checkpoint has
+        # drifted far below the tip.
+        tip = nil
+        models::Block
+          .where(height: from_height..)
+          .exclude(header: nil)
+          .order(:height)
+          .select(:height)
+          .each do |row|
+            h = row[:height]
+            break if tip.nil? && h != from_height # from_height itself not validated → unseeded
+            break if tip && h != tip + 1          # gap — the run ends at the previous height
 
-        tip = from_height
-        heights.each do |h|
-          break if h > tip + 1
-
-          tip = h
-        end
+            tip = h
+          end
         tip
       end
 
@@ -1466,37 +1469,38 @@ module BSV
       # Write (or upgrade to) a validated, header-bearing +blocks+ row.
       # Append-or-reject at an occupied height — see {#record_block_header}.
       #
-      # Checks the existing row inside a transaction so the
-      # decide-then-write is atomic against a concurrent writer:
+      # A single +INSERT ... ON CONFLICT+ — atomic, so it avoids the
+      # read-then-write race the previous +for_update+ check left open (two
+      # writers both seeing no row and racing on +create+, one hitting a
+      # unique violation that, in +:spv_headers+ mode, would fail a
+      # verification closed):
       #   * no row            → INSERT the validated row.
-      #   * row, same header  → idempotent no-op.
-      #   * row, diff header  → raise (competing header = reorg evidence).
       #   * row, header NULL  → UPGRADE in place (trusted → validated),
-      #                         realigning merkle_root / block_hash to the
-      #                         header so +header_root_match+ holds.
+      #                         realigning merkle_root / block_hash so
+      #                         +header_root_match+ holds (the +update_where+).
+      #   * row, header set   → +update_where+ excludes it, so DO NOTHING; the
+      #                         post-read then no-ops (same header) or raises
+      #                         (a different, competing header = reorg evidence).
       def record_validated_header(height, root_bin, hash_bin, header_bin)
-        @db.transaction do
-          existing = models::Block.where(height: height).for_update.first
-          if existing.nil?
-            fields = { height: height, merkle_root: Sequel.blob(root_bin),
-                       header: Sequel.blob(header_bin) }
-            fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
-            models::Block.create(fields)
-            next
-          end
+        insert_fields = { height: height, merkle_root: Sequel.blob(root_bin),
+                          header: Sequel.blob(header_bin) }
+        insert_fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
 
-          if existing.header
-            next if existing.header == header_bin
+        update_fields = { merkle_root: Sequel.blob(root_bin), header: Sequel.blob(header_bin) }
+        update_fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
 
-            raise BSV::Wallet::CompetingBlockHeaderError, height
-          end
+        models::Block.dataset
+                     .insert_conflict(target: :height, update: update_fields,
+                                      update_where: { Sequel[:blocks][:header] => nil })
+                     .insert(insert_fields)
 
-          # Upgrade a trusted-service row to validated. Realign merkle_root
-          # (and block_hash) to the header so header_root_match is satisfied.
-          fields = { header: Sequel.blob(header_bin), merkle_root: Sequel.blob(root_bin) }
-          fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
-          existing.update(fields)
-        end
+        # The row now carries a header. If it differs from ours, a competing
+        # header was already validated at this height — reorg evidence the
+        # upsert deliberately left intact (#245), never an overwrite. The
+        # read-back is race-free: a header-bearing row is immutable (the
+        # +update_where+ above never touches one).
+        stored = models::Block.where(height: height).get(:header)
+        raise BSV::Wallet::CompetingBlockHeaderError, height unless stored == header_bin
       end
 
       def broadcast_to_hash(record)

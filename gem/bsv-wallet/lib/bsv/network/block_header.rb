@@ -169,6 +169,10 @@ module BSV
       rescue InvalidHeaderError, TypeError, ArgumentError
         # Bad field types (e.g. a non-hex +bits+ string, a +nil+ hash
         # field) collapse to a closed failure rather than propagating.
+        # +pack('V')+ masks out-of-range integers to 32 bits rather than
+        # raising, so a malformed numeric field assembles a wrong header
+        # that then fails the round-trip hash check (or downstream PoW /
+        # linkage) — fail-closed without needing a RangeError rescue.
         nil
       end
 
