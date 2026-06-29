@@ -69,9 +69,20 @@ end
 abort BSV::Wallet::CLI.missing_wif_message(wallet_name) if wif.nil? || wif.empty?
 db_url ||= BSV::Wallet::CLI.default_sqlite_url(wallet_name)
 
-# Boot store + services (walletd doesn't need Engine or KeyDeriver)
-store = BSV::Wallet::Store.connect(db_url, max_connections: daemon_pool_size)
+# Boot store + services. Walletd doesn't construct the Engine (it's a
+# broadcast / proof / status daemon, not an action-creation surface) but
+# DOES derive +identity_pubkey_hash+ so +Store#verify_schema!+ can run as
+# a boot-time guard. The CHECK protects all writes regardless; the guard
+# fails fast on schema/WIF mismatch (restore-to-wrong-DB, etc.) before
+# the daemon settles into its reactor loop. HLR #467 / #475.
+key_deriver = BSV::Wallet::KeyDeriver.new(private_key: BSV::Primitives::PrivateKey.from_wif(wif))
+store = BSV::Wallet::Store.connect(
+  db_url,
+  max_connections: daemon_pool_size,
+  identity_pubkey_hash: key_deriver.identity_pubkey_hash
+)
 store.migrate!
+store.verify_schema! # HLR #467 / #475 — fail fast on schema/WIF mismatch
 
 # GorillaPool (Arcade) is the broadcast porcelain — callbacks via
 # X-CallbackToken + SSE status push, the path the wallet is designed
