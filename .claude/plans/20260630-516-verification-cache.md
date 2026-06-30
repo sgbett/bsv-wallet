@@ -10,15 +10,39 @@ The fix: persist the verification fact alongside the bytes, short-circuit the ve
 
 ## Decisions taken (resolving HLR open questions)
 
-### 1. SDK extension vs wallet-side pruning → **SDK extension**
+### 1. SDK extension vs wallet-side pruning → **SDK extension (`verified:` kwarg)**
 
-Plan: add `Tx#verify(chain_tracker:, trusted_wtxids: Set.new)` to `bsv-ruby-sdk`. When recursing into an input's `source_transaction`, if that transaction's wtxid is in `trusted_wtxids`, treat it as a terminal (skip its subtree, skip its script verify). Tiny SDK change, opt-in via the new kwarg, no behavioural change for existing callers.
+Plan: add `Tx#verify(chain_tracker:, fee_model:, verified: nil)` to `bsv-ruby-sdk`. The SDK's existing implementation at `lib/bsv/transaction/tx.rb:633-640` already maintains an in-call `verified = {}` hash that short-circuits repeated ancestors within a single walk:
 
-Why SDK-level over wallet-side graph pruning:
-- The SDK already owns the recursion; intercepting at the recursion point is the right architectural seam.
-- Wallet-side pruning would have to mutate parsed BEEF state to make terminals (re-shape `source_transaction` references), which is invasive and would break round-tripping.
-- `trusted_wtxids` is a primitive concept — "set of wtxids the caller asserts are valid"; doesn't leak wallet-specific concerns into the SDK.
-- BEEF V2 already supports TXID-only entries; this kwarg is essentially a "treat these as TXID-only for verify purposes" hook.
+```ruby
+def verify(chain_tracker:, fee_model: nil)
+  verified = {}
+  queue = [self]
+  until queue.empty?
+    tx = queue.shift
+    wtxid = tx.wtxid
+    next if verified[wtxid]   # <-- within-walk dedup, already there
+    # ...
+  end
+end
+```
+
+The wallet's persistent cache is the cross-call version of the same data structure. Exposing the SDK's existing Hash as a `verified:` kwarg lets the caller pre-seed it from a persistent store. Two-line SDK change:
+
+```ruby
+def verify(chain_tracker:, fee_model: nil, verified: nil)
+  verified = verified ? verified.dup : {}   # honour caller's pre-seed
+  queue = [self]
+  # ... rest unchanged ...
+end
+```
+
+Why this is the right shape:
+- The SDK already owns the recursion AND the dedup Hash. Adding a kwarg just exposes it; no new path.
+- Naming aligns: the kwarg name `verified:` matches the existing internal Hash name. No new vocabulary.
+- The wallet's `verifier_version + verified_via` gate ensures only validated entries are passed in — trust is the caller's concern, the SDK is just respecting an assertion.
+- Confirmed orthogonal to SDK #881: the #881 plan's §5 explicitly notes ancestor dedup is "already in the code, no work needed" — #881 doesn't touch this path.
+- Wallet-side pruning would have to mutate parsed BEEF state, which is invasive and would break round-tripping.
 
 ### 2. Reaper vs lazy chain-anchor check → **both, in order**
 
@@ -107,29 +131,38 @@ The Postgres ENUM type goes alongside `broadcast_intent` at the top of `001`. SQ
 
 ## SDK change required (separate PR)
 
-Repo: `sgbett/bsv-ruby-sdk`. Change: `Tx#verify` accepts `trusted_wtxids:` kwarg.
+Repo: `sgbett/bsv-ruby-sdk`. Change: `Tx#verify` accepts `verified:` kwarg that pre-seeds the existing in-call dedup Hash.
 
 ```ruby
-# Before
-def verify(chain_tracker: nil)
-  # recursive walk
+# Before (lib/bsv/transaction/tx.rb:633)
+def verify(chain_tracker:, fee_model: nil)
+  verified = {}
+  queue = [self]
+  # ...
 end
 
 # After
-def verify(chain_tracker: nil, trusted_wtxids: nil)
-  # recursive walk; before recursing into source_transaction:
-  #   next if trusted_wtxids&.include?(source_transaction.wtxid)
+def verify(chain_tracker:, fee_model: nil, verified: nil)
+  verified = verified ? verified.dup : {}
+  queue = [self]
+  # ... rest unchanged ...
 end
 ```
 
 Acceptance:
 - New kwarg defaults to nil (no behaviour change for existing callers).
-- Recursion short-circuits at any input whose `source_transaction.wtxid` is in `trusted_wtxids`.
-- Spec: build a tx whose source_transaction has a deliberately-invalid input, verify with that source's wtxid in trusted_wtxids → passes. Verify without it → fails.
-- Spec: trust set ignored for inputs with merkle_path (those still verify via chain_tracker; trust is for unproven subtrees).
-- SDK release with the feature gates the wallet's Phase 4.
+- When provided, supplied wtxids are treated as already-verified — the SDK skips their subtree the same way it currently skips on-walk-repeats.
+- `.dup` so the caller's set isn't mutated by the in-call additions.
+- Spec: build a tx whose source_transaction has a deliberately-invalid input, verify with that source's wtxid in `verified:` → passes. Verify without it → fails.
+- Spec: kwarg ignored for inputs with merkle_path (those still verify via chain_tracker; the kwarg is for unproven subtrees).
+- Spec: caller's set unchanged after call (dup semantics).
 
-Sequencing: file the SDK issue + PR alongside Phase 1 schema work. SDK lands, gem version bumped in wallet, wallet Phase 4 unblocks.
+Coordinates with SDK #881:
+- The #881 plan's §5 explicitly lists ancestor dedup as "already in the code, no work needed". #881 touches the per-Tx sighash machinery; this change touches the verify-walk dedup. Orthogonal surfaces, no merge conflict.
+- The verify body may grow other instrumentation as #881 phases land (Layer 1–5 caches). The kwarg's site (pre-seed the `verified` Hash at the top of the body) is stable regardless.
+- Sensible to wait for #881 code to land before opening the PR for this kwarg — review of the kwarg PR is cleaner against the post-#881 verify body. Not strictly blocking, but tidier.
+
+Sequencing: open the SDK issue alongside this branch's Phase 1; PR after #881 lands or in parallel if convenient. SDK release with the kwarg gates wallet Phase 5.
 
 ## ADR scope (for separate creation)
 
