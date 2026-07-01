@@ -180,8 +180,12 @@ Sequel.migration do
     #   NOT NULL AND verified_via IN (...) AND verifier_version >= ?
     # as an index-only scan. SQLite planner falls back to the existing
     # UNIQUE on wtxid plus a post-filter — acceptable for dev-only.
+    # +block_id IS NOT NULL+ excludes unproven txs (which have no anchor
+    # to re-org and cannot appear in the reaper's +block_id IN (...)+ set);
+    # Postgres indexes NULLs by default, so naming the predicate keeps the
+    # index smaller and more selective without changing semantics.
     add_index :tx_proofs, :block_id,
-              where: Sequel.lit('verified_at IS NOT NULL'),
+              where: Sequel.lit('verified_at IS NOT NULL AND block_id IS NOT NULL'),
               name: :idx_tx_proofs_verified_by_block
     if postgres
       run <<~SQL

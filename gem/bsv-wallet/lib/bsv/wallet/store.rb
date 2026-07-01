@@ -824,8 +824,14 @@ module BSV
         acc = Set.new
         wtxids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
           blobs = chunk.map { |w| Sequel.blob(w) }
+          # +verified_at IS NOT NULL+ is redundant given the coherent-state
+          # CHECK (verified_via IS NOT NULL ⟺ verified_at IS NOT NULL), but
+          # Postgres's planner does not infer partial-index matches from
+          # CHECK implications — the WHERE clause must literally name the
+          # partial-index predicate for the covering index to be picked.
           hits = models::TxProof
                  .where(wtxid: blobs, verified_via: via_in)
+                 .exclude(verified_at: nil)
                  .where { verifier_version >= version_at_least }
                  .select_map(:wtxid)
           acc.merge(hits.map(&:to_s))
@@ -834,7 +840,12 @@ module BSV
       end
 
       def max_verifier_version_seen
-        models::TxProof.exclude(verifier_version: nil).max(:verifier_version)
+        # Filter on +verified_at+ (not +verifier_version+): the covering
+        # index is partial on +verified_at IS NOT NULL+, so filtering by
+        # that column lets the planner satisfy the MAX from the index at
+        # boot time. Coherent CHECK makes the two filters semantically
+        # equivalent.
+        models::TxProof.exclude(verified_at: nil).max(:verifier_version)
       end
 
       # --- Block Headers ---
