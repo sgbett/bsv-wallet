@@ -846,6 +846,7 @@ Sequel.migration do
 
     if postgres
       extension :pg_enum
+      drop_enum(:verification_source)
       drop_enum(:spendable_intent)
       drop_enum(:tx_status)
       drop_enum(:broadcast_intent)

@@ -423,6 +423,85 @@ module BSV
           raise NotImplementedError
         end
 
+        # --- Verification cache (ADR-033 / HLR #516) ---
+
+        # Record a successful verification of the given wtxid. Idempotent
+        # under repeated calls with the same +via+; upgrades permitted per
+        # the monotonicity rule (see below).
+        #
+        # Single atomic UPDATE with a monotonic predicate so an older writer
+        # cannot clobber a newer +verifier_version+ stamp. Silent no-op when
+        # the row does not exist (the tx has not been persisted via
+        # +save_proof+ yet). Callers verifying a subject/ancestor should
+        # ensure the proof rows are persisted first.
+        #
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
+        # @param via [String] one of the +VERIFIED_VIA_*+ constants on
+        #   +Store::Models::TxProof+
+        # @param at_time [Time, nil] verification timestamp; defaults to now
+        # @return [Integer] number of rows updated (0 if no matching proof,
+        #   0 also if the row's existing +verifier_version+ is higher — no
+        #   clobber)
+        def mark_verified(wtxid:, via:, at_time: nil)
+          raise NotImplementedError
+        end
+
+        # Batch form of +#mark_verified+ — a single set-based UPDATE for
+        # the whole ingress ancestry. Empty input is a cheap no-op (no DB
+        # round-trip). Chunks internally at 10k to stay under Postgres's
+        # bind-parameter limit.
+        #
+        # All rows in the batch get the same +via+ / +at_time+ (typical use:
+        # BeefImporter marks every walked wtxid as +'spv'+ in one call).
+        #
+        # @param wtxids [Array<String>] 32-byte binary wtxids
+        # @param via [String] see +#mark_verified+
+        # @param at_time [Time, nil] see +#mark_verified+
+        # @return [Integer] number of rows updated across all chunks
+        def mark_verified_batch(wtxids:, via:, at_time: nil)
+          raise NotImplementedError
+        end
+
+        # Look up the verification record for a wtxid. Returns +nil+ when
+        # the tx has no proof row OR the proof row has unpopulated
+        # verification state (three-column-coherent CHECK ensures either
+        # all populated or all NULL — no mixed reads).
+        #
+        # @param wtxid [String] 32-byte binary wtxid (wire byte order)
+        # @return [Hash, nil] +{ verified_at:, verified_via:, verifier_version: }+
+        #   or +nil+
+        def verification_state(wtxid:)
+          raise NotImplementedError
+        end
+
+        # Batch trust-set query for the read path (BeefImporter Sub 5).
+        # Returns the subset of +wtxids+ whose stored +verified_via+ is in
+        # the caller-supplied +via_in+ set AND whose +verifier_version+ is
+        # at least +version_at_least+. Empty input short-circuits (no DB
+        # round-trip). Chunked internally.
+        #
+        # Callers pass +via_in: TxProof::VERIFIED_VIA_TRUSTED+ (which
+        # excludes +self_built+) to build the +verified:+ Set for
+        # +Tx#verify+'s kwarg (bsv-ruby-sdk #904).
+        #
+        # @param wtxids [Array<String>] 32-byte binary wtxids
+        # @param version_at_least [Integer]
+        # @param via_in [Array<String>] +VERIFIED_VIA_*+ values to accept
+        # @return [Set<String>] subset of +wtxids+ that pass the gate
+        def verified_wtxids(wtxids:, version_at_least:, via_in:)
+          raise NotImplementedError
+        end
+
+        # Highest +verifier_version+ observed in +tx_proofs+. Used at boot
+        # to refuse a downgraded binary — a wallet with rows stamped at
+        # version N must not run under code that only supports version < N.
+        # Returns +nil+ when no rows have been marked verified.
+        #
+        # @return [Integer, nil]
+        def max_verifier_version_seen
+          raise NotImplementedError
+        end
+
         # --- Settings ---
 
         # Retrieve a setting value by key.
