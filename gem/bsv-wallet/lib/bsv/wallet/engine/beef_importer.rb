@@ -91,6 +91,26 @@ module BSV
             # half-imported action whose ancestry can't be reproduced).
             assert_proofs_complete!(beef)
 
+            # HLR #516 Sub 2 — populate the verification cache. Trust claim:
+            # every wtxid in +walked_wtxids+ is either the subject or an
+            # ancestor reached by walking +input.source_transaction+ from
+            # the subject. The subject passed
+            # +subject_tx.verify(chain_tracker: @chain_tracker)+ above, which
+            # runs full script + ECDSA on every unproven ancestor and
+            # validates every +merkle_path+ against +chain_tracker+.
+            #
+            # Non-atomic BEEF (BRC-62) sibling entries not reached by the
+            # walk stay uncached — the closure is subject-rooted, not
+            # +beef.transactions+-based, so unrelated siblings never enter
+            # the batch. Cache write joins this same +db.transaction+ block;
+            # a downstream failure (promote_action) rolls back the marks
+            # alongside the proof/action rows (ADR-033).
+            walked_wtxids = ancestor_closure_wtxids(subject_tx)
+            @store.mark_verified_batch(
+              wtxids: walked_wtxids,
+              via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV
+            )
+
             # trustSelf: replace known ancestors with TXID-only entries.
             # This runs AFTER save_beef_proofs so no proof data is lost, and
             # AFTER verify so the full graph was already validated.
@@ -187,6 +207,29 @@ module BSV
           subject_tx.verify(chain_tracker: @chain_tracker)
         rescue BSV::Transaction::VerificationError => e
           raise BSV::Wallet::InvalidBeefError, "SPV verification failed: #{e.message} (#{e.code})"
+        end
+
+        # BFS walk of the ancestor closure from +subject_tx+, following
+        # +input.source_transaction+ pointers. Returns the wtxid set —
+        # the same set +Tx#verify+ walked internally (HLR #516 Sub 2).
+        #
+        # Non-atomic BEEF unrelated siblings are excluded by construction:
+        # the walk is subject-rooted, not +beef.transactions+-based.
+        # A tx already visited is skipped so cyclic-looking references
+        # (impossible in a valid BEEF, defensive here) can't loop.
+        def ancestor_closure_wtxids(subject_tx)
+          seen = Set.new
+          queue = [subject_tx]
+          until queue.empty?
+            tx = queue.shift
+            next if seen.include?(tx.wtxid)
+
+            seen << tx.wtxid
+            tx.inputs.each do |input|
+              queue << input.source_transaction if input.source_transaction
+            end
+          end
+          seen
         end
 
         # Save merkle proofs from a parsed BEEF to ProofStore.
