@@ -170,6 +170,7 @@ A "no" to any of these is the principle leaking. Sometimes the leak is deliberat
 
 - [`state-boundaries.md`](state-boundaries.md) — companion load-bearing principle. Where the principle of state defines *what* the wallet maintains (a DB always in a valid state), state-boundaries defines *where* that maintenance lives by the stateless/stateful axis (SDK / wallet).
 - [`state-representations.md`](state-representations.md) — the living conformance register: a per-element classification of every state representation in the schema against this principle, with the conscious exceptions named.
+- [`verification-cache.md`](verification-cache.md) — a concrete application of this principle: verification result is tx-immutable state that had been recomputed on every reference; ADR-033 lifts it into the schema.
 - `schema.md` — the schema design that operationalises this principle. Principle #11 ("the database is the last line of defense") is the schema-side restatement.
 - `.architecture/decisions/adrs/20260505_ADR-009-postgres-native-primitives.md` — why the schema chose Postgres-native primitives rather than portable subsets.
 - [`../concepts/architecture.md`](../concepts/architecture.md) — narrative summary of the layered architecture that defers to this document for the canonical principle statement.
