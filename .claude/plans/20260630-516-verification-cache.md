@@ -319,3 +319,84 @@ Phase 1 commit-as-it-emerges plan:
 5. **Lint + final review**.
 
 Each commit atomic, conventional message, references `#516` and the Sub-1 issue when filed.
+
+---
+
+## Specialist synthesis (2026-07-01)
+
+Nine specialists reviewed the plan. Convergent themes and unique findings fold in below; Pragmatic Enforcer's cuts applied where no domain specialist defended.
+
+### Load-bearing refinements
+
+1. **`self_built` is NOT trusted for Sub 5 short-circuit.** Cryptography and security specialists concur: `self_built` asserts "wallet's signer produced this" — a construction-invariant claim, not an end-to-end verification. Sub 5 gates on `verified_via IN ('spv', 'broadcast_ack')` only. `self_built` remains a lifecycle-metadata value; downstream consumers can distinguish, but the short-circuit trust set excludes it.
+
+2. **Transitive re-org invalidation is required.** Cryptography specialist: if ancestor Y (with merkle_path) re-orgs out, all descendants whose `'spv'` state depended on Y are stale — even if the descendants have no merkle_path of their own. Sub 6 as first-drafted only handled direct anchor loss. Extend to walk the descent graph clearing dependent rows.
+
+3. **Version downgrade protection.** Security specialist: bare `>= verifier_version` comparison is symmetric; a rolled-back binary honours stale-higher rows under weaker logic. Add `wallet_meta.max_verifier_version_seen` (or a `settings` key); refuse boot if code's `VERIFIER_VERSION < max_seen`.
+
+4. **Sub 5 and Sub 6 must co-release.** Security specialist: between Sub 5 (cache reads) and Sub 6 (re-org invalidation), orphaned anchors are honoured. Either ship together, or Sub 5 explicitly refuses hits on `merkle_path IS NOT NULL` rows until Sub 6 lands.
+
+5. **Cache-write only for txs verified reached.** Domain specialist: non-atomic BEEF (BRC-62) may carry unrelated siblings; blindly marking all `beef.transactions.each` cache-writes wtxids that weren't in the verify walk. Enumerate reached wtxids explicitly.
+
+### Interface / naming corrections (Ruby idiom, ruby specialist)
+
+6. **`Store#verified_wtxids(wtxids:)` not `(in:)`.** `in:` is a Ruby reserved word — parses as kwarg but reads awkwardly and requires `binding.local_variable_get(:in)` for destructuring. Convention in this Store is `mark_X(wtxids:, ...)`.
+
+7. **`BSV::Wallet::VERIFIER_VERSION`, not `Engine::VERIFIER_VERSION`.** Gem-level semantic-version stamp belongs in `lib/bsv/wallet/version.rb` alongside `BSV::Wallet::VERSION`. Store queries and Engine callers both reference without cross-namespace reaching.
+
+8. **Frozen-string enum constants on the model.** `Store::Models::TxProof` exposes `VERIFIED_VIA_SPV = 'spv'`, etc. All write sites reference constants, not bare literals — matches `ArcStatus::ACCEPTED` idiom in-repo.
+
+### Database refinements (performance + database)
+
+9. **Add explicit `block_id` partial index for reaper.** Sequel FK on `tx_proofs.block_id` is NOT auto-indexed. Sub 7's `UPDATE ... WHERE block_id IN (...)` will seq-scan at scale. Add `INDEX ON tx_proofs (block_id) WHERE verified_at IS NOT NULL` at Sub 1.
+
+10. **Reshape the read-path index.** The originally-proposed `(wtxid) WHERE verified_at IS NOT NULL` is redundant against the existing `UNIQUE (wtxid)` — planner will prefer the unique. Replace with `(wtxid) INCLUDE (verified_via, verifier_version) WHERE verified_at IS NOT NULL` — index-only scan for the batched read.
+
+11. **`mark_verified` is a single atomic UPDATE** with monotonic predicate (`WHERE verifier_version IS NULL OR verifier_version < ?`) — refuses to clobber a newer stamp with an older one. Under `broadcast_ack`-upgrades-`self_built`, the predicate permits the transition.
+
+12. **`mark_verified_batch(rows)` from day one.** Sub 2's N-inserts-per-ingress is a footgun. Set-based `UPDATE ... WHERE wtxid = ANY(?)` — one statement, one plan-cache hit.
+
+13. **`verified_wtxids(wtxids:)` chunks at 10k** for Postgres bind-parameter limit; empty input returns `[]` without hitting DB.
+
+### SDK kwarg refinement (performance + systems architect)
+
+14. **`Tx#verify(verified: Set)`, freeze-on-entry, no `.dup`.** Performance specialist flagged 3× allocation churn (wallet Set → SDK Hash → dup). Accept a `Set` directly; freeze on entry; internal walk uses `include?` semantics identical to the existing Hash-based `verified[wtxid]` check.
+
+### Newcomer / documentation (maintainability)
+
+15. **`docs/reference/verification-cache.md`** as a Phase 1 deliverable. Plan file gets archived; the reference doc is where a newcomer arrives. Registers in `docs/reference/index.md`; cross-linked from `hot-path-design.md` and `principle-of-state.md`. Covers three-tier framing, `verified_via` trust semantics table, lazy-vs-active reaper dichotomy signposted, `verifier_version` bump SOP.
+
+16. **ADR-033's `verifier_version` bump-trigger clause.** Cryptography specialist's list: (a) script interpreter change; (b) BIP-143 preimage layout/field ordering; (c) `MerklePath#verify` change (including coinbase-maturity check); (d) FORKID sighash rules. Explicit exclusions: logging, performance-only refactors, error-message wording.
+
+### Deferrals (Pragmatic Enforcer — accepted where undefended)
+
+17. **Sub 8 broadcast-ack upgrade path DEFERRED.** Enum VALUE stays in Sub 1 (lifecycle metadata); active upgrade path (`'self_built'` → `'broadcast_ack'` on ARC 200/202) waits for a concrete downstream consumer. Cost of premature: two lines of write-path today, zero readers. Defer.
+
+18. **Sub 7 active reaper remains deferred** as first-planned; walletd event surface must settle first.
+
+19. **BUMP dedup, BEEF cache, cluster-tier Redis** — remain out-of-scope. Unchanged.
+
+### Rejected
+
+- **Pragmatic Enforcer's proposal to strip enum to boolean.** DEFENDED by cryptography (Sub 5 gate) and security (`self_built` differentiation). Kept.
+- **Pragmatic Enforcer's proposal to strip `verifier_version`.** DEFENDED by cryptography (explicit bump-trigger clauses) and security (downgrade attack). Kept + augmented with `wallet_meta.max_verifier_version_seen`.
+- **Pragmatic Enforcer's proposal to defer Sub 6.** DEFENDED by cryptography (transitive invalidation) and security (Sub 5/6 gap). Kept + extended.
+
+### Additional test coverage (cross-specialist)
+
+- Cross-wallet DB isolation: shared Postgres, cache in A not visible to B (security)
+- Concurrent `mark_verified` on same wtxid (database)
+- Cross-BEEF ancestor with mutated structural context (cryptography)
+- Invalid-signature ancestor: no partial cache write on verify failure (security + cryptography)
+- Coinbase 100-block maturity edge (cryptography)
+- Boot with lower `VERIFIER_VERSION` than `max_seen` — refuses (security)
+- `EXPLAIN` capture at 100k/1M `tx_proofs` for batch lookup and reaper update — commit as fixture (performance)
+- GC allocation regression signal alongside wall-clock (performance)
+
+### Updated critical path
+
+**Sub 1 → (Sub 2 + Sub 3 parallel) → Sub 4 (SDK, coordinated with #881) → Sub 5 + Sub 6 co-released → (Sub 7, Sub 8 both deferred)**
+
+Sub 8's active work drops out of the critical path; only its enum value lands (in Sub 1). Sub 7 remains deferred to walletd event work.
+
+The persistent-cache win becomes viable after Sub 5+6 co-release. Sub 1 is now larger (schema + `wallet_meta` + reference doc + boundary APIs) but self-contained.
