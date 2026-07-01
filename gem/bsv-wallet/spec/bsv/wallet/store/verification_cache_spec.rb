@@ -139,4 +139,56 @@ RSpec.describe BSV::Wallet::Store, :store do
         .to raise_error(BSV::Wallet::SchemaIntegrityError, /downgrade refused/)
     end
   end
+
+  describe 'wtxid length validation' do
+    it 'raises when mark_verified_batch receives a malformed wtxid' do
+      good = persist_proof
+      malformed = "\x00".b * 20 # 20 bytes, not 32
+      expect { store.mark_verified_batch(wtxids: [good, malformed], via: 'spv') }
+        .to raise_error(ArgumentError, /wtxid/)
+    end
+
+    it 'raises when verified_wtxids receives a malformed wtxid' do
+      malformed = "\x00".b * 20
+      expect do
+        store.verified_wtxids(wtxids: [malformed], version_at_least: 1, via_in: ['spv'])
+      end.to raise_error(ArgumentError, /wtxid/)
+    end
+  end
+
+  describe 'chunking (VERIFY_BATCH_CHUNK boundary)' do
+    # Stub the internal constant to a small value so the chunking path is
+    # exercisable without persisting tens of thousands of rows.
+    it 'processes inputs spanning multiple chunks under the 10k boundary' do
+      wtxids = 25.times.map { persist_proof }
+      stub_const('BSV::Wallet::Store::VERIFY_BATCH_CHUNK', 10)
+      rows = store.mark_verified_batch(wtxids: wtxids, via: 'spv')
+      expect(rows).to eq(25)
+    end
+  end
+
+  describe 'DB-level ENUM / CHECK (bypasses application validation)' do
+    it 'rejects an invalid verified_via via the Postgres ENUM or SQLite CHECK', :store do
+      wtxid = persist_proof
+      # Bypass +validate_verified_via!+ by hitting Sequel directly.
+      expect do
+        models::TxProof
+          .where(wtxid: Sequel.blob(wtxid))
+          .update(verified_at: Time.now, verified_via: 'imported', verifier_version: 1)
+      end.to raise_error(Sequel::DatabaseError)
+    end
+  end
+
+  describe 'identity-version gate (code version matches row version)' do
+    it 'includes rows written at exactly VERIFIER_VERSION in the trust set' do
+      wtxid = persist_proof
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      result = store.verified_wtxids(
+        wtxids: [wtxid],
+        version_at_least: BSV::Wallet::VERIFIER_VERSION,
+        via_in: ['spv']
+      )
+      expect(result).to include(wtxid)
+    end
+  end
 end

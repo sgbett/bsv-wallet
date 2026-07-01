@@ -773,8 +773,8 @@ module BSV
       private_constant :VERIFY_BATCH_CHUNK
 
       def mark_verified(wtxid:, via:, at_time: nil)
-        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'mark_verified wtxid')
-        validate_verified_via!(via)
+        # Single form delegates to the batch — validation of both +wtxid+
+        # and +via+ happens once, inside the batch method.
         mark_verified_batch(wtxids: [wtxid], via: via, at_time: at_time)
       end
 
@@ -782,6 +782,7 @@ module BSV
         return 0 if wtxids.empty?
 
         validate_verified_via!(via)
+        wtxids.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'mark_verified_batch wtxid') }
         version = BSV::Wallet::VERIFIER_VERSION
         stamp = at_time || Time.now
 
@@ -819,6 +820,7 @@ module BSV
       def verified_wtxids(wtxids:, version_at_least:, via_in:)
         return Set.new if wtxids.empty?
 
+        wtxids.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'verified_wtxids wtxid') }
         acc = Set.new
         wtxids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
           blobs = chunk.map { |w| Sequel.blob(w) }
