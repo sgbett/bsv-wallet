@@ -137,6 +137,22 @@ module BSV
               "(expected hex=#{expected_hex})"
       end
 
+      # Verify the running binary's +VERIFIER_VERSION+ is not older than the
+      # highest version stamped into +tx_proofs+ (ADR-033 / HLR #516).
+      # A downgraded binary that trusted higher-version rows would honour
+      # entries produced under logic it can no longer reproduce.
+      #
+      # @raise [BSV::Wallet::SchemaIntegrityError] when the code's version
+      #   is lower than +MAX(tx_proofs.verifier_version)+
+      def verify_verifier_version!
+        seen = max_verifier_version_seen
+        return unless seen && seen > BSV::Wallet::VERIFIER_VERSION
+
+        raise BSV::Wallet::SchemaIntegrityError,
+              "wallet requires VERIFIER_VERSION >= #{seen}, " \
+              "code is at #{BSV::Wallet::VERIFIER_VERSION} — downgrade refused"
+      end
+
       def disconnect
         @db&.disconnect
         @db = nil
@@ -748,6 +764,90 @@ module BSV
         models::TxProof.where(wtxid: Sequel.blob(wtxid)).any?
       end
 
+      # --- Verification cache (ADR-033 / HLR #516) ---
+
+      # Chunk size for +wtxid IN (?...)+ queries. Postgres allows up to
+      # 65_535 bind parameters per statement; 10k leaves headroom for
+      # additional predicates and keeps a single chunk's plan small.
+      VERIFY_BATCH_CHUNK = 10_000
+      private_constant :VERIFY_BATCH_CHUNK
+
+      def mark_verified(wtxid:, via:, at_time: nil)
+        # Single form delegates to the batch — validation of both +wtxid+
+        # and +via+ happens once, inside the batch method.
+        mark_verified_batch(wtxids: [wtxid], via: via, at_time: at_time)
+      end
+
+      def mark_verified_batch(wtxids:, via:, at_time: nil)
+        return 0 if wtxids.empty?
+
+        validate_verified_via!(via)
+        wtxids.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'mark_verified_batch wtxid') }
+        version = BSV::Wallet::VERIFIER_VERSION
+        stamp = at_time || Time.now
+
+        # Monotonic predicate. +existing <= new+ admits the three legal
+        # transitions: NULL → any (first write), N-1 → N (version upgrade),
+        # N → N (same-version metadata upgrade, e.g. +self_built+ →
+        # +broadcast_ack+). Refuses N+1 → N — a downgraded binary cannot
+        # clobber rows written under stricter logic.
+        rows = 0
+        wtxids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
+          blobs = chunk.map { |w| Sequel.blob(w) }
+          rows += models::TxProof
+                  .where(wtxid: blobs)
+                  .where { (verifier_version <= version) | Sequel.expr(verifier_version: nil) }
+                  .update(verified_at: stamp, verified_via: via, verifier_version: version)
+        end
+        rows
+      end
+
+      def verification_state(wtxid:)
+        BSV::Primitives::Hex.validate_wtxid!(wtxid, name: 'verification_state wtxid')
+        record = models::TxProof
+                 .where(wtxid: Sequel.blob(wtxid))
+                 .exclude(verified_at: nil)
+                 .first
+        return unless record
+
+        {
+          verified_at: record.verified_at,
+          verified_via: record.verified_via.to_s,
+          verifier_version: record.verifier_version
+        }
+      end
+
+      def verified_wtxids(wtxids:, version_at_least:, via_in:)
+        return Set.new if wtxids.empty?
+
+        wtxids.each { |w| BSV::Primitives::Hex.validate_wtxid!(w, name: 'verified_wtxids wtxid') }
+        acc = Set.new
+        wtxids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
+          blobs = chunk.map { |w| Sequel.blob(w) }
+          # +verified_at IS NOT NULL+ is redundant given the coherent-state
+          # CHECK (verified_via IS NOT NULL ⟺ verified_at IS NOT NULL), but
+          # Postgres's planner does not infer partial-index matches from
+          # CHECK implications — the WHERE clause must literally name the
+          # partial-index predicate for the covering index to be picked.
+          hits = models::TxProof
+                 .where(wtxid: blobs, verified_via: via_in)
+                 .exclude(verified_at: nil)
+                 .where { verifier_version >= version_at_least }
+                 .select_map(:wtxid)
+          acc.merge(hits.map(&:to_s))
+        end
+        acc
+      end
+
+      def max_verifier_version_seen
+        # Filter on +verified_at+ (not +verifier_version+): the covering
+        # index is partial on +verified_at IS NOT NULL+, so filtering by
+        # that column lets the planner satisfy the MAX from the index at
+        # boot time. Coherent CHECK makes the two filters semantically
+        # equivalent.
+        models::TxProof.exclude(verified_at: nil).max(:verifier_version)
+      end
+
       # --- Block Headers ---
 
       # Persist a +blocks+ row, append-or-reject (#335).
@@ -1244,6 +1344,14 @@ module BSV
       end
 
       private
+
+      def validate_verified_via!(via)
+        return if models::TxProof::VERIFIED_VIA_VALUES.include?(via)
+
+        raise ArgumentError,
+              'mark_verified via must be one of ' \
+              "#{models::TxProof::VERIFIED_VIA_VALUES.inspect}, got #{via.inspect}"
+      end
 
       # Recursive inner method for reject_action. Walks children first
       # (post-order tear-down) so outputs.action_id RESTRICT doesn't

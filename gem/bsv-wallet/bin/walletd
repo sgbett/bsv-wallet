@@ -83,6 +83,7 @@ store = BSV::Wallet::Store.connect(
 )
 store.migrate!
 store.verify_schema! # HLR #467 / #475 — fail fast on schema/WIF mismatch
+store.verify_verifier_version! # HLR #516 — refuse a downgraded binary
 
 # GorillaPool (Arcade) is the broadcast porcelain — callbacks via
 # X-CallbackToken + SSE status push, the path the wallet is designed

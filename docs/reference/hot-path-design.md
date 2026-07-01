@@ -90,6 +90,7 @@ When a new cross-table rule arrives at the schema, walk the filter:
 
 - [`intent-and-outcomes.md`](intent-and-outcomes.md) — the principle that produces most of these cross-table invariants in the first place. Intent is stated on the parent, denormalised onto the child, and constrained declaratively here.
 - [`principle-of-state.md`](principle-of-state.md) — the schema enforces, always. This document is the operational rule for *how* it enforces on the hot path.
+- [`verification-cache.md`](verification-cache.md) — verification result is state; the `mark_verified` write on the receive hot path is shaped by this document's rules (single atomic UPDATE, batched from day one).
 - [`schema.md`](schema.md) — the table-by-table reference; the worked examples above link to their schema definitions.
 - ADR-002 — design for scale; the throughput argument behind the hot-path rule.
 - ADR-003 — schema as canonical state; the principle this is operationalising.
