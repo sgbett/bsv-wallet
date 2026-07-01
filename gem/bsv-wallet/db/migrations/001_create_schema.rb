@@ -168,9 +168,12 @@ Sequel.migration do
     # Verification-cache supporting indexes (ADR-033 / HLR #516).
     #
     # +by_block+ (partial) supports the reorg reaper's
-    #   UPDATE tx_proofs SET verified_at = NULL WHERE block_id IN (...)
-    #   AND verified_at IS NOT NULL
-    # — Sequel's foreign_key does NOT auto-index block_id.
+    #   UPDATE tx_proofs
+    #     SET verified_at = NULL, verified_via = NULL, verifier_version = NULL
+    #     WHERE block_id IN (...) AND verified_at IS NOT NULL
+    # — all three columns must be cleared together to satisfy the
+    # +verification_state_coherent+ CHECK. Sequel's foreign_key does NOT
+    # auto-index block_id.
     #
     # +covering+ (Postgres INCLUDE, unproven-only) supports the batch read
     #   SELECT wtxid FROM tx_proofs WHERE wtxid = ANY(?) AND verified_at IS

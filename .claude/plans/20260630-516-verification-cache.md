@@ -352,7 +352,7 @@ Nine specialists reviewed the plan. Convergent themes and unique findings fold i
 
 10. **Reshape the read-path index.** The originally-proposed `(wtxid) WHERE verified_at IS NOT NULL` is redundant against the existing `UNIQUE (wtxid)` — planner will prefer the unique. Replace with `(wtxid) INCLUDE (verified_via, verifier_version) WHERE verified_at IS NOT NULL` — index-only scan for the batched read.
 
-11. **`mark_verified` is a single atomic UPDATE** with monotonic predicate (`WHERE verifier_version IS NULL OR verifier_version < ?`) — refuses to clobber a newer stamp with an older one. Under `broadcast_ack`-upgrades-`self_built`, the predicate permits the transition.
+11. **`mark_verified` is a single atomic UPDATE** with monotonic predicate (`WHERE verifier_version IS NULL OR verifier_version <= ?`) — refuses to clobber a newer stamp with an older one. The `<=` (rather than strict `<`) admits three legal transitions: NULL → any (first write), N-1 → N (version upgrade), N → N (same-version metadata upgrade — e.g. `broadcast_ack`-upgrades-`self_built`). Refuses N+1 → N.
 
 12. **`mark_verified_batch(rows)` from day one.** Sub 2's N-inserts-per-ingress is a footgun. Set-based `UPDATE ... WHERE wtxid = ANY(?)` — one statement, one plan-cache hit.
 

@@ -95,7 +95,7 @@ Do not wire the cache into egress. If you find yourself wanting to, revisit ADR-
 
 ## Concurrency
 
-Optimistic. Verify is a pure function; two processes verifying the same wtxid produce identical results. `mark_verified` is a single atomic UPDATE with a monotonic predicate (`WHERE verifier_version IS NULL OR verifier_version < ?`) so an older writer cannot clobber a newer stamp. Last-writer-wins is correct because the state written is identical.
+Optimistic. Verify is a pure function; two processes verifying the same wtxid produce identical results. `mark_verified` is a single atomic UPDATE with a monotonic predicate (`WHERE verifier_version IS NULL OR verifier_version <= ?`) so an older writer cannot clobber a newer stamp. The `<=` (rather than strict `<`) admits same-version metadata upgrades — e.g. `self_built` → `broadcast_ack` under the same `VERIFIER_VERSION` — while still refusing a downgraded binary. Last-writer-wins at the same version is correct because the state written is identical.
 
 ## The SDK seam
 

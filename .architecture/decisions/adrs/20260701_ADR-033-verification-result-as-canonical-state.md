@@ -96,7 +96,7 @@ The cache is a read-only optimisation for `BeefImporter#verify_incoming_transact
 
 ### Concurrency
 
-Optimistic. Verify is a pure function; two concurrent processes verifying the same wtxid produce identical results. Last-writer-wins is correct because the state written is identical. `mark_verified` is a single atomic UPDATE with a monotonic predicate (`WHERE verifier_version IS NULL OR verifier_version < new_version`) to prevent an older writer clobbering a newer stamp.
+Optimistic. Verify is a pure function; two concurrent processes verifying the same wtxid produce identical results. Last-writer-wins is correct because the state written is identical. `mark_verified` is a single atomic UPDATE with a monotonic predicate (`WHERE verifier_version IS NULL OR verifier_version <= new_version`) to prevent an older writer clobbering a newer stamp. The `<=` (rather than strict `<`) admits three legal transitions: NULL → any (first write), N-1 → N (version upgrade), N → N (same-version metadata upgrade, e.g. `'self_built'` → `'broadcast_ack'`). Refuses N+1 → N.
 
 ## The residual — stated honestly
 
