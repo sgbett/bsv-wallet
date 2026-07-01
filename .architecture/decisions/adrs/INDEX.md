@@ -45,3 +45,4 @@ Conventions in force (see `.claude/plans/20260614-adr-reorganisation.md`):
 | 31 | [ADR-029](20260624_ADR-029-originator-deferral-dbap-direction.md) | 2026-06-24 | Accepted | Originator deferral and DBAP direction — PushDrop permission tokens in admin baskets when implemented |
 | 32 | [ADR-031](20260628_ADR-031-intent-and-outcomes.md) | 2026-06-28 | Accepted | Intent stated explicitly; outcomes persisted as rows; never reverse-engineer intent from outcomes (HLR #467) |
 | 33 | [ADR-032](20260629_ADR-032-spv-header-trust-model.md) | 2026-06-29 | Accepted | Opt-in SPV header trust model — PoW-validated headers vs trusted-service roots (HLR #335) |
+| 34 | [ADR-033](20260701_ADR-033-verification-result-as-canonical-state.md) | 2026-07-01 | Accepted | Verification result is canonical persistent state — three-tier cache on tx_proofs (HLR #516) |
