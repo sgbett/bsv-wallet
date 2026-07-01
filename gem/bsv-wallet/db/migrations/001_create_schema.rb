@@ -53,6 +53,7 @@ Sequel.migration do
     c[:broadcast_intent] = postgres ? :broadcast_intent : :text
     c[:tx_status] = postgres ? :tx_status : :text
     c[:spendable_intent] = postgres ? :spendable_intent : :text
+    c[:verification_source] = postgres ? :verification_source : :text
     c[:now] = postgres ? Sequel.function(:now) : Sequel::CURRENT_TIMESTAMP
 
     # ARC tx_status vocabulary, per
@@ -77,6 +78,14 @@ Sequel.migration do
       # (BRC-29 outbound payment, base58 to counterparty). The intent is
       # stated explicitly, not inferred from outcomes (HLR #467 / ADR-031).
       create_enum(:spendable_intent, %w[spendable none])
+      # verification_source: how a tx_proofs row's verification fact was
+      # established. 'self_built' — wallet constructed and signed;
+      # 'spv' — passed Tx#verify(chain_tracker:); 'broadcast_ack' — ARC
+      # returned an accepted status. See ADR-033 and
+      # docs/reference/verification-cache.md for the trust semantics of
+      # each value. 'self_built' is explicitly NOT trusted for the
+      # short-circuit path in BeefImporter (HLR #516 specialist review).
+      create_enum(:verification_source, %w[self_built spv broadcast_ack])
     end
 
     # 1. blocks — known block headers (chain tracker's local view)
@@ -123,6 +132,14 @@ Sequel.migration do
       column :created_at, c[:timestamptz], null: false, default: c[:now]
       column :updated_at, c[:timestamptz], null: false, default: c[:now]
 
+      # Persistent verification cache (ADR-033 / HLR #516). The three columns
+      # move together — either all NULL (not verified by this wallet) or all
+      # NOT NULL (verified at some point). See
+      # docs/reference/verification-cache.md.
+      column :verified_at, c[:timestamptz]
+      column :verified_via, c[:verification_source]
+      column :verifier_version, :integer
+
       constraint(:wtxid_length, 'length(wtxid) = 32')
       # raw_tx must be at least 20 bytes: version + input_count + output_count
       # + amount + script_len + OP_1 + locktime (#380 gap 2).
@@ -131,6 +148,45 @@ Sequel.migration do
       # against. The reverse is fine (#198/#219): height-known + path-pending is
       # the "confirmed but unproven" intermediate state.
       constraint(:path_requires_block, 'merkle_path IS NULL OR block_id IS NOT NULL')
+      # Coherent verification state: verified_at/via/version must all be NULL
+      # or all NOT NULL. Prevents readers from seeing a half-populated row.
+      constraint(
+        :verification_state_coherent,
+        '(verified_at IS NULL AND verified_via IS NULL AND verifier_version IS NULL) OR ' \
+        '(verified_at IS NOT NULL AND verified_via IS NOT NULL AND verifier_version IS NOT NULL)'
+      )
+      constraint(:verifier_version_range, 'verifier_version IS NULL OR verifier_version >= 1')
+      # SQLite mirror of the verification_source ENUM.
+      unless postgres
+        constraint(
+          :verified_via_values,
+          "verified_via IS NULL OR verified_via IN ('self_built', 'spv', 'broadcast_ack')"
+        )
+      end
+    end
+
+    # Verification-cache supporting indexes (ADR-033 / HLR #516).
+    #
+    # +by_block+ (partial) supports the reorg reaper's
+    #   UPDATE tx_proofs SET verified_at = NULL WHERE block_id IN (...)
+    #   AND verified_at IS NOT NULL
+    # — Sequel's foreign_key does NOT auto-index block_id.
+    #
+    # +covering+ (Postgres INCLUDE, unproven-only) supports the batch read
+    #   SELECT wtxid FROM tx_proofs WHERE wtxid = ANY(?) AND verified_at IS
+    #   NOT NULL AND verified_via IN (...) AND verifier_version >= ?
+    # as an index-only scan. SQLite planner falls back to the existing
+    # UNIQUE on wtxid plus a post-filter — acceptable for dev-only.
+    add_index :tx_proofs, :block_id,
+              where: Sequel.lit('verified_at IS NOT NULL'),
+              name: :idx_tx_proofs_verified_by_block
+    if postgres
+      run <<~SQL
+        CREATE INDEX idx_tx_proofs_verified_covering
+          ON tx_proofs (wtxid)
+          INCLUDE (verified_via, verifier_version)
+          WHERE verified_at IS NOT NULL
+      SQL
     end
 
     # 3. actions — transaction lifecycle
