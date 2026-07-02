@@ -91,29 +91,17 @@ module BSV
             # half-imported action whose ancestry can't be reproduced).
             assert_proofs_complete!(beef)
 
-            # HLR #516 Sub 2 — populate the verification cache. Trust claim:
-            # every wtxid in +walked_wtxids+ is a tx that +Tx#verify+
-            # actually validated in the call above. The walker mirrors the
-            # SDK's traversal exactly, including the merkle-path
-            # short-circuit (see +ancestor_closure_wtxids+): the SDK stops
-            # at merkle-proven leaves and does NOT recurse into their
-            # inputs. Walking past a proven leaf would trust attacker-
-            # supplied grandparent bytes the SDK never touched.
-            #
-            # Non-atomic BEEF (BRC-62) sibling entries not reached by the
-            # walk stay uncached — the closure is subject-rooted, not
-            # +beef.transactions+-based, so unrelated siblings never enter
-            # the batch. Cache write joins this same +db.transaction+ block;
-            # a downstream failure (promote_action) rolls back the marks
-            # alongside the proof/action rows (ADR-033).
-            # +to_a+ matches +mark_verified_batch+'s +Array<String>+ interface
-            # contract; +ancestor_closure_wtxids+ returns a +Set+ (right shape
-            # for the walker's dedup) but we convert at the boundary.
-            walked_wtxids = ancestor_closure_wtxids(subject_tx).to_a
-            @store.mark_verified_batch(
-              wtxids: walked_wtxids,
-              via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV
-            )
+            # TODO(post-bsv-ruby-sdk#904): populate the verification cache
+            # by handing +walked_wtxids+ to +@store.mark_verified_batch+
+            # with +via: 'spv'+ (HLR #516 Sub 2). Requires the bidirectional
+            # +verified:+ kwarg on +Tx#verify+ — see #904. The wallet MUST
+            # NOT re-implement the SDK's walk (an earlier revision of this
+            # PR did, and drifted from +Tx#verify+ at the merkle-path
+            # short-circuit — white-hat review caught a persistent-trust-
+            # corruption vector where attacker-supplied grandparent bytes
+            # behind a proven ancestor got marked +'spv'+). The correct
+            # source of the walked set is +Tx#verify+ itself; the SDK owns
+            # that logic; the wallet consumes it.
 
             # trustSelf: replace known ancestors with TXID-only entries.
             # This runs AFTER save_beef_proofs so no proof data is lost, and
@@ -211,49 +199,6 @@ module BSV
           subject_tx.verify(chain_tracker: @chain_tracker)
         rescue BSV::Transaction::VerificationError => e
           raise BSV::Wallet::InvalidBeefError, "SPV verification failed: #{e.message} (#{e.code})"
-        end
-
-        # Walk the ancestor closure from +subject_tx+, mirroring
-        # +Tx#verify+'s traversal exactly. Returns the wtxid set the SDK
-        # actually validated (HLR #516 Sub 2).
-        #
-        # **Critical invariant**: this walker must match +Tx#verify+'s
-        # traversal at +bsv-ruby-sdk/lib/bsv/transaction/tx.rb:759-777+.
-        # The SDK short-circuits at merkle-proven leaves (validates the
-        # merkle_path against chain_tracker, then +next+ — does NOT
-        # recurse into +input.source_transaction+). Walking past a
-        # merkle-proven leaf here would mark grandparents as +'spv'+
-        # when the SDK never validated them — persistent trust corruption
-        # from attacker-supplied bytes in the BEEF's ancestor list.
-        #
-        # Non-atomic BEEF unrelated siblings are excluded by construction:
-        # the walk is subject-rooted, not +beef.transactions+-based.
-        # A tx already visited is skipped so cyclic-looking references
-        # (impossible in a valid BEEF, defensive here) can't loop.
-        #
-        # Uses +pop+ (LIFO / DFS) rather than +shift+ (FIFO / BFS): both
-        # visit the same set — order doesn't matter for a +Set+
-        # accumulator — and +pop+ is O(1) on Ruby +Array+ where +shift+
-        # is O(n). Keeps the walk O(N) for deep ancestor closures on the
-        # ingress hot path.
-        def ancestor_closure_wtxids(subject_tx)
-          seen = Set.new
-          queue = [subject_tx]
-          until queue.empty?
-            tx = queue.pop
-            next if seen.include?(tx.wtxid)
-
-            seen << tx.wtxid
-            # Mirror +Tx#verify+'s merkle-path short-circuit — proven
-            # leaves are validated via chain_tracker, their inputs are
-            # not touched. Walking past them would trust unverified bytes.
-            next if tx.merkle_path
-
-            tx.inputs.each do |input|
-              queue << input.source_transaction if input.source_transaction
-            end
-          end
-          seen
         end
 
         # Save merkle proofs from a parsed BEEF to ProofStore.
