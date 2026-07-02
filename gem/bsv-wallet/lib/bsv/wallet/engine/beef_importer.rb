@@ -106,7 +106,10 @@ module BSV
             # the batch. Cache write joins this same +db.transaction+ block;
             # a downstream failure (promote_action) rolls back the marks
             # alongside the proof/action rows (ADR-033).
-            walked_wtxids = ancestor_closure_wtxids(subject_tx)
+            # +to_a+ matches +mark_verified_batch+'s +Array<String>+ interface
+            # contract; +ancestor_closure_wtxids+ returns a +Set+ (right shape
+            # for the walker's dedup) but we convert at the boundary.
+            walked_wtxids = ancestor_closure_wtxids(subject_tx).to_a
             @store.mark_verified_batch(
               wtxids: walked_wtxids,
               via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV
@@ -210,8 +213,8 @@ module BSV
           raise BSV::Wallet::InvalidBeefError, "SPV verification failed: #{e.message} (#{e.code})"
         end
 
-        # BFS walk of the ancestor closure from +subject_tx+, mirroring
-        # +Tx#verify+'s walk exactly. Returns the wtxid set the SDK
+        # Walk the ancestor closure from +subject_tx+, mirroring
+        # +Tx#verify+'s traversal exactly. Returns the wtxid set the SDK
         # actually validated (HLR #516 Sub 2).
         #
         # **Critical invariant**: this walker must match +Tx#verify+'s
@@ -227,11 +230,17 @@ module BSV
         # the walk is subject-rooted, not +beef.transactions+-based.
         # A tx already visited is skipped so cyclic-looking references
         # (impossible in a valid BEEF, defensive here) can't loop.
+        #
+        # Uses +pop+ (LIFO / DFS) rather than +shift+ (FIFO / BFS): both
+        # visit the same set — order doesn't matter for a +Set+
+        # accumulator — and +pop+ is O(1) on Ruby +Array+ where +shift+
+        # is O(n). Keeps the walk O(N) for deep ancestor closures on the
+        # ingress hot path.
         def ancestor_closure_wtxids(subject_tx)
           seen = Set.new
           queue = [subject_tx]
           until queue.empty?
-            tx = queue.shift
+            tx = queue.pop
             next if seen.include?(tx.wtxid)
 
             seen << tx.wtxid
