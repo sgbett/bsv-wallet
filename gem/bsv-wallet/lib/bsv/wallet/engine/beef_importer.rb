@@ -92,12 +92,13 @@ module BSV
             assert_proofs_complete!(beef)
 
             # HLR #516 Sub 2 — populate the verification cache. Trust claim:
-            # every wtxid in +walked_wtxids+ is either the subject or an
-            # ancestor reached by walking +input.source_transaction+ from
-            # the subject. The subject passed
-            # +subject_tx.verify(chain_tracker: @chain_tracker)+ above, which
-            # runs full script + ECDSA on every unproven ancestor and
-            # validates every +merkle_path+ against +chain_tracker+.
+            # every wtxid in +walked_wtxids+ is a tx that +Tx#verify+
+            # actually validated in the call above. The walker mirrors the
+            # SDK's traversal exactly, including the merkle-path
+            # short-circuit (see +ancestor_closure_wtxids+): the SDK stops
+            # at merkle-proven leaves and does NOT recurse into their
+            # inputs. Walking past a proven leaf would trust attacker-
+            # supplied grandparent bytes the SDK never touched.
             #
             # Non-atomic BEEF (BRC-62) sibling entries not reached by the
             # walk stay uncached — the closure is subject-rooted, not
@@ -209,9 +210,18 @@ module BSV
           raise BSV::Wallet::InvalidBeefError, "SPV verification failed: #{e.message} (#{e.code})"
         end
 
-        # BFS walk of the ancestor closure from +subject_tx+, following
-        # +input.source_transaction+ pointers. Returns the wtxid set —
-        # the same set +Tx#verify+ walked internally (HLR #516 Sub 2).
+        # BFS walk of the ancestor closure from +subject_tx+, mirroring
+        # +Tx#verify+'s walk exactly. Returns the wtxid set the SDK
+        # actually validated (HLR #516 Sub 2).
+        #
+        # **Critical invariant**: this walker must match +Tx#verify+'s
+        # traversal at +bsv-ruby-sdk/lib/bsv/transaction/tx.rb:759-777+.
+        # The SDK short-circuits at merkle-proven leaves (validates the
+        # merkle_path against chain_tracker, then +next+ — does NOT
+        # recurse into +input.source_transaction+). Walking past a
+        # merkle-proven leaf here would mark grandparents as +'spv'+
+        # when the SDK never validated them — persistent trust corruption
+        # from attacker-supplied bytes in the BEEF's ancestor list.
         #
         # Non-atomic BEEF unrelated siblings are excluded by construction:
         # the walk is subject-rooted, not +beef.transactions+-based.
@@ -225,6 +235,11 @@ module BSV
             next if seen.include?(tx.wtxid)
 
             seen << tx.wtxid
+            # Mirror +Tx#verify+'s merkle-path short-circuit — proven
+            # leaves are validated via chain_tracker, their inputs are
+            # not touched. Walking past them would trust unverified bytes.
+            next if tx.merkle_path
+
             tx.inputs.each do |input|
               queue << input.source_transaction if input.source_transaction
             end

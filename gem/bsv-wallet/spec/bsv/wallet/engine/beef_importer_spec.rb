@@ -569,6 +569,88 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         expect(store.verification_state(wtxid: built[:ancestor].wtxid)).to be_nil
       end
 
+      # SECURITY REGRESSION: HLR #516 Sub 2 white-hat review Critical
+      # finding. +Tx#verify+ short-circuits at merkle-proven leaves and
+      # does NOT recurse into their +input.source_transaction+. If the
+      # walker walked past a proven leaf, an attacker could inject
+      # arbitrary unverified grandparent bytes into the BEEF's ancestor
+      # list and have them marked +'spv'+ in +tx_proofs+ — persistent
+      # trust corruption on all future receives.
+      #
+      # This spec builds:
+      #   grandparent (no merkle_path, attacker-supplied)
+      #     ↑
+      #   ancestor  (has merkle_path — proven, so verify stops here)
+      #     ↑
+      #   subject
+      #
+      # The subject's verify succeeds because it reaches +ancestor+ which
+      # is merkle-proven and validates against +chain_tracker+. The SDK
+      # never touches +grandparent+. The walker MUST behave the same way
+      # — grandparent's wtxid must NOT appear in the cache.
+      it 'does not mark unproven grandparents behind a merkle-proven ancestor as spv (SEC)' do
+        # Grandparent: no merkle_path. Its content is irrelevant — verify
+        # never touches it.
+        grandparent = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        grandparent.add_output(BSV::Transaction::TransactionOutput.new(
+                                 satoshis: 700,
+                                 locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                               ))
+
+        # Ancestor: has merkle_path, spends grandparent. Its inputs won't
+        # be script-verified because the merkle-path short-circuit fires.
+        ancestor = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        ancestor.add_input(BSV::Transaction::TransactionInput.new(
+                             prev_wtxid: grandparent.wtxid,
+                             prev_tx_out_index: 0,
+                             sequence: 0xFFFFFFFF,
+                             unlocking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                           ))
+        ancestor.inputs[0].source_transaction = grandparent
+        ancestor.add_output(BSV::Transaction::TransactionOutput.new(
+                              satoshis: 600,
+                              locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                            ))
+        ancestor.merkle_path = build_merkle_path(ancestor)
+
+        subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                               prev_wtxid: ancestor.wtxid,
+                               prev_tx_out_index: 0,
+                               sequence: 0xFFFFFFFF,
+                               unlocking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                             ))
+        subject_tx.inputs[0].source_transaction = ancestor
+        subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                satoshis: 500,
+                                locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                              ))
+
+        beef = BSV::Transaction::Beef.new
+        beef.merge_transaction(grandparent)
+        beef.merge_transaction(ancestor)
+        beef.merge_transaction(subject_tx)
+
+        beef_importer.import(
+          tx: beef.to_atomic_binary(subject_tx.wtxid),
+          description: 'grandparent write guard',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'sec regression', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }]
+        )
+
+        # Subject and ancestor were validated by Tx#verify — trusted.
+        expect(verified_via(subject_tx.wtxid)).to eq('spv')
+        expect(verified_via(ancestor.wtxid)).to eq('spv')
+        # Grandparent was NEVER validated (verify short-circuited at
+        # ancestor's merkle_path). It must NOT be marked verified.
+        expect(store.verification_state(wtxid: grandparent.wtxid)).to be_nil
+      end
+
       it 'does not write when verify_incoming_transaction! raises (before-write guard)' do
         built = build_verifiable_beef(satoshis: 500)
         # Reject the ancestor's merkle path — Tx#verify raises
