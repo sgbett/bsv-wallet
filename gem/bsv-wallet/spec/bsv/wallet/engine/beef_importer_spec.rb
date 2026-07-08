@@ -581,6 +581,80 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         expect(store.verification_state(wtxid: built[:subject_tx].wtxid)).to be_nil
         expect(store.verification_state(wtxid: built[:ancestor].wtxid)).to be_nil
       end
+
+      # REGRESSION: non-atomic BEEF (BRC-62) with an unrelated sibling entry
+      # not reachable from the subject via +input.source_transaction+.
+      # +save_beef_proofs+ persists proof rows for every non-TXID-only entry
+      # in +beef.transactions+ — including the sibling — but only the wtxid
+      # set +Tx#verify+ actually walked (subject + reachable ancestors) may
+      # be marked +verified_via = 'spv'+. A future change that broadened
+      # the marked set (e.g. handing +beef.transactions.map(&:wtxid)+
+      # instead of +verified_wtxids.keys+ to +mark_verified_batch+) would
+      # accidentally trust the sibling — persistent trust escalation for
+      # any tx the BEEF's producer chose to include.
+      it 'does not mark unrelated siblings in a non-atomic BEEF as spv' do
+        # Main chain: proven ancestor spent by subject.
+        ancestor = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        ancestor.add_output(BSV::Transaction::TransactionOutput.new(
+                              satoshis: 600,
+                              locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                            ))
+        ancestor.merkle_path = build_merkle_path(ancestor)
+
+        subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                               prev_wtxid: ancestor.wtxid,
+                               prev_tx_out_index: 0,
+                               sequence: 0xFFFFFFFF,
+                               unlocking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                             ))
+        subject_tx.inputs[0].source_transaction = ancestor
+        subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                satoshis: 500,
+                                locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                              ))
+
+        # Sibling: independent proven tx, no relationship to subject.
+        # Its bytes get persisted via +save_beef_proofs+ but +Tx#verify+
+        # never visits it (not reachable from subject_tx).
+        sibling = BSV::Transaction::Tx.new(version: 1, lock_time: 42)
+        sibling.add_output(BSV::Transaction::TransactionOutput.new(
+                             satoshis: 999,
+                             locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                           ))
+        sibling.merkle_path = build_merkle_path(sibling, block_height: 800_001)
+
+        beef = BSV::Transaction::Beef.new
+        beef.merge_transaction(ancestor)
+        beef.merge_transaction(sibling)
+        beef.merge_transaction(subject_tx) # last → subject on the non-atomic parse path
+
+        # Non-atomic BRC-62 binary (no atomic wrapper). +parse_beef+ picks
+        # +beef.transactions.last+ as the subject when +subject_wtxid+ is
+        # absent — see +beef_importer.rb+ line 60.
+        beef_binary = beef.to_binary
+
+        beef_importer.import(
+          tx: beef_binary,
+          description: 'non-atomic sibling guard',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'sibling guard', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }]
+        )
+
+        # Subject + walked ancestor: marked spv.
+        expect(verified_via(subject_tx.wtxid)).to eq('spv')
+        expect(verified_via(ancestor.wtxid)).to eq('spv')
+
+        # Sibling: proof row persisted (save_beef_proofs saw it), but
+        # verification stamp absent (Tx#verify never reached it).
+        expect(store.find_proof(wtxid: sibling.wtxid)).not_to be_nil
+        expect(store.verification_state(wtxid: sibling.wtxid)).to be_nil
+      end
     end
 
     it 'rolls back the created+signed action if promotion fails mid-ingress (#362 atomicity)' do
