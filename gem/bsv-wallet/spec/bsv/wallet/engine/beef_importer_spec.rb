@@ -508,6 +508,81 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       expect(store.find_proof(wtxid: built[:subject_tx].wtxid)).to be_nil
     end
 
+    # HLR #516 Sub 2 — successful ingress marks the exact wtxid set that
+    # +Tx#verify+ walked as +verified_via = 'spv'+ in +tx_proofs+. The
+    # walked set comes from the SDK's own +verified:+ accumulator (bsv-sdk
+    # 0.26+); the wallet does not re-implement the walk. Non-atomic BEEF
+    # sibling entries the SDK never visits stay uncached by construction.
+    describe 'verification cache write (HLR #516 Sub 2)' do
+      def import_ok(built)
+        beef_importer.import(
+          tx: built[:beef_binary], description: 'sub-2 cache write',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'sub two cache', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }]
+        )
+      end
+
+      def verified_via(wtxid)
+        store.verification_state(wtxid: wtxid)&.[](:verified_via)
+      end
+
+      it 'marks subject + walked ancestors as spv on success' do
+        built = build_verifiable_beef(satoshis: 500)
+        import_ok(built)
+
+        expect(verified_via(built[:subject_tx].wtxid)).to eq('spv')
+        expect(verified_via(built[:ancestor].wtxid)).to eq('spv')
+      end
+
+      it 'writes the wtxids at the current VERIFIER_VERSION' do
+        built = build_verifiable_beef(satoshis: 500)
+        import_ok(built)
+
+        state = store.verification_state(wtxid: built[:subject_tx].wtxid)
+        expect(state[:verifier_version]).to eq(BSV::Wallet::VERIFIER_VERSION)
+        expect(state[:verified_at]).to be_a(Time)
+      end
+
+      it 'issues a single mark_verified_batch call, not N per ancestor' do
+        built = build_verifiable_beef(satoshis: 500)
+        allow(store).to receive(:mark_verified_batch).and_call_original
+
+        import_ok(built)
+
+        expect(store).to have_received(:mark_verified_batch).once
+      end
+
+      it 'rolls back cache writes when promotion fails mid-ingress (atomicity)' do
+        built = build_verifiable_beef(satoshis: 500)
+        allow(store).to receive(:promote_action).and_raise(StandardError, 'promote boom')
+
+        expect { import_ok(built) }.to raise_error(/promote boom/)
+
+        # Cache writes joined the same db.transaction — the failure rolls
+        # them back alongside the proof + action rows. No partial trust.
+        expect(store.verification_state(wtxid: built[:subject_tx].wtxid)).to be_nil
+        expect(store.verification_state(wtxid: built[:ancestor].wtxid)).to be_nil
+      end
+
+      it 'does not write when verify_incoming_transaction! raises (before-write guard)' do
+        built = build_verifiable_beef(satoshis: 500)
+        # Reject the ancestor's merkle path — Tx#verify raises
+        # +:invalid_merkle_proof+, which +verify_incoming_transaction!+
+        # wraps into +InvalidBeefError+. Write path never reached.
+        allow(chain_tracker).to receive(:valid_root_for_height?).and_return(false)
+
+        expect { import_ok(built) }.to raise_error(BSV::Wallet::InvalidBeefError)
+
+        expect(store.verification_state(wtxid: built[:subject_tx].wtxid)).to be_nil
+        expect(store.verification_state(wtxid: built[:ancestor].wtxid)).to be_nil
+      end
+    end
+
     it 'rolls back the created+signed action if promotion fails mid-ingress (#362 atomicity)' do
       built = build_verifiable_beef(satoshis: 500)
       allow(store).to receive(:promote_action).and_raise(StandardError, 'promote boom')
