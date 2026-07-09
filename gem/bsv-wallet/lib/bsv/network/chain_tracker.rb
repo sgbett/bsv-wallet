@@ -69,7 +69,8 @@ module BSV
         @store.max_block_height || 0
       end
 
-      # Batched merkle-root lookup for anchor liveness (HLR #516 Sub 6).
+      # Height-deduplicated merkle-root lookup for anchor liveness
+      # (HLR #516 Sub 6).
       #
       # Returns +{ height => root_bytes | nil }+ — one entry per input
       # height. Wire-order 32-byte binary bytes, matching the persisted
@@ -79,6 +80,13 @@ module BSV
       # on unresolvable heights, only on genuine root mismatches.
       #
       # Empty input short-circuits: no fetches, empty Hash returned.
+      #
+      # **Batching scope.** This base implementation only guarantees
+      # height de-duplication before dispatch — on a store miss it still
+      # performs one +get_block_header+ network call per height. Callers
+      # wanting a single-sync batch (one header-syncer round trip for
+      # the whole set) should use +SpvHeaderChainTracker#known_roots_for_heights+,
+      # which does exactly that. (Copilot round-3 on #533.)
       #
       # This is a fast-path helper for +Engine::AnchorLivenessCache+, not
       # a duck-type contract with the SDK.

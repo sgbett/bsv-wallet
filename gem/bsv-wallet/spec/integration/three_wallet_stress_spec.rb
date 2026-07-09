@@ -33,6 +33,16 @@
 # instrumentation Sub 6.3 provides on +AnchorLivenessCache#stats+);
 # unset → the spec is a no-op skip so CI's default unit lane pays
 # nothing.
+#
+# **How to run this suite.** +gem/bsv-wallet/.rspec+ excludes
+# +spec/integration/**/*_spec.rb+ from the default lane, so an
+# unqualified +bundle exec rspec+ will not touch this file. Invoke it
+# explicitly:
+#
+#   BSV_WALLET_VERIFY_TRACE=1 bundle exec rspec spec/integration/three_wallet_stress_spec.rb
+#
+# CI runs a dedicated integration lane that clears the exclusion and
+# sets the env var; the default unit lane skips this file entirely.
 
 require 'securerandom'
 require_relative '../bsv/wallet/store/shared_context'

@@ -172,9 +172,15 @@ module BSV
           heights.to_h { |h| [h, @known_roots[h]] }
         rescue StandardError => e
           BSV.logger&.warn { "[AnchorLivenessCache] known_roots_for error: #{e.message}" }
-          # Fail-closed on the invalidation side: an outage cannot decay
-          # the trust set. Return an empty map so
-          # +invalidate_stale_anchors!+ has nothing to clear.
+          # Preserve trust on a transient outage — the AC #4 "unknown ≠
+          # mismatch" guarantee. Return an empty map so
+          # +invalidate_stale_anchors!+ has nothing to clear; the trust
+          # set survives the outage untouched. The next verify-walk
+          # retries; a persistent outage surfaces via failed re-verifies
+          # elsewhere, not by silently decaying the cache. This is not
+          # "fail-closed": we intentionally *preserve* trust rather than
+          # invalidate, because false-invalidation on transient errors
+          # would collapse receive throughput. (Copilot round-3 on #533.)
           {}
         end
 
