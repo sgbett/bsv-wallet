@@ -875,6 +875,61 @@ module BSV
         models::TxProof.exclude(verified_at: nil).max(:verifier_version)
       end
 
+      # Anchor-liveness invalidation writer (HLR #516 Sub 6.1).
+      #
+      # Clears the three verification-cache columns
+      # (+verified_at+, +verified_via+, +verifier_version+) on any
+      # +tx_proofs+ row whose stored anchor disagrees with the tracker's
+      # current view. The anchor key is +(block_height, computed_root)+
+      # in wire-order 32-byte binary bytes — NOT hex, NOT BUMP-encoded
+      # bytes. The persisted +merkle_path+ is folded through the SDK's
+      # +MerklePath#compute_root+ so that BUMP-encoding variability
+      # (offset-0 leaf duplicates, unbalanced padding, hash-side ordering)
+      # closes at the canonical root before comparison — two BUMPs with
+      # the same computed root produce identical invalidation decisions
+      # regardless of their on-wire bytes.
+      #
+      # Coarse-clear rule: all three columns move together to satisfy the
+      # +verification_state_coherent+ CHECK. Only rows already carrying a
+      # trust mark (+verified_via IS NOT NULL+) are touched; unverified
+      # rows are left alone (no work for the descendant walker to undo).
+      #
+      # +heights_to_roots+ semantics:
+      # - present with a 32-byte value ⇒ compare, invalidate on mismatch.
+      # - present with +nil+          ⇒ height is "unknown" to the tracker
+      #   (transient outage, sync gap) — never invalidate. The trust set
+      #   must not decay under a network blip.
+      # - height absent from the Hash ⇒ untouched (caller did not ask).
+      #
+      # No chain_tracker dependency here — this method is a pure writer.
+      # +Engine::AnchorLivenessCache+ resolves +heights_to_roots+ from
+      # the tracker and hands it in.
+      #
+      # @param heights_to_roots [Hash{Integer => String, nil}] wire-order
+      #   32-byte binary current roots keyed by block height
+      # @return [Array<Integer>] +actions.id+ values whose proofs were
+      #   invalidated (needed by Sub 6.2's descendant walk)
+      def invalidate_stale_anchors!(heights_to_roots:)
+        return [] if heights_to_roots.nil? || heights_to_roots.empty?
+
+        invalidated_action_ids = []
+        # Chunk by height to keep the per-statement predicate small on
+        # wallets with tens of thousands of proofs per re-org'd block.
+        # +VERIFY_BATCH_CHUNK+ (10k) is the row-level ceiling; batching
+        # by height directly is coarser but simpler and matches the
+        # write shape (one UPDATE per (height, root) pair).
+        @db.transaction do
+          heights_to_roots.each do |height, current_root_bytes|
+            next if current_root_bytes.nil? # tracker "unknown" — do not invalidate
+
+            invalidated_action_ids.concat(
+              invalidate_anchors_at_height(height, current_root_bytes)
+            )
+          end
+        end
+        invalidated_action_ids.uniq
+      end
+
       # --- Block Headers ---
 
       # Persist a +blocks+ row, append-or-reject (#335).
@@ -1709,18 +1764,107 @@ module BSV
         height = proof[:height]
         return unless height
 
-        existing = models::Block.first(height: height)
-        return existing.id if existing
-
         merkle_root = proof[:merkle_root] || derive_merkle_root(proof[:merkle_path])
+        root_bin = merkle_root ? to_binary(merkle_root) : nil
+
+        existing = models::Block.first(height: height)
+        if existing
+          # HLR #516 Sub 6.1 Option B: same-height/different-hash re-org
+          # is fork evidence, not a silent upsert. Attaching this proof
+          # to the stale row would leave the anchor-liveness path unable
+          # to detect the mismatch (both rows now agree). Raise instead;
+          # the re-org handler at +Engine::AnchorLivenessCache+ owns
+          # invalidation.
+          raise BSV::Wallet::CompetingBlockHeaderError, height if root_bin && existing.merkle_root && existing.merkle_root != root_bin
+
+          return existing.id
+        end
+
         return unless merkle_root
 
-        root_bin = to_binary(merkle_root)
         hash_bin = proof[:block_hash] ? to_binary(proof[:block_hash]) : nil
-
         models::Block.create(height: height, merkle_root: root_bin, block_hash: hash_bin).id
       rescue Sequel::UniqueConstraintViolation
-        models::Block.first!(height: height).id
+        # A concurrent writer landed the +blocks+ row between our probe
+        # and insert. Re-read and re-check the merkle_root: if the
+        # winner recorded a competing root, this is the same re-org
+        # signal the pre-check would have raised for, so surface it
+        # rather than silently attach to the winner's row.
+        winner = models::Block.first!(height: height)
+        raise BSV::Wallet::CompetingBlockHeaderError, height if root_bin && winner.merkle_root && winner.merkle_root != root_bin
+
+        winner.id
+      end
+
+      # Fold a persisted +merkle_path+ blob through the SDK's
+      # +MerklePath#compute_root+ so BUMP-encoding variability closes at
+      # the canonical wire-order root. Returns +nil+ on any parse
+      # failure — a proof we cannot compute a root for is left alone by
+      # the anchor-liveness walk (nothing to compare against).
+      #
+      # +wtxid+ names which leaf of the BUMP owns this row — the SDK
+      # walks the leaves of +path[0]+ to disambiguate compound proofs.
+      # Wire-order 32 bytes, matching the +wtxid+ column.
+      def computed_root_for_path(merkle_path_binary, wtxid)
+        return nil unless merkle_path_binary && wtxid
+
+        paths = BSV::Transaction::MerklePath.from_binary(merkle_path_binary)
+        mp = paths.is_a?(Array) ? paths.first : paths
+        mp&.compute_root(wtxid)
+      rescue StandardError
+        nil
+      end
+
+      # Invalidate every verified +tx_proofs+ row whose block sits at
+      # +height+ but whose computed root disagrees with
+      # +current_root_bytes+ (wire-order 32 bytes). Returns the
+      # +actions.id+ of each cleared row for Sub 6.2 to walk descendants.
+      def invalidate_anchors_at_height(height, current_root_bytes)
+        block_ids = models::Block.where(height: height).select_map(:id)
+        return [] if block_ids.empty?
+
+        # Fetch the candidate rows before mutating so we can partition on
+        # +computed_root+ (BUMP-parsed, not the raw +merkle_path+ blob)
+        # and log per-row context. The set is bounded by the +by_block+
+        # partial index (+verified_at IS NOT NULL AND block_id IS NOT
+        # NULL+) — a re-org batch will not touch unverified rows.
+        candidates = models::TxProof
+                     .where(block_id: block_ids)
+                     .exclude(verified_via: nil)
+                     .exclude(merkle_path: nil)
+                     .select(:id, :wtxid, :merkle_path)
+                     .all
+
+        stale_ids = []
+        candidates.each do |row|
+          computed = computed_root_for_path(row.merkle_path, row.wtxid)
+          next unless computed # unparseable path — leave untouched (Sub 6.2 may still descend)
+          next if computed == current_root_bytes
+
+          log_anchor_mismatch(row.wtxid, height, computed, current_root_bytes)
+          stale_ids << row.id
+        end
+        return [] if stale_ids.empty?
+
+        # Clear all three columns together — the +verification_state_coherent+
+        # CHECK rolls back a partial clear.
+        stale_ids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
+          models::TxProof
+            .where(id: chunk)
+            .exclude(verified_via: nil)
+            .update(verified_at: nil, verified_via: nil, verifier_version: nil)
+        end
+
+        models::Action.where(tx_proof_id: stale_ids).select_map(:id)
+      end
+
+      def log_anchor_mismatch(wtxid, height, stored_root, current_root)
+        BSV.logger&.debug do
+          "[Store#invalidate_stale_anchors!] wtxid=#{wtxid.to_dtxid} " \
+            "cause=anchor_mismatch height=#{height} " \
+            "stored_root=#{stored_root.unpack1('H*')} " \
+            "current_root=#{current_root.unpack1('H*')}"
+        end
       end
 
       def derive_merkle_root(merkle_path_binary)

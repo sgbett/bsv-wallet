@@ -502,6 +502,26 @@ module BSV
           raise NotImplementedError
         end
 
+        # Anchor-liveness invalidation writer (HLR #516 Sub 6.1). Clears
+        # +verified_at+/+verified_via+/+verifier_version+ on any
+        # verified +tx_proofs+ row whose block sits at a supplied height
+        # but whose persisted +merkle_path+ folds to a root differing
+        # from the tracker's current view. Pure writer — no chain_tracker
+        # dependency; +Engine::AnchorLivenessCache+ resolves the map.
+        #
+        # A +nil+ value in +heights_to_roots+ marks the height as
+        # "unknown to the tracker" (transient outage, sync gap) and is
+        # treated as a no-op — the trust set must not decay under a
+        # network blip. Only a genuine root disagreement invalidates.
+        #
+        # @param heights_to_roots [Hash{Integer => String, nil}]
+        #   wire-order 32-byte binary current roots keyed by block height
+        # @return [Array<Integer>] +actions.id+ of every action whose
+        #   proof was invalidated (Sub 6.2 walks the descendants)
+        def invalidate_stale_anchors!(heights_to_roots:)
+          raise NotImplementedError
+        end
+
         # --- Settings ---
 
         # Retrieve a setting value by key.

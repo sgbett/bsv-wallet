@@ -252,4 +252,227 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(result).to include(wtxid)
     end
   end
+
+  # HLR #516 Sub 6.1 — anchor liveness. The writer is pure: hand it a
+  # +{ height => current_root_bytes }+ map and it clears verification
+  # columns on any row whose persisted merkle_path folds to a different
+  # root at that height. Wire-order 32-byte binary throughout — never
+  # hex, never BUMP-encoded bytes.
+  describe '#invalidate_stale_anchors!' do
+    # A single-leaf BUMP for +wtxid+ at +height+.
+    # +MerklePath#compute_root+ shortcircuits at a single-element single
+    # level and returns +wtxid+ unchanged, so root == wtxid.
+    def single_leaf_bump(wtxid:, height:)
+      leaf = BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid, txid: true)
+      BSV::Transaction::MerklePath.new(block_height: height, path: [[leaf]])
+    end
+
+    # A two-leaf BUMP where +wtxid_a+ (offset 0) and +wtxid_b+ (offset
+    # 1) share a common merkle root at +height+ — verified by the SDK's
+    # +MerklePath#compute_root+ which walks the sibling into
+    # +sha256d(wtxid_a + wtxid_b)+ from either starting leaf.
+    def paired_leaves_bump(wtxid_a:, wtxid_b:, height:)
+      leaf_a = BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid_a, txid: true)
+      leaf_b = BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: wtxid_b, txid: true)
+      BSV::Transaction::MerklePath.new(block_height: height, path: [[leaf_a, leaf_b]])
+    end
+
+    # Persist a +tx_proofs+ row anchored at +height+ with a single-leaf
+    # BUMP (computed root == wtxid). Optionally mark verified via +via+.
+    def persist_anchored_proof(height:, via: nil, wtxid: SecureRandom.random_bytes(32))
+      bump = single_leaf_bump(wtxid: wtxid, height: height)
+      store.save_proof(wtxid: wtxid,
+                       proof: { raw_tx: 'x'.b * 20,
+                                height: height,
+                                merkle_root: wtxid, # single-leaf BUMP: root == wtxid
+                                merkle_path: bump.to_binary })
+      store.mark_verified(wtxid: wtxid, via: via) if via
+      wtxid
+    end
+
+    # Persist a pair of +tx_proofs+ rows anchored at +height+ that
+    # share a common merkle root. Returns +[wtxid_a, wtxid_b, shared_root]+.
+    def persist_paired_proofs(height:, via: 'spv')
+      wtxid_a = SecureRandom.random_bytes(32)
+      wtxid_b = SecureRandom.random_bytes(32)
+      bump = paired_leaves_bump(wtxid_a: wtxid_a, wtxid_b: wtxid_b, height: height)
+      shared_root = bump.compute_root(wtxid_a)
+      store.save_proof(wtxid: wtxid_a,
+                       proof: { raw_tx: 'x'.b * 20,
+                                height: height,
+                                merkle_root: shared_root,
+                                merkle_path: bump.to_binary })
+      store.save_proof(wtxid: wtxid_b,
+                       proof: { raw_tx: 'x'.b * 20,
+                                height: height,
+                                merkle_root: shared_root,
+                                merkle_path: bump.to_binary })
+      [wtxid_a, wtxid_b, shared_root].tap do
+        [wtxid_a, wtxid_b].each { |w| store.mark_verified(wtxid: w, via: via) } if via
+      end
+    end
+
+    it 'is a no-op on empty input (no DB round-trip)' do
+      expect(store.invalidate_stale_anchors!(heights_to_roots: {})).to eq([])
+    end
+
+    it 'leaves rows untouched when the tracker root matches the persisted root' do
+      height = 900_100
+      wtxid = persist_anchored_proof(height: height, via: 'spv')
+      store.invalidate_stale_anchors!(heights_to_roots: { height => wtxid })
+      expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
+    end
+
+    it 'clears the three verification columns on same-height/different-root mismatch' do
+      height = 900_101
+      wtxid = persist_anchored_proof(height: height, via: 'spv')
+      current = SecureRandom.random_bytes(32) # tracker's new-tip root at that height
+      store.invalidate_stale_anchors!(heights_to_roots: { height => current })
+      expect(store.verification_state(wtxid: wtxid)).to be_nil
+    end
+
+    it 'returns the invalidated action_ids so Sub 6.2 can walk descendants' do
+      height = 900_102
+      wtxid = persist_anchored_proof(height: height, via: 'spv')
+      # Link an action to this proof so we know which id to expect.
+      proof_id = models::TxProof.where(wtxid: Sequel.blob(wtxid)).get(:id)
+      action = models::Action.create(description: 'anchor test 1', broadcast_intent: 'none')
+      action.update(tx_proof_id: proof_id)
+
+      cleared = store.invalidate_stale_anchors!(heights_to_roots: { height => SecureRandom.random_bytes(32) })
+      expect(cleared).to include(action.id)
+    end
+
+    it 'treats chain_tracker "unknown" (nil root) as a no-op (does not decay trust on outage)' do
+      height = 900_103
+      wtxid = persist_anchored_proof(height: height, via: 'spv')
+      store.invalidate_stale_anchors!(heights_to_roots: { height => nil })
+      expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
+    end
+
+    # Coarse-clear rule (cryptography): only touch rows carrying a trust
+    # mark — an unverified row has nothing to clear and inviting the
+    # UPDATE into its predicate would trip the coherent CHECK.
+    it 'leaves unverified rows alone (verified_via IS NULL predicate)' do
+      height = 900_104
+      wtxid = persist_anchored_proof(height: height, via: nil) # no mark
+      store.invalidate_stale_anchors!(heights_to_roots: { height => SecureRandom.random_bytes(32) })
+      expect(store.verification_state(wtxid: wtxid)).to be_nil # was nil, still nil
+    end
+
+    # BUMP-encoding evasion regression — two BUMPs at the same (height,
+    # computed_root) invalidate equivalently. Here both proofs share
+    # ONE two-leaf BUMP, so their computed roots match exactly. The
+    # tracker root disagrees with that shared root; both rows clear.
+    it 'keys on computed root — paired proofs sharing one root both clear on mismatch' do
+      height = 900_105
+      wtxid_a, wtxid_b, shared_root = persist_paired_proofs(height: height)
+
+      # Sanity: they really do share a root before invalidation.
+      expect(store.find_block(height: height)[:merkle_root]).to eq(shared_root)
+
+      # Tracker reports a different root at that height ⇒ both rows,
+      # having equivalent computed roots, both clear.
+      store.invalidate_stale_anchors!(heights_to_roots: { height => SecureRandom.random_bytes(32) })
+      expect(store.verification_state(wtxid: wtxid_a)).to be_nil
+      expect(store.verification_state(wtxid: wtxid_b)).to be_nil
+    end
+
+    it 'keeps paired proofs verified when the tracker root matches the shared root' do
+      height = 900_108
+      wtxid_a, wtxid_b, shared_root = persist_paired_proofs(height: height)
+
+      store.invalidate_stale_anchors!(heights_to_roots: { height => shared_root })
+      expect(store.verification_state(wtxid: wtxid_a)&.[](:verified_via)).to eq('spv')
+      expect(store.verification_state(wtxid: wtxid_b)&.[](:verified_via)).to eq('spv')
+    end
+
+    # Tx re-mined at a different block: an ingress path re-writes the
+    # merkle_path/block_id on a subsequent +save_proof+ call. The rule
+    # is coarse-clear on the anchor mismatch; on the next verify
+    # reference the re-verify path re-anchors and re-marks the row. We
+    # cannot easily emulate the full re-anchoring from a Store-only
+    # spec (that's Sub 5's read path) — assert here that a same-height
+    # re-save with a different computed root followed by anchor-liveness
+    # clears the row.
+    it 'clears the row when re-verification would find a different anchor' do
+      height = 900_106
+      wtxid = SecureRandom.random_bytes(32)
+      persist_anchored_proof(height: height, via: 'spv', wtxid: wtxid)
+
+      # Simulate a network re-org where the tracker now reports a
+      # different root at that height. Anchor-liveness clears; the next
+      # verify walk (Sub 5) restores the mark.
+      store.invalidate_stale_anchors!(heights_to_roots: { height => SecureRandom.random_bytes(32) })
+      expect(store.verification_state(wtxid: wtxid)).to be_nil
+    end
+
+    it 'chunks large invalidation batches under VERIFY_BATCH_CHUNK' do
+      # Use one shared block row via paired proofs (two per height),
+      # spread across six heights → twelve rows to clear in one call.
+      map = {}
+      wtxids = []
+      6.times do |i|
+        h = 900_107_000 + i
+        a, b, = persist_paired_proofs(height: h)
+        map[h] = SecureRandom.random_bytes(32) # tracker disagrees at every height
+        wtxids << a << b
+      end
+      stub_const('BSV::Wallet::Store::VERIFY_BATCH_CHUNK', 5)
+      store.invalidate_stale_anchors!(heights_to_roots: map)
+      wtxids.each { |w| expect(store.verification_state(wtxid: w)).to be_nil }
+    end
+  end
+
+  # HLR #516 Sub 6.1 — +find_or_create_block+ Option B fix. Prior to
+  # the fix, a +save_proof+ call whose supplied +merkle_root+ disagreed
+  # with an existing +blocks+ row at the same height silently attached
+  # the new proof to the stale row, defeating anchor-liveness. Now it
+  # raises +CompetingBlockHeaderError+ and lets the anchor-liveness
+  # path own re-org resolution.
+  describe '#save_proof / find_or_create_block competing merkle_root' do
+    it 'raises CompetingBlockHeaderError on same-height/different-root re-org signal' do
+      height = 900_200
+      root_original = SecureRandom.random_bytes(32)
+      root_competing = SecureRandom.random_bytes(32)
+
+      wtxid1 = SecureRandom.random_bytes(32)
+      store.save_proof(wtxid: wtxid1,
+                       proof: { raw_tx: 'x'.b * 20, height: height, merkle_root: root_original })
+      expect(store.find_block(height: height)[:merkle_root]).to eq(root_original)
+
+      wtxid2 = SecureRandom.random_bytes(32)
+      expect do
+        store.save_proof(wtxid: wtxid2,
+                         proof: { raw_tx: 'x'.b * 20, height: height, merkle_root: root_competing })
+      end.to raise_error(BSV::Wallet::CompetingBlockHeaderError)
+
+      # The original blocks row is untouched — re-org evidence preserved.
+      expect(store.find_block(height: height)[:merkle_root]).to eq(root_original)
+    end
+
+    it 'is idempotent when merkle_root matches an existing row' do
+      height = 900_201
+      root = SecureRandom.random_bytes(32)
+      wtxid1 = SecureRandom.random_bytes(32)
+      wtxid2 = SecureRandom.random_bytes(32)
+      store.save_proof(wtxid: wtxid1,
+                       proof: { raw_tx: 'x'.b * 20, height: height, merkle_root: root })
+      expect do
+        store.save_proof(wtxid: wtxid2,
+                         proof: { raw_tx: 'x'.b * 20, height: height, merkle_root: root })
+      end.not_to raise_error
+    end
+
+    it 'accepts a proof at a height with no existing block row' do
+      height = 900_202
+      wtxid = SecureRandom.random_bytes(32)
+      expect do
+        store.save_proof(wtxid: wtxid,
+                         proof: { raw_tx: 'x'.b * 20, height: height,
+                                  merkle_root: SecureRandom.random_bytes(32) })
+      end.not_to raise_error
+      expect(store.find_block(height: height)).not_to be_nil
+    end
+  end
 end
