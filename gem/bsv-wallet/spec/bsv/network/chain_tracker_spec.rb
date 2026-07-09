@@ -236,5 +236,42 @@ RSpec.describe BSV::Network::ChainTracker do
 
       expect(tracker.known_roots_for_heights([height])).to eq(height => nil)
     end
+
+    # Copilot on #533. Ruby's +pack('H*')+ silently coerces
+    # odd-length / non-hex input, so an unvalidated malformed
+    # +merkleroot+ would corrupt anchor-liveness. Treat malformed as
+    # "unknown" (nil), not a distorted binary root.
+    it 'maps nil when merkleroot is not 64-char hex (malformed field)' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('merkleroot' => 'deadbee') # odd length, would silently pad
+      )
+
+      expect(tracker.known_roots_for_heights([height])).to eq(height => nil)
+      expect(store).not_to have_received(:record_block_header)
+    end
+
+    it 'maps nil when merkleroot contains non-hex characters' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('merkleroot' => "zzzz#{'0' * 60}")
+      )
+
+      expect(tracker.known_roots_for_heights([height])).to eq(height => nil)
+    end
+
+    it 'ignores a malformed block_hash while accepting a valid merkleroot' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('merkleroot' => merkle_root_hex, 'hash' => 'not-hex')
+      )
+
+      result = tracker.known_roots_for_heights([height])
+      expect(result[height]).to eq(merkle_root_wire)
+      # block_hash treated as nil rather than silently persisting a corrupted value.
+      expect(store).to have_received(:record_block_header).with(
+        height: height, merkle_root: merkle_root_wire, block_hash: nil
+      )
+    end
   end
 end

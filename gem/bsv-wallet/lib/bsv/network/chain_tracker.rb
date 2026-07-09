@@ -115,16 +115,32 @@ module BSV
         return nil unless result.http_success?
 
         fetched_root = result.data['merkleroot'] || result.data['merkleRoot'] || result.data['merkle_root']
-        return nil unless fetched_root
+        # Validate 64-char hex before decoding. Ruby's +pack('H*')+
+        # silently pads odd-length input with 0 and coerces non-hex
+        # digits to 0, so an unvalidated malformed field would persist
+        # a corrupted root that never matches any proof (false-
+        # invalidation of the whole height) or accidentally matches
+        # another proof (false-preservation of a re-org'd anchor).
+        # Treat malformed as "unknown" — same category as a missing
+        # field, distinct from a genuine mismatch. Copilot on #533.
+        return nil unless valid_hex_root?(fetched_root)
 
         fetched_wire = [fetched_root].pack('H*').reverse
         block_hash = result.data['hash'] || result.data['blockHash'] || result.data['block_hash']
-        block_hash_wire = block_hash ? [block_hash].pack('H*').reverse : nil
+        block_hash_wire = valid_hex_root?(block_hash) ? [block_hash].pack('H*').reverse : nil
         persist_block(height: height, merkle_root: fetched_wire, block_hash: block_hash_wire)
         fetched_wire
       rescue StandardError => e
         BSV.logger&.warn { "[ChainTracker] known_roots_for_heights height=#{height} error: #{e.message}" }
         nil
+      end
+
+      # Reject anything that isn't 64 lowercase/uppercase hex characters.
+      # Merkle roots and block hashes are 32-byte SHA256d outputs; their
+      # display-order representation is always 64 hex chars. Anything
+      # else is malformed. Copilot on #533.
+      def valid_hex_root?(value)
+        value.is_a?(String) && value.match?(/\A[0-9a-fA-F]{64}\z/)
       end
 
       def persist_block(height:, merkle_root:, block_hash:)
