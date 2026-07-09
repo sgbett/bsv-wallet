@@ -83,7 +83,7 @@ Both required: lazy is the fail-safe (works for CLI subprocess use); active is t
 The anchor key is `(block_height, computed_root)` in **wire-order binary bytes** — not hex, not BUMP-encoded bytes. Two implementation consequences follow.
 
 - **Computed root, not stored bytes.** The persisted `tx_proofs.merkle_path` is folded through the SDK's `MerklePath#compute_root` before comparison. BUMP-encoding variability closes at that computed root — offset-0 leaf duplicates, unbalanced-tree padding, and hash-side ordering all produce the same 32-byte root even when the on-wire BUMPs differ. Two BUMPs for the same wtxid with matching `(height, computed_root)` invalidate equivalently; two BUMPs for the same wtxid at the same height whose computed roots disagree both clear on the mismatched-hash branch.
-- **Wire-order binary throughout.** Both sides of the comparison are the raw 32-byte SHA256d output. Hex conversion happens only at the debug-log boundary (`stored_root`/`current_root` in the `[Store#invalidate_stale_anchors!]` line), never in the predicate. This matches the `wtxid`/`blocks.merkle_root` convention documented in the top-level `CLAUDE.md`.
+- **Wire-order binary throughout.** Both sides of the comparison are the raw 32-byte SHA256d output. Hex conversion happens only at the debug-log boundary (`computed_root`/`current_root` in the `[Store#invalidate_stale_anchors!]` line), never in the predicate. This matches the `wtxid`/`blocks.merkle_root` convention documented in the top-level `CLAUDE.md`.
 
 **`chain_tracker` unreachable ≠ mismatch.** A network error, an unknown height, or an empty tracker returns `nil` from `known_roots_for_heights` — the map entry is preserved for that height but marked "unknown". `Store#invalidate_stale_anchors!` treats `nil` values as a no-op and does not clear the row. This is a correctness invariant, not a nicety: a transient outage must not decay the trust set into an unrecoverable state.
 
@@ -170,10 +170,10 @@ The persisted `merkle_path` for this wtxid folded through `MerklePath#compute_ro
 Debug log to grep:
 
 ```
-[Store#invalidate_stale_anchors!] wtxid=<dtxid> cause=anchor_mismatch height=<H> stored_root=<hex> current_root=<hex>
+[Store#invalidate_stale_anchors!] wtxid=<dtxid> cause=anchor_mismatch height=<H> computed_root=<hex> current_root=<hex>
 ```
 
-The `stored_root` and `current_root` fields are hex-encoded at the log boundary; the underlying comparison is wire-order 32-byte binary. If the two roots differ, this is expected re-org behaviour — the next verify walk will re-anchor if the tracker has moved on.
+The `computed_root` and `current_root` fields are hex-encoded at the log boundary; the underlying comparison is wire-order 32-byte binary. `computed_root` is derived from the persisted `merkle_path` via `MerklePath#compute_root` (BUMP-encoding variability closes there); `current_root` is what `chain_tracker.known_roots_for_heights` reports for the same height. If the two roots differ, this is expected re-org behaviour — the next verify walk will re-anchor if the tracker has moved on.
 
 ### 2. Transitive descent (Sub 6.2)
 

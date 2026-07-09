@@ -1138,7 +1138,7 @@ module BSV
           BSV.logger&.warn do
             "[Store#sanity_sweep_verified_anchors!] wtxid=#{row[:wtxid].to_dtxid} " \
               "cause=boot_sweep_divergence height=#{row[:height]} " \
-              "stored_root=#{computed.to_dtxid} " \
+              "computed_root=#{computed.to_dtxid} " \
               "current_root=#{current.to_dtxid}"
           end
         end
@@ -2162,11 +2162,11 @@ module BSV
         {}
       end
 
-      def log_anchor_mismatch(wtxid, height, stored_root, current_root)
+      def log_anchor_mismatch(wtxid, height, computed_root, current_root)
         BSV.logger&.debug do
           "[Store#invalidate_stale_anchors!] wtxid=#{wtxid.to_dtxid} " \
             "cause=anchor_mismatch height=#{height} " \
-            "stored_root=#{stored_root.to_dtxid} " \
+            "computed_root=#{computed_root.to_dtxid} " \
             "current_root=#{current_root.to_dtxid}"
         end
       end
