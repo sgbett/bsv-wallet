@@ -351,6 +351,30 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
     end
 
+    # Fail-closed on unparseable +merkle_path+ — Copilot round-1 on #533.
+    # A row whose stored proof cannot compute a root can be neither
+    # confirmed nor refuted against +chain_tracker+; leaving it untouched
+    # would let it retain +'spv'+ forever and Sub 5's read gate would
+    # trust it. Clear it so the next reference forces re-verify.
+    it 'clears rows whose merkle_path is unparseable (fail closed)' do
+      height = 900_104
+      wtxid = persist_anchored_proof(height: height, via: 'spv')
+      # Corrupt the persisted path — +computed_root_for_path+ returns nil.
+      models::TxProof.where(wtxid: Sequel.blob(wtxid))
+                     .update(merkle_path: Sequel.blob("\x00".b * 4))
+
+      cleared = store.invalidate_stale_anchors!(
+        heights_to_roots: { height => SecureRandom.random_bytes(32) }
+      )
+
+      expect(store.verification_state(wtxid: wtxid)).to be_nil
+      # Returned action_ids include the cleared row so Sub 6.2 can descend.
+      action = models::Action.where(
+        tx_proof_id: models::TxProof.where(wtxid: Sequel.blob(wtxid)).select(:id)
+      ).first
+      expect(cleared).to include(action.id) if action
+    end
+
     # Coarse-clear rule (cryptography): only touch rows carrying a trust
     # mark — an unverified row has nothing to clear and inviting the
     # UPDATE into its predicate would trip the coherent CHECK.
@@ -1094,8 +1118,6 @@ RSpec.describe BSV::Wallet::Store, :store do
       tracker = build_tracker(wtxids_by_height)
       # Sample only 2 → the tracker sees at most 2 heights.
       store.sanity_sweep_verified_anchors!(chain_tracker: tracker, sample_size: 2)
-      queried = tracker.instance_variable_get(:@__doubles__) # no-op — we assert via received-arg
-      _ = queried
       expect(tracker).to have_received(:known_roots_for_heights) do |heights|
         expect(heights.size).to be <= 2
       end

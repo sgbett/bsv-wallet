@@ -1124,8 +1124,8 @@ module BSV
           BSV.logger&.warn do
             "[Store#sanity_sweep_verified_anchors!] wtxid=#{row[:wtxid].to_dtxid} " \
               "cause=boot_sweep_divergence height=#{row[:height]} " \
-              "stored_root=#{computed.unpack1('H*')} " \
-              "current_root=#{current.unpack1('H*')}"
+              "stored_root=#{computed.to_dtxid} " \
+              "current_root=#{current.to_dtxid}"
           end
         end
         divergences
@@ -2042,7 +2042,17 @@ module BSV
         stale_ids = []
         candidates.each do |row|
           computed = computed_root_for_path(row.merkle_path, row.wtxid)
-          next unless computed # unparseable path — leave untouched (Sub 6.2 may still descend)
+          if computed.nil?
+            # Fail closed — a proof we cannot compute a root for cannot
+            # be anchor-checked, so we can neither confirm nor refute
+            # liveness. Clear the trust mark so the next reference forces
+            # re-verify; a silently-skipped row would retain +'spv'+
+            # forever and Sub 5's read gate would trust it. Copilot
+            # round-1 on #533.
+            log_unparseable_merkle_path(row.wtxid, height)
+            stale_ids << row.id
+            next
+          end
           next if computed == current_root_bytes
 
           log_anchor_mismatch(row.wtxid, height, computed, current_root_bytes)
@@ -2129,8 +2139,21 @@ module BSV
         BSV.logger&.debug do
           "[Store#invalidate_stale_anchors!] wtxid=#{wtxid.to_dtxid} " \
             "cause=anchor_mismatch height=#{height} " \
-            "stored_root=#{stored_root.unpack1('H*')} " \
-            "current_root=#{current_root.unpack1('H*')}"
+            "stored_root=#{stored_root.to_dtxid} " \
+            "current_root=#{current_root.to_dtxid}"
+        end
+      end
+
+      # Unparseable +merkle_path+ blob — a proof we cannot compute a root
+      # for cannot be anchor-checked, so we treat it as anchor mismatch
+      # (fail closed). Next reference forces re-verify + proof re-fetch.
+      # A rare event (BUMP format changes across SDK versions, storage
+      # corruption); +warn+ so operators can correlate against
+      # bsv-sdk upgrades.
+      def log_unparseable_merkle_path(wtxid, height)
+        BSV.logger&.warn do
+          "[Store#invalidate_stale_anchors!] wtxid=#{wtxid.to_dtxid} " \
+            "cause=unparseable_merkle_path height=#{height}"
         end
       end
 
