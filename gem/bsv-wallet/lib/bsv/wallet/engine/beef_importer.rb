@@ -52,8 +52,11 @@ module BSV
 
           # Full SPV verification: scripts, merkle proofs, and fee adequacy
           # (output <= input). Replaces the former validate_beef! +
-          # validate_fee_adequacy! two-step.
-          verify_incoming_transaction!(subject_tx)
+          # validate_fee_adequacy! two-step. Accumulator captures the exact
+          # wtxid set +Tx#verify+ walked — used below to populate the
+          # persistent verification cache (HLR #516 Sub 2).
+          verified_wtxids = {}
+          verify_incoming_transaction!(subject_tx, verified: verified_wtxids)
 
           # Resolve + validate the caller's outputs against the parsed subject
           # tx BEFORE any persistence (#362). A malformed request — non-Array
@@ -90,6 +93,25 @@ module BSV
             # rolls the whole ingress back (principle of state — never a
             # half-imported action whose ancestry can't be reproduced).
             assert_proofs_complete!(beef)
+
+            # HLR #516 Sub 2 — populate the verification cache. Trust claim:
+            # every wtxid in +verified_wtxids.keys+ is a tx that +Tx#verify+
+            # itself walked and validated in the call above, including the
+            # merkle-path short-circuit at proven leaves (SDK-owned; the
+            # wallet does not re-implement the walk — an earlier revision
+            # tried and the white-hat review caught the drift).
+            #
+            # Non-atomic BEEF (BRC-62) sibling entries not reached by
+            # +Tx#verify+ stay uncached — the accumulator only captures
+            # nodes the SDK actually visited.
+            #
+            # Cache write joins this same +db.transaction+ block; a
+            # downstream failure (promote_action) rolls back the marks
+            # alongside the proof/action rows (ADR-033).
+            @store.mark_verified_batch(
+              wtxids: verified_wtxids.keys,
+              via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV
+            )
 
             # trustSelf: replace known ancestors with TXID-only entries.
             # This runs AFTER save_beef_proofs so no proof data is lost, and
@@ -181,10 +203,15 @@ module BSV
         #
         # @param subject_tx [Transaction::Tx]
         # @raise [InvalidBeefError] wrapping SDK VerificationError
-        def verify_incoming_transaction!(subject_tx)
+        def verify_incoming_transaction!(subject_tx, verified: nil)
           raise BSV::Wallet::InvalidBeefError, 'chain_tracker required for SPV verification' unless @chain_tracker
 
-          subject_tx.verify(chain_tracker: @chain_tracker)
+          # +verified:+ (bsv-sdk 0.26+) is a caller-supplied accumulator the
+          # SDK writes into as it walks the ancestor graph. Callers who want
+          # the walked wtxid set (HLR #516 Sub 2 — persistent verification
+          # cache write) pass a mutable Hash; the SDK owns the walk, we read
+          # +verified.keys+ after verify returns.
+          subject_tx.verify(chain_tracker: @chain_tracker, verified: verified)
         rescue BSV::Transaction::VerificationError => e
           raise BSV::Wallet::InvalidBeefError, "SPV verification failed: #{e.message} (#{e.code})"
         end
