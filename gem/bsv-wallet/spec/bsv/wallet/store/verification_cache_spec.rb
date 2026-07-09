@@ -43,11 +43,13 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('broadcast_ack')
     end
 
-    # HLR #521 strength ratchet — the mark_verified predicate is
-    # monotonic on +verifier_version+ only. Without the +via+ ratchet,
-    # a spurious self_built write on a wtxid Sub 2 already marked
-    # +'spv'+ would silently downgrade the row at the same version.
-    # These specs pin the ratchet as structural.
+    # HLR #521 strength ratchet — trust hierarchy from
+    # +docs/reference/verification-cache.md+ is +self_built+ <
+    # +broadcast_ack+ < +spv+ (+'spv'+ is the strongest local trust
+    # because +Tx#verify+ ran end-to-end; +broadcast_ack+ means the
+    # network has it but this wallet never verified). Same-version
+    # downgrades must be refused; the version predicate alone gates
+    # cross-version writes.
     it 'refuses to downgrade verified_via from spv to self_built (same version)' do
       wtxid = persist_proof
       store.mark_verified(wtxid: wtxid, via: 'spv')
@@ -64,11 +66,19 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('broadcast_ack')
     end
 
-    it 'still allows spv to upgrade to broadcast_ack (same version)' do
+    it 'refuses to downgrade verified_via from spv to broadcast_ack (same version)' do
       wtxid = persist_proof
       store.mark_verified(wtxid: wtxid, via: 'spv')
+      rows = store.mark_verified(wtxid: wtxid, via: 'broadcast_ack')
+      expect(rows).to eq(0)
+      expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('spv')
+    end
+
+    it 'upgrades broadcast_ack to spv (same version)' do
+      wtxid = persist_proof
       store.mark_verified(wtxid: wtxid, via: 'broadcast_ack')
-      expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('broadcast_ack')
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('spv')
     end
   end
 

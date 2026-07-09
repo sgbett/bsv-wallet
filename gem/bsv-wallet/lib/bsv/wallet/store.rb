@@ -792,31 +792,29 @@ module BSV
         # +broadcast_ack+). Refuses N+1 → N — a downgraded binary cannot
         # clobber rows written under stricter logic.
         #
-        # HLR #521 strength ratchet: +self_built+ writes never clobber a
-        # trusted +verified_via+ (+'spv'+ or +'broadcast_ack'+) — the
-        # monotonic version clause alone would silently downgrade at the
-        # same version. The predicate is unconditional on version: a
-        # future stricter verifier that classifies a wtxid as +self_built+
-        # after an older binary marked it +'spv'+ should not silently
-        # discard the SPV mark either. Version-upgrade demotions belong
-        # in an explicit migration, not this hot-path write.
-        #
-        # Positive predicate — +verified_via IS NULL OR = 'self_built'+ —
-        # written as an explicit +OR+ because +where(col: [nil, val])+
-        # emits +col IN (NULL, val)+ under Sequel, and SQL's three-valued
-        # logic never matches +col = NULL+ (it evaluates to NULL, not
-        # TRUE). That would filter every fresh proof row alongside the
-        # trusted ones, defeating the ratchet.
+        # HLR #521 strength ratchet: the version clause alone leaves
+        # +verified_via+ downgrades legal at the same version. Enforce the
+        # doc'd trust hierarchy (+self_built+ < +broadcast_ack+ < +spv+)
+        # by refusing writes whose new via is weaker than the existing
+        # one. +docs/reference/verification-cache.md+ pins +spv+ as the
+        # strongest local trust (end-to-end +Tx#verify+) with the
+        # lifecycle +self_built → broadcast_ack → spv+ — trust only
+        # ratchets forward; version-upgrade demotions belong in an
+        # explicit migration, not this hot-path write.
+        allowed_prior = allowed_prior_states_for(via)
         rows = 0
         wtxids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
           blobs = chunk.map { |w| Sequel.blob(w) }
           scope = models::TxProof
                   .where(wtxid: blobs)
                   .where { (verifier_version <= version) | Sequel.expr(verifier_version: nil) }
-          if via == models::TxProof::VERIFIED_VIA_SELF_BUILT
+          if allowed_prior
+            # Explicit +IS NULL OR IN (...)+ — +where(col: [nil, ...])+
+            # would emit +col IN (NULL, ...)+ and SQL's three-valued
+            # logic never matches +col = NULL+, filtering every fresh
+            # proof row alongside the ratcheted ones.
             scope = scope.where(
-              Sequel.expr(verified_via: nil) |
-              Sequel.expr(verified_via: models::TxProof::VERIFIED_VIA_SELF_BUILT)
+              Sequel.expr(verified_via: nil) | Sequel.expr(verified_via: allowed_prior)
             )
           end
           rows += scope.update(verified_at: stamp, verified_via: via, verifier_version: version)
@@ -1373,6 +1371,27 @@ module BSV
         raise ArgumentError,
               'mark_verified via must be one of ' \
               "#{models::TxProof::VERIFIED_VIA_VALUES.inspect}, got #{via.inspect}"
+      end
+
+      # HLR #521 strength ratchet: prior +verified_via+ values that a new
+      # +via+ may overwrite at the same +verifier_version+. Trust
+      # hierarchy is +self_built+ < +broadcast_ack+ < +spv+ per
+      # +docs/reference/verification-cache.md+.
+      #
+      # +nil+ ⇒ no ratchet gate (the new +via+ is the strongest and
+      # can overwrite anything, subject only to the version predicate).
+      # The +NULL+ prior case is added at the query site, so callers here
+      # only see the non-nil allowed prior enum values.
+      def allowed_prior_states_for(via)
+        case via
+        when models::TxProof::VERIFIED_VIA_SELF_BUILT
+          [models::TxProof::VERIFIED_VIA_SELF_BUILT]
+        when models::TxProof::VERIFIED_VIA_BROADCAST_ACK
+          [models::TxProof::VERIFIED_VIA_SELF_BUILT, models::TxProof::VERIFIED_VIA_BROADCAST_ACK]
+        end
+        # VERIFIED_VIA_SPV: nil — the strongest; only the version
+        # predicate gates it (an older-version binary still cannot
+        # clobber a newer stamp).
       end
 
       # Recursive inner method for reject_action. Walks children first
