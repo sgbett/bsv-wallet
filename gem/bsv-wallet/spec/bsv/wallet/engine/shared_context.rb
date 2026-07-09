@@ -212,10 +212,11 @@ RSpec.shared_context 'engine setup' do
     # (append-or-reject re-org guard). Fixtures used to jam every
     # funding source into height 1, which trips the guard now that
     # +save_proof+ passes the computed root to +find_or_create_block+.
-    # Derive a unique block-height from the source_wtxid so each
-    # fixture-generated tx has its own +blocks+ row — a realistic shape
-    # anyway (real chain blocks each hold their own set of txs).
-    fixture_height = source_wtxid.unpack1('N') & 0x7fffffff # 31-bit safe INTEGER
+    # Take a monotonic height from the current +blocks+ table so each
+    # fixture-generated tx has its own +blocks+ row — deterministic
+    # uniqueness (the earlier +source_wtxid+-derived height was
+    # probabilistic, per #533 Copilot round-2).
+    fixture_height = (BSV::Wallet::Store::Models::Block.max(:height) || 900_000).to_i + 1
     merkle_path = BSV::Transaction::MerklePath.new(
       block_height: fixture_height,
       path: [[BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: source_wtxid, txid: true)]]

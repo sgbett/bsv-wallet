@@ -2003,8 +2003,10 @@ module BSV
       # Fold a persisted +merkle_path+ blob through the SDK's
       # +MerklePath#compute_root+ so BUMP-encoding variability closes at
       # the canonical wire-order root. Returns +nil+ on any parse
-      # failure — a proof we cannot compute a root for is left alone by
-      # the anchor-liveness walk (nothing to compare against).
+      # failure — the caller (+invalidate_anchors_at_height+) treats
+      # +nil+ as a fail-closed signal: unparseable proofs cannot be
+      # anchor-checked, so the trust mark is cleared to force a
+      # re-verify on next reference. See #533 Copilot round-1.
       #
       # +wtxid+ names which leaf of the BUMP owns this row — the SDK
       # walks the leaves of +path[0]+ to disambiguate compound proofs.
