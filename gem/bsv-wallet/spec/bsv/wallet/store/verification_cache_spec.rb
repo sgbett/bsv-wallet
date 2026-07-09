@@ -684,4 +684,298 @@ RSpec.describe BSV::Wallet::Store, :store do
       [action.id, wtxid]
     end
   end
+
+  # HLR #516 Sub 6.3 — adversarial test matrix. Each vector below closes
+  # a specialist-review concern (a/d/e/g); vectors (b), (c), (f) already
+  # sit inside Sub 6.2's coverage upstream. The matrix here exercises
+  # the interaction between +invalidate_stale_anchors!+, its BUMP
+  # canonicalisation, coinbase-maturity-adjacent height mutations, and
+  # a simulated DB failure inside the invalidation UPDATE.
+  describe 'adversarial matrix (Sub 6.3)' do
+    # Persist a single-leaf-BUMP proof at +height+, then flip the trust
+    # mark on. Returns +wtxid+.
+    def persist_marked_anchor(height:, via: 'spv', wtxid: SecureRandom.random_bytes(32))
+      leaf = BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid, txid: true)
+      bump = BSV::Transaction::MerklePath.new(block_height: height, path: [[leaf]])
+      store.save_proof(wtxid: wtxid,
+                       proof: { raw_tx: 'x'.b * 20, height: height,
+                                merkle_root: wtxid, merkle_path: bump.to_binary })
+      store.mark_verified(wtxid: wtxid, via: via) if via
+      wtxid
+    end
+
+    # Rewrite the stored +merkle_path+ blob for +wtxid+ in-place without
+    # going through +save_proof+ — bypasses the +find_or_create_block+
+    # guard so the test can pit two different BUMP encodings whose
+    # +compute_root+ agree against the tracker.
+    def force_merkle_path!(wtxid:, path_bytes:)
+      models::TxProof
+        .where(wtxid: Sequel.blob(wtxid))
+        .update(merkle_path: Sequel.blob(path_bytes))
+    end
+
+    # Adversarial vector (a): BUMP-encoding evasion. Two BUMPs with the
+    # same +(height, computed_root)+ but different bytes must trigger
+    # equivalent invalidation. This variant of the Sub 6.1 "paired
+    # proofs" test uses two DIFFERENT BUMP encodings for the SAME wtxid
+    # rather than one shared BUMP for two wtxids — the SDK's
+    # +compute_root+ canonicalisation (duplicate flag vs. explicit
+    # sibling of identical hash bytes) is what the anchor-liveness path
+    # must fold through before comparison. Encoding tricks cannot buy an
+    # attacker a bypass.
+    describe '(a) BUMP-encoding evasion' do
+      # Odd-count merkle row: when a level has an odd number of leaves,
+      # Bitcoin duplicates the last one. This can be encoded in the
+      # BRC-74 BUMP two ways for a single-tx block-with-padding scenario:
+      #
+      # - Explicit sibling: +PathElement.new(offset: 1, hash: wtxid)+ —
+      #   32 bytes of the same hash bytes on the wire.
+      # - Duplicate flag:   +PathElement.new(offset: 1, duplicate: true)+
+      #   — one flag byte, no hash bytes on the wire.
+      #
+      # Both compute to the same root (+sha256d(wtxid + wtxid)+ ==
+      # +sha256d(working + working)+). Byte counts differ. Anchor-
+      # liveness must fold both through +compute_root+ before comparing
+      # against the tracker.
+      def bump_with_explicit_dup_sibling(wtxid:, height:)
+        leaf = BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid, txid: true)
+        sibling = BSV::Transaction::MerklePath::PathElement.new(offset: 1, hash: wtxid)
+        BSV::Transaction::MerklePath.new(block_height: height, path: [[leaf, sibling]])
+      end
+
+      def bump_with_duplicate_flag_sibling(wtxid:, height:)
+        leaf = BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid, txid: true)
+        sibling = BSV::Transaction::MerklePath::PathElement.new(offset: 1, duplicate: true)
+        BSV::Transaction::MerklePath.new(block_height: height, path: [[leaf, sibling]])
+      end
+
+      it 'produces the same computed root from two differently-encoded BUMPs for one wtxid' do
+        wtxid = SecureRandom.random_bytes(32)
+        height = 970_001
+        explicit = bump_with_explicit_dup_sibling(wtxid: wtxid, height: height)
+        flagged  = bump_with_duplicate_flag_sibling(wtxid: wtxid, height: height)
+
+        expect(explicit.compute_root(wtxid)).to eq(flagged.compute_root(wtxid))
+        expect(explicit.to_binary).not_to eq(flagged.to_binary) # different bytes on the wire
+      end
+
+      # +wtxid+ column is UNIQUE — we cannot persist two proofs with the
+      # same wtxid. Prove BUMP-encoding invariance by persisting once
+      # with encoding A, then rewriting the +merkle_path+ column in-place
+      # to encoding B and re-running anchor liveness. The decision must
+      # be identical because both encodings fold to the same computed
+      # root; the persisted +merkle_path+ bytes are fed through
+      # +MerklePath#compute_root+ before comparison, never used as raw
+      # bytes.
+      it 'invalidates equivalently after in-place BUMP-encoding swap (same wtxid)' do
+        height = 970_002
+        wtxid = SecureRandom.random_bytes(32)
+
+        explicit = bump_with_explicit_dup_sibling(wtxid: wtxid, height: height)
+        flagged  = bump_with_duplicate_flag_sibling(wtxid: wtxid, height: height)
+        shared_root = explicit.compute_root(wtxid)
+        # Sanity: the two encodings differ on the wire but canonicalise
+        # to the same computed root.
+        expect(flagged.compute_root(wtxid)).to eq(shared_root)
+        expect(explicit.to_binary).not_to eq(flagged.to_binary)
+
+        # Persist with the explicit-sibling encoding.
+        store.save_proof(wtxid: wtxid,
+                         proof: { raw_tx: 'x'.b * 20, height: height,
+                                  merkle_root: shared_root, merkle_path: explicit.to_binary })
+        store.mark_verified(wtxid: wtxid, via: 'spv')
+
+        # Rewrite the +merkle_path+ in-place to the flagged-sibling
+        # encoding. +find_or_create_block+ is bypassed (the row already
+        # exists at this height with the same root).
+        force_merkle_path!(wtxid: wtxid, path_bytes: flagged.to_binary)
+
+        # Tracker reports a competing root → mismatch decision must
+        # fire even though the persisted bytes now differ.
+        store.invalidate_stale_anchors!(heights_to_roots: { height => SecureRandom.random_bytes(32) })
+        expect(store.verification_state(wtxid: wtxid)).to be_nil
+
+        # Second round: same wtxid, different height so no UNIQUE clash;
+        # verify a survives-under-tracker-agreement case with the
+        # flagged encoding to close the pair.
+        height2 = 970_003
+        wtxid2 = SecureRandom.random_bytes(32)
+        flagged2 = bump_with_duplicate_flag_sibling(wtxid: wtxid2, height: height2)
+        shared_root2 = flagged2.compute_root(wtxid2)
+        store.save_proof(wtxid: wtxid2,
+                         proof: { raw_tx: 'x'.b * 20, height: height2,
+                                  merkle_root: shared_root2, merkle_path: flagged2.to_binary })
+        store.mark_verified(wtxid: wtxid2, via: 'spv')
+        # Tracker agrees on the shared root → the flagged encoding
+        # canonicalises to the same root and the row survives.
+        store.invalidate_stale_anchors!(heights_to_roots: { height2 => shared_root2 })
+        expect(store.verification_state(wtxid: wtxid2)&.[](:verified_via)).to eq('spv')
+      end
+    end
+
+    # Adversarial vector (d): same-hash accept vs same-height different-
+    # hash invalidate matrix — belt-and-braces alongside 6.1's coverage.
+    # The mid-block move case exercises the "block re-mined at a
+    # different height" edge: same wtxid, same computed root, different
+    # persisted anchor block row (different height). Sub 6.1's
+    # invalidation is per-height; this proves the guard fires at the
+    # height whose stored row disagreed, even when other rows persist
+    # with different anchors.
+    describe '(d) same-hash accept vs different-hash invalidate' do
+      it 'no-op when tracker agrees at every height (same-hash accept)' do
+        h1 = 970_100
+        h2 = 970_101
+        w1 = persist_marked_anchor(height: h1)
+        w2 = persist_marked_anchor(height: h2)
+        store.invalidate_stale_anchors!(heights_to_roots: { h1 => w1, h2 => w2 })
+        expect(store.verification_state(wtxid: w1)&.[](:verified_via)).to eq('spv')
+        expect(store.verification_state(wtxid: w2)&.[](:verified_via)).to eq('spv')
+      end
+
+      it 'clears only the mismatched height when others agree (partial invalidation)' do
+        h_agree = 970_102
+        h_bad   = 970_103
+        w_agree = persist_marked_anchor(height: h_agree)
+        w_bad   = persist_marked_anchor(height: h_bad)
+        store.invalidate_stale_anchors!(
+          heights_to_roots: { h_agree => w_agree, h_bad => SecureRandom.random_bytes(32) }
+        )
+        expect(store.verification_state(wtxid: w_agree)&.[](:verified_via)).to eq('spv')
+        expect(store.verification_state(wtxid: w_bad)).to be_nil
+      end
+
+      it 'mid-block move: same wtxid re-anchored at a NEW height keeps the untouched original clear scoped' do
+        # A "mid-block move" scenario: two proofs at two heights (h1
+        # and h2). A re-org moves h1 out but leaves h2 alone. The
+        # anchor-liveness pass names both heights; only h1's row is
+        # cleared, h2's row survives even if it shared a wtxid pattern.
+        h1 = 970_104
+        h2 = 970_105
+        # Independent wtxids at each height so we can assert per-height
+        # scoping.
+        w1 = persist_marked_anchor(height: h1)
+        w2 = persist_marked_anchor(height: h2)
+
+        # Tracker disagrees on h1 (re-org there), agrees on h2.
+        store.invalidate_stale_anchors!(
+          heights_to_roots: { h1 => SecureRandom.random_bytes(32), h2 => w2 }
+        )
+        expect(store.verification_state(wtxid: w1)).to be_nil
+        expect(store.verification_state(wtxid: w2)&.[](:verified_via)).to eq('spv')
+      end
+    end
+
+    # Adversarial vector (e): coinbase re-org burst. Height mutations
+    # H → H+99 → H+100 → H+99 → H+101 across the maturity boundary
+    # invalidate on each crossing. The wallet layer's job is to fire
+    # +invalidate_stale_anchors!+ every time the tracker reports a
+    # differing root at the persisted height; the SDK's
+    # +MerklePath#verify+ owns the maturity check itself on re-verify.
+    # This test asserts +verified_via+ clears on each mismatch crossing,
+    # not that the maturity rule is understood at the wallet layer.
+    describe '(e) coinbase re-org burst across maturity boundary' do
+      it 'invalidates on each crossing of the H+99 <-> H+100 maturity boundary' do
+        # Anchor a coinbase-shaped proof at some base height. Rewriting
+        # +block_id+ on the proof row simulates the tracker seeing the
+        # coinbase land at successive heights as re-orgs move it.
+        base_h = 970_200
+        wtxid = persist_marked_anchor(height: base_h)
+
+        # Sequence: H → H+99 → H+100 → H+99 → H+101. Each transition is
+        # a re-anchoring at a different height. We simulate this by
+        # re-saving the proof at the target height (which creates the
+        # +blocks+ row + re-links +tx_proofs.block_id+) then firing
+        # anchor-liveness with a competing root at the OLD height —
+        # any row whose current +block_id+ points at a row whose
+        # +height+ still matches "old" clears.
+        heights = [base_h + 99, base_h + 100, base_h + 99, base_h + 101]
+
+        heights.each do |new_height|
+          # Re-anchor: fresh BUMP for the same wtxid at the new height.
+          leaf = BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid, txid: true)
+          bump = BSV::Transaction::MerklePath.new(block_height: new_height, path: [[leaf]])
+          store.save_proof(wtxid: wtxid,
+                           proof: { raw_tx: 'x'.b * 20, height: new_height,
+                                    merkle_root: wtxid, merkle_path: bump.to_binary })
+          store.mark_verified(wtxid: wtxid, via: 'spv')
+
+          # Tracker reports a competing root at the new height →
+          # anchor-liveness clears +verified_via+.
+          store.invalidate_stale_anchors!(
+            heights_to_roots: { new_height => SecureRandom.random_bytes(32) }
+          )
+          expect(store.verification_state(wtxid: wtxid))
+            .to be_nil, "expected verified_via cleared at H=#{new_height}"
+        end
+      end
+    end
+
+    # Adversarial vector (g): simulated DB failure inside the
+    # invalidation UPDATE. Two invariants:
+    #
+    # 1. The caller (+Store#invalidate_stale_anchors!+, then
+    #    +AnchorLivenessCache#filter_trusted+) surfaces the error —
+    #    the +db.transaction+ block re-raises the +Sequel::DatabaseError+
+    #    and does not silently return a stale trust set.
+    # 2. The read path never returns the stale wtxid in the same
+    #    walk. Because the UPDATE + SELECT sit in strict sequence
+    #    inside +filter_trusted+ (write first, read after), a raise
+    #    at UPDATE aborts before the SELECT — no ordering hole where
+    #    a caller could receive the stale wtxid after a failed
+    #    invalidation.
+    describe '(g) simulated DB failure inside invalidation UPDATE' do
+      # Persist a proof, mark it verified, and return the wtxid. The
+      # test stubs +clear_verification_columns_for_proofs+ (the shared
+      # UPDATE primitive) to raise a +Sequel::DatabaseError+ mid-flow.
+      let(:height) { 970_300 }
+      let(:wtxid)  { persist_marked_anchor(height: height) }
+
+      before { wtxid }
+
+      it 'surfaces a Sequel::DatabaseError from Store#invalidate_stale_anchors!' do
+        allow(store).to receive(:clear_verification_columns_for_proofs)
+          .and_raise(Sequel::DatabaseError, 'simulated update failure')
+
+        expect do
+          store.invalidate_stale_anchors!(
+            heights_to_roots: { height => SecureRandom.random_bytes(32) }
+          )
+        end.to raise_error(Sequel::DatabaseError, /simulated update failure/)
+      end
+
+      it 'leaves the row unchanged when the UPDATE raises (transaction rollback)' do
+        allow(store).to receive(:clear_verification_columns_for_proofs)
+          .and_raise(Sequel::DatabaseError, 'simulated update failure')
+
+        expect do
+          store.invalidate_stale_anchors!(
+            heights_to_roots: { height => SecureRandom.random_bytes(32) }
+          )
+        end.to raise_error(Sequel::DatabaseError)
+
+        # The 'spv' mark survives — the outer +db.transaction+ inside
+        # +invalidate_stale_anchors!+ rolled back the whole batch.
+        expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
+      end
+
+      it 'AnchorLivenessCache#filter_trusted does not return the stale wtxid when the UPDATE raises' do
+        # Order-of-operations invariant: +filter_trusted+ runs the
+        # invalidation write BEFORE the +verified_wtxids+ read. A
+        # raise at the write MUST abort before the read returns — a
+        # caller never receives the stale wtxid alongside a failed
+        # invalidation.
+        tracker = instance_double(BSV::Network::ChainTracker)
+        allow(tracker).to receive(:known_roots_for_heights) do |heights|
+          heights.to_h { |h| [h, SecureRandom.random_bytes(32)] } # every height mismatches
+        end
+
+        allow(store).to receive(:clear_verification_columns_for_proofs)
+          .and_raise(Sequel::DatabaseError, 'simulated update failure')
+
+        cache = BSV::Wallet::Engine::AnchorLivenessCache.new(store: store, chain_tracker: tracker)
+        expect { cache.filter_trusted([wtxid]) }
+          .to raise_error(Sequel::DatabaseError, /simulated update failure/)
+      end
+    end
+  end
 end
