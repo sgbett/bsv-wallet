@@ -985,6 +985,26 @@ module BSV
         seeds = action_ids.to_a
         return Set.new if seeds.empty?
 
+        # Chunk the seed set at +VERIFY_BATCH_CHUNK+ before feeding the
+        # CTE. A re-org invalidating tens of thousands of anchors would
+        # exceed SQLite's 32_766 bind-parameter limit on the base
+        # +actions IN (…)+ clause otherwise, aborting transitive
+        # invalidation and leaving stale trust marks. Chunk-and-merge is
+        # safe: the CTE recurses to +max_depth+ per chunk, and
+        # +Set.new+ collapses duplicate descendants across chunks
+        # (diamond ancestry between two chunks converges to the same
+        # union). Copilot on #533.
+        results = Set.new
+        seeds.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
+          results.merge(descend_from_seed_chunk(chunk, max_depth))
+        end
+        results
+      end
+
+      # Run the recursive descent CTE for a single chunk of seed
+      # +action_ids+. Extracted from +descendant_action_ids_of+ so the
+      # chunking loop above stays legible.
+      def descend_from_seed_chunk(seeds, max_depth)
         # Base case — every seed enters +descent+ at depth 0. Casts on
         # both columns are load-bearing on Postgres: the recursive step
         # emits +inputs.action_id+ (bigint) and +depth + 1+ (integer),
@@ -993,15 +1013,6 @@ module BSV
         # recursive term but type bigint overall"). +actions.id+ is
         # +bigserial+ (already bigint), so only +depth+ needs an
         # explicit cast; SQLite is duck-typed and honours either shape.
-        #
-        # Seed from a single +actions IN (…)+ query, not one +SELECT
-        # literal+ per +action_id+ UNION'd together — for a re-org with
-        # many invalidated anchors the multi-UNION SQL grows O(N) and
-        # can hit statement-size limits. The IN-list still uses N bind
-        # parameters, well under SQLite's 32_766 ceiling at every
-        # realistic re-org size (per-height chunking upstream at
-        # +VERIFY_BATCH_CHUNK = 10_000+ bounds this even further).
-        # Copilot round-8 on #533.
         seed_ds = @db[:actions]
                   .where(id: seeds)
                   .select(
@@ -1033,6 +1044,7 @@ module BSV
 
         Set.new(cte.select_map(:action_id))
       end
+      private :descend_from_seed_chunk
 
       # Shared row-clearing primitive for verification-cache invalidation
       # (HLR #516 Sub 6.2). Called by the descent walk wired into

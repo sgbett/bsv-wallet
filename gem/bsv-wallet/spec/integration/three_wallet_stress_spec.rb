@@ -132,10 +132,10 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
       end
 
       # Total tracker invocations equals number of walks — one per
-      # walk maximum. RSpec spy count. (Because the tracker itself is a
-      # double, +have_received.count+ over the full test is the exact
-      # sum.)
-      expect(tracker).to have_received(:known_roots_for_heights).at_most(20).times
+      # walk. Exactly 20, not "at most" — the tighter assertion catches
+      # regressions where +filter_trusted+ stops invoking the tracker
+      # (e.g. an early return on empty heights). Copilot on #533.
+      expect(tracker).to have_received(:known_roots_for_heights).exactly(20).times
     end
 
     it 'iter-100 receive_ms stays within 2x of iter-10 (growth shape)' do
