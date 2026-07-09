@@ -95,18 +95,30 @@ module BSV
           return Set.new if wtxids.nil? || wtxids.empty?
 
           heights = heights_for_verified(wtxids)
+          # Resolve tracker roots BEFORE opening the DB transaction — the
+          # chain_tracker's +known_roots_for_heights+ may perform network
+          # I/O (SPV syncer sync, services HTTP fetch). Holding a wallet
+          # DB tx across external I/O inflates lock time and turns any
+          # tracker latency into a bottleneck. Copilot on #533.
+          heights_to_roots = known_roots_for(heights)
+          trusted = nil
           @store.db.transaction do
             invalidated = @store.invalidate_stale_anchors!(
-              heights_to_roots: known_roots_for(heights)
+              heights_to_roots: heights_to_roots
             )
             @stats[:invalidated_anchors] += invalidated.size if @stats
             expand_and_clear_descendants(invalidated) if invalidated.any?
+            # Read the trust set INSIDE the same transaction so a
+            # concurrent writer cannot mutate a row between invalidation
+            # and the read — the returned Set reflects the state
+            # committed by this walk, not some interleaving. Copilot on #533.
+            trusted = @store.verified_wtxids(
+              wtxids: wtxids,
+              version_at_least: BSV::Wallet::VERIFIER_VERSION,
+              via_in: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_TRUSTED
+            )
           end
-          @store.verified_wtxids(
-            wtxids: wtxids,
-            version_at_least: BSV::Wallet::VERIFIER_VERSION,
-            via_in: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_TRUSTED
-          )
+          trusted
         end
 
         private
