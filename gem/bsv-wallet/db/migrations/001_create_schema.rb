@@ -223,6 +223,15 @@ Sequel.migration do
       index :wtxid, unique: true, where: Sequel.lit('wtxid IS NOT NULL')
       index :broadcast_intent
 
+      # tx_proof_id is unique when present. Structurally guaranteed by
+      # +tx_proofs.wtxid+ UNIQUE + +actions.wtxid+ partial UNIQUE + every
+      # +link_proof+ caller matching action_wtxid to proof_wtxid — but
+      # making it explicit at the schema level catches any future writer
+      # that violates the pattern. HLR #516 Sub 6 relies on this when
+      # seeding the descent CTE from invalidated proof action_ids (#534).
+      index :tx_proof_id, unique: true, where: Sequel.lit('tx_proof_id IS NOT NULL'),
+                          name: :idx_actions_tx_proof_id_unique
+
       # Composite FK target: broadcasts(action_id, intent) → actions(id, broadcast_intent)
       # makes broadcasts.intent track actions.broadcast_intent atomically (#221).
       unique %i[id broadcast_intent]

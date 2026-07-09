@@ -600,6 +600,28 @@ RSpec.describe BSV::Wallet::Store, :store do
       action = BSV::Wallet::Store::Models::Action[result[:id]]
       expect(action.derived_status).to eq(:completed)
     end
+
+    # HLR #516 Sub 6 / #534 — partial UNIQUE on +actions.tx_proof_id+.
+    # Structurally guaranteed by the +tx_proofs.wtxid+ UNIQUE +
+    # +actions.wtxid+ partial UNIQUE + +link_proof+ callers matching
+    # wtxids; the schema constraint makes it explicit so any future
+    # writer that violates the pattern surfaces at write time rather
+    # than silently seeding N descent walks from one proof (the
+    # white-hat concern on PR #533).
+    it 'refuses to link the same proof to a second action (schema UNIQUE)' do
+      # First action: created, signed, linked to the proof.
+      result_a = store.create_action(action: { description: 'first' })
+      wtxid_a = SecureRandom.random_bytes(32)
+      store.sign_action(action_id: result_a[:id], wtxid: wtxid_a, raw_tx: SecureRandom.random_bytes(100))
+      proof = BSV::Wallet::Store::Models::TxProof.first(wtxid: Sequel.blob(wtxid_a))
+      store.link_proof(action_id: result_a[:id], tx_proof_id: proof.id)
+
+      # Second action: attempt to link the SAME proof. Must raise on
+      # the partial UNIQUE index.
+      result_b = store.create_action(action: { description: 'second' })
+      expect { store.link_proof(action_id: result_b[:id], tx_proof_id: proof.id) }
+        .to raise_error(Sequel::UniqueConstraintViolation)
+    end
   end
 
   describe '#abort_action' do
