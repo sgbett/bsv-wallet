@@ -142,9 +142,13 @@ module BSV
         # reference is safe, missed clear opens a silent double-spend
         # window.
         #
-        # Runs inside the +db.transaction+ opened by +filter_trusted+ —
-        # Sequel flattens nested transactions, and a failure at any step
-        # rolls back both the anchor UPDATE and the descendant UPDATE.
+        # Runs inside the +db.transaction+ opened by +filter_trusted+.
+        # Sequel nests transactions via savepoints (spec DB uses
+        # +auto_savepoint: true+); the invariant we rely on is that
+        # nested +db.transaction+ blocks do NOT introduce extra commit
+        # boundaries, and a failure at any step rolls back both the
+        # anchor UPDATE and the descendant UPDATE via the outer
+        # transaction. Copilot round-7 on #533.
         def expand_and_clear_descendants(seed_action_ids)
           descent = @store.descendant_action_ids_of(action_ids: seed_action_ids)
           @stats[:walked_descendants] += descent.size if @stats
@@ -172,16 +176,20 @@ module BSV
           heights.to_h { |h| [h, @known_roots[h]] }
         rescue StandardError => e
           BSV.logger&.warn { "[AnchorLivenessCache] known_roots_for error: #{e.message}" }
-          # Preserve trust on a transient outage — the AC #4 "unknown ≠
-          # mismatch" guarantee. Return an empty map so
-          # +invalidate_stale_anchors!+ has nothing to clear; the trust
-          # set survives the outage untouched. The next verify-walk
-          # retries; a persistent outage surfaces via failed re-verifies
-          # elsewhere, not by silently decaying the cache. This is not
-          # "fail-closed": we intentionally *preserve* trust rather than
-          # invalidate, because false-invalidation on transient errors
-          # would collapse receive throughput. (Copilot round-3 on #533.)
-          {}
+          # Preserve trust on a transient outage for PARSEABLE rows —
+          # the AC #4 "unknown ≠ mismatch" guarantee — while STILL
+          # letting the store fail-closed clear structurally-unverifiable
+          # rows (missing / unparseable +merkle_path+ with a trust mark).
+          # Return +{ h => nil }+ for every requested height (not +{}+),
+          # so +Store#invalidate_stale_anchors!+ scans each height's
+          # candidates; parseable rows preserve trust via the per-row
+          # +next if current_root_bytes.nil?+ guard, unverifiable rows
+          # clear via the +computed_root_for_path+ nil-branch.
+          # (Copilot round-3 established outage-preservation for
+          # parseable rows; round-6 established fail-closed on
+          # unverifiable rows; round-7 completes the story for the
+          # full-outage path.)
+          heights.to_h { |h| [h, nil] }
         end
 
         # Zero-value counter Hash — instantiated only when

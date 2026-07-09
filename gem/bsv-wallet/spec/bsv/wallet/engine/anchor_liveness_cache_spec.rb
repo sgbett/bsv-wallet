@@ -118,6 +118,30 @@ RSpec.describe BSV::Wallet::Engine::AnchorLivenessCache, :store do
       expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
     end
 
+    # Copilot round-7 on #533. Even under a full tracker outage
+    # (+known_roots_for_heights+ raises), structurally-unverifiable
+    # rows must still fail-closed clear — the outage-preservation
+    # guarantee applies only to rows that COULD be verified if the
+    # tracker came back. Fix: the rescue path returns +{ h => nil }+
+    # for every requested height (not +{}+), so the store scans each
+    # height and the per-row +computed_root_for_path+ nil-branch
+    # clears unverifiable rows regardless of tracker reachability.
+    it 'still clears unverifiable rows when known_roots_for_heights raises (round-7)' do
+      height = 950_022
+      wtxid = persist_anchored(height: height)
+      # Force the row into the "confirmed but unproven" trust shape.
+      BSV::Wallet::Store::Models::TxProof
+        .where(wtxid: Sequel.blob(wtxid))
+        .update(merkle_path: nil)
+
+      tracker = instance_double(BSV::Network::ChainTracker)
+      allow(tracker).to receive(:known_roots_for_heights).and_raise(StandardError, 'network boom')
+      cache = described_class.new(store: store, chain_tracker: tracker)
+
+      cache.filter_trusted([wtxid])
+      expect(store.verification_state(wtxid: wtxid)).to be_nil
+    end
+
     it 'invalidates one row at height A while leaving a matching row at height B alone' do
       wtxid_a = persist_anchored(height: 950_030)
       wtxid_b = persist_anchored(height: 950_031)
