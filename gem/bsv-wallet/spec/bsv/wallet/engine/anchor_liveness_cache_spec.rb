@@ -118,6 +118,23 @@ RSpec.describe BSV::Wallet::Engine::AnchorLivenessCache, :store do
       expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
     end
 
+    # Copilot round-8 on #533. The rescue path must honour the
+    # "cached for the life of the instance" invariant that the happy
+    # path relies on — repeat calls in the same walk must not retry
+    # the tracker. Fix: populate +@known_roots+ with nils before
+    # returning from the rescue block.
+    it 'caches nils on the rescue path so repeat calls do not re-invoke the tracker' do
+      tracker = instance_double(BSV::Network::ChainTracker)
+      allow(tracker).to receive(:known_roots_for_heights).and_raise(StandardError, 'network boom')
+      cache = described_class.new(store: store, chain_tracker: tracker)
+
+      cache.send(:known_roots_for, [950_100, 950_101])
+      cache.send(:known_roots_for, [950_100, 950_101])
+
+      # One invocation, even though we asked twice.
+      expect(tracker).to have_received(:known_roots_for_heights).once
+    end
+
     # Copilot round-7 on #533. Even under a full tracker outage
     # (+known_roots_for_heights+ raises), structurally-unverifiable
     # rows must still fail-closed clear — the outage-preservation

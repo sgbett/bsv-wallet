@@ -189,6 +189,13 @@ module BSV
           # parseable rows; round-6 established fail-closed on
           # unverifiable rows; round-7 completes the story for the
           # full-outage path.)
+          #
+          # Populate +@known_roots+ so a repeat call in the same walk
+          # honours the "don't re-fetch" invariant noted above — a
+          # rescued outage stays rescued for the rest of the instance's
+          # lifetime. Copilot round-8 on #533.
+          @known_roots ||= {}
+          heights.each { |h| @known_roots[h] = nil }
           heights.to_h { |h| [h, nil] }
         end
 

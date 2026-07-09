@@ -986,18 +986,26 @@ module BSV
         # Base case — every seed enters +descent+ at depth 0. Casts on
         # both columns are load-bearing on Postgres: the recursive step
         # emits +inputs.action_id+ (bigint) and +depth + 1+ (integer),
-        # so the seed literals must match those types or PG raises a
+        # so the seed columns must match those types or PG raises a
         # +DatatypeMismatch+ ("column N has type integer in non-
-        # recursive term but type bigint overall"). Sequel's +Sequel.cast+
-        # generates dialect-appropriate CAST syntax; SQLite ignores the
-        # type coercion at storage but honours the SQL.
-        seed_ds = build_descent_seed(seeds.first)
-        seeds[1..].each do |aid|
-          seed_ds = seed_ds.union(
-            build_descent_seed(aid),
-            all: true, from_self: false
-          )
-        end
+        # recursive term but type bigint overall"). +actions.id+ is
+        # +bigserial+ (already bigint), so only +depth+ needs an
+        # explicit cast; SQLite is duck-typed and honours either shape.
+        #
+        # Seed from a single +actions IN (…)+ query, not one +SELECT
+        # literal+ per +action_id+ UNION'd together — for a re-org with
+        # many invalidated anchors the multi-UNION SQL grows O(N) and
+        # can hit statement-size limits. The IN-list still uses N bind
+        # parameters, well under SQLite's 32_766 ceiling at every
+        # realistic re-org size (per-height chunking upstream at
+        # +VERIFY_BATCH_CHUNK = 10_000+ bounds this even further).
+        # Copilot round-8 on #533.
+        seed_ds = @db[:actions]
+                  .where(id: seeds)
+                  .select(
+                    Sequel[:id].as(:action_id),
+                    Sequel.cast(0, :integer).as(:depth)
+                  )
 
         # Recursive step — for every row currently in +descent+ below the
         # depth cap, find the actions whose inputs consume outputs
@@ -2100,18 +2108,6 @@ module BSV
           action_ids.concat(models::Action.where(tx_proof_id: chunk).select_map(:id))
         end
         action_ids
-      end
-
-      # Build a single-row rowset for the descent CTE seed. Casts pin the
-      # column types so Postgres's non-recursive term matches the type
-      # emitted by the recursive term (+inputs.action_id+ = bigint,
-      # +depth + 1+ = integer). SQLite is duck-typed and accepts either
-      # form.
-      def build_descent_seed(action_id)
-        @db.select(
-          Sequel.cast(action_id, :bigint).as(:action_id),
-          Sequel.cast(0, :integer).as(:depth)
-        )
       end
 
       # Shared row-clearing UPDATE for verification-cache invalidation.
