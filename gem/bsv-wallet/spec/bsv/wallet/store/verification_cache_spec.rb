@@ -978,4 +978,137 @@ RSpec.describe BSV::Wallet::Store, :store do
       end
     end
   end
+
+  # HLR #516 Sub 6.3 — boot-time cache sanity sweep. Divergence
+  # detector, NOT an invalidator: logs via +BSV.logger.warn+ on
+  # mismatch and returns a count. Env-gated so CLI tools pay nothing;
+  # the daemon opts in by setting +BSV_WALLET_VERIFY_BOOT_SWEEP=1+.
+  # Non-fatal at every failure surface.
+  describe '#sanity_sweep_verified_anchors!' do
+    def build_tracker(roots)
+      tracker = instance_double(BSV::Network::ChainTracker)
+      allow(tracker).to receive(:known_roots_for_heights) do |heights|
+        heights.to_h { |h| [h, roots[h]] }
+      end
+      tracker
+    end
+
+    # Persist a single-leaf-BUMP proof anchored at +height+, marked +'spv'+.
+    def persist_anchored_spv(height:, wtxid: SecureRandom.random_bytes(32))
+      leaf = BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: wtxid, txid: true)
+      bump = BSV::Transaction::MerklePath.new(block_height: height, path: [[leaf]])
+      store.save_proof(wtxid: wtxid,
+                       proof: { raw_tx: 'x'.b * 20, height: height,
+                                merkle_root: wtxid, merkle_path: bump.to_binary })
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      wtxid
+    end
+
+    before { ENV.delete('BSV_WALLET_VERIFY_BOOT_SWEEP') }
+
+    it 'is a no-op when the env var is unset (returns 0 without touching the tracker)' do
+      wtxid = persist_anchored_spv(height: 971_001)
+      tracker = build_tracker(971_001 => SecureRandom.random_bytes(32))
+      result = store.sanity_sweep_verified_anchors!(chain_tracker: tracker)
+      expect(result).to eq(0)
+      expect(tracker).not_to have_received(:known_roots_for_heights)
+      # Row untouched — sweep never clears.
+      expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
+    end
+
+    it 'logs and returns divergence count when tracker root disagrees with stored root' do
+      ENV['BSV_WALLET_VERIFY_BOOT_SWEEP'] = '1'
+      wtxid = persist_anchored_spv(height: 971_002)
+      tracker = build_tracker(971_002 => SecureRandom.random_bytes(32)) # disagreement
+      # +BSV.logger+ is a duck-type slot; a spy captures the +warn+
+      # calls the sweep emits on divergence.
+      logger = spy('bsv logger')
+      allow(BSV).to receive(:logger).and_return(logger)
+
+      result = store.sanity_sweep_verified_anchors!(chain_tracker: tracker)
+      expect(result).to eq(1)
+      expect(logger).to have_received(:warn).at_least(:once)
+      # Divergence detector, not invalidator — the row stays marked.
+      expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_BOOT_SWEEP')
+    end
+
+    it 'returns 0 when the tracker agrees on every sampled row' do
+      ENV['BSV_WALLET_VERIFY_BOOT_SWEEP'] = '1'
+      wtxid = persist_anchored_spv(height: 971_003)
+      tracker = build_tracker(971_003 => wtxid) # single-leaf: root == wtxid
+      result = store.sanity_sweep_verified_anchors!(chain_tracker: tracker)
+      expect(result).to eq(0)
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_BOOT_SWEEP')
+    end
+
+    it 'is a no-op on empty samples (no spv rows to sweep)' do
+      ENV['BSV_WALLET_VERIFY_BOOT_SWEEP'] = '1'
+      # No proofs persisted at all.
+      tracker = build_tracker({})
+      expect(store.sanity_sweep_verified_anchors!(chain_tracker: tracker)).to eq(0)
+      # Sample is empty → no batched tracker call.
+      expect(tracker).not_to have_received(:known_roots_for_heights)
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_BOOT_SWEEP')
+    end
+
+    it 'swallows a chain_tracker outage (StandardError → 0 divergences, no raise)' do
+      ENV['BSV_WALLET_VERIFY_BOOT_SWEEP'] = '1'
+      persist_anchored_spv(height: 971_004)
+      tracker = instance_double(BSV::Network::ChainTracker)
+      allow(tracker).to receive(:known_roots_for_heights).and_raise(StandardError, 'network boom')
+      expect { store.sanity_sweep_verified_anchors!(chain_tracker: tracker) }.not_to raise_error
+      expect(store.sanity_sweep_verified_anchors!(chain_tracker: tracker)).to eq(0)
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_BOOT_SWEEP')
+    end
+
+    it 'treats tracker "unknown" (nil root) as a no-op, not a divergence' do
+      ENV['BSV_WALLET_VERIFY_BOOT_SWEEP'] = '1'
+      persist_anchored_spv(height: 971_005)
+      tracker = build_tracker(971_005 => nil) # tracker returned nil
+      expect(store.sanity_sweep_verified_anchors!(chain_tracker: tracker)).to eq(0)
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_BOOT_SWEEP')
+    end
+
+    it 'skips rows whose merkle_path fails to parse (not a divergence)' do
+      ENV['BSV_WALLET_VERIFY_BOOT_SWEEP'] = '1'
+      wtxid = persist_anchored_spv(height: 971_006)
+      # Corrupt the persisted path — +computed_root_for_path+ returns nil.
+      models::TxProof.where(wtxid: Sequel.blob(wtxid))
+                     .update(merkle_path: Sequel.blob("\x00".b * 4))
+      tracker = build_tracker(971_006 => SecureRandom.random_bytes(32))
+      expect(store.sanity_sweep_verified_anchors!(chain_tracker: tracker)).to eq(0)
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_BOOT_SWEEP')
+    end
+
+    it 'respects the sample_size cap (bounded work regardless of table size)' do
+      ENV['BSV_WALLET_VERIFY_BOOT_SWEEP'] = '1'
+      # Persist five rows at five heights, all matching the tracker.
+      wtxids_by_height = 5.times.to_h { |i| [971_100 + i, persist_anchored_spv(height: 971_100 + i)] }
+      tracker = build_tracker(wtxids_by_height)
+      # Sample only 2 → the tracker sees at most 2 heights.
+      store.sanity_sweep_verified_anchors!(chain_tracker: tracker, sample_size: 2)
+      queried = tracker.instance_variable_get(:@__doubles__) # no-op — we assert via received-arg
+      _ = queried
+      expect(tracker).to have_received(:known_roots_for_heights) do |heights|
+        expect(heights.size).to be <= 2
+      end
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_BOOT_SWEEP')
+    end
+
+    it 'is a no-op when chain_tracker is nil' do
+      ENV['BSV_WALLET_VERIFY_BOOT_SWEEP'] = '1'
+      persist_anchored_spv(height: 971_200)
+      expect(store.sanity_sweep_verified_anchors!(chain_tracker: nil)).to eq(0)
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_BOOT_SWEEP')
+    end
+  end
 end

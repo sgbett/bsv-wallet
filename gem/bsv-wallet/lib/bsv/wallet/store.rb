@@ -1066,6 +1066,74 @@ module BSV
         rows_cleared
       end
 
+      # Boot-time cache sanity sweep (HLR #516 Sub 6.3, failsafe-for-
+      # failsafe). Samples a bounded number of +tx_proofs+ rows whose
+      # verification is +'spv'+ and whose +merkle_path+ is populated,
+      # then compares each row's computed root against the +chain_tracker+'s
+      # current view at the same block height. On divergence: log via
+      # +BSV.logger.warn+.
+      #
+      # This method does NOT invalidate rows — that job belongs to
+      # +invalidate_stale_anchors!+ / +Engine::AnchorLivenessCache+ on
+      # the per-verify-walk path. This is a divergence *detector*: it
+      # surfaces silent drift (schema-level bug, tracker-write race,
+      # migration corruption) that the per-walk path would eventually
+      # catch on next reference but might not for cold rows.
+      #
+      # Env-gated by +BSV_WALLET_VERIFY_BOOT_SWEEP=1+. Unset → the whole
+      # method is a no-op (CLI tools boot fast, the daemon opts in).
+      # Non-fatal at every failure surface: DB errors, +chain_tracker+
+      # outages, empty samples, and unparseable BUMPs all fall through
+      # to a debug log and return.
+      #
+      # Not part of any per-walk hot path. Cost is a single indexed
+      # SELECT bounded by +sample_size+ plus one batched
+      # +known_roots_for_heights+ call — an order of magnitude below
+      # the ongoing chain-tracker traffic even at daemon boot.
+      #
+      # @param chain_tracker [#known_roots_for_heights] anchor-liveness-
+      #   capable chain tracker
+      # @param sample_size [Integer] upper bound on rows to sample
+      # @return [Integer] number of rows whose stored root diverged from
+      #   the tracker's current view (0 when the sweep did nothing)
+      def sanity_sweep_verified_anchors!(chain_tracker:, sample_size: 100)
+        return 0 unless ENV['BSV_WALLET_VERIFY_BOOT_SWEEP'] == '1'
+        return 0 if chain_tracker.nil?
+
+        # Sample the freshest 'spv' rows with a merkle_path present.
+        # Ordering by +verified_at DESC+ concentrates the sample on
+        # the frontier — the rows most likely to be near an active
+        # re-org tip.
+        samples = sanity_sweep_sample(sample_size)
+        return 0 if samples.empty?
+
+        heights = samples.map { |row| row[:height] }.uniq
+        current_roots = safe_known_roots_for(chain_tracker, heights)
+        return 0 if current_roots.empty?
+
+        divergences = 0
+        samples.each do |row|
+          current = current_roots[row[:height]]
+          next if current.nil? # tracker "unknown" — not a divergence
+
+          computed = computed_root_for_path(row[:merkle_path], row[:wtxid])
+          next unless computed # unparseable BUMP — skip, not a divergence
+          next if computed == current
+
+          divergences += 1
+          BSV.logger&.warn do
+            "[Store#sanity_sweep_verified_anchors!] wtxid=#{row[:wtxid].to_dtxid} " \
+              "cause=boot_sweep_divergence height=#{row[:height]} " \
+              "stored_root=#{computed.unpack1('H*')} " \
+              "current_root=#{current.unpack1('H*')}"
+          end
+        end
+        divergences
+      rescue Sequel::DatabaseError => e
+        BSV.logger&.debug { "[Store#sanity_sweep_verified_anchors!] db error: #{e.message}" }
+        0
+      end
+
       # --- Block Headers ---
 
       # Persist a +blocks+ row, append-or-reject (#335).
@@ -2020,6 +2088,41 @@ module BSV
           .where(id: proof_ids)
           .exclude(verified_via: nil)
           .update(verified_at: nil, verified_via: nil, verifier_version: nil)
+      end
+
+      # Boot-sweep sampler. Returns up to +limit+ +tx_proofs+ rows that
+      # carry an +'spv'+ mark AND have a +merkle_path+ populated (rows
+      # for which anchor liveness is meaningful — unanchored rows have
+      # nothing to check). Ordered by +verified_at DESC+ so the sample
+      # concentrates on the freshest rows, most likely to be near an
+      # active re-org tip.
+      def sanity_sweep_sample(limit)
+        models::TxProof
+          .join(:blocks, id: :block_id)
+          .where(Sequel[:tx_proofs][:verified_via] => 'spv')
+          .exclude(Sequel[:tx_proofs][:merkle_path] => nil)
+          .order(Sequel[:tx_proofs][:verified_at].desc)
+          .limit(limit)
+          .select(
+            Sequel[:tx_proofs][:wtxid],
+            Sequel[:tx_proofs][:merkle_path],
+            Sequel[:blocks][:height]
+          )
+          .all
+          .map { |r| { wtxid: r[:wtxid], merkle_path: r[:merkle_path], height: r[:height] } }
+      end
+
+      # Safe wrapper around +chain_tracker.known_roots_for_heights+ for
+      # the boot sweep. A tracker outage MUST NOT prevent boot; return
+      # an empty Hash on any exception. Consistent with the per-walk
+      # anchor-liveness cache's fail-closed-on-invalidation stance.
+      def safe_known_roots_for(chain_tracker, heights)
+        chain_tracker.known_roots_for_heights(heights)
+      rescue StandardError => e
+        BSV.logger&.debug do
+          "[Store#sanity_sweep_verified_anchors!] chain_tracker error: #{e.message}"
+        end
+        {}
       end
 
       def log_anchor_mismatch(wtxid, height, stored_root, current_root)

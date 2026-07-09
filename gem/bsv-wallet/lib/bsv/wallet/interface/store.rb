@@ -574,6 +574,26 @@ module BSV
           raise NotImplementedError
         end
 
+        # Boot-time cache sanity sweep (HLR #516 Sub 6.3, failsafe-for-
+        # failsafe). Samples up to +sample_size+ +tx_proofs+ rows that
+        # carry an +'spv'+ mark AND have a +merkle_path+ populated, then
+        # compares each row's computed root against the +chain_tracker+'s
+        # current view. On divergence: log via +BSV.logger.warn+.
+        # Does NOT invalidate — that's the per-verify-walk path's job.
+        #
+        # Env-gated by +BSV_WALLET_VERIFY_BOOT_SWEEP=1+; unset is a
+        # no-op (return 0). Non-fatal on DB errors, tracker outages,
+        # and empty samples.
+        #
+        # @param chain_tracker [#known_roots_for_heights] tracker with
+        #   the batched root-lookup interface
+        # @param sample_size [Integer] upper bound on rows sampled
+        # @return [Integer] number of divergences observed (0 if disabled
+        #   or nothing to check)
+        def sanity_sweep_verified_anchors!(chain_tracker:, sample_size: 100)
+          raise NotImplementedError
+        end
+
         # --- Settings ---
 
         # Retrieve a setting value by key.
