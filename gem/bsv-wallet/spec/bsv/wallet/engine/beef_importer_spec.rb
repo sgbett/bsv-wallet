@@ -548,13 +548,21 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         expect(state[:verified_at]).to be_a(Time)
       end
 
-      it 'issues a single mark_verified_batch call, not N per ancestor' do
+      it 'issues a single mark_verified_batch(via: spv) call, not N per ancestor' do
         built = build_verifiable_beef(satoshis: 500)
         allow(store).to receive(:mark_verified_batch).and_call_original
 
         import_ok(built)
 
-        expect(store).to have_received(:mark_verified_batch).once
+        # Sub 2's contract: subject + all walked ancestors marked in one
+        # set-based UPDATE — one +via: 'spv'+ call regardless of ancestor
+        # count. HLR #521's +via: 'self_built'+ site (Sub 3) dispatches
+        # +mark_verified+ singular for the subject, which delegates to
+        # +mark_verified_batch+ internally; that call is filtered out
+        # here so this spec keeps its Sub 2 focus.
+        expect(store).to have_received(:mark_verified_batch)
+          .with(hash_including(via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV))
+          .once
       end
 
       it 'rolls back cache writes when promotion fails mid-ingress (atomicity)' do
@@ -726,6 +734,62 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         # verification stamp absent (Tx#verify never reached it).
         expect(store.find_proof(wtxid: sibling.wtxid)).not_to be_nil
         expect(store.verification_state(wtxid: sibling.wtxid)).to be_nil
+      end
+    end
+
+    # HLR #521 Sub 3 — the ingress atomic block records a +self_built+
+    # lifecycle annotation on the subject BEFORE Sub 2's +'spv'+ mark
+    # runs in the same +db.transaction+. Because +Store#mark_verified+'s
+    # monotonic predicate is on +verifier_version+ only (not on
+    # +verified_via+ strength), writing +self_built+ AFTER the SPV mark
+    # would silently downgrade. This ordering pins the invariant: the
+    # +self_built+ call is dispatched, and the FINAL committed row
+    # carries +'spv'+ (SPV wins).
+    describe 'HLR #521 self_built annotation ordering' do
+      def import_ok(built)
+        beef_importer.import(
+          tx: built[:beef_binary], description: 'sub-3 self_built',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'sub three self built', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }]
+        )
+      end
+
+      it 'dispatches mark_verified(via: self_built) for the subject during ingress' do
+        built = build_verifiable_beef(satoshis: 500)
+        allow(store).to receive(:mark_verified).and_call_original
+
+        import_ok(built)
+
+        expect(store).to have_received(:mark_verified).with(
+          wtxid: built[:subject_tx].wtxid,
+          via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
+        )
+      end
+
+      it 'commits verified_via = spv (SPV mark upgrades self_built in the same transaction)' do
+        built = build_verifiable_beef(satoshis: 500)
+        import_ok(built)
+
+        # self_built was stamped mid-transaction, then upgraded to spv by
+        # Sub 2's mark_verified_batch. The committed row reflects spv.
+        state = store.verification_state(wtxid: built[:subject_tx].wtxid)
+        expect(state[:verified_via]).to eq('spv')
+      end
+
+      it 'rolls back the self_built stamp when promotion fails mid-ingress' do
+        built = build_verifiable_beef(satoshis: 500)
+        allow(store).to receive(:promote_action).and_raise(StandardError, 'promote boom')
+
+        expect { import_ok(built) }.to raise_error(/promote boom/)
+
+        # The self_built write joined the same db.transaction — a
+        # downstream failure rolls it back alongside proof + action rows.
+        expect(store.verification_state(wtxid: built[:subject_tx].wtxid)).to be_nil
       end
     end
 

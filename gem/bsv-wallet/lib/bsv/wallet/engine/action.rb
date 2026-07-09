@@ -273,6 +273,15 @@ module BSV
             outputs: pending, change_outputs: built[:change_outputs]
           )
           @engine.store.save_proof(wtxid: built[:wtxid], proof: { raw_tx: built[:raw_tx] })
+          # HLR #521 — trust claim: wallet's +TxBuilder+ built and signed this
+          # tx in-process; +Store#sign_action+ just committed the signed bytes
+          # atomically. +self_built+ is lifecycle metadata (Sub 5 excludes it
+          # from the trust set); the row upgrades to +'spv'+ later via HLR #517
+          # or +'broadcast_ack'+ via HLR #522.
+          @engine.store.mark_verified(
+            wtxid: built[:wtxid],
+            via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
+          )
         end
 
         # Internal-path atomic completion: sign + proof + Phase-4 promotion
@@ -292,6 +301,14 @@ module BSV
             sign_outputs: [], change_outputs: built[:change_outputs],
             promote_outputs: promote
           )
+          # HLR #521 — trust claim: +Store#complete_internal_action+ composed
+          # sign + save_proof + promote in one transaction (the atomic-completion
+          # pattern from #327/#328/#362). +self_built+ marks the wallet as the
+          # constructor; Sub 5 excludes +self_built+ from the trust set.
+          @engine.store.mark_verified(
+            wtxid: built[:wtxid],
+            via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
+          )
         end
 
         # Complete the deferred-signing flow's signing step: deserialise the
@@ -304,6 +321,15 @@ module BSV
           wtxid, raw_tx, = apply_spends(spends)
           @engine.store.sign_action(action_id: @id, wtxid: wtxid, raw_tx: raw_tx)
           @engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+          # HLR #521 — trust claim: wallet's signer produced the P2PKH witness
+          # bytes for wallet-owned inputs; caller-supplied spends are treated
+          # as opaque bytes and NOT verified here. +self_built+ therefore
+          # describes construction provenance only ("wallet's signer ran"),
+          # not end-to-end verification — Sub 5 excludes it from the trust set.
+          @engine.store.mark_verified(
+            wtxid: wtxid,
+            via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
+          )
           { wtxid: wtxid, raw_tx: raw_tx }
         end
 
