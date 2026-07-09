@@ -791,13 +791,35 @@ module BSV
         # N → N (same-version metadata upgrade, e.g. +self_built+ →
         # +broadcast_ack+). Refuses N+1 → N — a downgraded binary cannot
         # clobber rows written under stricter logic.
+        #
+        # HLR #521 strength ratchet: +self_built+ writes never clobber a
+        # trusted +verified_via+ (+'spv'+ or +'broadcast_ack'+) — the
+        # monotonic version clause alone would silently downgrade at the
+        # same version. The predicate is unconditional on version: a
+        # future stricter verifier that classifies a wtxid as +self_built+
+        # after an older binary marked it +'spv'+ should not silently
+        # discard the SPV mark either. Version-upgrade demotions belong
+        # in an explicit migration, not this hot-path write.
+        #
+        # Positive predicate — +verified_via IS NULL OR = 'self_built'+ —
+        # written as an explicit +OR+ because +where(col: [nil, val])+
+        # emits +col IN (NULL, val)+ under Sequel, and SQL's three-valued
+        # logic never matches +col = NULL+ (it evaluates to NULL, not
+        # TRUE). That would filter every fresh proof row alongside the
+        # trusted ones, defeating the ratchet.
         rows = 0
         wtxids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
           blobs = chunk.map { |w| Sequel.blob(w) }
-          rows += models::TxProof
+          scope = models::TxProof
                   .where(wtxid: blobs)
                   .where { (verifier_version <= version) | Sequel.expr(verifier_version: nil) }
-                  .update(verified_at: stamp, verified_via: via, verifier_version: version)
+          if via == models::TxProof::VERIFIED_VIA_SELF_BUILT
+            scope = scope.where(
+              Sequel.expr(verified_via: nil) |
+              Sequel.expr(verified_via: models::TxProof::VERIFIED_VIA_SELF_BUILT)
+            )
+          end
+          rows += scope.update(verified_at: stamp, verified_via: via, verifier_version: version)
         end
         rows
       end

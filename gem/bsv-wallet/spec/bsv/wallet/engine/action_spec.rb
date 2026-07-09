@@ -281,6 +281,36 @@ RSpec.describe BSV::Wallet::Engine::Action do
       expect(state[:verified_via])
         .to eq(BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT)
     end
+
+    # HLR #521 atomicity — the +sign_action+ + +save_proof+ +
+    # +mark_verified+ sequence lives inside a single
+    # +@engine.store.db.transaction+ block on each egress path. A
+    # +mark_verified+ failure must roll back the whole atomic unit so a
+    # crash never strands a signed-but-unstamped action. Without the
+    # wrapper the sign row would commit and the +self_built+ mark would
+    # be missing — a partial write the +principle-of-state+ forbids.
+    it 'send-path rolls sign_action + save_proof back when mark_verified fails' do
+      fund_wallet(satoshis: 1_000_000, count: 1, prefix: 'sendAtomicity',
+                  suffix: 'root')
+      recipient = BSV::Primitives::PrivateKey.generate.public_key.to_hex
+
+      captured_wtxid = nil
+      allow(store).to receive(:mark_verified) do |wtxid:, **_kwargs|
+        captured_wtxid = wtxid
+        raise StandardError, 'mark boom'
+      end
+
+      expect do
+        engine_with_keys.send_payment(recipient: recipient, satoshis: 5_000)
+      end.to raise_error(/mark boom/)
+
+      # sign_action stamped wtxid on the action row and save_proof
+      # persisted a +tx_proofs+ row — the enclosing db.transaction
+      # rolled BOTH back alongside the failed mark_verified.
+      expect(captured_wtxid).not_to be_nil
+      expect(store.find_action(wtxid: captured_wtxid)).to be_nil
+      expect(store.find_proof(wtxid: captured_wtxid)).to be_nil
+    end
   end
 
   describe 'Engine#sign_action no_send guard' do

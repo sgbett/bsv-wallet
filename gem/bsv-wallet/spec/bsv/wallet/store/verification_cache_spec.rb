@@ -42,6 +42,34 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.mark_verified(wtxid: wtxid, via: 'broadcast_ack')
       expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('broadcast_ack')
     end
+
+    # HLR #521 strength ratchet — the mark_verified predicate is
+    # monotonic on +verifier_version+ only. Without the +via+ ratchet,
+    # a spurious self_built write on a wtxid Sub 2 already marked
+    # +'spv'+ would silently downgrade the row at the same version.
+    # These specs pin the ratchet as structural.
+    it 'refuses to downgrade verified_via from spv to self_built (same version)' do
+      wtxid = persist_proof
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      rows = store.mark_verified(wtxid: wtxid, via: 'self_built')
+      expect(rows).to eq(0)
+      expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('spv')
+    end
+
+    it 'refuses to downgrade verified_via from broadcast_ack to self_built (same version)' do
+      wtxid = persist_proof
+      store.mark_verified(wtxid: wtxid, via: 'broadcast_ack')
+      rows = store.mark_verified(wtxid: wtxid, via: 'self_built')
+      expect(rows).to eq(0)
+      expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('broadcast_ack')
+    end
+
+    it 'still allows spv to upgrade to broadcast_ack (same version)' do
+      wtxid = persist_proof
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      store.mark_verified(wtxid: wtxid, via: 'broadcast_ack')
+      expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('broadcast_ack')
+    end
   end
 
   describe '#mark_verified_batch' do

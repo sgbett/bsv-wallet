@@ -268,20 +268,25 @@ module BSV
         # proof store so the broadcast worker can ship EF.
         def sign_and_save!(built:, outputs:)
           pending = outputs.nil? ? [] : self.class.build_output_specs(outputs, built[:vout_mapping])
-          @engine.store.sign_action(
-            action_id: @id, wtxid: built[:wtxid], raw_tx: built[:raw_tx],
-            outputs: pending, change_outputs: built[:change_outputs]
-          )
-          @engine.store.save_proof(wtxid: built[:wtxid], proof: { raw_tx: built[:raw_tx] })
-          # HLR #521 — trust claim: wallet's +TxBuilder+ built and signed this
-          # tx in-process; +Store#sign_action+ just committed the signed bytes
-          # atomically. +self_built+ is lifecycle metadata (Sub 5 excludes it
-          # from the trust set); the row upgrades to +'spv'+ later via HLR #517
-          # or +'broadcast_ack'+ via HLR #522.
-          @engine.store.mark_verified(
-            wtxid: built[:wtxid],
-            via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
-          )
+          # HLR #521 — sign + proof + self_built stamp are one atomic unit.
+          # Sequel flattens the nested +db.transaction+ inside +sign_action+
+          # into this outer block, so a crash between the sign commit and
+          # the +mark_verified+ UPDATE cannot leave the proof row with
+          # +verified_via IS NULL+. Trust claim: wallet's +TxBuilder+ built
+          # and signed this tx in-process. +self_built+ is lifecycle
+          # metadata (Sub 5 excludes it from the trust set); the row upgrades
+          # to +'spv'+ later via HLR #517 or +'broadcast_ack'+ via HLR #522.
+          @engine.store.db.transaction do
+            @engine.store.sign_action(
+              action_id: @id, wtxid: built[:wtxid], raw_tx: built[:raw_tx],
+              outputs: pending, change_outputs: built[:change_outputs]
+            )
+            @engine.store.save_proof(wtxid: built[:wtxid], proof: { raw_tx: built[:raw_tx] })
+            @engine.store.mark_verified(
+              wtxid: built[:wtxid],
+              via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
+            )
+          end
         end
 
         # Internal-path atomic completion: sign + proof + Phase-4 promotion
@@ -296,19 +301,26 @@ module BSV
         # +sign_outputs+ would violate +outputs_action_id_vout_key+.
         def complete_internal!(built:, outputs:)
           promote = outputs&.any? ? self.class.build_output_specs(outputs, built[:vout_mapping]) : []
-          @engine.store.complete_internal_action(
-            action_id: @id, wtxid: built[:wtxid], raw_tx: built[:raw_tx],
-            sign_outputs: [], change_outputs: built[:change_outputs],
-            promote_outputs: promote
-          )
-          # HLR #521 — trust claim: +Store#complete_internal_action+ composed
-          # sign + save_proof + promote in one transaction (the atomic-completion
-          # pattern from #327/#328/#362). +self_built+ marks the wallet as the
-          # constructor; Sub 5 excludes +self_built+ from the trust set.
-          @engine.store.mark_verified(
-            wtxid: built[:wtxid],
-            via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
-          )
+          # HLR #521 — extends the #327/#328/#362 atomic-completion pattern
+          # to include the self_built stamp. Sequel flattens
+          # +complete_internal_action+'s inner +db.transaction+ into this
+          # outer block; a crash between the internal-completion commit and
+          # +mark_verified+ cannot leave the row with +verified_via IS
+          # NULL+. Trust claim: +Store#complete_internal_action+ composed
+          # sign + save_proof + promote in one transaction. +self_built+
+          # marks the wallet as the constructor; Sub 5 excludes it from the
+          # trust set.
+          @engine.store.db.transaction do
+            @engine.store.complete_internal_action(
+              action_id: @id, wtxid: built[:wtxid], raw_tx: built[:raw_tx],
+              sign_outputs: [], change_outputs: built[:change_outputs],
+              promote_outputs: promote
+            )
+            @engine.store.mark_verified(
+              wtxid: built[:wtxid],
+              via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
+            )
+          end
         end
 
         # Complete the deferred-signing flow's signing step: deserialise the
@@ -319,17 +331,22 @@ module BSV
         # @return [Hash] +{ wtxid:, raw_tx: }+
         def apply_caller_spends!(spends:)
           wtxid, raw_tx, = apply_spends(spends)
-          @engine.store.sign_action(action_id: @id, wtxid: wtxid, raw_tx: raw_tx)
-          @engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
-          # HLR #521 — trust claim: wallet's signer produced the P2PKH witness
-          # bytes for wallet-owned inputs; caller-supplied spends are treated
-          # as opaque bytes and NOT verified here. +self_built+ therefore
+          # HLR #521 — sign + proof + self_built stamp are one atomic unit;
+          # Sequel flattens +sign_action+'s inner +db.transaction+ so a
+          # crash cannot leave the proof row with +verified_via IS NULL+.
+          # Trust claim: wallet's signer produced the P2PKH witness bytes
+          # for wallet-owned inputs; caller-supplied spends are treated as
+          # opaque bytes and NOT verified here. +self_built+ therefore
           # describes construction provenance only ("wallet's signer ran"),
           # not end-to-end verification — Sub 5 excludes it from the trust set.
-          @engine.store.mark_verified(
-            wtxid: wtxid,
-            via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
-          )
+          @engine.store.db.transaction do
+            @engine.store.sign_action(action_id: @id, wtxid: wtxid, raw_tx: raw_tx)
+            @engine.store.save_proof(wtxid: wtxid, proof: { raw_tx: raw_tx })
+            @engine.store.mark_verified(
+              wtxid: wtxid,
+              via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
+            )
+          end
           { wtxid: wtxid, raw_tx: raw_tx }
         end
 
