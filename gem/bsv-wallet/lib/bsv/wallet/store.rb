@@ -910,7 +910,7 @@ module BSV
       # @return [Array<Integer>] +actions.id+ values whose proofs were
       #   invalidated (needed by Sub 6.2's descendant walk)
       def invalidate_stale_anchors!(heights_to_roots:)
-        return [] if heights_to_roots.nil? || heights_to_roots.empty?
+        return [] if heights_to_roots.empty?
 
         invalidated_action_ids = []
         # Chunk by height to keep the per-statement predicate small on
