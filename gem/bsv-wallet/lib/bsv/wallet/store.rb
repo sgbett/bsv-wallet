@@ -920,8 +920,14 @@ module BSV
         # write shape (one UPDATE per (height, root) pair).
         @db.transaction do
           heights_to_roots.each do |height, current_root_bytes|
-            next if current_root_bytes.nil? # tracker "unknown" — do not invalidate
-
+            # +current_root_bytes+ may be +nil+ (tracker outage for this
+            # height). We still walk the candidates so
+            # structurally-unverifiable rows (missing / unparseable
+            # +merkle_path+ with a trust mark) get fail-closed cleared
+            # regardless of tracker reachability. The anchor-mismatch
+            # comparison itself is what needs a live tracker; unverifiable
+            # rows are unverifiable at any tracker state. Copilot round-6
+            # on #533.
             invalidated_action_ids.concat(
               invalidate_anchors_at_height(height, current_root_bytes)
             )
@@ -2057,14 +2063,21 @@ module BSV
             # be anchor-checked, so we can neither confirm nor refute
             # liveness. Clear the trust mark so the next reference forces
             # re-verify; a silently-skipped row would retain +'spv'+
-            # forever and Sub 5's read gate would trust it.
-            # Copilot round-1 (unparseable bytes) + round-5 (missing
-            # path) on #533.
+            # forever and Sub 5's read gate would trust it. Structural
+            # unverifiability is orthogonal to tracker reachability —
+            # this branch fires even when +current_root_bytes+ is +nil+
+            # (tracker outage). Copilot round-1 (unparseable bytes) +
+            # round-5 (missing path) + round-6 (tracker-outage
+            # separation) on #533.
             cause = row.merkle_path.nil? ? 'missing_merkle_path' : 'unparseable_merkle_path'
             log_unverifiable_proof(row.wtxid, height, cause)
             stale_ids << row.id
             next
           end
+          # Tracker unreachable for this height → cannot compare; preserve
+          # trust on transient outage (the AC #4 "unknown ≠ mismatch"
+          # guarantee for parseable proofs).
+          next if current_root_bytes.nil?
           next if computed == current_root_bytes
 
           log_anchor_mismatch(row.wtxid, height, computed, current_root_bytes)

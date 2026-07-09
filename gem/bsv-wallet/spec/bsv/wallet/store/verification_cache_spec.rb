@@ -351,6 +351,23 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
     end
 
+    # Structural unverifiability is orthogonal to tracker reachability —
+    # Copilot round-6 on #533. Even when +known_roots_for_heights+
+    # returns +nil+ for a height (tracker outage), rows that are
+    # structurally unverifiable (missing / unparseable +merkle_path+
+    # with a trust mark) must still fail-closed. The "preserve trust
+    # on outage" guarantee only applies to rows that COULD be verified
+    # if the tracker came back.
+    it 'clears unverifiable rows even when the tracker is unreachable (nil root)' do
+      height = 900_106
+      wtxid = persist_anchored_proof(height: height, via: 'spv')
+      models::TxProof.where(wtxid: Sequel.blob(wtxid))
+                     .update(merkle_path: nil) # confirmed-but-unproven trust
+
+      store.invalidate_stale_anchors!(heights_to_roots: { height => nil })
+      expect(store.verification_state(wtxid: wtxid)).to be_nil
+    end
+
     # Fail-closed on missing +merkle_path+ — Copilot round-5 on #533.
     # The schema allows +block_id NOT NULL AND merkle_path IS NULL+
     # (the "confirmed but unproven" intermediate state per the
