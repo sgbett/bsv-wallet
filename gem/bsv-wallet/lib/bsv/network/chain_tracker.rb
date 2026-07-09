@@ -69,7 +69,55 @@ module BSV
         @store.max_block_height || 0
       end
 
+      # Batched merkle-root lookup for anchor liveness (HLR #516 Sub 6).
+      #
+      # Returns +{ height => root_bytes | nil }+ — one entry per input
+      # height. Wire-order 32-byte binary bytes, matching the persisted
+      # convention (never hex, never BUMP-bytes). +nil+ for a height the
+      # tracker cannot resolve (fetch failure, network error): distinct
+      # from "mismatch" — the anchor-liveness caller must not invalidate
+      # on unresolvable heights, only on genuine root mismatches.
+      #
+      # Empty input short-circuits: no fetches, empty Hash returned.
+      #
+      # This is a fast-path helper for +Engine::AnchorLivenessCache+, not
+      # a duck-type contract with the SDK.
+      #
+      # @param heights [Array<Integer>]
+      # @return [Hash{Integer => String, nil}]
+      def known_roots_for_heights(heights)
+        return {} if heights.nil? || heights.empty?
+
+        heights.uniq.to_h do |height|
+          [height, resolve_root_for_height(height)]
+        end
+      end
+
       private
+
+      # Resolve the wire-order merkle root at +height+, hitting the store
+      # first and the network only on miss. Returns +nil+ on any failure
+      # (network 5xx, parse error, missing field) so the caller can
+      # distinguish "unknown" from "mismatch".
+      def resolve_root_for_height(height)
+        block = @store.find_block(height: height)
+        return block[:merkle_root] if block && block[:merkle_root]
+
+        result = @services.call(:get_block_header, height)
+        return nil unless result.http_success?
+
+        fetched_root = result.data['merkleroot'] || result.data['merkleRoot'] || result.data['merkle_root']
+        return nil unless fetched_root
+
+        fetched_wire = [fetched_root].pack('H*').reverse
+        block_hash = result.data['hash'] || result.data['blockHash'] || result.data['block_hash']
+        block_hash_wire = block_hash ? [block_hash].pack('H*').reverse : nil
+        persist_block(height: height, merkle_root: fetched_wire, block_hash: block_hash_wire)
+        fetched_wire
+      rescue StandardError => e
+        BSV.logger&.warn { "[ChainTracker] known_roots_for_heights height=#{height} error: #{e.message}" }
+        nil
+      end
 
       def persist_block(height:, merkle_root:, block_hash:)
         @store.record_block_header(height: height, merkle_root: merkle_root, block_hash: block_hash)

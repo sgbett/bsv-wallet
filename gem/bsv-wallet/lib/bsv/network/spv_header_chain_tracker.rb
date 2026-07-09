@@ -96,6 +96,61 @@ module BSV
         BSV.logger&.warn { "[SpvHeaderChainTracker] current_height error: #{e.message}" }
         @checkpoint[:height]
       end
+
+      # Batched merkle-root lookup for anchor liveness (HLR #516 Sub 6).
+      #
+      # Returns +{ height => root_bytes | nil }+ — one entry per input
+      # height. Values are wire-order 32-byte binary bytes drawn from the
+      # locally-validated header chain. +nil+ for heights outside the
+      # validated range (below the checkpoint, above the tip the sync
+      # could reach, or reachable only via a failed sync) — the caller
+      # must not conflate "unknown" with "mismatch".
+      #
+      # Empty input short-circuits: no sync, empty Hash returned.
+      #
+      # Extends the validated chain up to +max(height) + MATURITY_HEADROOM+
+      # once, so a batch of nearby heights costs one sync rather than one
+      # per height.
+      #
+      # @param heights [Array<Integer>]
+      # @return [Hash{Integer => String, nil}]
+      def known_roots_for_heights(heights)
+        return {} if heights.nil? || heights.empty?
+
+        uniq = heights.uniq
+        # Cover the whole batch with one sync — the tracker's fail-closed
+        # posture applies per-height on the read side below.
+        top = uniq.max
+        begin
+          @syncer.sync_to!([top + MATURITY_HEADROOM, top].max)
+        rescue StandardError => e
+          BSV.logger&.warn { "[SpvHeaderChainTracker] known_roots_for_heights sync error: #{e.message}" }
+          # Sync failure ⇒ every requested height is "unknown" to us.
+          # Do not fall through to a false-invalidate.
+          return uniq.to_h { |h| [h, nil] }
+        end
+
+        uniq.to_h do |height|
+          [height, extract_root_at(height)]
+        end
+      end
+
+      private
+
+      # Extract the wire-order merkle root from the header stored at
+      # +height+, or +nil+ when the sync could not cover it or the row
+      # carries only a trusted-service (header-NULL) entry.
+      def extract_root_at(height)
+        return nil if height < @checkpoint[:height]
+
+        raw = @store.header_at(height: height)
+        return nil unless raw
+
+        raw.b[36, 32]
+      rescue StandardError => e
+        BSV.logger&.warn { "[SpvHeaderChainTracker] extract_root_at height=#{height} error: #{e.message}" }
+        nil
+      end
     end
   end
 end

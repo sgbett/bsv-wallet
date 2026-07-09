@@ -112,6 +112,56 @@ RSpec.describe BSV::Network::SpvHeaderChainTracker, :store do
     end
   end
 
+  describe '#known_roots_for_heights (HLR #516 Sub 6.1)' do
+    it 'returns wire-order 32-byte roots for covered heights' do
+      heights = [start_height + 5, start_height + 10, start_height + 20]
+      roots = tracker.known_roots_for_heights(heights)
+      heights.each do |h|
+        expect(roots[h]).to eq(chain[h].merkle_root)
+        expect(roots[h].bytesize).to eq(32)
+      end
+    end
+
+    it 'returns nil for heights outside the validated range (unknown, not mismatch)' do
+      unreachable = start_height + 500 # sync 404s before reaching here
+      roots = tracker.known_roots_for_heights([unreachable])
+      expect(roots).to eq(unreachable => nil)
+    end
+
+    it 'returns nil for heights below the checkpoint' do
+      roots = tracker.known_roots_for_heights([start_height - 1])
+      expect(roots).to eq(start_height - 1 => nil)
+    end
+
+    it 'is a no-op on empty input (no sync, empty Hash)' do
+      expect(tracker.known_roots_for_heights([])).to eq({})
+    end
+
+    it 'costs one sync per batch and shares coverage across nearby batches' do
+      # First batch: sync extends chain to max(heights) + MATURITY_HEADROOM.
+      tracker.known_roots_for_heights([start_height + 5, start_height + 6, start_height + 7])
+      fetch_count = 0
+      allow(services).to receive(:call) do |command, height|
+        fetch_count += 1
+        raise "unexpected command #{command}" unless command == :get_block_header
+
+        chain.key?(height) ? SyntheticChain.success_response(chain[height]) : SyntheticChain.error_response
+      end
+      # Second batch entirely within the already-covered range (max ≤
+      # first batch's max) — no new fetches; the syncer answers from
+      # already-persisted headers.
+      tracker.known_roots_for_heights([start_height + 3, start_height + 7])
+      expect(fetch_count).to eq(0)
+    end
+
+    it 'returns nil for every requested height when sync raises' do
+      allow(services).to receive(:call).and_raise(StandardError, 'network boom')
+      heights = [start_height + 5, start_height + 6]
+      roots = tracker.known_roots_for_heights(heights)
+      expect(roots).to eq(heights.to_h { |h| [h, nil] })
+    end
+  end
+
   describe 'network override' do
     it 'falls back to the baked-in mainnet checkpoint when no override is given' do
       real = described_class.new(store: store, services: services, network: :mainnet)
