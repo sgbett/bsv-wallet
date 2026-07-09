@@ -582,6 +582,75 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         expect(store.verification_state(wtxid: built[:ancestor].wtxid)).to be_nil
       end
 
+      # REGRESSION: a 3-hop chain must mark every walked wtxid, not just
+      # the subject and its direct parent. +Tx#verify+ recurses via
+      # +input.source_transaction+ until it hits a merkle-proven ancestor;
+      # a proven grandparent behind an unproven parent must appear in
+      # +verified_wtxids+ and get marked +'spv'+. Belt-and-braces against
+      # any future SDK change that silently narrowed the walk.
+      it 'marks every walked wtxid in a multi-hop chain (subject → parent → grandparent)' do
+        # Grandparent: merkle-proven root of the chain. Verify will
+        # short-circuit here (merkle_path present, chain_tracker accepts).
+        grandparent = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        grandparent.add_output(BSV::Transaction::TransactionOutput.new(
+                                 satoshis: 700,
+                                 locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                               ))
+        grandparent.merkle_path = build_merkle_path(grandparent)
+
+        # Parent: unproven, spends grandparent. Verify runs script here
+        # and recurses into grandparent.
+        parent = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        parent.add_input(BSV::Transaction::TransactionInput.new(
+                           prev_wtxid: grandparent.wtxid,
+                           prev_tx_out_index: 0,
+                           sequence: 0xFFFFFFFF,
+                           unlocking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                         ))
+        parent.inputs[0].source_transaction = grandparent
+        parent.add_output(BSV::Transaction::TransactionOutput.new(
+                            satoshis: 600,
+                            locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                          ))
+
+        # Subject: unproven, spends parent. Verify starts here, walks
+        # parent → grandparent, marks all three.
+        subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+        subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                               prev_wtxid: parent.wtxid,
+                               prev_tx_out_index: 0,
+                               sequence: 0xFFFFFFFF,
+                               unlocking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                             ))
+        subject_tx.inputs[0].source_transaction = parent
+        subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                satoshis: 500,
+                                locking_script: BSV::Script::Script.from_binary(OP_TRUE)
+                              ))
+
+        beef = BSV::Transaction::Beef.new
+        beef.merge_transaction(grandparent)
+        beef.merge_transaction(parent)
+        beef.merge_transaction(subject_tx)
+
+        beef_importer.import(
+          tx: beef.to_atomic_binary(subject_tx.wtxid),
+          description: 'multi-hop chain mark',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'multi hop chain', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }]
+        )
+
+        # All three hops marked — the SDK walk visits each one.
+        expect(verified_via(subject_tx.wtxid)).to eq('spv')
+        expect(verified_via(parent.wtxid)).to eq('spv')
+        expect(verified_via(grandparent.wtxid)).to eq('spv')
+      end
+
       # REGRESSION: non-atomic BEEF (BRC-62) with an unrelated sibling entry
       # not reachable from the subject via +input.source_transaction+.
       # +save_beef_proofs+ persists proof rows for every non-TXID-only entry
@@ -622,7 +691,10 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
                              satoshis: 999,
                              locking_script: BSV::Script::Script.from_binary(OP_TRUE)
                            ))
-        sibling.merkle_path = build_merkle_path(sibling, block_height: 800_001)
+        # +block_height: 800_000 + 1+ — a different block from the main
+        # chain's fixture (helper default is 800_000); the delta is
+        # incidental, not a load-bearing property of the test.
+        sibling.merkle_path = build_merkle_path(sibling, block_height: 800_000 + 1)
 
         beef = BSV::Transaction::Beef.new
         beef.merge_transaction(ancestor)
