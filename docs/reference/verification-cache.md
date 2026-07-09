@@ -63,6 +63,17 @@ Both required: lazy is the fail-safe (works for CLI subprocess use); active is t
 
 **Transitive invalidation is mandatory.** If ancestor Y (with a merkle_path) re-orgs out, descendants whose `'spv'` state depended on Y's proof are also stale — an unproven descendant Z whose script verification succeeded *because* the chain of trust anchored on Y is broken when Y re-orgs. Both paths must clear the descent graph, not just the directly-anchored row.
 
+#### The anchor-liveness invariant (HLR #516 Sub 6.1)
+
+The anchor key is `(block_height, computed_root)` in **wire-order binary bytes** — not hex, not BUMP-encoded bytes. Two implementation consequences follow.
+
+- **Computed root, not stored bytes.** The persisted `tx_proofs.merkle_path` is folded through the SDK's `MerklePath#compute_root` before comparison. BUMP-encoding variability closes at that computed root — offset-0 leaf duplicates, unbalanced-tree padding, and hash-side ordering all produce the same 32-byte root even when the on-wire BUMPs differ. Two BUMPs for the same wtxid with matching `(height, computed_root)` invalidate equivalently; two BUMPs for the same wtxid at the same height whose computed roots disagree both clear on the mismatched-hash branch.
+- **Wire-order binary throughout.** Both sides of the comparison are the raw 32-byte SHA256d output. Hex conversion happens only at the debug-log boundary (`stored_root`/`current_root` in the `[Store#invalidate_stale_anchors!]` line), never in the predicate. This matches the `wtxid`/`blocks.merkle_root` convention documented in the top-level `CLAUDE.md`.
+
+**`chain_tracker` unreachable ≠ mismatch.** A network error, an unknown height, or an empty tracker returns `nil` from `known_roots_for_heights` — the map entry is preserved for that height but marked "unknown". `Store#invalidate_stale_anchors!` treats `nil` values as a no-op and does not clear the row. This is a correctness invariant, not a nicety: a transient outage must not decay the trust set into an unrecoverable state.
+
+**`Store#find_or_create_block` is append-or-reject.** A `save_proof` call whose supplied `(height, merkle_root)` disagrees with an existing `blocks` row at the same height raises `CompetingBlockHeaderError` rather than silently attaching to the stale row. Re-org handling is delegated to the anchor-liveness path — every invalidation goes through `invalidate_stale_anchors!`, never through a silent block-row swap.
+
 ### 2. Verifier version upgrade
 
 `BSV::Wallet::VERIFIER_VERSION` is a compile-time constant. It bumps when verification semantics change. A row with `verifier_version < current` is treated as a cache miss and re-verified. Existing rows are silently upgraded on first reference; no migration script needed.
