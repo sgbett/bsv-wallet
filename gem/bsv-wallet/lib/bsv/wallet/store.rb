@@ -769,8 +769,10 @@ module BSV
       # Chunk size for +wtxid IN (?...)+ queries. Postgres allows up to
       # 65_535 bind parameters per statement; 10k leaves headroom for
       # additional predicates and keeps a single chunk's plan small.
+      # Public: +Engine::AnchorLivenessCache#heights_for_verified+ uses
+      # the same ceiling so every large wtxid-IN query in the wallet
+      # respects one bind-limit invariant.
       VERIFY_BATCH_CHUNK = 10_000
-      private_constant :VERIFY_BATCH_CHUNK
 
       def mark_verified(wtxid:, via:, at_time: nil)
         # Single form delegates to the batch — validation of both +wtxid+

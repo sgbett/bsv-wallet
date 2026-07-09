@@ -106,7 +106,7 @@ RSpec.describe BSV::Wallet::Engine::AnchorLivenessCache, :store do
       expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
     end
 
-    it 'does not invalidate when known_roots_for_heights raises (fail-closed on invalidation)' do
+    it 'preserves trust on parseable rows when known_roots_for_heights raises (outage = unknown ≠ mismatch)' do
       height = 950_021
       wtxid = persist_anchored(height: height)
       tracker = instance_double(BSV::Network::ChainTracker)

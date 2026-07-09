@@ -112,17 +112,28 @@ module BSV
         private
 
         # Collect the distinct block heights carrying a currently-verified
-        # proof row for any of +wtxids+. One indexed read
+        # proof row for any of +wtxids+. Indexed read
         # (+idx_tx_proofs_verified_by_block+ partial index covers the
         # +verified_at IS NOT NULL AND block_id IS NOT NULL+ predicate).
+        # Chunks the +wtxid IN (...)+ predicate at
+        # +Store::VERIFY_BATCH_CHUNK+ to stay under SQLite's 32_766
+        # bind-parameter ceiling and match the codebase-wide convention
+        # for large wtxid-set reads. Copilot on #533.
         def heights_for_verified(wtxids)
-          blobs = wtxids.map { |w| Sequel.blob(w) }
-          BSV::Wallet::Store::Models::TxProof
-            .join(:blocks, id: :block_id)
-            .where(Sequel[:tx_proofs][:wtxid] => blobs)
-            .exclude(Sequel[:tx_proofs][:verified_via] => nil)
-            .distinct
-            .select_map(Sequel[:blocks][:height])
+          chunk = BSV::Wallet::Store::VERIFY_BATCH_CHUNK
+          heights = Set.new
+          wtxids.each_slice(chunk) do |slice|
+            blobs = slice.map { |w| Sequel.blob(w) }
+            heights.merge(
+              BSV::Wallet::Store::Models::TxProof
+                .join(:blocks, id: :block_id)
+                .where(Sequel[:tx_proofs][:wtxid] => blobs)
+                .exclude(Sequel[:tx_proofs][:verified_via] => nil)
+                .distinct
+                .select_map(Sequel[:blocks][:height])
+            )
+          end
+          heights.to_a
         end
 
         # HLR #516 Sub 6.2 — expand the invalidated anchor set through
