@@ -447,6 +447,35 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.invalidate_stale_anchors!(heights_to_roots: map)
       wtxids.each { |w| expect(store.verification_state(wtxid: w)).to be_nil }
     end
+
+    # Copilot round-4 on #533 — the action-id lookup at the tail of
+    # +invalidate_anchors_at_height+ used to run one giant
+    # +tx_proof_id IN (…)+ query against +actions+, which could
+    # exceed SQLite's bind-parameter limit and produce a bad plan on
+    # Postgres at large re-org sizes. Chunked at +VERIFY_BATCH_CHUNK+.
+    it 'chunks the action-id lookup on the same boundary as the clear' do
+      map = {}
+      wtxids = []
+      6.times do |i|
+        h = 900_108_000 + i
+        a, b, = persist_paired_proofs(height: h)
+        map[h] = SecureRandom.random_bytes(32) # tracker disagrees at every height
+        wtxids << a << b
+      end
+      stub_const('BSV::Wallet::Store::VERIFY_BATCH_CHUNK', 5)
+
+      # Attach each proof to its own action so we have twelve action_ids
+      # spread across three chunks of size 5-5-2 under the stub.
+      wtxids.each_with_index do |w, i|
+        proof_id = models::TxProof.where(wtxid: Sequel.blob(w)).get(:id)
+        action = models::Action.create(description: "chunk-tail-#{i}", broadcast_intent: 'none')
+        action.update(tx_proof_id: proof_id)
+      end
+
+      cleared = store.invalidate_stale_anchors!(heights_to_roots: map)
+      # All twelve actions surface — accumulate across chunks.
+      expect(cleared.size).to eq(12)
+    end
   end
 
   # HLR #516 Sub 6.1 — +find_or_create_block+ Option B fix. Prior to

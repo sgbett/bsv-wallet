@@ -2029,20 +2029,21 @@ module BSV
         block_ids = models::Block.where(height: height).select_map(:id)
         return [] if block_ids.empty?
 
-        # Fetch the candidate rows before mutating so we can partition on
-        # +computed_root+ (BUMP-parsed, not the raw +merkle_path+ blob)
-        # and log per-row context. The set is bounded by the +by_block+
-        # partial index (+verified_at IS NOT NULL AND block_id IS NOT
-        # NULL+) — a re-org batch will not touch unverified rows.
+        # Stream candidates instead of +.all+ — a re-org height with tens
+        # of thousands of verified proofs would otherwise materialise
+        # every row (with its +merkle_path+ blob) into memory inside the
+        # transaction. +paged_each+ walks the dataset in fixed-size
+        # server-side fetches (+VERIFY_BATCH_CHUNK+ = 10_000). The set
+        # is bounded by the +by_block+ partial index (+verified_at IS
+        # NOT NULL AND block_id IS NOT NULL+). Copilot round-4 on #533.
         candidates = models::TxProof
                      .where(block_id: block_ids)
                      .exclude(verified_via: nil)
                      .exclude(merkle_path: nil)
                      .select(:id, :wtxid, :merkle_path)
-                     .all
 
         stale_ids = []
-        candidates.each do |row|
+        candidates.paged_each(rows_per_fetch: VERIFY_BATCH_CHUNK) do |row|
           computed = computed_root_for_path(row.merkle_path, row.wtxid)
           if computed.nil?
             # Fail closed — a proof we cannot compute a root for cannot
@@ -2066,11 +2067,17 @@ module BSV
         # both invalidation paths (anchor liveness here, transitive
         # descent in +invalidate_verification+) share a single write
         # site — the maintainability-specialist ask against drift.
+        # The action-id lookup shares the same chunk boundary: a giant
+        # +tx_proof_id IN (...)+ query could exceed SQLite's
+        # bind-parameter limit (32_766) on a large re-org batch, and
+        # the plan gets progressively worse on Postgres too. Copilot
+        # round-4 on #533.
+        action_ids = []
         stale_ids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
           clear_verification_columns_for_proofs(chunk)
+          action_ids.concat(models::Action.where(tx_proof_id: chunk).select_map(:id))
         end
-
-        models::Action.where(tx_proof_id: stale_ids).select_map(:id)
+        action_ids
       end
 
       # Build a single-row rowset for the descent CTE seed. Casts pin the
