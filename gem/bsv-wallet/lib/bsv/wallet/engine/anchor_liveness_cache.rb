@@ -29,6 +29,32 @@ module BSV
         def initialize(store:, chain_tracker:)
           @store = store
           @chain_tracker = chain_tracker
+          # HLR #516 Sub 6.3 — env-gated instrumentation. When
+          # +BSV_WALLET_VERIFY_TRACE=1+ the +@stats+ Hash is
+          # instantiated and per-step counters are incremented in the
+          # hot path. When unset, +@stats+ stays +nil+ and every
+          # counter site is a bare +if @stats+ short-circuit — no Hash
+          # allocation, no fetch/store cost on the receive path.
+          @stats = ENV['BSV_WALLET_VERIFY_TRACE'] == '1' ? new_stats_hash : nil
+        end
+
+        # Snapshot of per-instance counters. Returns +nil+ when
+        # +BSV_WALLET_VERIFY_TRACE+ is not set — deliberate, so a
+        # caller enabling instrumentation adds no allocation to the
+        # default hot path.
+        #
+        # When set, the returned Hash carries:
+        #   :chain_tracker_calls  — invocations of +known_roots_for_heights+
+        #   :cache_hits           — heights answered from the per-walk memo
+        #   :cache_misses         — heights that needed a fresh tracker call
+        #   :invalidated_anchors  — action_ids the anchor UPDATE cleared
+        #   :walked_descendants   — total ids the descent walk visited
+        #
+        # @return [Hash{Symbol => Integer}, nil]
+        def stats
+          return nil unless @stats
+
+          @stats.dup
         end
 
         # Filter +wtxids+ to the subset the wallet may still trust.
@@ -73,6 +99,7 @@ module BSV
             invalidated = @store.invalidate_stale_anchors!(
               heights_to_roots: known_roots_for(heights)
             )
+            @stats[:invalidated_anchors] += invalidated.size if @stats
             expand_and_clear_descendants(invalidated) if invalidated.any?
           end
           @store.verified_wtxids(
@@ -120,6 +147,7 @@ module BSV
         # rolls back both the anchor UPDATE and the descendant UPDATE.
         def expand_and_clear_descendants(seed_action_ids)
           descent = @store.descendant_action_ids_of(action_ids: seed_action_ids)
+          @stats[:walked_descendants] += descent.size if @stats
           @store.invalidate_verification(action_ids: descent)
         end
 
@@ -133,7 +161,14 @@ module BSV
 
           @known_roots ||= {}
           missing = heights - @known_roots.keys
-          @known_roots.merge!(@chain_tracker.known_roots_for_heights(missing)) if missing.any?
+          if @stats
+            @stats[:cache_hits]   += (heights.size - missing.size)
+            @stats[:cache_misses] += missing.size
+          end
+          if missing.any?
+            @stats[:chain_tracker_calls] += 1 if @stats
+            @known_roots.merge!(@chain_tracker.known_roots_for_heights(missing))
+          end
           heights.to_h { |h| [h, @known_roots[h]] }
         rescue StandardError => e
           BSV.logger&.warn { "[AnchorLivenessCache] known_roots_for error: #{e.message}" }
@@ -141,6 +176,19 @@ module BSV
           # the trust set. Return an empty map so
           # +invalidate_stale_anchors!+ has nothing to clear.
           {}
+        end
+
+        # Zero-value counter Hash — instantiated only when
+        # +BSV_WALLET_VERIFY_TRACE+ is set at construction time. Every
+        # increment site short-circuits on +@stats.nil?+ so the hot
+        # path pays neither the Hash allocation nor the per-step
+        # +[]+/+[]=+ cost in the default (unset) mode.
+        def new_stats_hash
+          { chain_tracker_calls: 0,
+            cache_hits: 0,
+            cache_misses: 0,
+            invalidated_anchors: 0,
+            walked_descendants: 0 }
         end
       end
     end

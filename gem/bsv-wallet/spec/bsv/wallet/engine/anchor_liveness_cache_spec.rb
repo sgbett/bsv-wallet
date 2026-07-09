@@ -269,4 +269,81 @@ RSpec.describe BSV::Wallet::Engine::AnchorLivenessCache, :store do
       end
     end
   end
+
+  # HLR #516 Sub 6.3 — env-gated instrumentation. Zero allocation on
+  # the hot path when +BSV_WALLET_VERIFY_TRACE+ is unset; a populated
+  # Hash returned by +#stats+ when set. The env variable is read at
+  # +new+ time so the guard is per-instance, not per-call — reflects
+  # the pipeline shape where a fresh cache is built per verify-walk.
+  describe '#stats — env-gated instrumentation' do
+    before { ENV.delete('BSV_WALLET_VERIFY_TRACE') }
+
+    it 'returns nil by default (no env var set)' do
+      cache = described_class.new(store: store,
+                                  chain_tracker: instance_double(BSV::Network::ChainTracker))
+      expect(cache.stats).to be_nil
+    end
+
+    it 'returns a Hash of counters when BSV_WALLET_VERIFY_TRACE=1' do
+      ENV['BSV_WALLET_VERIFY_TRACE'] = '1'
+      cache = described_class.new(store: store,
+                                  chain_tracker: instance_double(BSV::Network::ChainTracker))
+      snapshot = cache.stats
+      expect(snapshot).to be_a(Hash)
+      expect(snapshot.keys).to include(
+        :chain_tracker_calls, :cache_hits, :cache_misses,
+        :invalidated_anchors, :walked_descendants
+      )
+      expect(snapshot.values).to all(eq(0)) # zero-initialised
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_TRACE')
+    end
+
+    it 'increments counters as the pipeline runs (env-set instance)' do
+      ENV['BSV_WALLET_VERIFY_TRACE'] = '1'
+      height = 970_401
+      # Wire an actions row so +invalidate_stale_anchors!+ returns
+      # non-empty action_ids and the descent walk runs.
+      wtxid = persist_anchored(height: height)
+      proof_id = models::TxProof.where(wtxid: Sequel.blob(wtxid)).get(:id)
+      action = models::Action.create(description: 'stats test', broadcast_intent: 'none')
+      action.update(tx_proof_id: proof_id)
+      tracker = build_tracker(height => SecureRandom.random_bytes(32)) # mismatch
+      cache = described_class.new(store: store, chain_tracker: tracker)
+
+      cache.filter_trusted([wtxid])
+      snapshot = cache.stats
+      expect(snapshot[:chain_tracker_calls]).to eq(1)
+      expect(snapshot[:cache_misses]).to eq(1)
+      expect(snapshot[:cache_hits]).to eq(0) # first walk — all fresh
+      expect(snapshot[:invalidated_anchors]).to eq(1)
+      expect(snapshot[:walked_descendants]).to be >= 1 # seed count itself
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_TRACE')
+    end
+
+    it 'stays flat (nil-returning) on the default hot path' do
+      height = 970_402
+      wtxid = persist_anchored(height: height)
+      tracker = build_tracker(height => wtxid) # match — no invalidation
+      # Env NOT set → no Hash instantiated at construction time.
+      cache = described_class.new(store: store, chain_tracker: tracker)
+
+      cache.filter_trusted([wtxid])
+      # +#stats+ returns nil even after a full pipeline run.
+      expect(cache.stats).to be_nil
+    end
+
+    it 'returns a snapshot copy (mutation-safe)' do
+      ENV['BSV_WALLET_VERIFY_TRACE'] = '1'
+      cache = described_class.new(store: store,
+                                  chain_tracker: instance_double(BSV::Network::ChainTracker))
+      snapshot = cache.stats
+      snapshot[:chain_tracker_calls] = 9_999 # mutate the copy
+      # Internal state untouched — a subsequent snapshot still shows 0.
+      expect(cache.stats[:chain_tracker_calls]).to eq(0)
+    ensure
+      ENV.delete('BSV_WALLET_VERIFY_TRACE')
+    end
+  end
 end
