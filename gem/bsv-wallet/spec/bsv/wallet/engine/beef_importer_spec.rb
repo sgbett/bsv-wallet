@@ -703,7 +703,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
 
         # Non-atomic BRC-62 binary (no atomic wrapper). +parse_beef+ picks
         # +beef.transactions.last+ as the subject when +subject_wtxid+ is
-        # absent — see +beef_importer.rb+ line 60.
+        # absent — see +BeefImporter#parse_beef+.
         beef_binary = beef.to_binary
 
         beef_importer.import(
