@@ -147,13 +147,16 @@ RSpec.describe BSV::Wallet::Store, '#descendant_action_ids_of', :store do
         make_input(consumer: actions[i + 1], output: make_output(actions[i]))
       end
 
-      # Wall-clock cap: the coarse cap is 500ms per the task
-      # description. Local runs sit well under this even on SQLite.
+      # Functional correctness runs on every lane. The wall-clock
+      # ceiling is env-gated to the perf lane (+BSV_WALLET_VERIFY_TRACE=1+)
+      # — hard timing budgets on default CI are flaky under runner load
+      # (Copilot round-11 on #533). Local runs sit well under 500ms
+      # even on SQLite; enforce that under trace.
       result = nil
       duration = Benchmark.realtime do
         result = store.descendant_action_ids_of(action_ids: [actions[0].id])
       end
-      expect(duration).to be < 0.5
+      expect(duration).to be < 0.5 if ENV['BSV_WALLET_VERIFY_TRACE'] == '1'
 
       # Depth 0 = seed; depth 100 = 100 hops beyond seed → 101 rows.
       expect(result.size).to eq(101)
@@ -192,7 +195,8 @@ RSpec.describe BSV::Wallet::Store, '#descendant_action_ids_of', :store do
         # Set-deduplicated in Ruby: only two unique action_ids.
         expect(result).to eq(Set[a.id, b.id])
       end
-      expect(duration).to be < 0.5
+      # Env-gated wall-clock ceiling — see Copilot round-11 note above.
+      expect(duration).to be < 0.5 if ENV['BSV_WALLET_VERIFY_TRACE'] == '1'
     end
   end
 end

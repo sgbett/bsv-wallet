@@ -767,7 +767,10 @@ RSpec.describe BSV::Wallet::Store, :store do
         # Only the anchor row carries a trust mark → UPDATE cleared 1.
         expect(cleared).to eq(1)
       end
-      expect(duration).to be < 0.5
+      # Env-gated wall-clock ceiling — hard timing budgets flake under
+      # default CI runner load; perf-lane (+BSV_WALLET_VERIFY_TRACE=1+)
+      # enforces the 500ms budget. Copilot round-11 on #533.
+      expect(duration).to be < 0.5 if ENV['BSV_WALLET_VERIFY_TRACE'] == '1'
 
       # Anchor cleared; descendants untouched (were never marked).
       expect(store.verification_state(wtxid: anchor_wtxid)).to be_nil
