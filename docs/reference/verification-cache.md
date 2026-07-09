@@ -87,11 +87,11 @@ Do **not** bump for:
 
 Version history is captured in ADR-033.
 
-## Egress is unaffected
+## Egress writes, never reads
 
-The cache is a read-only optimisation for `BeefImporter#verify_incoming_transaction!`. It does not alter what the wallet emits. `Hydrator#build_atomic_beef` and `validate_for_handoff!` operate on bytes-and-proofs, structural checks only — they never consult the verification fact. This is deliberate: incoming trust and outgoing bytes are distinct concerns.
+The cache write path is bidirectional — ingress and egress both stamp `tx_proofs`. Egress sites (`Action#sign_and_save!`, `#apply_caller_spends!`, `#complete_internal!`, and the `BeefImporter` atomic ingress) record `verified_via = 'self_built'` as construction-provenance metadata (HLR #521). What egress does NOT do is *read* the cache: `Hydrator#build_atomic_beef` and `validate_for_handoff!` operate on bytes-and-proofs, structural checks only — they never consult `verified_via` to decide what the wallet emits. Incoming trust and outgoing bytes remain distinct concerns.
 
-Do not wire the cache into egress. If you find yourself wanting to, revisit ADR-033 first.
+Do not wire the cache into egress *decisions*. If you find yourself wanting outgoing behaviour to branch on `verified_via`, revisit ADR-033 first.
 
 ## Concurrency
 
