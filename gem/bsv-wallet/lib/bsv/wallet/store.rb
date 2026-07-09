@@ -2036,10 +2036,17 @@ module BSV
         # server-side fetches (+VERIFY_BATCH_CHUNK+ = 10_000). The set
         # is bounded by the +by_block+ partial index (+verified_at IS
         # NOT NULL AND block_id IS NOT NULL+). Copilot round-4 on #533.
+        #
+        # +merkle_path IS NULL+ is INCLUDED — the schema allows a
+        # "height-known + path-pending" row (+path_requires_block+
+        # CHECK, migration comment "confirmed but unproven"), and if
+        # such a row also carries +verified_via='spv'+ it must fail
+        # closed on the next anchor-liveness pass. Silently skipping
+        # +merkle_path IS NULL+ rows would let that combination retain
+        # trust across re-orgs. Copilot round-5 on #533.
         candidates = models::TxProof
                      .where(block_id: block_ids)
                      .exclude(verified_via: nil)
-                     .exclude(merkle_path: nil)
                      .select(:id, :wtxid, :merkle_path)
 
         stale_ids = []
@@ -2050,9 +2057,11 @@ module BSV
             # be anchor-checked, so we can neither confirm nor refute
             # liveness. Clear the trust mark so the next reference forces
             # re-verify; a silently-skipped row would retain +'spv'+
-            # forever and Sub 5's read gate would trust it. Copilot
-            # round-1 on #533.
-            log_unparseable_merkle_path(row.wtxid, height)
+            # forever and Sub 5's read gate would trust it.
+            # Copilot round-1 (unparseable bytes) + round-5 (missing
+            # path) on #533.
+            cause = row.merkle_path.nil? ? 'missing_merkle_path' : 'unparseable_merkle_path'
+            log_unverifiable_proof(row.wtxid, height, cause)
             stale_ids << row.id
             next
           end
@@ -2153,16 +2162,27 @@ module BSV
         end
       end
 
-      # Unparseable +merkle_path+ blob — a proof we cannot compute a root
-      # for cannot be anchor-checked, so we treat it as anchor mismatch
-      # (fail closed). Next reference forces re-verify + proof re-fetch.
-      # A rare event (BUMP format changes across SDK versions, storage
-      # corruption); +warn+ so operators can correlate against
-      # bsv-sdk upgrades.
-      def log_unparseable_merkle_path(wtxid, height)
+      # A verified proof we cannot compute a root for cannot be
+      # anchor-checked, so we treat it as anchor mismatch (fail closed).
+      # Next reference forces re-verify + proof re-fetch. Two causes,
+      # both rare:
+      #
+      # * +cause: 'unparseable_merkle_path'+ — bytes present but
+      #   +MerklePath#compute_root+ raised (BUMP format changes across
+      #   SDK versions, storage corruption). Copilot round-1 on #533.
+      # * +cause: 'missing_merkle_path'+ — +merkle_path IS NULL+ but
+      #   the row carries +verified_via IS NOT NULL+ and
+      #   +block_id IS NOT NULL+ (schema allows the "confirmed but
+      #   unproven" state; if it also gains a trust mark, we can never
+      #   validate/invalidate the anchor). Copilot round-5 on #533.
+      #
+      # +warn+ so operators can correlate against bsv-sdk upgrades or
+      # a proof-acquisition pipeline that persisted trust without
+      # persisting the proof.
+      def log_unverifiable_proof(wtxid, height, cause)
         BSV.logger&.warn do
           "[Store#invalidate_stale_anchors!] wtxid=#{wtxid.to_dtxid} " \
-            "cause=unparseable_merkle_path height=#{height}"
+            "cause=#{cause} height=#{height}"
         end
       end
 

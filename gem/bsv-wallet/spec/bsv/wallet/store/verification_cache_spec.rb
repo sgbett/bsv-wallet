@@ -351,6 +351,35 @@ RSpec.describe BSV::Wallet::Store, :store do
       expect(store.verification_state(wtxid: wtxid)&.[](:verified_via)).to eq('spv')
     end
 
+    # Fail-closed on missing +merkle_path+ — Copilot round-5 on #533.
+    # The schema allows +block_id NOT NULL AND merkle_path IS NULL+
+    # (the "confirmed but unproven" intermediate state per the
+    # +path_requires_block+ CHECK). If such a row also gains a trust
+    # mark (via a broken writer that outruns the proof-acquisition
+    # pipeline), the anchor-liveness path must NOT silently skip it —
+    # doing so would let the row retain +'spv'+ across arbitrary
+    # re-orgs. Include it in the candidate scan; +computed_root_for_path+
+    # returns +nil+ for +merkle_path IS NULL+, and the fail-closed
+    # branch clears the trust mark.
+    it 'clears rows whose merkle_path is NULL but block_id is set (fail closed)' do
+      height = 900_105
+      wtxid = persist_anchored_proof(height: height, via: 'spv')
+      # Simulate the "confirmed but unproven" corruption: clear the
+      # merkle_path but leave block_id + verified_via = 'spv'.
+      models::TxProof.where(wtxid: Sequel.blob(wtxid))
+                     .update(merkle_path: nil)
+
+      cleared = store.invalidate_stale_anchors!(
+        heights_to_roots: { height => SecureRandom.random_bytes(32) }
+      )
+
+      expect(store.verification_state(wtxid: wtxid)).to be_nil
+      action = models::Action.where(
+        tx_proof_id: models::TxProof.where(wtxid: Sequel.blob(wtxid)).select(:id)
+      ).first
+      expect(cleared).to include(action.id) if action
+    end
+
     # Fail-closed on unparseable +merkle_path+ — Copilot round-1 on #533.
     # A row whose stored proof cannot compute a root can be neither
     # confirmed nor refuted against +chain_tracker+; leaving it untouched
