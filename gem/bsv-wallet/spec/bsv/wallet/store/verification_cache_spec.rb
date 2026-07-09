@@ -42,6 +42,67 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.mark_verified(wtxid: wtxid, via: 'broadcast_ack')
       expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('broadcast_ack')
     end
+
+    # HLR #521 strength ratchet — trust hierarchy from
+    # +docs/reference/verification-cache.md+ is +self_built+ <
+    # +broadcast_ack+ < +spv+ (+'spv'+ is the strongest local trust
+    # because +Tx#verify+ ran end-to-end; +broadcast_ack+ means the
+    # network has it but this wallet never verified). Same-version
+    # downgrades must be refused; the version predicate alone gates
+    # cross-version writes.
+    it 'refuses to downgrade verified_via from spv to self_built (same version)' do
+      wtxid = persist_proof
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      rows = store.mark_verified(wtxid: wtxid, via: 'self_built')
+      expect(rows).to eq(0)
+      expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('spv')
+    end
+
+    it 'refuses to downgrade verified_via from broadcast_ack to self_built (same version)' do
+      wtxid = persist_proof
+      store.mark_verified(wtxid: wtxid, via: 'broadcast_ack')
+      rows = store.mark_verified(wtxid: wtxid, via: 'self_built')
+      expect(rows).to eq(0)
+      expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('broadcast_ack')
+    end
+
+    it 'refuses to downgrade verified_via from spv to broadcast_ack (same version)' do
+      wtxid = persist_proof
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      rows = store.mark_verified(wtxid: wtxid, via: 'broadcast_ack')
+      expect(rows).to eq(0)
+      expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('spv')
+    end
+
+    it 'upgrades broadcast_ack to spv (same version)' do
+      wtxid = persist_proof
+      store.mark_verified(wtxid: wtxid, via: 'broadcast_ack')
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('spv')
+    end
+
+    # HLR #521 strength ratchet is same-version only. Cross-version
+    # (existing verifier_version < code version) writes go through the
+    # monotonic version predicate alone — the new verifier's
+    # classification is authoritative, and Sub 5's read gate
+    # (+verified_wtxids(version_at_least:)+) already excludes stale
+    # stronger marks from an older binary.
+    it 'allows a weaker via to overwrite an older-version stronger via (cross-version)' do
+      wtxid = persist_proof
+      # Row starts at the compile-time constant (currently 1). Simulate
+      # a code-version bump by stubbing +VERIFIER_VERSION+ to a higher
+      # value for the second write, so the row's version predates the
+      # binary that's now running. +verifier_version_range+ CHECK
+      # (+>= 1+) forbids ageing the row below 1 the other way.
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      stub_const('BSV::Wallet::VERIFIER_VERSION', BSV::Wallet::VERIFIER_VERSION + 1)
+
+      rows = store.mark_verified(wtxid: wtxid, via: 'self_built')
+      expect(rows).to eq(1)
+      state = store.verification_state(wtxid: wtxid)
+      expect(state[:verified_via]).to eq('self_built')
+      expect(state[:verifier_version]).to eq(BSV::Wallet::VERIFIER_VERSION)
+    end
   end
 
   describe '#mark_verified_batch' do

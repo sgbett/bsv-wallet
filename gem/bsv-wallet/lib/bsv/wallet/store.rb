@@ -791,13 +791,40 @@ module BSV
         # N → N (same-version metadata upgrade, e.g. +self_built+ →
         # +broadcast_ack+). Refuses N+1 → N — a downgraded binary cannot
         # clobber rows written under stricter logic.
+        #
+        # HLR #521 strength ratchet, *same-version only*: the version
+        # clause alone leaves +verified_via+ downgrades legal at the same
+        # version. Enforce the doc'd trust hierarchy (+self_built+ <
+        # +broadcast_ack+ < +spv+ per +verification-cache.md+) by
+        # refusing same-version writes whose new via is weaker than the
+        # existing one. Cross-version writes (N-1 → N) bypass the
+        # ratchet: the new verifier's classification is authoritative,
+        # and Sub 5's read path already gates on +verifier_version >=
+        # current+, so stale weaker marks fall out of the trust set
+        # naturally.
+        allowed_prior = allowed_prior_states_for(via)
         rows = 0
         wtxids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
           blobs = chunk.map { |w| Sequel.blob(w) }
-          rows += models::TxProof
-                  .where(wtxid: blobs)
-                  .where { (verifier_version <= version) | Sequel.expr(verifier_version: nil) }
-                  .update(verified_at: stamp, verified_via: via, verifier_version: version)
+          scope = models::TxProof.where(wtxid: blobs)
+          scope = if allowed_prior
+                    # Combined monotonic-version + same-version ratchet.
+                    # Explicit +IS NULL OR IN (...)+ — +where(col: [nil,
+                    # ...])+ emits +col IN (NULL, ...)+, and SQL's
+                    # three-valued logic never matches +col = NULL+ that
+                    # way (would filter fresh rows alongside ratcheted
+                    # ones).
+                    scope.where do
+                      Sequel.expr(verifier_version: nil) |
+                        (Sequel[:verifier_version] < version) |
+                        (Sequel.expr(verifier_version: version) &
+                         (Sequel.expr(verified_via: nil) |
+                          Sequel.expr(verified_via: allowed_prior)))
+                    end
+                  else
+                    scope.where { (verifier_version <= version) | Sequel.expr(verifier_version: nil) }
+                  end
+          rows += scope.update(verified_at: stamp, verified_via: via, verifier_version: version)
         end
         rows
       end
@@ -1351,6 +1378,30 @@ module BSV
         raise ArgumentError,
               'mark_verified via must be one of ' \
               "#{models::TxProof::VERIFIED_VIA_VALUES.inspect}, got #{via.inspect}"
+      end
+
+      # HLR #521 strength ratchet: prior +verified_via+ values that a new
+      # +via+ may overwrite when the existing row is at the SAME
+      # +verifier_version+. Trust hierarchy per
+      # +docs/reference/verification-cache.md+ is +self_built+ <
+      # +broadcast_ack+ < +spv+; the ratchet lets trust only move
+      # forward within a version. Cross-version writes are gated by the
+      # version predicate at the call site, not by this table.
+      #
+      # +nil+ ⇒ no ratchet gate (the new +via+ is the strongest and
+      # can overwrite anything, subject only to the version predicate).
+      # The +NULL+ prior case is added at the query site, so callers
+      # here only see the non-nil allowed-prior enum values.
+      def allowed_prior_states_for(via)
+        case via
+        when models::TxProof::VERIFIED_VIA_SELF_BUILT
+          [models::TxProof::VERIFIED_VIA_SELF_BUILT]
+        when models::TxProof::VERIFIED_VIA_BROADCAST_ACK
+          [models::TxProof::VERIFIED_VIA_SELF_BUILT, models::TxProof::VERIFIED_VIA_BROADCAST_ACK]
+        end
+        # VERIFIED_VIA_SPV: nil — the strongest; only the version
+        # predicate gates it (an older-version binary still cannot
+        # clobber a newer stamp).
       end
 
       # Recursive inner method for reject_action. Walks children first

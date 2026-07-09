@@ -87,15 +87,25 @@ Do **not** bump for:
 
 Version history is captured in ADR-033.
 
-## Egress is unaffected
+## Egress writes, never reads
 
-The cache is a read-only optimisation for `BeefImporter#verify_incoming_transaction!`. It does not alter what the wallet emits. `Hydrator#build_atomic_beef` and `validate_for_handoff!` operate on bytes-and-proofs, structural checks only — they never consult the verification fact. This is deliberate: incoming trust and outgoing bytes are distinct concerns.
+The cache write path is bidirectional — both ingress and egress stamp `tx_proofs`.
 
-Do not wire the cache into egress. If you find yourself wanting to, revisit ADR-033 first.
+- **Egress sites** (HLR #521) — `Action#sign_and_save!`, `#apply_caller_spends!`, and `#complete_internal!` record `verified_via = 'self_built'` after each sign path, as construction-provenance metadata.
+- **Ingress site** (Sub 2, HLR #520) — `BeefImporter#import`'s atomic block records `'spv'` for the wtxid set `Tx#verify` walked. The same block also writes a transient `'self_built'` stamp on the subject before the SPV mark upgrades it — an ordering guard so a subsequent `mark_verified(via: 'self_built')` cannot silently downgrade the SPV row at the same version.
+
+What egress does NOT do is *read* the cache: `Hydrator#build_atomic_beef` and `validate_for_handoff!` operate on bytes-and-proofs, structural checks only — they never consult `verified_via` to decide what the wallet emits. Incoming trust and outgoing bytes remain distinct concerns.
+
+Do not wire the cache into egress *decisions*. If you find yourself wanting outgoing behaviour to branch on `verified_via`, revisit ADR-033 first.
 
 ## Concurrency
 
-Optimistic. Verify is a pure function; two processes verifying the same wtxid produce identical results. `mark_verified` is a single atomic UPDATE with a monotonic predicate (`WHERE verifier_version IS NULL OR verifier_version <= ?`) so an older writer cannot clobber a newer stamp. The `<=` (rather than strict `<`) admits same-version metadata upgrades — e.g. `self_built` → `broadcast_ack` under the same `VERIFIER_VERSION` — while still refusing a downgraded binary. Last-writer-wins at the same version is correct because the state written is identical.
+Optimistic. Verify is a pure function; two processes verifying the same wtxid produce identical results. `mark_verified` is a single atomic UPDATE with two composed gates:
+
+1. **Monotonic version predicate** — `verifier_version IS NULL OR verifier_version <= ?` — an older writer cannot clobber a newer stamp. `<=` (rather than strict `<`) admits same-version writes.
+2. **Same-version strength ratchet** — when the existing row is at the current `VERIFIER_VERSION`, the new `via` may only overwrite `verified_via` values at or below its own strength. Strength order is `self_built` < `broadcast_ack` < `spv`, so within one version `self_built` can only overwrite `NULL` or `self_built`, `broadcast_ack` can overwrite `NULL`/`self_built`/`broadcast_ack`, and `spv` can overwrite any. This makes trust ratchet forward within a version — a subsequent `self_built` write cannot silently demote a row Sub 2 already marked `'spv'`.
+
+Cross-version writes (`existing verifier_version < current`) bypass the ratchet: the new verifier's classification is authoritative, and `Store#verified_wtxids(version_at_least:)` excludes stale marks from older binaries anyway. Version-upgrade demotions are safe to write; the read gate keeps the trust surface honest.
 
 ## The SDK seam
 

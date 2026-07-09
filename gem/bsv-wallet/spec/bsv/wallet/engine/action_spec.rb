@@ -215,6 +215,102 @@ RSpec.describe BSV::Wallet::Engine::Action do
       expect(result[:wtxid].bytesize).to eq(32)
       expect(result[:raw_tx]).to be_a(String)
     end
+
+    # HLR #521 — deferred sign completion is one of three egress-side
+    # sites that stamp +verified_via = 'self_built'+ after the signer runs.
+    # Trust claim: wallet's signer produced the P2PKH witness bytes for
+    # wallet-owned inputs; +self_built+ names lifecycle-provenance only.
+    it 'populates the verification cache as self_built' do
+      create_result = engine.brc100.create_action(
+        description: 'apply_caller_spends! self_built',
+        inputs: [], sign_and_process: false,
+        outputs: [
+          { satoshis: 0, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1',
+            sender_identity_key: 'self' }
+        ]
+      )
+      reference = create_result[:signable_transaction][:reference]
+      action = described_class.find(engine: engine, reference: reference)
+
+      result = action.apply_caller_spends!(spends: {})
+
+      state = store.verification_state(wtxid: result[:wtxid])
+      expect(state[:verified_via])
+        .to eq(BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT)
+      expect(state[:verifier_version]).to eq(BSV::Wallet::VERIFIER_VERSION)
+    end
+  end
+
+  # HLR #521 — the three egress-side +self_built+ writes exercised
+  # through the engine surface (send, internal, deferred sign — that
+  # last one lives in the +#apply_caller_spends!+ block above).
+  #
+  # +self_built+ is lifecycle metadata; Sub 5 excludes it from the
+  # short-circuit trust set. These specs only assert the write happens
+  # and the constant is used — trust-decision behaviour is Sub 5's
+  # coverage.
+  describe 'HLR #521 egress self_built writes' do
+    it 'send-path (no_send: false) populates cache as self_built' do
+      fund_wallet(satoshis: 1_000_000, count: 1, prefix: 'sendSelfBuilt',
+                  suffix: 'root')
+      recipient = BSV::Primitives::PrivateKey.generate.public_key.to_hex
+
+      result = engine_with_keys.send_payment(
+        recipient: recipient, satoshis: 5_000
+      )
+
+      state = store.verification_state(wtxid: result[:wtxid])
+      expect(state[:verified_via])
+        .to eq(BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT)
+    end
+
+    it 'internal-action path (no_send: true) populates cache as self_built' do
+      fund_wallet(satoshis: 1_000_000, count: 1, prefix: 'internalSelfBuilt',
+                  suffix: 'root')
+
+      result = engine_with_keys.brc100.create_action(
+        description: 'internal self_built',
+        outputs: [{ satoshis: 5_000, locking_script: SecureRandom.random_bytes(25),
+                    spendable: false }],
+        no_send: true
+      )
+      wtxid = result[:txid]
+
+      state = store.verification_state(wtxid: wtxid)
+      expect(state[:verified_via])
+        .to eq(BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT)
+    end
+
+    # HLR #521 atomicity — the +sign_action+ + +save_proof+ +
+    # +mark_verified+ sequence lives inside a single
+    # +@engine.store.db.transaction+ block on each egress path. A
+    # +mark_verified+ failure must roll back the whole atomic unit so a
+    # crash never strands a signed-but-unstamped action. Without the
+    # wrapper the sign row would commit and the +self_built+ mark would
+    # be missing — a partial write the +principle-of-state+ forbids.
+    it 'send-path rolls sign_action + save_proof back when mark_verified fails' do
+      fund_wallet(satoshis: 1_000_000, count: 1, prefix: 'sendAtomicity',
+                  suffix: 'root')
+      recipient = BSV::Primitives::PrivateKey.generate.public_key.to_hex
+
+      captured_wtxid = nil
+      allow(store).to receive(:mark_verified) do |wtxid:, **_kwargs|
+        captured_wtxid = wtxid
+        raise StandardError, 'mark boom'
+      end
+
+      expect do
+        engine_with_keys.send_payment(recipient: recipient, satoshis: 5_000)
+      end.to raise_error(/mark boom/)
+
+      # sign_action stamped wtxid on the action row and save_proof
+      # persisted a +tx_proofs+ row — the enclosing db.transaction
+      # rolled BOTH back alongside the failed mark_verified.
+      expect(captured_wtxid).not_to be_nil
+      expect(store.find_action(wtxid: captured_wtxid)).to be_nil
+      expect(store.find_proof(wtxid: captured_wtxid)).to be_nil
+    end
   end
 
   describe 'Engine#sign_action no_send guard' do

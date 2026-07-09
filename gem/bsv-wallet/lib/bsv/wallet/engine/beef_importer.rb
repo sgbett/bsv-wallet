@@ -79,6 +79,21 @@ module BSV
             @store.save_proof(wtxid: subject_tx.wtxid, proof: { raw_tx: subject_tx.to_binary })
             BSV.logger&.debug { "[Engine::BeefImporter] import: subject=#{subject_tx.dtxid}" }
 
+            # HLR #521 — trust claim: ingress-path lifecycle annotation. The
+            # subject tx was externally built (BEEF came from a caller), so
+            # +self_built+ names the wallet's ingress-completion pattern here,
+            # not construction of the tx bytes. Sub 2's SPV mark below runs in
+            # the SAME atomic transaction and upgrades the subject's
+            # verified_via to +'spv'+ (stronger); this ordering matters because
+            # +mark_verified+'s monotonic predicate is on +verifier_version+
+            # only — a self_built write AFTER the SPV mark would silently
+            # downgrade. Sub 5 excludes +self_built+ from the trust set anyway,
+            # but keep the ordering explicit for future audits.
+            @store.mark_verified(
+              wtxid: subject_tx.wtxid,
+              via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT
+            )
+
             attach_labels(action_result[:id], labels)
 
             # Save ancestor proofs BEFORE replacing known ancestors with TXID-only.
