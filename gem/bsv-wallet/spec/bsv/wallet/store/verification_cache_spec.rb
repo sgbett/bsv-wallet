@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'benchmark'
 require_relative 'shared_context'
 
 RSpec.describe BSV::Wallet::Store, :store do
@@ -473,6 +474,214 @@ RSpec.describe BSV::Wallet::Store, :store do
                                   merkle_root: SecureRandom.random_bytes(32) })
       end.not_to raise_error
       expect(store.find_block(height: height)).not_to be_nil
+    end
+  end
+
+  # HLR #516 Sub 6.2 — transitive descendant invalidation. The shared
+  # primitive coarse-clears verification state for a set of action_ids
+  # (typically seed anchors + walked descendants). Gated on
+  # +verified_via IS NOT NULL+ so rows without a trust mark are
+  # untouched, defusing the poisoned-descendant DoS vector.
+  describe '#invalidate_verification' do
+    # Create a bare tx_proofs row + its associated action.
+    def persist_proof_and_action(via: 'spv')
+      wtxid = SecureRandom.random_bytes(32)
+      store.save_proof(wtxid: wtxid, proof: { raw_tx: 'x'.b * 20 })
+      proof_id = models::TxProof.where(wtxid: Sequel.blob(wtxid)).get(:id)
+      action = models::Action.create(description: 'sub 6.2 action', broadcast_intent: 'none')
+      action.update(tx_proof_id: proof_id)
+      store.mark_verified(wtxid: wtxid, via: via) if via
+      [action.id, wtxid]
+    end
+
+    it 'clears verified_at/via/version together on a marked row' do
+      action_id, wtxid = persist_proof_and_action(via: 'spv')
+
+      cleared = store.invalidate_verification(action_ids: [action_id])
+      expect(cleared).to eq(1)
+      expect(store.verification_state(wtxid: wtxid)).to be_nil
+    end
+
+    # Security specialist's DoS vector — the descent walk (unbounded)
+    # sees all structural descendants; the UPDATE (bounded) only
+    # touches rows with a trust mark. A poisoned subtree of synthetic
+    # rows without +verified_via+ produces 0 UPDATE hits.
+    it 'skips rows without a verified_via mark (poisoned-descendant defence)' do
+      action_id, wtxid = persist_proof_and_action(via: nil) # unmarked
+      cleared = store.invalidate_verification(action_ids: [action_id])
+      expect(cleared).to eq(0)
+      # Row still has NULL verification state (was never marked).
+      expect(store.verification_state(wtxid: wtxid)).to be_nil
+    end
+
+    it 'is a no-op on empty input (no DB round-trip)' do
+      expect(store.invalidate_verification(action_ids: [])).to eq(0)
+      expect(store.invalidate_verification(action_ids: Set.new)).to eq(0)
+    end
+
+    it 'skips action_ids with no tx_proof_id (mid-lifecycle actions)' do
+      unsigned = models::Action.create(description: 'mid lifecycle', broadcast_intent: 'none')
+      expect(store.invalidate_verification(action_ids: [unsigned.id])).to eq(0)
+    end
+
+    it 'accepts a Set as input' do
+      action_id, = persist_proof_and_action(via: 'spv')
+      expect(store.invalidate_verification(action_ids: Set[action_id])).to eq(1)
+    end
+
+    it 'chunks large batches under INVALIDATE_BATCH_CHUNK' do
+      ids = 12.times.map { persist_proof_and_action(via: 'spv').first }
+      stub_const('BSV::Wallet::Store::INVALIDATE_BATCH_CHUNK', 5)
+      cleared = store.invalidate_verification(action_ids: ids)
+      expect(cleared).to eq(12)
+    end
+  end
+
+  # HLR #516 Sub 6.2 — combined behaviour: seed anchors + walked
+  # descendants get coarse-cleared inside one +db.transaction+. The
+  # descent walk is done by +Store#descendant_action_ids_of+; here we
+  # exercise the union directly and prove all rows are cleared
+  # together.
+  describe 'transitive descent invalidation (Sub 6.2)' do
+    # Chain A -> B -> C where each action has its own proof row and
+    # 'spv' mark. Returns +{ a: [aid, wtxid], b: [...], c: [...] }+.
+    def build_chain
+      chain = {}
+      %i[a b c].each do |sym|
+        wtxid = SecureRandom.random_bytes(32)
+        store.save_proof(wtxid: wtxid, proof: { raw_tx: 'x'.b * 20 })
+        proof_id = models::TxProof.where(wtxid: Sequel.blob(wtxid)).get(:id)
+        action = models::Action.create(description: "chain #{sym} action", broadcast_intent: 'none')
+        action.update(tx_proof_id: proof_id)
+        store.mark_verified(wtxid: wtxid, via: 'spv')
+        chain[sym] = [action.id, wtxid]
+      end
+      # Wire A -> B -> C via outputs + inputs.
+      output_a = models::Output.create(action_id: chain[:a].first, satoshis: 1000,
+                                       vout: 0, locking_script: SecureRandom.random_bytes(25),
+                                       spendable_intent: 'none')
+      models::Input.create(action_id: chain[:b].first, output_id: output_a.id, vin: 0)
+      output_b = models::Output.create(action_id: chain[:b].first, satoshis: 1000,
+                                       vout: 0, locking_script: SecureRandom.random_bytes(25),
+                                       spendable_intent: 'none')
+      models::Input.create(action_id: chain[:c].first, output_id: output_b.id, vin: 0)
+      chain
+    end
+
+    # AC #2 — C is the anchor; on re-org the descent from C reaches A
+    # and B (via descendant walk) plus C itself, and all three rows
+    # are cleared. Note: "descendants" here means "structural
+    # descendants via inputs.output_id → outputs.action_id" — from A's
+    # perspective, B and C are descendants because they consume A's
+    # outputs.
+    it 'clears the whole chain A -> B -> C when A (root anchor) is invalidated' do
+      chain = build_chain
+
+      descent = store.descendant_action_ids_of(action_ids: [chain[:a].first])
+      expect(descent).to eq(Set[chain[:a].first, chain[:b].first, chain[:c].first])
+
+      cleared = store.invalidate_verification(action_ids: descent)
+      expect(cleared).to eq(3)
+
+      %i[a b c].each do |sym|
+        expect(store.verification_state(wtxid: chain[sym].last)).to be_nil
+      end
+    end
+
+    # Atomic combined invalidation: anchor + descent share one
+    # +db.transaction+ block. If either UPDATE fails, both roll back.
+    it 'rolls back both UPDATEs when a wrapping transaction raises' do
+      chain = build_chain
+
+      # Deliberate exception inside a transaction that also performs
+      # the two-step invalidation. The transaction should abort with
+      # no change.
+      expect do
+        store.db.transaction do
+          descent = store.descendant_action_ids_of(action_ids: [chain[:a].first])
+          store.invalidate_verification(action_ids: descent)
+          raise 'simulated post-invalidation failure'
+        end
+      end.to raise_error(RuntimeError, /simulated/)
+
+      # All three rows retain their 'spv' marks.
+      %i[a b c].each do |sym|
+        expect(store.verification_state(wtxid: chain[sym].last)&.[](:verified_via)).to eq('spv')
+      end
+    end
+
+    # A row without a verification mark sits on the descent walk but
+    # its UPDATE is skipped. This proves the poisoned-descendant DoS
+    # defence at the graph level, not just at the primitive level.
+    it 'walks unmarked descendants without clearing them (poisoned-descendant DoS)' do
+      chain = build_chain
+
+      # Persist an extra descendant D whose row has no 'spv' mark
+      # (adversarial: attacker grafts a synthetic descendant hoping to
+      # amplify the UPDATE cost). D consumes C's output.
+      d_wtxid = SecureRandom.random_bytes(32)
+      store.save_proof(wtxid: d_wtxid, proof: { raw_tx: 'x'.b * 20 })
+      proof_d = models::TxProof.where(wtxid: Sequel.blob(d_wtxid)).get(:id)
+      d_action = models::Action.create(description: 'poisoned descendant', broadcast_intent: 'none')
+      d_action.update(tx_proof_id: proof_d)
+      output_c = models::Output.create(action_id: chain[:c].first, satoshis: 1000,
+                                       vout: 0, locking_script: SecureRandom.random_bytes(25),
+                                       spendable_intent: 'none')
+      models::Input.create(action_id: d_action.id, output_id: output_c.id, vin: 0)
+      # NOTE: no store.mark_verified(...) — D's row has NULL verified_via.
+
+      descent = store.descendant_action_ids_of(action_ids: [chain[:a].first])
+      expect(descent).to include(d_action.id) # walked
+      cleared = store.invalidate_verification(action_ids: descent)
+      expect(cleared).to eq(3) # A, B, C — NOT D
+      expect(store.verification_state(wtxid: d_wtxid)).to be_nil # was nil, still nil
+    end
+
+    # Deep poisoned chain — 200 unmarked descendant rows below one
+    # verified anchor. The CTE walks unbounded up to max_depth=100;
+    # the UPDATE clears just the anchor row. Bounded runtime, no
+    # runaway.
+    it 'terminates in bounded time on a poisoned-descendant chain' do
+      # Anchor with an 'spv' mark.
+      anchor_id, anchor_wtxid = persist_marked_action
+
+      # Chain 200 unmarked descendants below the anchor.
+      previous_action = { id: anchor_id }
+      200.times do |_i|
+        output = models::Output.create(
+          action_id: previous_action[:id], satoshis: 1000, vout: 0,
+          locking_script: SecureRandom.random_bytes(25), spendable_intent: 'none'
+        )
+        child = models::Action.create(description: 'poisoned descendant', broadcast_intent: 'none')
+        # Give it a proof row so tx_proof_id is set but leave verified_via NULL.
+        cw = SecureRandom.random_bytes(32)
+        store.save_proof(wtxid: cw, proof: { raw_tx: 'x'.b * 20 })
+        proof_c = models::TxProof.where(wtxid: Sequel.blob(cw)).get(:id)
+        child.update(tx_proof_id: proof_c)
+        models::Input.create(action_id: child.id, output_id: output.id, vin: 0)
+        previous_action = { id: child.id }
+      end
+
+      duration = Benchmark.realtime do
+        descent = store.descendant_action_ids_of(action_ids: [anchor_id])
+        cleared = store.invalidate_verification(action_ids: descent)
+        # Only the anchor row carries a trust mark → UPDATE cleared 1.
+        expect(cleared).to eq(1)
+      end
+      expect(duration).to be < 0.5
+
+      # Anchor cleared; descendants untouched (were never marked).
+      expect(store.verification_state(wtxid: anchor_wtxid)).to be_nil
+    end
+
+    def persist_marked_action
+      wtxid = SecureRandom.random_bytes(32)
+      store.save_proof(wtxid: wtxid, proof: { raw_tx: 'x'.b * 20 })
+      proof_id = models::TxProof.where(wtxid: Sequel.blob(wtxid)).get(:id)
+      action = models::Action.create(description: 'sub 6.2 anchor', broadcast_intent: 'none')
+      action.update(tx_proof_id: proof_id)
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      [action.id, wtxid]
     end
   end
 end

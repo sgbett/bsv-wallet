@@ -930,6 +930,142 @@ module BSV
         invalidated_action_ids.uniq
       end
 
+      # Chunk size for the descent-invalidation UPDATE (HLR #516 Sub 6.2).
+      # Half +VERIFY_BATCH_CHUNK+: the WHERE predicate is more complex
+      # (large +action_id IN (...)+ set plus the +verified_via IS NOT
+      # NULL+ gate) and this keeps a single chunk safely under
+      # +SQLITE_MAX_VARIABLE_NUMBER = 32_766+ while leaving planner
+      # headroom on Postgres.
+      INVALIDATE_BATCH_CHUNK = 5_000
+      private_constant :INVALIDATE_BATCH_CHUNK
+
+      # Structural descent walk (HLR #516 Sub 6.2).
+      #
+      # Descent linkage (each hop from a parent action to its child):
+      #
+      #   outputs.action_id (parent) → outputs.id
+      #                              → inputs.output_id
+      #                              → inputs.action_id (child)
+      #
+      # Implemented as a recursive CTE via +Sequel::Dataset#with_recursive+.
+      # The CTE is named +descent+ with columns +(action_id, depth)+.
+      # The base case seeds +descent+ from +action_ids+ at depth 0. The
+      # recursive step joins the last descent row through +outputs+ and
+      # +inputs+ to produce the child action_ids at +depth + 1+, stopping
+      # once the depth column hits +max_depth+.
+      #
+      # Three properties matter for correctness:
+      #
+      # - +union_all: false+ so the CTE emits UNION (dedup); a diamond
+      #   ancestry where two paths from X reach Y still yields one Y row.
+      # - The depth counter caps recursion at +max_depth+ (default 100 =
+      #   coinbase-maturity ceiling) — a natural bound above which any
+      #   descendant is beyond every re-org's reach.
+      # - The depth cap is also the cycle guard. A contrived cyclic input
+      #   graph (shouldn't exist in real tx graphs but the CHECKs don't
+      #   forbid it) would re-visit rows through dedup; combined with the
+      #   depth ceiling, the walk terminates in bounded time regardless.
+      #
+      # Returns the seed ids plus every descendant reachable within the
+      # depth cap. The caller feeds this set to
+      # +invalidate_verification+ for coarse row-clearing.
+      #
+      # @param action_ids [Array<Integer>, Set<Integer>] seed action_ids
+      # @param max_depth [Integer] recursion ceiling (default 100)
+      # @return [Set<Integer>] seed action_ids + all transitive descendants
+      def descendant_action_ids_of(action_ids:, max_depth: 100)
+        seeds = action_ids.to_a
+        return Set.new if seeds.empty?
+
+        # Base case — every seed enters +descent+ at depth 0. Casts on
+        # both columns are load-bearing on Postgres: the recursive step
+        # emits +inputs.action_id+ (bigint) and +depth + 1+ (integer),
+        # so the seed literals must match those types or PG raises a
+        # +DatatypeMismatch+ ("column N has type integer in non-
+        # recursive term but type bigint overall"). Sequel's +Sequel.cast+
+        # generates dialect-appropriate CAST syntax; SQLite ignores the
+        # type coercion at storage but honours the SQL.
+        seed_ds = build_descent_seed(seeds.first)
+        seeds[1..].each do |aid|
+          seed_ds = seed_ds.union(
+            build_descent_seed(aid),
+            all: true, from_self: false
+          )
+        end
+
+        # Recursive step — for every row currently in +descent+ below the
+        # depth cap, find the actions whose inputs consume outputs
+        # produced by that action.
+        recursive_ds = @db[:outputs]
+                       .join(:descent, action_id: Sequel[:outputs][:action_id])
+                       .join(:inputs, output_id: Sequel[:outputs][:id])
+                       .where(Sequel[:descent][:depth] < max_depth)
+                       .select(
+                         Sequel[:inputs][:action_id].as(:action_id),
+                         (Sequel[:descent][:depth] + 1).as(:depth)
+                       )
+
+        # +union_all: false+ ⇒ UNION (dedup at each step). Diamond
+        # ancestry survives without duplicate visits; cyclic paths
+        # produce redundant same-action_id-different-depth rows until
+        # the depth cap halts recursion — bounded time, and Set.new
+        # collapses to unique action_ids on return.
+        cte = @db[:descent]
+              .with_recursive(:descent, seed_ds, recursive_ds,
+                              args: %i[action_id depth],
+                              union_all: false)
+
+        Set.new(cte.select_map(:action_id))
+      end
+
+      # Shared row-clearing primitive for verification-cache invalidation
+      # (HLR #516 Sub 6.2). Called by the descent walk wired into
+      # +Engine::AnchorLivenessCache+ after +invalidate_stale_anchors!+
+      # returns invalidated anchor +action_ids+.
+      #
+      # Two gates on the UPDATE:
+      #
+      # - +action_id IN (chunk)+ — the coarse-cleared descent set
+      # - +verified_via IS NOT NULL+ — the security-specialist DoS
+      #   defence. The descent WALK is unbounded on the read side
+      #   (structural descendants can be poisoned by an adversary
+      #   grafting synthetic rows); the UPDATE is bounded to rows
+      #   carrying a trust mark. Rows without +verified_via+ have no
+      #   cache state to clear and would trip the coherent CHECK.
+      #
+      # All three verification columns move together in one UPDATE so
+      # +verification_state_coherent+ is satisfied atomically.
+      # +INVALIDATE_BATCH_CHUNK+ (5k rows/statement) keeps the per-chunk
+      # bind-parameter count and planner cost bounded on both backends.
+      #
+      # @param action_ids [Array<Integer>, Set<Integer>]
+      # @return [Integer] rows cleared
+      def invalidate_verification(action_ids:)
+        ids = action_ids.to_a
+        return 0 if ids.empty?
+
+        rows_cleared = 0
+        ids.each_slice(INVALIDATE_BATCH_CHUNK) do |chunk|
+          # Resolve the +tx_proofs.id+ set backing this chunk of actions.
+          # Actions with no proof row (mid-lifecycle) are excluded here
+          # — no verification state to clear.
+          proof_ids = models::Action
+                      .where(id: chunk)
+                      .exclude(tx_proof_id: nil)
+                      .select_map(:tx_proof_id)
+          next if proof_ids.empty?
+
+          # Debug-log the wtxid + root anchor context BEFORE the UPDATE
+          # so a trace-path reader sees "cleared X because Y". Skipped
+          # when the logger is nil (production hot path — no DB round-
+          # trip cost).
+          log_transitive_invalidation(proof_ids) if BSV.logger
+
+          rows_cleared += clear_verification_columns_for_proofs(proof_ids)
+        end
+        rows_cleared
+      end
+
       # --- Block Headers ---
 
       # Persist a +blocks+ row, append-or-reject (#335).
@@ -1846,16 +1982,44 @@ module BSV
         end
         return [] if stale_ids.empty?
 
-        # Clear all three columns together — the +verification_state_coherent+
-        # CHECK rolls back a partial clear.
+        # Clear all three columns together via the shared primitive so
+        # both invalidation paths (anchor liveness here, transitive
+        # descent in +invalidate_verification+) share a single write
+        # site — the maintainability-specialist ask against drift.
         stale_ids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
-          models::TxProof
-            .where(id: chunk)
-            .exclude(verified_via: nil)
-            .update(verified_at: nil, verified_via: nil, verifier_version: nil)
+          clear_verification_columns_for_proofs(chunk)
         end
 
         models::Action.where(tx_proof_id: stale_ids).select_map(:id)
+      end
+
+      # Build a single-row rowset for the descent CTE seed. Casts pin the
+      # column types so Postgres's non-recursive term matches the type
+      # emitted by the recursive term (+inputs.action_id+ = bigint,
+      # +depth + 1+ = integer). SQLite is duck-typed and accepts either
+      # form.
+      def build_descent_seed(action_id)
+        @db.select(
+          Sequel.cast(action_id, :bigint).as(:action_id),
+          Sequel.cast(0, :integer).as(:depth)
+        )
+      end
+
+      # Shared row-clearing UPDATE for verification-cache invalidation.
+      # Both +invalidate_anchors_at_height+ (Sub 6.1's anchor-liveness
+      # path) and +invalidate_verification+ (Sub 6.2's transitive-
+      # descent path) route their write through here so the +verified_via
+      # IS NOT NULL+ predicate + coherent three-column clear stay in one
+      # place. Drift between the two paths would be a subtle correctness
+      # bug — the maintainability-specialist ask.
+      #
+      # @param proof_ids [Array<Integer>] +tx_proofs.id+ values to clear
+      # @return [Integer] rows updated
+      def clear_verification_columns_for_proofs(proof_ids)
+        models::TxProof
+          .where(id: proof_ids)
+          .exclude(verified_via: nil)
+          .update(verified_at: nil, verified_via: nil, verifier_version: nil)
       end
 
       def log_anchor_mismatch(wtxid, height, stored_root, current_root)
@@ -1864,6 +2028,30 @@ module BSV
             "cause=anchor_mismatch height=#{height} " \
             "stored_root=#{stored_root.unpack1('H*')} " \
             "current_root=#{current_root.unpack1('H*')}"
+        end
+      end
+
+      # Debug trace for +invalidate_verification+. Emits one line per
+      # cleared wtxid so a trace-path reader can attribute the miss to
+      # transitive-descent invalidation. +root_anchor+ is the row's own
+      # wtxid when the row itself is anchored (block_id present) or
+      # +unknown+ when it's a pure descendant — the shared primitive
+      # doesn't receive the specific seed that triggered the walk.
+      # Precise anchor attribution is not correctness-critical: the
+      # trace-path affordance is for the human debugger, and
+      # "cause=transitive_descent" is already the attribution.
+      def log_transitive_invalidation(proof_ids)
+        BSV.logger&.debug do
+          rows = models::TxProof
+                 .where(id: proof_ids)
+                 .exclude(verified_via: nil)
+                 .select(:wtxid, :block_id)
+                 .all
+          rows.map do |r|
+            anchor = r.block_id ? r.wtxid.to_dtxid : 'unknown'
+            "[Store#invalidate_verification] wtxid=#{r.wtxid.to_dtxid} " \
+              "cause=transitive_descent root_anchor=#{anchor}"
+          end.join("\n")
         end
       end
 

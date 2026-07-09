@@ -522,6 +522,58 @@ module BSV
           raise NotImplementedError
         end
 
+        # Structural descent walk (HLR #516 Sub 6.2). Returns the set of
+        # +actions.id+ reachable from any +action_ids+ seed by following
+        # the +inputs.output_id → outputs.id → outputs.action_id+ edge
+        # transitively. Uses a recursive CTE (+Sequel::Dataset#with_recursive+)
+        # so the walk executes in one DB round-trip on both Postgres and
+        # SQLite. The seed IDs are included in the returned set.
+        #
+        # Coarse-clear semantics: the walk descends every structural
+        # descendant regardless of whether that row's SPV walk went
+        # through the seed anchor. Inferring the answer requires replaying
+        # +Tx#verify+, which defeats the cache. Clearing more than needed
+        # forces a cheap re-verify on next reference; clearing less than
+        # needed opens a silent double-spend acceptance window — the
+        # asymmetry favours coarse.
+        #
+        # Depth cap +max_depth+ bounds the walk. 100 is the natural coinbase
+        # maturity ceiling — anything past that is definitionally beyond
+        # any re-org's coinbase-invalidation reach and terminating early
+        # is correct. The cap also serves as the cycle guard.
+        #
+        # @param action_ids [Array<Integer>] seed +actions.id+ values
+        # @param max_depth [Integer] recursion depth cap (default 100)
+        # @return [Set<Integer>] seeds + all transitive descendants
+        def descendant_action_ids_of(action_ids:, max_depth: 100)
+          raise NotImplementedError
+        end
+
+        # Shared row-clearing primitive for verification-cache invalidation
+        # (HLR #516 Sub 6.2). Clears +verified_at+, +verified_via+ and
+        # +verifier_version+ together on every +tx_proofs+ row whose
+        # backing action_id sits in +action_ids+ AND whose +verified_via+
+        # is currently non-NULL.
+        #
+        # The +verified_via IS NOT NULL+ predicate is the security-
+        # specialist DoS defence: an attacker can grow the descent set
+        # unboundedly by chaining synthetic rows without verification
+        # marks; those rows lie on the descent WALK but the UPDATE never
+        # touches them. The write cost stays bounded by "rows carrying
+        # trust", never by "rows plausibly reachable".
+        #
+        # Clearing all three columns in one UPDATE satisfies the
+        # +verification_state_coherent+ CHECK — a partial clear
+        # (+verified_at NULL+ with +verified_via+ still set) trips it and
+        # rolls the whole UPDATE back.
+        #
+        # @param action_ids [Array<Integer>, Set<Integer>]
+        # @return [Integer] number of rows whose verification state was
+        #   cleared
+        def invalidate_verification(action_ids:)
+          raise NotImplementedError
+        end
+
         # --- Settings ---
 
         # Retrieve a setting value by key.
