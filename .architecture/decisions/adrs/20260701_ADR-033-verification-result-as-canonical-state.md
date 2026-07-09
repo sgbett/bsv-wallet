@@ -128,6 +128,25 @@ Extend `HydratedTxCache` to remember verification results in memory. Covers the 
 
 Simpler surface. Would collapse the lifecycle (`self_built` / `spv` / `broadcast_ack`) into one bit — losing the trust-source distinction and forcing either "trust everything" or "trust nothing" downstream. Rejected on the specialist review (crypto + security both defended the enum). The `verifier_version` similarly earns its keep against downgrade attacks.
 
+### E. Persistent descent metadata table for transitive invalidation (Option C) — DEFERRED
+
+HLR #516 Sub 6.2 implements transitive invalidation via a recursive CTE (`Store#descendant_action_ids_of`). Sub 6.2's synthesised specialist review identified an alternative — a persistent `descent_metadata` table that pre-materialises the descent graph so re-org fan-out becomes a single indexed read rather than a recursive walk. The nine-specialist synthesis concurred: defer unless the CTE measures poorly.
+
+The CTE choice covers three properties Option (C) also delivers, at zero storage cost and zero write-path overhead:
+
+- **Diamond-ancestry dedup** via `union_all: false` (UNION rather than UNION ALL).
+- **Cycle termination** via the depth counter capped at `max_depth = 100` (natural coinbase-maturity ceiling).
+- **Cross-backend portability** — Sequel `Dataset#with_recursive` compiles to a single SQL statement on Postgres and SQLite.
+
+Storage cost of Option (C) is non-trivial: every ingress writes rows for the descent edges (`ancestor_action_id, descendant_action_id, depth`), the row count grows quadratically-ish with cross-BEEF descendant density, and every reap has to prune the descent rows too. Write-path complexity ripples into every hot-path ingress site.
+
+**Measurement-gated migration criterion.** Option (C) becomes worth reconsidering only when:
+
+- The recursive CTE surfaces as a top-3 cost driver in a receive-throughput profile at ≥ 100k proven wtxids in the wallet, AND
+- The Sub 6.3 regression harness (HLR #532) shows the CTE crossing the 15% Postgres / 25% SQLite ceiling on iter-100 `receive_ms` vs the Sub-5-only baseline.
+
+Named here so future readers see "considered and deferred", not forgotten. The Sub 6.2 implementation records this deferral in the "Descent graph invalidation" subsection of `docs/reference/verification-cache.md`.
+
 ## Consequences
 
 ### Positive
@@ -151,7 +170,7 @@ Simpler surface. Would collapse the lifecycle (`self_built` / `spv` / `broadcast
 
 ## Related
 
-- **HLR #516** — this ADR's parent work.
+- **HLR #516** — this ADR's parent work. Sub 6 (issues #530/#531/#532) implements the two-path re-org invalidation this ADR names (lazy anchor check + active reaper + transitive descent walk).
 - **HLR #517** — egress-verification worker follow-up (upgrade `self_built` → `spv` asynchronously).
 - **ADR-003** — Principle of state (canonical DB, atomic transitions, invalid state structurally impossible). This ADR identifies verification result as a class of state the wallet had been recomputing.
 - **ADR-015** — Chain-tracker pivot (SDK `Tx#verify` walks proofs; wallet answers root-for-height). The kwarg PR (bsv-ruby-sdk #904) is the seam between the SDK's walk and the wallet's persistent cache.

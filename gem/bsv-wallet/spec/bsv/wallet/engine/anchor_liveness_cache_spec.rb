@@ -162,5 +162,111 @@ RSpec.describe BSV::Wallet::Engine::AnchorLivenessCache, :store do
       trusted = cache.filter_trusted([wtxid_a, wtxid_b])
       expect(trusted).to include(wtxid_a, wtxid_b)
     end
+
+    # HLR #516 Sub 6.2 — the transitive descent walk. When the tracker
+    # invalidates an anchor, its structural descendants (rows whose SPV
+    # walk went through the anchor's proof) are coarse-cleared too.
+    # These cases wire the whole path: anchor mismatch → descent walk →
+    # descendant UPDATE, all in one +db.transaction+.
+    describe 'transitive descendant invalidation' do
+      # Persist an action with an 'spv' mark backed by +wtxid+'s
+      # proof, and return its action id + the produced output row.
+      def persist_marked_action_with_output(height:, wtxid: nil)
+        wtxid ||= persist_anchored(height: height)
+        proof_id = models::TxProof.where(wtxid: Sequel.blob(wtxid)).get(:id)
+        action = models::Action.where(tx_proof_id: proof_id).first ||
+                 models::Action.create(description: 'descent test source',
+                                       broadcast_intent: 'none').tap { |a| a.update(tx_proof_id: proof_id) }
+        output = models::Output.create(
+          action_id: action.id, satoshis: 1000, vout: 0,
+          locking_script: SecureRandom.random_bytes(25), spendable_intent: 'none'
+        )
+        [action.id, wtxid, output]
+      end
+
+      # Persist a descendant action consuming +output+, marked
+      # +via+ (typically 'spv' — the SPV walk through the anchor's
+      # proof would have produced this mark). Returns
+      # +[action_id, wtxid]+.
+      def persist_descendant_of(output:, via: 'spv')
+        wtxid = SecureRandom.random_bytes(32)
+        store.save_proof(wtxid: wtxid, proof: { raw_tx: 'x'.b * 20 })
+        proof_id = models::TxProof.where(wtxid: Sequel.blob(wtxid)).get(:id)
+        action = models::Action.create(description: 'descendant test', broadcast_intent: 'none')
+        action.update(tx_proof_id: proof_id)
+        models::Input.create(action_id: action.id, output_id: output.id, vin: 0)
+        store.mark_verified(wtxid: wtxid, via: via) if via
+        [action.id, wtxid]
+      end
+
+      it 'invalidates a downstream descendant when the anchor is stale' do
+        height = 960_001
+        _anchor_id, anchor_wtxid, output = persist_marked_action_with_output(height: height)
+        _descendant_id, descendant_wtxid = persist_descendant_of(output: output, via: 'spv')
+
+        tracker = build_tracker(height => SecureRandom.random_bytes(32)) # anchor mismatches
+        cache = described_class.new(store: store, chain_tracker: tracker)
+
+        trusted = cache.filter_trusted([anchor_wtxid, descendant_wtxid])
+        expect(trusted).not_to include(anchor_wtxid)
+        expect(trusted).not_to include(descendant_wtxid)
+        expect(store.verification_state(wtxid: anchor_wtxid)).to be_nil
+        expect(store.verification_state(wtxid: descendant_wtxid)).to be_nil
+      end
+
+      it 'leaves descendants alone when the tracker agrees on the anchor root' do
+        height = 960_002
+        _anchor_id, anchor_wtxid, output = persist_marked_action_with_output(height: height)
+        _descendant_id, descendant_wtxid = persist_descendant_of(output: output, via: 'spv')
+
+        tracker = build_tracker(height => anchor_wtxid) # anchor matches
+        cache = described_class.new(store: store, chain_tracker: tracker)
+
+        trusted = cache.filter_trusted([anchor_wtxid, descendant_wtxid])
+        expect(trusted).to include(anchor_wtxid, descendant_wtxid)
+      end
+
+      # Poisoned descendant: an unmarked structural descendant sits on
+      # the descent walk but its UPDATE is skipped. The walk stays
+      # bounded and the trust set stays correct.
+      it 'walks but does not update an unmarked poisoned descendant' do
+        height = 960_003
+        _anchor_id, anchor_wtxid, output = persist_marked_action_with_output(height: height)
+        _poisoned_id, poisoned_wtxid = persist_descendant_of(output: output, via: nil)
+
+        tracker = build_tracker(height => SecureRandom.random_bytes(32))
+        cache = described_class.new(store: store, chain_tracker: tracker)
+
+        cache.filter_trusted([anchor_wtxid, poisoned_wtxid])
+        # Anchor cleared; poisoned row was never marked so has nothing
+        # to clear.
+        expect(store.verification_state(wtxid: anchor_wtxid)).to be_nil
+        expect(store.verification_state(wtxid: poisoned_wtxid)).to be_nil
+      end
+
+      # Atomic combined invalidation — a mid-transaction failure rolls
+      # back both anchor and descendant UPDATEs. Exercised by making
+      # +descendant_action_ids_of+ raise; the +invalidate_stale_anchors!+
+      # write inside the same +db.transaction+ must be undone.
+      it 'rolls back the anchor UPDATE when the descent walk raises' do
+        height = 960_004
+        _anchor_id, anchor_wtxid, output = persist_marked_action_with_output(height: height)
+        _descendant_id, descendant_wtxid = persist_descendant_of(output: output, via: 'spv')
+
+        tracker = build_tracker(height => SecureRandom.random_bytes(32))
+        cache = described_class.new(store: store, chain_tracker: tracker)
+
+        allow(store).to receive(:descendant_action_ids_of)
+          .and_raise(StandardError, 'simulated descent failure')
+
+        expect { cache.filter_trusted([anchor_wtxid, descendant_wtxid]) }
+          .to raise_error(StandardError, /simulated/)
+
+        # Anchor's 'spv' mark preserved — the outer transaction rolled
+        # back the anchor UPDATE too.
+        expect(store.verification_state(wtxid: anchor_wtxid)&.[](:verified_via)).to eq('spv')
+        expect(store.verification_state(wtxid: descendant_wtxid)&.[](:verified_via)).to eq('spv')
+      end
+    end
   end
 end

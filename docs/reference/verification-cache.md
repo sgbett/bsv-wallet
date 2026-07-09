@@ -74,6 +74,19 @@ The anchor key is `(block_height, computed_root)` in **wire-order binary bytes**
 
 **`Store#find_or_create_block` is append-or-reject.** A `save_proof` call whose supplied `(height, merkle_root)` disagrees with an existing `blocks` row at the same height raises `CompetingBlockHeaderError` rather than silently attaching to the stale row. Re-org handling is delegated to the anchor-liveness path — every invalidation goes through `invalidate_stale_anchors!`, never through a silent block-row swap.
 
+#### Descent graph invalidation (HLR #516 Sub 6.2)
+
+Once `invalidate_stale_anchors!` returns the set of action_ids whose anchor rows have just been cleared, every structural descendant of those actions must be coarse-cleared too. A descendant Z whose `'spv'` state came from an SPV walk running through the re-org'd ancestor's proof is stale even though its own row was never anchored.
+
+The canonical implementation lives at `Store#descendant_action_ids_of(action_ids:, max_depth: 100)`. It is a recursive CTE (Sequel `Dataset#with_recursive`) walking the edge `inputs.output_id → outputs.id → outputs.action_id` transitively.
+
+- **Coarse-clear rule.** Every structural descendant is walked *regardless* of whether that row's SPV walk went through the invalidated anchor. Inferring the answer requires replaying `Tx#verify`, which defeats the cache. The asymmetry favours coarse: wasted re-verify on next reference is safe; missed clear is a silent double-spend acceptance window. The cryptography reviewer vetoed any "walked-only" heuristic on this basis.
+- **`verified_via IS NOT NULL` UPDATE gate.** The descent WALK is unbounded on the read side (structural descendants can be poisoned by an adversary grafting synthetic rows). The UPDATE — done by the shared primitive `Store#invalidate_verification(action_ids:)` — is bounded to rows carrying a trust mark. Rows without `verified_via` have no cache state to clear and would trip the coherent CHECK. This is the security specialist's DoS defence stitched onto the cryptography reviewer's coarse-clear rule.
+- **Depth cap `D = 100`.** Natural coinbase-maturity ceiling — anything beyond 100 hops is definitionally past every re-org's reach. Also the cycle guard: contrived cyclic input graphs terminate at the cap, and `Set.new(...)` collapses duplicate rows on return.
+- **Atomic combined invalidation.** `Engine::AnchorLivenessCache#filter_trusted` runs the anchor UPDATE and the descent UPDATE inside one `db.transaction`. Sequel flattens nested transactions; the caller (Sub 5 read path, forthcoming) can wrap the whole `filter_trusted` invocation in its own transaction without introducing extra commit boundaries. A failure mid-invalidation rolls back both.
+
+The Option (C) alternative — a persistent descent-metadata table — is deferred (see ADR-033). The recursive CTE is the load-bearing implementation; Option (C) becomes worth pursuing only if measurements indicate the walk is a hot-path cost driver.
+
 ### 2. Verifier version upgrade
 
 `BSV::Wallet::VERIFIER_VERSION` is a compile-time constant. It bumps when verification semantics change. A row with `verifier_version < current` is treated as a cache miss and re-verified. Existing rows are silently upgraded on first reference; no migration script needed.

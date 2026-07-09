@@ -40,15 +40,28 @@ module BSV
         #      each height — one batched call, memoised for the life of
         #      this instance so the walk cannot double-fetch.
         #   3. Hand the +{ height => root }+ map to
-        #      +Store#invalidate_stale_anchors!+ (pure writer).
-        #   4. Re-query +Store#verified_wtxids+ so the caller receives a
-        #      Set that already reflects the invalidation. The read is
-        #      trivially cheap under the covering index.
+        #      +Store#invalidate_stale_anchors!+ (pure writer). Returns
+        #      the invalidated anchor +action_ids+.
+        #   4. HLR #516 Sub 6.2 — walk the structural descent from those
+        #      anchors via +Store#descendant_action_ids_of+ and coarse-
+        #      clear all verified descendants via
+        #      +Store#invalidate_verification+. The UPDATE inside the
+        #      shared primitive is gated on +verified_via IS NOT NULL+,
+        #      so unmarked structural descendants (adversarial or
+        #      benign) are walked but never written. Steps 3 + 4 share
+        #      one +db.transaction+ block: an anchor cleared while
+        #      descendants remain +'spv'+ is the state the atomic
+        #      combined invalidation exists to prevent.
+        #   5. Re-query +Store#verified_wtxids+ so the caller receives a
+        #      Set that already reflects both anchor and descendant
+        #      invalidation. The read is trivially cheap under the
+        #      covering index.
         #
         # Chain-tracker unreachable (network error, unknown height,
         # empty tracker) surfaces as +nil+ entries in the resolved map
         # and does NOT invalidate — only genuine root mismatches clear
-        # rows. Transient outages leave the trust set intact.
+        # rows. Transient outages leave the trust set intact, and the
+        # descent walk is skipped when the anchor set is empty.
         #
         # @param wtxids [Array<String>] 32-byte binary wtxids
         # @return [Set<String>] the surviving trust set
@@ -56,7 +69,12 @@ module BSV
           return Set.new if wtxids.nil? || wtxids.empty?
 
           heights = heights_for_verified(wtxids)
-          @store.invalidate_stale_anchors!(heights_to_roots: known_roots_for(heights))
+          @store.db.transaction do
+            invalidated = @store.invalidate_stale_anchors!(
+              heights_to_roots: known_roots_for(heights)
+            )
+            expand_and_clear_descendants(invalidated) if invalidated.any?
+          end
           @store.verified_wtxids(
             wtxids: wtxids,
             version_at_least: BSV::Wallet::VERIFIER_VERSION,
@@ -78,6 +96,31 @@ module BSV
             .exclude(Sequel[:tx_proofs][:verified_via] => nil)
             .distinct
             .select_map(Sequel[:blocks][:height])
+        end
+
+        # HLR #516 Sub 6.2 — expand the invalidated anchor set through
+        # +Store#descendant_action_ids_of+ and coarse-clear via
+        # +Store#invalidate_verification+. The seed anchors are the
+        # +action_ids+ returned by +invalidate_stale_anchors!+ — actions
+        # whose own proof rows have just been cleared. The descent walk
+        # unifies them with all structural descendants (transitively via
+        # +inputs → outputs → next actions+); the shared primitive's
+        # +verified_via IS NOT NULL+ predicate gates the UPDATE to rows
+        # that carry a trust mark.
+        #
+        # Coarse-clear rule (cryptography): every structural descendant
+        # is walked regardless of whether its SPV proof went through the
+        # invalidated anchor. Inferring the answer requires replaying
+        # +Tx#verify+, which defeats the cache; wasted re-verify on next
+        # reference is safe, missed clear opens a silent double-spend
+        # window.
+        #
+        # Runs inside the +db.transaction+ opened by +filter_trusted+ —
+        # Sequel flattens nested transactions, and a failure at any step
+        # rolls back both the anchor UPDATE and the descendant UPDATE.
+        def expand_and_clear_descendants(seed_action_ids)
+          descent = @store.descendant_action_ids_of(action_ids: seed_action_ids)
+          @store.invalidate_verification(action_ids: descent)
         end
 
         # Per-walk memo — collapse repeat descent through the same
