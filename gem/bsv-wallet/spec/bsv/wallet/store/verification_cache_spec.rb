@@ -80,6 +80,29 @@ RSpec.describe BSV::Wallet::Store, :store do
       store.mark_verified(wtxid: wtxid, via: 'spv')
       expect(store.verification_state(wtxid: wtxid)[:verified_via]).to eq('spv')
     end
+
+    # HLR #521 strength ratchet is same-version only. Cross-version
+    # (existing verifier_version < code version) writes go through the
+    # monotonic version predicate alone — the new verifier's
+    # classification is authoritative, and Sub 5's read gate
+    # (+verified_wtxids(version_at_least:)+) already excludes stale
+    # stronger marks from an older binary.
+    it 'allows a weaker via to overwrite an older-version stronger via (cross-version)' do
+      wtxid = persist_proof
+      # Row starts at the compile-time constant (currently 1). Simulate
+      # a code-version bump by stubbing +VERIFIER_VERSION+ to a higher
+      # value for the second write, so the row's version predates the
+      # binary that's now running. +verifier_version_range+ CHECK
+      # (+>= 1+) forbids ageing the row below 1 the other way.
+      store.mark_verified(wtxid: wtxid, via: 'spv')
+      stub_const('BSV::Wallet::VERIFIER_VERSION', BSV::Wallet::VERIFIER_VERSION + 1)
+
+      rows = store.mark_verified(wtxid: wtxid, via: 'self_built')
+      expect(rows).to eq(1)
+      state = store.verification_state(wtxid: wtxid)
+      expect(state[:verified_via]).to eq('self_built')
+      expect(state[:verifier_version]).to eq(BSV::Wallet::VERIFIER_VERSION)
+    end
   end
 
   describe '#mark_verified_batch' do

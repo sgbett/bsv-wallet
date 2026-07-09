@@ -95,7 +95,12 @@ Do not wire the cache into egress. If you find yourself wanting to, revisit ADR-
 
 ## Concurrency
 
-Optimistic. Verify is a pure function; two processes verifying the same wtxid produce identical results. `mark_verified` is a single atomic UPDATE with a monotonic predicate (`WHERE verifier_version IS NULL OR verifier_version <= ?`) so an older writer cannot clobber a newer stamp. The `<=` (rather than strict `<`) admits same-version metadata upgrades — e.g. `self_built` → `broadcast_ack` under the same `VERIFIER_VERSION` — while still refusing a downgraded binary. Last-writer-wins at the same version is correct because the state written is identical.
+Optimistic. Verify is a pure function; two processes verifying the same wtxid produce identical results. `mark_verified` is a single atomic UPDATE with two composed gates:
+
+1. **Monotonic version predicate** — `verifier_version IS NULL OR verifier_version <= ?` — an older writer cannot clobber a newer stamp. `<=` (rather than strict `<`) admits same-version writes.
+2. **Same-version strength ratchet** — when the existing row is at the current `VERIFIER_VERSION`, the new `via` may only overwrite `verified_via` values at or below its own strength. Strength order is `self_built` < `broadcast_ack` < `spv`, so within one version `self_built` can only overwrite `NULL` or `self_built`, `broadcast_ack` can overwrite `NULL`/`self_built`/`broadcast_ack`, and `spv` can overwrite any. This makes trust ratchet forward within a version — a subsequent `self_built` write cannot silently demote a row Sub 2 already marked `'spv'`.
+
+Cross-version writes (`existing verifier_version < current`) bypass the ratchet: the new verifier's classification is authoritative, and `Store#verified_wtxids(version_at_least:)` excludes stale marks from older binaries anyway. Version-upgrade demotions are safe to write; the read gate keeps the trust surface honest.
 
 ## The SDK seam
 
