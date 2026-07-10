@@ -5,6 +5,12 @@ source 'https://rubygems.org'
 gemspec
 
 group :development, :test do
+  # Ruby 4.0 dropped +benchmark+ from the standard library — added as a
+  # dev dependency so the perf-lane wall-clock harness in
+  # +verification_cache_spec.rb+ and +descendant_action_ids_of_spec.rb+
+  # still loads. Ruby 3.3/3.4 already ship it in stdlib and would ignore
+  # the explicit dependency; naming it keeps Ruby-4-preview CI green.
+  gem 'benchmark'
   gem 'rack-test', '~> 2.1'
   gem 'rake'
   gem 'rspec', '~> 3.13'

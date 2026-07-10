@@ -56,6 +56,18 @@ module BSV
             while (msg = pull.receive)
               begin
                 process(msg.first.to_i)
+              rescue BSV::Wallet::CompetingBlockHeaderError => e
+                # Distinct signal — ARC's success response carried proof
+                # material whose header disagrees with the wallet's
+                # persisted +blocks+ row. Real re-org signal from the
+                # broadcast side. Log at +error+ with the +competing_header+
+                # cause + height so it can be attributed distinctly rather
+                # than buried in generic worker-error telemetry.
+                # #533 code-review.
+                BSV.logger&.error do
+                  "[Engine::Broadcast] pull cause=competing_header height=#{e.height} — " \
+                    'ARC-supplied header conflicts with persisted blocks row'
+                end
               rescue StandardError => e
                 BSV.logger&.error { "[Engine::Broadcast] pull error: #{e.message}" }
               end

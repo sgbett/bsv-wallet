@@ -34,6 +34,18 @@ module BSV
             while (msg = pull.receive)
               begin
                 process(msg.first.to_i)
+              rescue BSV::Wallet::CompetingBlockHeaderError => e
+                # Distinct signal — the acquired proof's header disagrees
+                # with the wallet's cached +blocks+ row (re-org detected via
+                # proof acquisition). Surface as +task.failed+ with a
+                # dedicated reason so the daemon can distinguish this from
+                # a generic worker crash and, when Sub 5's read gate is
+                # wired, trigger an anchor-liveness sweep at that height.
+                # #533 code-review.
+                BSV::Wallet.emit('task.failed', task: 'proof_acquisition',
+                                                id: msg.first.to_i,
+                                                reason: :reorg_detected,
+                                                height: e.height)
               rescue StandardError => e
                 BSV::Wallet.emit('fiber.crashed', task: 'proof_acquisition', error: e.message.lines.first&.chomp)
               end

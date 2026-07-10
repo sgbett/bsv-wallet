@@ -207,13 +207,23 @@ RSpec.shared_context 'engine setup' do
     )
     store.sign_action(action_id: source_action[:id], wtxid: source_wtxid, raw_tx: source_raw_tx)
 
+    # HLR #516 Sub 6.1 fix: +find_or_create_block+ now refuses to
+    # attach two proofs with different roots to the same block row
+    # (append-or-reject re-org guard). Fixtures used to jam every
+    # funding source into height 1, which trips the guard now that
+    # +save_proof+ passes the computed root to +find_or_create_block+.
+    # Take a monotonic height from the current +blocks+ table so each
+    # fixture-generated tx has its own +blocks+ row — deterministic
+    # uniqueness (the earlier +source_wtxid+-derived height was
+    # probabilistic, per #533 Copilot round-2).
+    fixture_height = (BSV::Wallet::Store::Models::Block.max(:height) || 900_000).to_i + 1
     merkle_path = BSV::Transaction::MerklePath.new(
-      block_height: 1,
+      block_height: fixture_height,
       path: [[BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: source_wtxid, txid: true)]]
     )
     store.save_proof(
       wtxid: source_wtxid,
-      proof: { raw_tx: source_raw_tx, merkle_path: merkle_path.to_binary, height: 1 }
+      proof: { raw_tx: source_raw_tx, merkle_path: merkle_path.to_binary, height: fixture_height }
     )
 
     store.promote_action(action_id: source_action[:id], outputs: outputs)

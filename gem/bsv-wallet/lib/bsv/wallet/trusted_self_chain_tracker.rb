@@ -36,6 +36,24 @@ module BSV
 
       def valid_root_for_height?(_root, _height) = true
       def current_height = SENTINEL_HEIGHT
+
+      # Anchor-liveness stub — HLR #516 Sub 6.
+      #
+      # This tracker is egress-only: it exists to isolate the structural
+      # verify walk over a BEEF the wallet itself just built. It never
+      # participates in ingress trust and should never be wired into an
+      # +Engine::AnchorLivenessCache+. Returning "unknown" (+nil+) for
+      # every height keeps the caller safe in the pathological case a
+      # future call site accidentally passes this tracker to the ingress
+      # path: unknown ≠ mismatch, so the trust set is not invalidated.
+      #
+      # @param heights [Array<Integer>]
+      # @return [Hash{Integer => nil}]
+      def known_roots_for_heights(heights)
+        return {} if heights.nil? || heights.empty?
+
+        heights.uniq.to_h { |h| [h, nil] }
+      end
     end
   end
 end

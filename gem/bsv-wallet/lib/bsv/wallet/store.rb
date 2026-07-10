@@ -769,8 +769,10 @@ module BSV
       # Chunk size for +wtxid IN (?...)+ queries. Postgres allows up to
       # 65_535 bind parameters per statement; 10k leaves headroom for
       # additional predicates and keeps a single chunk's plan small.
+      # Public: +Engine::AnchorLivenessCache#heights_for_verified+ uses
+      # the same ceiling so every large wtxid-IN query in the wallet
+      # respects one bind-limit invariant.
       VERIFY_BATCH_CHUNK = 10_000
-      private_constant :VERIFY_BATCH_CHUNK
 
       def mark_verified(wtxid:, via:, at_time: nil)
         # Single form delegates to the batch — validation of both +wtxid+
@@ -873,6 +875,291 @@ module BSV
         # boot time. Coherent CHECK makes the two filters semantically
         # equivalent.
         models::TxProof.exclude(verified_at: nil).max(:verifier_version)
+      end
+
+      # Anchor-liveness invalidation writer (HLR #516 Sub 6.1).
+      #
+      # Clears the three verification-cache columns
+      # (+verified_at+, +verified_via+, +verifier_version+) on any
+      # +tx_proofs+ row whose stored anchor disagrees with the tracker's
+      # current view. The anchor key is +(block_height, computed_root)+
+      # in wire-order 32-byte binary bytes — NOT hex, NOT BUMP-encoded
+      # bytes. The persisted +merkle_path+ is folded through the SDK's
+      # +MerklePath#compute_root+ so that BUMP-encoding variability
+      # (offset-0 leaf duplicates, unbalanced padding, hash-side ordering)
+      # closes at the canonical root before comparison — two BUMPs with
+      # the same computed root produce identical invalidation decisions
+      # regardless of their on-wire bytes.
+      #
+      # Coarse-clear rule: all three columns move together to satisfy the
+      # +verification_state_coherent+ CHECK. Only rows already carrying a
+      # trust mark (+verified_via IS NOT NULL+) are touched; unverified
+      # rows are left alone (no work for the descendant walker to undo).
+      #
+      # +heights_to_roots+ semantics:
+      # - present with a 32-byte value ⇒ compare, invalidate on mismatch.
+      # - present with +nil+          ⇒ height is "unknown" to the tracker
+      #   (transient outage, sync gap) — never invalidate. The trust set
+      #   must not decay under a network blip.
+      # - height absent from the Hash ⇒ untouched (caller did not ask).
+      #
+      # No chain_tracker dependency here — this method is a pure writer.
+      # +Engine::AnchorLivenessCache+ resolves +heights_to_roots+ from
+      # the tracker and hands it in.
+      #
+      # @param heights_to_roots [Hash{Integer => String, nil}] wire-order
+      #   32-byte binary current roots keyed by block height
+      # @return [Array<Integer>] +actions.id+ values whose proofs were
+      #   invalidated (needed by Sub 6.2's descendant walk)
+      def invalidate_stale_anchors!(heights_to_roots:)
+        return [] if heights_to_roots.empty?
+
+        invalidated_action_ids = []
+        # Chunk by height to keep the per-statement predicate small on
+        # wallets with tens of thousands of proofs per re-org'd block.
+        # +VERIFY_BATCH_CHUNK+ (10k) is the row-level ceiling; batching
+        # by height directly is coarser but simpler and matches the
+        # write shape (one UPDATE per (height, root) pair).
+        @db.transaction do
+          heights_to_roots.each do |height, current_root_bytes|
+            # +current_root_bytes+ may be +nil+ (tracker outage for this
+            # height). We still walk the candidates so
+            # structurally-unverifiable rows (missing / unparseable
+            # +merkle_path+ with a trust mark) get fail-closed cleared
+            # regardless of tracker reachability. The anchor-mismatch
+            # comparison itself is what needs a live tracker; unverifiable
+            # rows are unverifiable at any tracker state. Copilot round-6
+            # on #533.
+            invalidated_action_ids.concat(
+              invalidate_anchors_at_height(height, current_root_bytes)
+            )
+          end
+        end
+        invalidated_action_ids.uniq
+      end
+
+      # Chunk size for the descent-invalidation UPDATE (HLR #516 Sub 6.2).
+      # Half +VERIFY_BATCH_CHUNK+: the WHERE predicate is more complex
+      # (large +action_id IN (...)+ set plus the +verified_via IS NOT
+      # NULL+ gate) and this keeps a single chunk safely under
+      # +SQLITE_MAX_VARIABLE_NUMBER = 32_766+ while leaving planner
+      # headroom on Postgres.
+      INVALIDATE_BATCH_CHUNK = 5_000
+      private_constant :INVALIDATE_BATCH_CHUNK
+
+      # Structural descent walk (HLR #516 Sub 6.2).
+      #
+      # Descent linkage (each hop from a parent action to its child):
+      #
+      #   outputs.action_id (parent) → outputs.id
+      #                              → inputs.output_id
+      #                              → inputs.action_id (child)
+      #
+      # Implemented as a recursive CTE via +Sequel::Dataset#with_recursive+.
+      # The CTE is named +descent+ with columns +(action_id, depth)+.
+      # The base case seeds +descent+ from +action_ids+ at depth 0. The
+      # recursive step joins the last descent row through +outputs+ and
+      # +inputs+ to produce the child action_ids at +depth + 1+, stopping
+      # once the depth column hits +max_depth+.
+      #
+      # Three properties matter for correctness:
+      #
+      # - +union_all: false+ so the CTE emits UNION (dedup); a diamond
+      #   ancestry where two paths from X reach Y still yields one Y row.
+      # - The depth counter caps recursion at +max_depth+ (default 100 =
+      #   coinbase-maturity ceiling) — a natural bound above which any
+      #   descendant is beyond every re-org's reach.
+      # - The depth cap is also the cycle guard. A contrived cyclic input
+      #   graph (shouldn't exist in real tx graphs but the CHECKs don't
+      #   forbid it) would re-visit rows through dedup; combined with the
+      #   depth ceiling, the walk terminates in bounded time regardless.
+      #
+      # Returns the seed ids plus every descendant reachable within the
+      # depth cap. The caller feeds this set to
+      # +invalidate_verification+ for coarse row-clearing.
+      #
+      # @param action_ids [Array<Integer>, Set<Integer>] seed action_ids
+      # @param max_depth [Integer] recursion ceiling (default 100)
+      # @return [Set<Integer>] seed action_ids + all transitive descendants
+      def descendant_action_ids_of(action_ids:, max_depth: 100)
+        seeds = action_ids.to_a
+        return Set.new if seeds.empty?
+
+        # Chunk the seed set at +VERIFY_BATCH_CHUNK+ before feeding the
+        # CTE. A re-org invalidating tens of thousands of anchors would
+        # exceed SQLite's 32_766 bind-parameter limit on the base
+        # +actions IN (…)+ clause otherwise, aborting transitive
+        # invalidation and leaving stale trust marks. Chunk-and-merge is
+        # safe: the CTE recurses to +max_depth+ per chunk, and
+        # +Set.new+ collapses duplicate descendants across chunks
+        # (diamond ancestry between two chunks converges to the same
+        # union). Copilot on #533.
+        results = Set.new
+        seeds.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
+          results.merge(descend_from_seed_chunk(chunk, max_depth))
+        end
+        results
+      end
+
+      # Run the recursive descent CTE for a single chunk of seed
+      # +action_ids+. Extracted from +descendant_action_ids_of+ so the
+      # chunking loop above stays legible.
+      def descend_from_seed_chunk(seeds, max_depth)
+        # Base case — every seed enters +descent+ at depth 0. Casts on
+        # both columns are load-bearing on Postgres: the recursive step
+        # emits +inputs.action_id+ (bigint) and +depth + 1+ (integer),
+        # so the seed columns must match those types or PG raises a
+        # +DatatypeMismatch+ ("column N has type integer in non-
+        # recursive term but type bigint overall"). +actions.id+ is
+        # +bigserial+ (already bigint), so only +depth+ needs an
+        # explicit cast; SQLite is duck-typed and honours either shape.
+        seed_ds = @db[:actions]
+                  .where(id: seeds)
+                  .select(
+                    Sequel[:id].as(:action_id),
+                    Sequel.cast(0, :integer).as(:depth)
+                  )
+
+        # Recursive step — for every row currently in +descent+ below the
+        # depth cap, find the actions whose inputs consume outputs
+        # produced by that action.
+        recursive_ds = @db[:outputs]
+                       .join(:descent, action_id: Sequel[:outputs][:action_id])
+                       .join(:inputs, output_id: Sequel[:outputs][:id])
+                       .where(Sequel[:descent][:depth] < max_depth)
+                       .select(
+                         Sequel[:inputs][:action_id].as(:action_id),
+                         (Sequel[:descent][:depth] + 1).as(:depth)
+                       )
+
+        # +union_all: false+ ⇒ UNION (dedup at each step). Diamond
+        # ancestry survives without duplicate visits; cyclic paths
+        # produce redundant same-action_id-different-depth rows until
+        # the depth cap halts recursion — bounded time, and Set.new
+        # collapses to unique action_ids on return.
+        cte = @db[:descent]
+              .with_recursive(:descent, seed_ds, recursive_ds,
+                              args: %i[action_id depth],
+                              union_all: false)
+
+        Set.new(cte.select_map(:action_id))
+      end
+      private :descend_from_seed_chunk
+
+      # Shared row-clearing primitive for verification-cache invalidation
+      # (HLR #516 Sub 6.2). Called by the descent walk wired into
+      # +Engine::AnchorLivenessCache+ after +invalidate_stale_anchors!+
+      # returns invalidated anchor +action_ids+.
+      #
+      # Two gates on the UPDATE:
+      #
+      # - +action_id IN (chunk)+ — the coarse-cleared descent set
+      # - +verified_via IS NOT NULL+ — the security-specialist DoS
+      #   defence. The descent WALK is unbounded on the read side
+      #   (structural descendants can be poisoned by an adversary
+      #   grafting synthetic rows); the UPDATE is bounded to rows
+      #   carrying a trust mark. Rows without +verified_via+ have no
+      #   cache state to clear and would trip the coherent CHECK.
+      #
+      # All three verification columns move together in one UPDATE so
+      # +verification_state_coherent+ is satisfied atomically.
+      # +INVALIDATE_BATCH_CHUNK+ (5k rows/statement) keeps the per-chunk
+      # bind-parameter count and planner cost bounded on both backends.
+      #
+      # @param action_ids [Array<Integer>, Set<Integer>]
+      # @return [Integer] rows cleared
+      def invalidate_verification(action_ids:)
+        ids = action_ids.to_a
+        return 0 if ids.empty?
+
+        rows_cleared = 0
+        ids.each_slice(INVALIDATE_BATCH_CHUNK) do |chunk|
+          # Resolve the +tx_proofs.id+ set backing this chunk of actions.
+          # Actions with no proof row (mid-lifecycle) are excluded here
+          # — no verification state to clear.
+          proof_ids = models::Action
+                      .where(id: chunk)
+                      .exclude(tx_proof_id: nil)
+                      .select_map(:tx_proof_id)
+          next if proof_ids.empty?
+
+          # Debug-log the wtxid + root anchor context BEFORE the UPDATE
+          # so a trace-path reader sees "cleared X because Y". Skipped
+          # when the logger is nil (production hot path — no DB round-
+          # trip cost).
+          log_transitive_invalidation(proof_ids) if BSV.logger
+
+          rows_cleared += clear_verification_columns_for_proofs(proof_ids)
+        end
+        rows_cleared
+      end
+
+      # Boot-time cache sanity sweep (HLR #516 Sub 6.3, failsafe-for-
+      # failsafe). Samples a bounded number of +tx_proofs+ rows whose
+      # verification is +'spv'+ and whose +merkle_path+ is populated,
+      # then compares each row's computed root against the +chain_tracker+'s
+      # current view at the same block height. On divergence: log via
+      # +BSV.logger.warn+.
+      #
+      # This method does NOT invalidate rows — that job belongs to
+      # +invalidate_stale_anchors!+ / +Engine::AnchorLivenessCache+ on
+      # the per-verify-walk path. This is a divergence *detector*: it
+      # surfaces silent drift (schema-level bug, tracker-write race,
+      # migration corruption) that the per-walk path would eventually
+      # catch on next reference but might not for cold rows.
+      #
+      # Env-gated by +BSV_WALLET_VERIFY_BOOT_SWEEP=1+. Unset → the whole
+      # method is a no-op (CLI tools boot fast, the daemon opts in).
+      # Non-fatal at every failure surface: DB errors, +chain_tracker+
+      # outages, empty samples, and unparseable BUMPs all fall through
+      # to a debug log and return.
+      #
+      # Not part of any per-walk hot path. Cost is a single indexed
+      # SELECT bounded by +sample_size+ plus one batched
+      # +known_roots_for_heights+ call — an order of magnitude below
+      # the ongoing chain-tracker traffic even at daemon boot.
+      #
+      # @param chain_tracker [#known_roots_for_heights] anchor-liveness-
+      #   capable chain tracker
+      # @param sample_size [Integer] upper bound on rows to sample
+      # @return [Integer] number of rows whose stored root diverged from
+      #   the tracker's current view (0 when the sweep did nothing)
+      def sanity_sweep_verified_anchors!(chain_tracker:, sample_size: 100)
+        return 0 unless ENV['BSV_WALLET_VERIFY_BOOT_SWEEP'] == '1'
+        return 0 if chain_tracker.nil?
+
+        # Sample the freshest 'spv' rows with a merkle_path present.
+        # Ordering by +verified_at DESC+ concentrates the sample on
+        # the frontier — the rows most likely to be near an active
+        # re-org tip.
+        samples = sanity_sweep_sample(sample_size)
+        return 0 if samples.empty?
+
+        heights = samples.map { |row| row[:height] }.uniq
+        current_roots = safe_known_roots_for(chain_tracker, heights)
+        return 0 if current_roots.empty?
+
+        divergences = 0
+        samples.each do |row|
+          current = current_roots[row[:height]]
+          next if current.nil? # tracker "unknown" — not a divergence
+
+          computed = computed_root_for_path(row[:merkle_path], row[:wtxid])
+          next unless computed # unparseable BUMP — skip, not a divergence
+          next if computed == current
+
+          divergences += 1
+          BSV.logger&.warn do
+            "[Store#sanity_sweep_verified_anchors!] wtxid=#{row[:wtxid].to_dtxid} " \
+              "cause=boot_sweep_divergence height=#{row[:height]} " \
+              "computed_root=#{computed.to_dtxid} " \
+              "current_root=#{current.to_dtxid}"
+          end
+        end
+        divergences
+      rescue Sequel::DatabaseError => e
+        BSV.logger&.debug { "[Store#sanity_sweep_verified_anchors!] db error: #{e.message}" }
+        0
       end
 
       # --- Block Headers ---
@@ -1129,7 +1416,11 @@ module BSV
 
           fields = { tx_status: tx_status }
           fields[:arc_status] = arc_status if arc_status
-          fields[:block_hash] = decode_hex(block_hash) if block_hash
+          # Provider responses give +blockHash+ in display-order hex;
+          # store wire-order to stay symmetric with +blocks.block_hash+
+          # and +ChainTracker+'s writes (#533 Copilot round-16 sibling).
+          hash_bin = hex_to_wire_binary(block_hash)
+          fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
           fields[:block_height] = block_height if block_height
           fields[:merkle_path] = decode_hex(merkle_path) if merkle_path
           fields[:extra_info] = extra_info if extra_info
@@ -1618,11 +1909,50 @@ module BSV
       end
 
       # Convert a value to binary. If already binary-encoded, return as-is;
-      # otherwise treat as hex string and pack.
+      # otherwise treat as hex string and pack — after validating hex
+      # shape via +BSV::Primitives::Hex.valid?+. Unvalidated
+      # +pack('H*')+ silently pads odd-length input and coerces non-hex
+      # chars to zero, so a malformed caller-supplied hex root would
+      # persist a distorted binary in +blocks+ (funds-safety adjacent
+      # per #533 chain_tracker fix; extended here to close the same
+      # class of gap at the +save_proof+ public interface).
       def to_binary(value)
         return value if value.encoding == Encoding::BINARY
 
+        raise ArgumentError, "expected binary or valid hex string, got #{value.inspect}" unless BSV::Primitives::Hex.valid?(value)
+
         [value].pack('H*')
+      end
+
+      # Convert a 32-byte hash from display-order hex (BSV wire convention
+      # at BRC / provider boundaries — ARC's +blockHash+, RPC's
+      # +merkleroot+) to the wire-order binary the schema stores. Binary
+      # input passes through unchanged (matches +to_binary+'s
+      # binary-in / binary-out shape and lets +ChainTracker+'s pre-reversed
+      # writers still reach this path without a second reversal).
+      #
+      # Nil in → nil out. Non-binary that isn't a 64-char hex string is a
+      # caller bug — raise so a mis-shaped provider payload can't
+      # silently persist a corrupted row. Copilot on #533 identified the
+      # specific case: +Services+ normalises +blockHash+ as display-order
+      # hex, and the +save_proof+ / +record_broadcast_result+ paths were
+      # calling +to_binary+ without reversing — leaving +blocks.block_hash+
+      # / +broadcasts.block_hash+ in the opposite byte order from
+      # +ChainTracker+'s writes.
+      def hex_to_wire_binary(value)
+        return unless value
+
+        if value.encoding == Encoding::BINARY
+          raise ArgumentError, "expected 32-byte binary hash, got #{value.bytesize} bytes" \
+            unless value.bytesize == 32
+
+          return value
+        end
+
+        raise ArgumentError, "expected binary or 64-char hex, got #{value.inspect}" \
+          unless value.length == 64 && BSV::Primitives::Hex.valid?(value)
+
+        [value].pack('H*').reverse
       end
 
       # Write (or upgrade to) a validated, header-bearing +blocks+ row.
@@ -1709,30 +2039,279 @@ module BSV
         height = proof[:height]
         return unless height
 
-        existing = models::Block.first(height: height)
-        return existing.id if existing
-
+        # +derive_merkle_root+ returns wire-order binary from the SDK;
+        # +proof[:merkle_root]+ (if the caller supplies it directly) may
+        # be display-order hex from a provider response. Route both
+        # through +hex_to_wire_binary+ — binary passes through unchanged,
+        # hex reverses to the wire-order convention +blocks+ stores.
+        # Without this, a caller-supplied hex merkle_root would compare
+        # against +ChainTracker+'s wire-order writes as if it were a
+        # different block. #533 Copilot round-16.
         merkle_root = proof[:merkle_root] || derive_merkle_root(proof[:merkle_path])
+        root_bin = merkle_root ? hex_to_wire_binary(merkle_root) : nil
+
+        existing = models::Block.first(height: height)
+        if existing
+          # HLR #516 Sub 6.1 Option B: same-height/different-hash re-org
+          # is fork evidence, not a silent upsert. Attaching this proof
+          # to the stale row would leave the anchor-liveness path unable
+          # to detect the mismatch (both rows now agree). Raise instead;
+          # the re-org handler at +Engine::AnchorLivenessCache+ owns
+          # invalidation.
+          raise BSV::Wallet::CompetingBlockHeaderError, height if root_bin && existing.merkle_root && existing.merkle_root != root_bin
+
+          return existing.id
+        end
+
         return unless merkle_root
 
-        root_bin = to_binary(merkle_root)
-        hash_bin = proof[:block_hash] ? to_binary(proof[:block_hash]) : nil
-
+        # +block_hash+ arrives from +BSV::Network::Services+ as
+        # display-order hex (ARC's +blockHash+). Reverse to wire-order to
+        # match +ChainTracker+'s +persist_block+ writes; otherwise
+        # +blocks.block_hash+ would sit in the opposite byte order from
+        # every other writer and quietly break telemetry / future
+        # anchor-hash comparisons. #533 Copilot round-16.
+        hash_bin = hex_to_wire_binary(proof[:block_hash])
         models::Block.create(height: height, merkle_root: root_bin, block_hash: hash_bin).id
       rescue Sequel::UniqueConstraintViolation
-        models::Block.first!(height: height).id
+        # A concurrent writer landed the +blocks+ row between our probe
+        # and insert. Re-read and re-check the merkle_root: if the
+        # winner recorded a competing root, this is the same re-org
+        # signal the pre-check would have raised for, so surface it
+        # rather than silently attach to the winner's row.
+        winner = models::Block.first!(height: height)
+        raise BSV::Wallet::CompetingBlockHeaderError, height if root_bin && winner.merkle_root && winner.merkle_root != root_bin
+
+        winner.id
       end
 
-      def derive_merkle_root(merkle_path_binary)
+      # Fold a persisted +merkle_path+ blob through the SDK's
+      # +MerklePath#compute_root+ so BUMP-encoding variability closes at
+      # the canonical wire-order root. Returns +nil+ on any parse
+      # failure — the caller (+invalidate_anchors_at_height+) treats
+      # +nil+ as a fail-closed signal: unparseable proofs cannot be
+      # anchor-checked, so the trust mark is cleared to force a
+      # re-verify on next reference. See #533 Copilot round-1.
+      #
+      # Delegates to +derive_merkle_root+ (the single home for the
+      # BUMP-parse-and-compute pattern; #533 code-review dedup) with
+      # the +wtxid:+ kwarg for compound-BUMP leaf disambiguation.
+      def computed_root_for_path(merkle_path_binary, wtxid)
+        return nil unless wtxid
+
+        derive_merkle_root(merkle_path_binary, wtxid: wtxid)
+      end
+
+      # Invalidate every verified +tx_proofs+ row whose block sits at
+      # +height+ but whose computed root disagrees with
+      # +current_root_bytes+ (wire-order 32 bytes). Returns the
+      # +actions.id+ of each cleared row for Sub 6.2 to walk descendants.
+      def invalidate_anchors_at_height(height, current_root_bytes)
+        block_ids = models::Block.where(height: height).select_map(:id)
+        return [] if block_ids.empty?
+
+        # Stream candidates instead of +.all+ — a re-org height with tens
+        # of thousands of verified proofs would otherwise materialise
+        # every row (with its +merkle_path+ blob) into memory inside the
+        # transaction. +paged_each+ walks the dataset in fixed-size
+        # server-side fetches (+VERIFY_BATCH_CHUNK+ = 10_000). The set
+        # is bounded by the +by_block+ partial index (+verified_at IS
+        # NOT NULL AND block_id IS NOT NULL+). Copilot round-4 on #533.
+        #
+        # +merkle_path IS NULL+ is INCLUDED — the schema allows a
+        # "height-known + path-pending" row (+path_requires_block+
+        # CHECK, migration comment "confirmed but unproven"), and if
+        # such a row also carries +verified_via='spv'+ it must fail
+        # closed on the next anchor-liveness pass. Silently skipping
+        # +merkle_path IS NULL+ rows would let that combination retain
+        # trust across re-orgs. Copilot round-5 on #533.
+        candidates = models::TxProof
+                     .where(block_id: block_ids)
+                     .exclude(verified_via: nil)
+                     .select(:id, :wtxid, :merkle_path)
+
+        stale_ids = []
+        candidates.paged_each(rows_per_fetch: VERIFY_BATCH_CHUNK) do |row|
+          computed = computed_root_for_path(row.merkle_path, row.wtxid)
+          if computed.nil?
+            # Fail closed — a proof we cannot compute a root for cannot
+            # be anchor-checked, so we can neither confirm nor refute
+            # liveness. Clear the trust mark so the next reference forces
+            # re-verify; a silently-skipped row would retain +'spv'+
+            # forever and Sub 5's read gate would trust it. Structural
+            # unverifiability is orthogonal to tracker reachability —
+            # this branch fires even when +current_root_bytes+ is +nil+
+            # (tracker outage). Copilot round-1 (unparseable bytes) +
+            # round-5 (missing path) + round-6 (tracker-outage
+            # separation) on #533.
+            cause = row.merkle_path.nil? ? 'missing_merkle_path' : 'unparseable_merkle_path'
+            log_unverifiable_proof(row.wtxid, height, cause)
+            stale_ids << row.id
+            next
+          end
+          # Tracker unreachable for this height → cannot compare; preserve
+          # trust on transient outage (the AC #4 "unknown ≠ mismatch"
+          # guarantee for parseable proofs).
+          next if current_root_bytes.nil?
+          next if computed == current_root_bytes
+
+          log_anchor_mismatch(row.wtxid, height, computed, current_root_bytes)
+          stale_ids << row.id
+        end
+        return [] if stale_ids.empty?
+
+        # Clear all three columns together via the shared primitive so
+        # both invalidation paths (anchor liveness here, transitive
+        # descent in +invalidate_verification+) share a single write
+        # site — the maintainability-specialist ask against drift.
+        # The action-id lookup shares the same chunk boundary: a giant
+        # +tx_proof_id IN (...)+ query could exceed SQLite's
+        # bind-parameter limit (32_766) on a large re-org batch, and
+        # the plan gets progressively worse on Postgres too. Copilot
+        # round-4 on #533.
+        action_ids = []
+        stale_ids.each_slice(VERIFY_BATCH_CHUNK) do |chunk|
+          clear_verification_columns_for_proofs(chunk)
+          action_ids.concat(models::Action.where(tx_proof_id: chunk).select_map(:id))
+        end
+        action_ids
+      end
+
+      # Shared row-clearing UPDATE for verification-cache invalidation.
+      # Both +invalidate_anchors_at_height+ (Sub 6.1's anchor-liveness
+      # path) and +invalidate_verification+ (Sub 6.2's transitive-
+      # descent path) route their write through here so the +verified_via
+      # IS NOT NULL+ predicate + coherent three-column clear stay in one
+      # place. Drift between the two paths would be a subtle correctness
+      # bug — the maintainability-specialist ask.
+      #
+      # @param proof_ids [Array<Integer>] +tx_proofs.id+ values to clear
+      # @return [Integer] rows updated
+      def clear_verification_columns_for_proofs(proof_ids)
+        models::TxProof
+          .where(id: proof_ids)
+          .exclude(verified_via: nil)
+          .update(verified_at: nil, verified_via: nil, verifier_version: nil)
+      end
+
+      # Boot-sweep sampler. Returns up to +limit+ +tx_proofs+ rows that
+      # carry an +'spv'+ mark AND have a +merkle_path+ populated (rows
+      # for which anchor liveness is meaningful — unanchored rows have
+      # nothing to check). Ordered by +verified_at DESC+ so the sample
+      # concentrates on the freshest rows, most likely to be near an
+      # active re-org tip.
+      def sanity_sweep_sample(limit)
+        models::TxProof
+          .join(:blocks, id: :block_id)
+          .where(Sequel[:tx_proofs][:verified_via] => 'spv')
+          .exclude(Sequel[:tx_proofs][:merkle_path] => nil)
+          .order(Sequel[:tx_proofs][:verified_at].desc)
+          .limit(limit)
+          .select(
+            Sequel[:tx_proofs][:wtxid],
+            Sequel[:tx_proofs][:merkle_path],
+            Sequel[:blocks][:height]
+          )
+          .all
+          .map { |r| { wtxid: r[:wtxid], merkle_path: r[:merkle_path], height: r[:height] } }
+      end
+
+      # Safe wrapper around +chain_tracker.known_roots_for_heights+ for
+      # the boot sweep. A tracker outage MUST NOT prevent boot; return
+      # an empty Hash on any exception. This is the divergence
+      # detector's fail-open posture: on outage we report zero
+      # divergences (rather than false-flagging every anchored row),
+      # aligning with the project-wide "unknown ≠ mismatch" outage
+      # semantics — the same "preserve trust on transient failure"
+      # rule +AnchorLivenessCache#known_roots_for+ applies to the
+      # per-walk invalidation path. Copilot on #533.
+      def safe_known_roots_for(chain_tracker, heights)
+        chain_tracker.known_roots_for_heights(heights)
+      rescue StandardError => e
+        BSV.logger&.debug do
+          "[Store#sanity_sweep_verified_anchors!] chain_tracker error: #{e.message}"
+        end
+        {}
+      end
+
+      def log_anchor_mismatch(wtxid, height, computed_root, current_root)
+        BSV.logger&.debug do
+          "[Store#invalidate_stale_anchors!] wtxid=#{wtxid.to_dtxid} " \
+            "cause=anchor_mismatch height=#{height} " \
+            "computed_root=#{computed_root.to_dtxid} " \
+            "current_root=#{current_root.to_dtxid}"
+        end
+      end
+
+      # A verified proof we cannot compute a root for cannot be
+      # anchor-checked, so we treat it as anchor mismatch (fail closed).
+      # Next reference forces re-verify + proof re-fetch. Two causes,
+      # both rare:
+      #
+      # * +cause: 'unparseable_merkle_path'+ — bytes present but
+      #   +MerklePath#compute_root+ raised (BUMP format changes across
+      #   SDK versions, storage corruption). Copilot round-1 on #533.
+      # * +cause: 'missing_merkle_path'+ — +merkle_path IS NULL+ but
+      #   the row carries +verified_via IS NOT NULL+ and
+      #   +block_id IS NOT NULL+ (schema allows the "confirmed but
+      #   unproven" state; if it also gains a trust mark, we can never
+      #   validate/invalidate the anchor). Copilot round-5 on #533.
+      #
+      # +warn+ so operators can correlate against bsv-sdk upgrades or
+      # a proof-acquisition pipeline that persisted trust without
+      # persisting the proof.
+      def log_unverifiable_proof(wtxid, height, cause)
+        BSV.logger&.warn do
+          "[Store#invalidate_stale_anchors!] wtxid=#{wtxid.to_dtxid} " \
+            "cause=#{cause} height=#{height}"
+        end
+      end
+
+      # Debug trace for +invalidate_verification+. Emits one line per
+      # cleared wtxid so a trace-path reader can attribute the miss to
+      # transitive-descent invalidation. +root_anchor+ is the row's own
+      # wtxid when the row itself is anchored (block_id present) or
+      # +unknown+ when it's a pure descendant — the shared primitive
+      # doesn't receive the specific seed that triggered the walk.
+      # Precise anchor attribution is not correctness-critical: the
+      # trace-path affordance is for the human debugger, and
+      # "cause=transitive_descent" is already the attribution.
+      def log_transitive_invalidation(proof_ids)
+        BSV.logger&.debug do
+          rows = models::TxProof
+                 .where(id: proof_ids)
+                 .exclude(verified_via: nil)
+                 .select(:wtxid, :block_id)
+                 .all
+          rows.map do |r|
+            anchor = r.block_id ? r.wtxid.to_dtxid : 'unknown'
+            "[Store#invalidate_verification] wtxid=#{r.wtxid.to_dtxid} " \
+              "cause=transitive_descent root_anchor=#{anchor}"
+          end.join("\n")
+        end
+      end
+
+      # BUMP-parse + compute_root, the single home for both the
+      # +find_or_create_block+ + +sanity_sweep_verified_anchors!+
+      # boundary path (compute_root with no arg, first-leaf) and the
+      # +invalidate_anchors_at_height+ per-row check (compute_root with
+      # the specific +wtxid+ leaf for compound-BUMP disambiguation).
+      # #533 code-review dedup.
+      #
+      # SDK's +MerklePath#compute_root+ returns wire-order (LE) bytes —
+      # the canonical internal byte order for the +blocks+ table (same
+      # convention as +wtxid+). Display-order conversion happens at
+      # boundaries (+ChainTracker+ on SDK/WoC ingress, logging, JSON).
+      #
+      # Rescues +StandardError+ → +nil+ so callers can uniformly treat
+      # unparseable input as "unknown" (schema state that cannot be
+      # anchor-checked).
+      def derive_merkle_root(merkle_path_binary, wtxid: nil)
         return unless merkle_path_binary
 
         paths = BSV::Transaction::MerklePath.from_binary(merkle_path_binary)
         mp = paths.is_a?(Array) ? paths.first : paths
-        # SDK's MerklePath#compute_root returns wire-order (LE) bytes —
-        # the canonical internal byte order for the blocks table (same
-        # convention as wtxid). Display-order conversion happens at
-        # boundaries (ChainTracker on SDK/WoC ingress, logging, JSON).
-        mp&.compute_root
+        wtxid ? mp&.compute_root(wtxid) : mp&.compute_root
       rescue StandardError
         nil
       end

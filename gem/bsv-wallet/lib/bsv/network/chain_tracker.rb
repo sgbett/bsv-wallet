@@ -69,7 +69,97 @@ module BSV
         @store.max_block_height || 0
       end
 
+      # Height-deduplicated merkle-root lookup for anchor liveness
+      # (HLR #516 Sub 6).
+      #
+      # Returns +{ height => root_bytes | nil }+ — one entry per input
+      # height. Wire-order 32-byte binary bytes, matching the persisted
+      # convention (never hex, never BUMP-bytes). +nil+ for a height the
+      # tracker cannot resolve (fetch failure, network error): distinct
+      # from "mismatch" — the anchor-liveness caller must not invalidate
+      # on unresolvable heights, only on genuine root mismatches.
+      #
+      # Empty input short-circuits: no fetches, empty Hash returned.
+      #
+      # **Batching scope.** This base implementation only guarantees
+      # height de-duplication before dispatch — on a store miss it still
+      # performs one +get_block_header+ network call per height. Callers
+      # wanting a single-sync batch (one header-syncer round trip for
+      # the whole set) should use +SpvHeaderChainTracker#known_roots_for_heights+,
+      # which does exactly that. (Copilot round-3 on #533.)
+      #
+      # This is a fast-path helper for +Engine::AnchorLivenessCache+, not
+      # a duck-type contract with the SDK.
+      #
+      # @param heights [Array<Integer>]
+      # @return [Hash{Integer => String, nil}]
+      def known_roots_for_heights(heights)
+        return {} if heights.nil? || heights.empty?
+
+        heights.uniq.to_h do |height|
+          [height, resolve_root_for_height(height)]
+        end
+      end
+
       private
+
+      # Resolve the wire-order merkle root at +height+, hitting the store
+      # first and the network only on miss. Returns +nil+ on any failure
+      # (network 5xx, parse error, missing field) so the caller can
+      # distinguish "unknown" from "mismatch".
+      def resolve_root_for_height(height)
+        block = @store.find_block(height: height)
+        return block[:merkle_root] if block && block[:merkle_root]
+
+        result = @services.call(:get_block_header, height)
+        return nil unless result.http_success?
+
+        fetched_root = result.data['merkleroot'] || result.data['merkleRoot'] || result.data['merkle_root']
+        # Validate 64-char hex before decoding. Ruby's +pack('H*')+
+        # silently pads odd-length input with 0 and coerces non-hex
+        # digits to 0, so an unvalidated malformed field would persist
+        # a corrupted root that never matches any proof (false-
+        # invalidation of the whole height) or accidentally matches
+        # another proof (false-preservation of a re-org'd anchor).
+        # Treat malformed as "unknown" — same category as a missing
+        # field, distinct from a genuine mismatch. Copilot on #533.
+        return nil unless valid_hex_root?(fetched_root)
+
+        fetched_wire = [fetched_root].pack('H*').reverse
+        block_hash = result.data['hash'] || result.data['blockHash'] || result.data['block_hash']
+        block_hash_wire = valid_hex_root?(block_hash) ? [block_hash].pack('H*').reverse : nil
+        persist_block(height: height, merkle_root: fetched_wire, block_hash: block_hash_wire)
+        fetched_wire
+      rescue BSV::Wallet::CompetingBlockHeaderError => e
+        # Distinct rescue for the re-org signal. The base rescue below
+        # would swallow this as "unknown", which +AnchorLivenessCache+
+        # treats as +unknown ≠ mismatch+ (preserve trust on outage) —
+        # exactly the wrong response when the network fetch just proved
+        # our persisted +blocks+ row is stale. Log at +warn+ with the
+        # +competing_header+ cause so operators (and future readers of
+        # the trace) can distinguish a real fork from a transient
+        # outage; still return +nil+ so the caller doesn't gain a new
+        # exception path, but the log stream carries the truth.
+        # #533 code-review.
+        BSV.logger&.warn do
+          "[ChainTracker] known_roots_for_heights height=#{height} " \
+            "cause=competing_header — persisted blocks row disagrees with fetched header (#{e.message})"
+        end
+        nil
+      rescue StandardError => e
+        BSV.logger&.warn { "[ChainTracker] known_roots_for_heights height=#{height} error: #{e.message}" }
+        nil
+      end
+
+      # Reject anything that isn't a 64-character hex string. Merkle
+      # roots and block hashes are 32-byte SHA256d outputs; their
+      # display-order representation is always 64 hex chars.
+      # Delegates hex-shape testing to +BSV::Primitives::Hex.valid?+
+      # (SDK) so all hex boundary guards in the wallet share one
+      # definition (#533 code-review — shared hex primitive).
+      def valid_hex_root?(value)
+        value.is_a?(String) && value.length == 64 && BSV::Primitives::Hex.valid?(value)
+      end
 
       def persist_block(height:, merkle_root:, block_hash:)
         @store.record_block_header(height: height, merkle_root: merkle_root, block_hash: block_hash)

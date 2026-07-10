@@ -69,6 +69,18 @@ module BSV
           # promotion) rolls the whole thing back — no dangling internal action
           # (#327 / #362). There is no broadcast to wait for, so the entire
           # incoming-BEEF ingress commits atomically.
+          #
+          # +CompetingBlockHeaderError+ (raised by +find_or_create_block+ when
+          # an ancestor's BUMP disagrees with the persisted +blocks+ row) is
+          # translated to +InvalidBeefError+ at this boundary so the
+          # +Interface::BeefImporter#import+ contract stays honest — every
+          # ingress failure surfaces as +InvalidBeefError+; consumers don't
+          # need to know a new error type exists. The re-org signal is not
+          # lost: the message carries the +competing_header+ tag, and
+          # anchor-liveness (once Sub 5 wires it) runs at ingress top before
+          # the ancestor loop, so a genuine re-org invalidates the stale
+          # +blocks+ row before we get here. #533 code-review.
+          pending_hydrator_enrichments = []
           @store.db.transaction do
             action_result = @store.create_action(
               action: { description: description, broadcast_intent: :none }
@@ -100,7 +112,12 @@ module BSV
             # save_beef_proofs iterates beef.transactions and skips TxidOnlyEntry —
             # if we replaced first, ancestors listed in known_txids but not yet in
             # ProofStore would be converted to TXID-only and their proofs lost.
-            save_beef_proofs(beef, subject_tx.wtxid, action_result[:id])
+            # Returns pending Hydrator enrichments — flushed AFTER the outer
+            # transaction commits so a rollback doesn't leave ghost anchors in
+            # the in-memory cache. #533 code-review.
+            pending_hydrator_enrichments.concat(
+              save_beef_proofs(beef, subject_tx.wtxid, action_result[:id])
+            )
 
             # Phase C ingress invariant (#296): assert the proof closure
             # save_beef_proofs was supposed to land actually landed, BEFORE
@@ -139,7 +156,18 @@ module BSV
             @store.promote_action(action_id: action_result[:id], outputs: output_specs)
           end
 
+          # Post-commit — the transaction succeeded, so the Hydrator
+          # can now safely be told about the proofs we persisted.
+          # A pre-commit failure would have raised out of the block
+          # above without reaching this point, so ghost anchors are
+          # impossible.
+          flush_hydrator_enrichments(pending_hydrator_enrichments)
+
           { accepted: true }
+        rescue BSV::Wallet::CompetingBlockHeaderError => e
+          raise BSV::Wallet::InvalidBeefError,
+                "BEEF ancestor at height #{e.height} conflicts with persisted block header " \
+                '(cause=competing_header — likely re-org or torn BEEF)'
         end
 
         # Resolve the merkle path a BEEF entry carries, whether wired directly
@@ -237,9 +265,23 @@ module BSV
         # @param beef [Transaction::Beef] parsed BEEF bundle
         # @param subject_wtxid [String] 32-byte wtxid of the subject transaction (wire order)
         # @param action_id [Integer] the action to link the subject proof to
+        # Persists each BEEF ancestor's proof via +Store#save_proof+ and
+        # accumulates a list of Hydrator-enrichment records for the
+        # caller to flush AFTER the outer +db.transaction+ commits.
+        #
+        # Why accumulate rather than call +proof_arrived+ inline: the
+        # Hydrator is an in-memory cache with no rollback hook. If a
+        # later step in the outer transaction (or a subsequent ancestor
+        # in this loop) raises, the +db.transaction+ rolls back every
+        # +tx_proofs+ row — but any +proof_arrived+ side-effects
+        # already applied to the Hydrator survive, poisoning the cache
+        # with terminals that don't exist in the DB. Returning the
+        # enrichments lets +#import+ flush them post-commit, so
+        # rollback leaves the Hydrator untouched. #533 code-review.
         def save_beef_proofs(beef, subject_wtxid, action_id)
           BSV::Primitives::Hex.validate_wtxid!(subject_wtxid, name: 'save_beef_proofs subject_wtxid')
           subject_proof_id = nil
+          pending_enrichments = []
 
           beef.transactions.each do |beef_tx|
             next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
@@ -262,20 +304,52 @@ module BSV
             # "proven". Acquisition of the real proof happens later via the
             # daemon's proof-acquisition task (#167). Per #177.
             subject_proof_id = proof_id if wtxid == subject_wtxid && merkle_path
-            # Monotonic cache enrichment — every save_proof site informs the
-            # shared substrate so the cache stays a true projection over
-            # +tx_proofs+. Without this, a BUMP-indirect ingress can leave a
-            # cache entry stuck at +merkle_path: nil+ even after the proof
-            # has persisted, defeating wire_ancestor's terminal short-circuit.
-            # #296 Phase D.
-            @hydrator&.proof_arrived(
+            # Accumulate for post-commit flush — see method docstring.
+            # Without post-commit flushing, a mid-transaction raise would
+            # leave the Hydrator with ghost anchors the DB doesn't back.
+            # The former #296 Phase D monotonic enrichment invariant still
+            # holds: every save_proof site still informs the substrate; the
+            # substrate call just happens AFTER commit.
+            #
+            # Only enqueue when a Hydrator is attached, and reuse the
+            # bytes already computed for +proof+ — a large BEEF's
+            # multi-MB +raw_tx+ shouldn't be re-serialised into a
+            # discard hash. Copilot on #533.
+            next unless @hydrator
+
+            pending_enrichments << {
               wtxid: wtxid,
-              raw_tx: beef_tx.transaction.to_binary,
-              merkle_path: merkle_path&.to_binary
-            )
+              raw_tx: proof[:raw_tx],
+              merkle_path: proof[:merkle_path]
+            }
           end
 
           @store.link_proof(action_id: action_id, tx_proof_id: subject_proof_id) if subject_proof_id
+          pending_enrichments
+        end
+
+        # Post-commit flush of the Hydrator enrichments accumulated
+        # during +save_beef_proofs+. Runs OUTSIDE the outer
+        # +db.transaction+ so a rollback leaves the Hydrator cache
+        # untouched. #533 code-review.
+        def flush_hydrator_enrichments(enrichments)
+          return unless @hydrator
+
+          # The ingress transaction has already committed. Hydrator
+          # enrichment is an in-memory hot-path optimisation — losing
+          # an update means the next +wire_ancestor+ walk will re-fetch
+          # from +tx_proofs+, which is correct fallback behaviour. Any
+          # exception here (a runaway cache, an OOM on +put+) must NOT
+          # surface as an ingress failure, because the ingress SUCCEEDED.
+          # Rescue and log at +warn+. Copilot on #533.
+          enrichments.each do |enrichment|
+            @hydrator.proof_arrived(**enrichment)
+          rescue StandardError => e
+            BSV.logger&.warn do
+              '[Engine::BeefImporter] hydrator enrichment failed post-commit ' \
+                "wtxid=#{enrichment[:wtxid].to_dtxid} error=#{e.message}"
+            end
+          end
         end
 
         # Phase C ingress completeness invariant (#296). Post-condition over

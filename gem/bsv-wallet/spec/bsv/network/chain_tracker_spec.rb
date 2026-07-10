@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'net/http'
+require 'sequel' # +persist_block+ rescues +Sequel::Error+ — constant must resolve in the spec harness
 
 RSpec.describe BSV::Network::ChainTracker do
   # --- Test helpers ---
@@ -184,6 +185,119 @@ RSpec.describe BSV::Network::ChainTracker do
       allow(services).to receive(:call).with(:current_height).and_return(error)
 
       expect(tracker.current_height).to eq(0)
+    end
+  end
+
+  describe '#known_roots_for_heights (HLR #516 Sub 6.1)' do
+    it 'returns the store root when the block is cached locally' do
+      allow(store).to receive(:find_block).with(height: height)
+                                          .and_return(merkle_root: merkle_root_wire)
+
+      expect(tracker.known_roots_for_heights([height])).to eq(height => merkle_root_wire)
+      expect(services).not_to have_received(:call)
+    end
+
+    it 'falls back to the network on a store miss and persists the fetched header' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('merkleroot' => merkle_root_hex, 'hash' => block_hash_hex)
+      )
+
+      result = tracker.known_roots_for_heights([height])
+      expect(result[height]).to eq(merkle_root_wire)
+      expect(store).to have_received(:record_block_header).with(
+        height: height, merkle_root: merkle_root_wire, block_hash: block_hash_wire
+      )
+    end
+
+    it 'maps nil for a height the network cannot resolve (unknown ≠ mismatch)' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(error)
+
+      expect(tracker.known_roots_for_heights([height])).to eq(height => nil)
+    end
+
+    it 'maps nil when the network response has no recognised root field' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('unexpected' => 'value')
+      )
+
+      expect(tracker.known_roots_for_heights([height])).to eq(height => nil)
+    end
+
+    it 'is a no-op on empty input' do
+      expect(tracker.known_roots_for_heights([])).to eq({})
+      expect(services).not_to have_received(:call)
+    end
+
+    it 'rescues per-height failures and yields nil for the erroring height' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_raise(StandardError, 'boom')
+
+      expect(tracker.known_roots_for_heights([height])).to eq(height => nil)
+    end
+
+    # Copilot on #533. Ruby's +pack('H*')+ silently coerces
+    # odd-length / non-hex input, so an unvalidated malformed
+    # +merkleroot+ would corrupt anchor-liveness. Treat malformed as
+    # "unknown" (nil), not a distorted binary root.
+    it 'maps nil when merkleroot is not 64-char hex (malformed field)' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('merkleroot' => 'deadbee') # odd length, would silently pad
+      )
+
+      expect(tracker.known_roots_for_heights([height])).to eq(height => nil)
+      expect(store).not_to have_received(:record_block_header)
+    end
+
+    it 'maps nil when merkleroot contains non-hex characters' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('merkleroot' => "zzzz#{'0' * 60}")
+      )
+
+      expect(tracker.known_roots_for_heights([height])).to eq(height => nil)
+    end
+
+    it 'ignores a malformed block_hash while accepting a valid merkleroot' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('merkleroot' => merkle_root_hex, 'hash' => 'not-hex')
+      )
+
+      result = tracker.known_roots_for_heights([height])
+      expect(result[height]).to eq(merkle_root_wire)
+      # block_hash treated as nil rather than silently persisting a corrupted value.
+      expect(store).to have_received(:record_block_header).with(
+        height: height, merkle_root: merkle_root_wire, block_hash: nil
+      )
+    end
+
+    # #533 code-review — the earlier broad +rescue StandardError+
+    # swallowed +CompetingBlockHeaderError+ (raised by
+    # +record_block_header+ when the persisted +blocks+ row disagrees
+    # with the fetched header — a real re-org signal). Now caught by
+    # a distinct clause that logs at +warn+ with +cause=competing_header+
+    # so operators can distinguish a fork from a transient outage.
+    it 'logs cause=competing_header when persist_block detects a fork' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('merkleroot' => merkle_root_hex, 'hash' => block_hash_hex)
+      )
+      allow(store).to receive(:record_block_header).and_raise(
+        BSV::Wallet::CompetingBlockHeaderError.new(height)
+      )
+      logger = double('logger')
+      captured = []
+      allow(logger).to receive(:warn) { |&block| captured << block.call }
+      allow(BSV).to receive(:logger).and_return(logger)
+
+      result = tracker.known_roots_for_heights([height])
+
+      expect(result).to eq(height => nil) # caller sees "unknown"
+      expect(captured.join).to include('cause=competing_header')
     end
   end
 end
