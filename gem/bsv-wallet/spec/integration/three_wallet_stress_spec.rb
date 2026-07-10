@@ -98,14 +98,86 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
     }
   end
 
-  # Sub 5's forthcoming three-wallet workload will replace this
-  # +pending+ block with a real per-iteration receive. Kept as a marker
-  # so the Sub 5 developer sees "wire this here" instead of hunting for
-  # the harness surface.
+  # HLR #516 Sub 5 — receive-path shape check via BeefImporter.
+  #
+  # The full three-wallet streamed workload (cross-wallet payment ping-pong,
+  # cold-vs-warm timing separation per AC #5) is bigger than Sub 5's wiring
+  # scope and moves to a follow-up integration HLR. This block covers the
+  # shape guard that matters most for Sub 5: iterating +BeefImporter#import+
+  # over unique subjects that all descend from the SAME proven ancestor
+  # should show flat per-iteration receive_ms because +filter_trusted+
+  # short-circuits the ancestor's subtree from the second iteration onwards.
   describe 'three-wallet workload' do
-    it 'iter-100 receive_ms stays within 2x of iter-10 (Sub 5 to land)' do
-      pending 'Sub 5 (HLR #516 read-path) will land the streamed BEEF workload here'
-      raise 'placeholder — remove pending in Sub 5'
+    it 'iter-100 receive_ms stays within 2x of iter-10 via BeefImporter' do
+      chain_tracker = build_tracker({})
+      allow(chain_tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
+      hydrator = BSV::Wallet::Engine::Hydrator.new(store: store)
+      importer = BSV::Wallet::Engine::BeefImporter.new(
+        store: store, chain_tracker: chain_tracker, hydrator: hydrator
+      )
+
+      # Proven ancestor at a known height — shared across every iteration
+      # so +filter_trusted+ has something to short-circuit.
+      op_true = "\x51".b
+      ancestor = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+      ancestor.add_output(BSV::Transaction::TransactionOutput.new(
+                            satoshis: 1_000_000,
+                            locking_script: BSV::Script::Script.from_binary(op_true)
+                          ))
+      sibling = SecureRandom.random_bytes(32)
+      ancestor.merkle_path = BSV::Transaction::MerklePath.new(
+        block_height: 800_000,
+        path: [[
+          BSV::Transaction::MerklePath::PathElement.new(offset: 2, hash: ancestor.wtxid, txid: true),
+          BSV::Transaction::MerklePath::PathElement.new(offset: 3, hash: sibling)
+        ]]
+      )
+
+      # Build a unique BEEF per iteration — same ancestor, distinct
+      # subject (varying lock_time keeps wtxids distinct so ingress
+      # doesn't dedup).
+      make_beef = lambda do |i|
+        subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: i)
+        subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                               prev_wtxid: ancestor.wtxid,
+                               prev_tx_out_index: 0,
+                               sequence: 0xFFFFFFFF,
+                               unlocking_script: BSV::Script::Script.from_binary(op_true)
+                             ))
+        subject_tx.inputs[0].source_transaction = ancestor
+        subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                satoshis: 500,
+                                locking_script: BSV::Script::Script.from_binary(op_true)
+                              ))
+        beef = BSV::Transaction::Beef.new
+        beef.merge_transaction(ancestor)
+        beef.merge_transaction(subject_tx)
+        [beef.to_atomic_binary(subject_tx.wtxid), subject_tx]
+      end
+
+      receive_ms = []
+      100.times do |i|
+        beef_binary, subject_tx = make_beef.call(i)
+        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        importer.import(
+          tx: beef_binary,
+          description: "sub 5 iter #{i}",
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'sub five iter', derivation_prefix: 'test',
+              derivation_suffix: subject_tx.wtxid.unpack1('H*')[0, 8],
+              sender_identity_key: 'self'
+            }
+          }]
+        )
+        receive_ms << ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000.0)
+      end
+
+      # Iter-10 vs iter-100 shape. The 2x ceiling is a catastrophic-
+      # regression guard, not a tight benchmark — CI noise floor
+      # dominates a run of this size.
+      expect(receive_ms[99]).to be < receive_ms[9] * 2.0
     end
   end
 
