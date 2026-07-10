@@ -101,24 +101,28 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
   # HLR #516 Sub 5 — receive-path short-circuit assertion via BeefImporter.
   #
   # Iterates +BeefImporter#import+ over subjects whose ancestor chain
-  # GROWS by one link per iteration. Without Sub 5's pre-seed, verify
-  # walks +i+ nodes at iteration +i+ (and +mark_verified_batch+ marks
-  # all +i+ as SPV). With the pre-seed, all prior links are trusted
-  # cache hits and +mark_verified_batch+ marks only the fresh subject.
+  # GROWS by one link per iteration. Only the ROOT ancestor carries a
+  # merkle path — every intermediate link is unproven. Without Sub 5's
+  # pre-seed, +Tx#verify+ chases +input.source_transaction+ pointers
+  # all the way to the root on every iteration and re-validates the
+  # merkle path via the chain tracker. With the pre-seed, the walk
+  # terminates at the first cached ancestor (iteration 2 onwards) and
+  # never re-reaches the root.
   #
-  # Asserts on the mechanism, not wall-clock. Copilot on #537 flagged
-  # that the earlier static-ancestor setup left a broken cache
-  # indistinguishable from a working one, and a per-iteration timing
-  # ceiling is noisy under OP_TRUE scripts (verify cost is trivial;
-  # BEEF-serialise + save-proof machinery grows with chain regardless
-  # of cache state). Counting the +newly_walked+ set size sidesteps
-  # both problems.
+  # The mechanism assertion is +chain_tracker.valid_root_for_height?+
+  # call count: exactly one across 100 iterations (iteration 1's root
+  # validation). Copilot on #537 (round-3) flagged that spying on
+  # +mark_verified_batch+ passes even when the SDK ignores the
+  # pre-seed — +newly_walked = keys - trusted+ dedupes at the wallet
+  # layer regardless of whether the SDK actually skipped recursion.
+  # Merkle-root validation happens INSIDE the SDK walk, so a call
+  # count there is the true mechanism signal.
   #
   # The full three-wallet streamed workload (cross-wallet payment
   # ping-pong, cold-vs-warm timing separation per AC #5) is bigger
   # than Sub 5's wiring scope and moves to a follow-up integration HLR.
   describe 'three-wallet workload' do
-    it 'short-circuits every prior chain link (newly_walked is a singleton per iteration)' do
+    it 'short-circuits the walk — chain_tracker validates the root exactly once across 100 iterations' do
       chain_tracker = build_tracker({})
       allow(chain_tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
       hydrator = BSV::Wallet::Engine::Hydrator.new(store: store)
@@ -144,15 +148,6 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
           BSV::Transaction::MerklePath::PathElement.new(offset: 3, hash: root_sibling)
         ]]
       )
-
-      # Spy on +mark_verified_batch(via: 'spv')+ to capture the newly-walked
-      # size per iteration. With Sub 5 wired: 1 (fresh subject only).
-      # Without: iteration i marks all i chain nodes.
-      newly_walked_sizes = []
-      allow(store).to receive(:mark_verified_batch).and_wrap_original do |m, **kwargs|
-        newly_walked_sizes << kwargs[:wtxids].size if kwargs[:via] == 'spv'
-        m.call(**kwargs)
-      end
 
       chain = [root]
       iterations = 100
@@ -191,11 +186,14 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
         chain << subject_tx
       end
 
-      # Iteration 1 walks [root, subject_1] — both new, newly_walked = 2.
-      # Every subsequent iteration walks only the fresh subject —
-      # newly_walked = 1. Anything else is a broken short-circuit.
-      expect(newly_walked_sizes.first).to eq(2)
-      expect(newly_walked_sizes[1..]).to all(eq(1))
+      # The load-bearing assertion: +chain_tracker.valid_root_for_height?+
+      # is called ONCE across all iterations — for the root's merkle
+      # path validation on iteration 1. Iteration 2 onwards, the pre-seed
+      # terminates the walk at the previously verified subject before
+      # +Tx#verify+ ever reaches the root. A broken short-circuit
+      # (verified: kwarg ignored, no pre-seed, or filter_trusted always
+      # empty) makes this fire 100 times.
+      expect(chain_tracker).to have_received(:valid_root_for_height?).once
     end
   end
 

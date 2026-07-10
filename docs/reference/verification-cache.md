@@ -57,7 +57,7 @@ A `verification_state_coherent` CHECK enforces that the three move together. `ve
 |---|---|---|
 | `'self_built'` | Wallet constructed this tx; trust comes from the builder, not from `Tx#verify` | **No** |
 | `'spv'` | Passed `Tx#verify(chain_tracker:)` end-to-end — the strongest local trust | Yes |
-| `'broadcast_ack'` | ARC returned an accepted status; the network has it | **No** (see below) |
+| `'broadcast_ack'` | ARC accepted the tx for relay/mining; not yet a network-wide fact (may be dropped, replaced, or fail to mine) | **No** (see below) |
 
 **`self_built` is excluded from the short-circuit trust set on purpose.** The wallet's sign path signs but does not run `Tx#verify_input` on what it just signed. `self_built` asserts construction provenance, not signature validity. A signer bug (or drift between the sign and verify sighash preimages) would cache a false verification claim if `self_built` were trusted. Conservative default; the async upgrade path (`self_built` → `spv` via a background worker) is tracked as HLR #517.
 
