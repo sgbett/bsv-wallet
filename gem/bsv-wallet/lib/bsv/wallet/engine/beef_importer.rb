@@ -335,8 +335,20 @@ module BSV
         def flush_hydrator_enrichments(enrichments)
           return unless @hydrator
 
+          # The ingress transaction has already committed. Hydrator
+          # enrichment is an in-memory hot-path optimisation — losing
+          # an update means the next +wire_ancestor+ walk will re-fetch
+          # from +tx_proofs+, which is correct fallback behaviour. Any
+          # exception here (a runaway cache, an OOM on +put+) must NOT
+          # surface as an ingress failure, because the ingress SUCCEEDED.
+          # Rescue and log at +warn+. Copilot on #533.
           enrichments.each do |enrichment|
             @hydrator.proof_arrived(**enrichment)
+          rescue StandardError => e
+            BSV.logger&.warn do
+              '[Engine::BeefImporter] hydrator enrichment failed post-commit ' \
+                "wtxid=#{enrichment[:wtxid].to_dtxid} error=#{e.message}"
+            end
           end
         end
 
