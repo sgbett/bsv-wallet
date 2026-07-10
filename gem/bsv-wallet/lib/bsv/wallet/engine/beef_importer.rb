@@ -221,7 +221,7 @@ module BSV
         # returns +nil+ for every height — "safe but useless" per its
         # own docstring). Missing method would surface as
         # +NoMethodError+ inside +AnchorLivenessCache#known_roots_for+,
-        # swallowed by the broad rescue in +filter_trusted+ as
+        # swallowed by that method's own broad +rescue StandardError+ as
         # "unknown" → +invalidate_stale_anchors!+ preserves the full
         # trust set → every previously-verified wtxid remains "trusted"
         # regardless of the actual chain state. Fail closed on both

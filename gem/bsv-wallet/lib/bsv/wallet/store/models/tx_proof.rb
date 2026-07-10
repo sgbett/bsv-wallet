@@ -19,7 +19,7 @@ module BSV
           # rows are trusted for the SDK's +verified:+ pre-seed today.
           #
           # An +'spv'+ row can be either ANCHORED (carries a merkle proof
-          # + +block_id+) or UNANCHORED (intermediate ancestor visited by
+          # and a +block_id+) or UNANCHORED (intermediate ancestor visited by
           # a prior +Tx#verify+ walk that terminated at a proven leaf
           # further down the chain). Both classes are safe to pre-seed:
           # anchored rows are re-verified directly by Sub 6.1's anchor-
