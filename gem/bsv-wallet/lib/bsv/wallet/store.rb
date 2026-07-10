@@ -1941,7 +1941,13 @@ module BSV
       # +ChainTracker+'s writes.
       def hex_to_wire_binary(value)
         return unless value
-        return value if value.encoding == Encoding::BINARY
+
+        if value.encoding == Encoding::BINARY
+          raise ArgumentError, "expected 32-byte binary hash, got #{value.bytesize} bytes" \
+            unless value.bytesize == 32
+
+          return value
+        end
 
         raise ArgumentError, "expected binary or 64-char hex, got #{value.inspect}" \
           unless value.length == 64 && BSV::Primitives::Hex.valid?(value)

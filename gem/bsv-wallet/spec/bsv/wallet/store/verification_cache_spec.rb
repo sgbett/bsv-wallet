@@ -601,6 +601,20 @@ RSpec.describe BSV::Wallet::Store, :store do
                        proof: { raw_tx: 'x'.b * 20, height: height, merkle_root: display_hex })
       expect(store.find_block(height: height)[:merkle_root]).to eq(wire)
     end
+
+    # #533 Copilot round-17 — reject mis-shaped binary at the boundary
+    # rather than deferring to a DB CHECK violation deeper in the write.
+    it 'rejects a non-32-byte binary block_hash with a clear ArgumentError' do
+      height = 900_205
+      wtxid = SecureRandom.random_bytes(32)
+      short_binary = 'x'.b * 16
+      expect do
+        store.save_proof(wtxid: wtxid,
+                         proof: { raw_tx: 'x'.b * 20, height: height,
+                                  merkle_root: SecureRandom.random_bytes(32),
+                                  block_hash: short_binary })
+      end.to raise_error(ArgumentError, /expected 32-byte binary hash, got 16 bytes/)
+    end
   end
 
   # HLR #516 Sub 6.2 — transitive descendant invalidation. The shared
