@@ -91,25 +91,47 @@ module BSV
       # This is a fast-path helper for +Engine::AnchorLivenessCache+, not
       # a duck-type contract with the SDK.
       #
+      # **Freshness for anchor-liveness.** Passes +refresh: true+ down to
+      # +resolve_root_for_height+ so the cached +blocks.merkle_root+ (set
+      # at proof-import time and never auto-refreshed on the
+      # trusted-service model) doesn't hide a re-org from the caller.
+      # +valid_root_for_height?+ (the SDK verify hot path) still hits the
+      # cache-first fast path unchanged. #535.
+      #
       # @param heights [Array<Integer>]
       # @return [Hash{Integer => String, nil}]
       def known_roots_for_heights(heights)
         return {} if heights.nil? || heights.empty?
 
         heights.uniq.to_h do |height|
-          [height, resolve_root_for_height(height)]
+          [height, resolve_root_for_height(height, refresh: true)]
         end
       end
 
       private
 
-      # Resolve the wire-order merkle root at +height+, hitting the store
-      # first and the network only on miss. Returns +nil+ on any failure
-      # (network 5xx, parse error, missing field) so the caller can
-      # distinguish "unknown" from "mismatch".
-      def resolve_root_for_height(height)
-        block = @store.find_block(height: height)
-        return block[:merkle_root] if block && block[:merkle_root]
+      # Resolve the wire-order merkle root at +height+.
+      #
+      # +refresh: false+ (default) — hit the store first, network only on
+      # miss. Cheap; used by +valid_root_for_height?+ where the cached
+      # answer is the correct answer (the SDK is verifying a proof
+      # against what the wallet believes about the chain).
+      #
+      # +refresh: true+ — skip the store cache and always fetch. Used by
+      # +known_roots_for_heights+ for HLR #516 Sub 6 anchor-liveness,
+      # where the answer must reflect the CURRENT chain view, not
+      # whatever the wallet has seen so far. Without this, the base
+      # trusted-service tracker would return the stale +blocks+ row set
+      # at proof-import time and defeat re-org detection at every
+      # cached height. #535.
+      #
+      # Returns +nil+ on any failure (network 5xx, parse error, missing
+      # field) so the caller can distinguish "unknown" from "mismatch".
+      def resolve_root_for_height(height, refresh: false)
+        unless refresh
+          block = @store.find_block(height: height)
+          return block[:merkle_root] if block && block[:merkle_root]
+        end
 
         result = @services.call(:get_block_header, height)
         return nil unless result.http_success?

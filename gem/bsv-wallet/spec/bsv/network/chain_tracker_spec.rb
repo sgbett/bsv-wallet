@@ -189,12 +189,23 @@ RSpec.describe BSV::Network::ChainTracker do
   end
 
   describe '#known_roots_for_heights (HLR #516 Sub 6.1)' do
-    it 'returns the store root when the block is cached locally' do
+    # #535 — anchor-liveness must see the CURRENT chain view, not
+    # whatever the wallet has seen so far. Bypass the +blocks+ cache
+    # (set at proof-import time, never auto-refreshed on the
+    # trusted-service model) and fetch fresh. Without this, a re-org
+    # at a height with a cached +blocks+ row would go undetected on the
+    # trusted-service tracker path.
+    it 'bypasses the store cache and fetches fresh even when a blocks row exists' do
+      stale_root = SecureRandom.random_bytes(32)
       allow(store).to receive(:find_block).with(height: height)
-                                          .and_return(merkle_root: merkle_root_wire)
+                                          .and_return(merkle_root: stale_root)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('merkleroot' => merkle_root_hex, 'hash' => block_hash_hex)
+      )
 
-      expect(tracker.known_roots_for_heights([height])).to eq(height => merkle_root_wire)
-      expect(services).not_to have_received(:call)
+      result = tracker.known_roots_for_heights([height])
+      expect(result[height]).to eq(merkle_root_wire) # fresh, not the stale cached root
+      expect(services).to have_received(:call).with(:get_block_header, height)
     end
 
     it 'falls back to the network on a store miss and persists the fetched header' do
