@@ -770,19 +770,49 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         store.mark_verified(wtxid: tx.wtxid, via: via)
       end
 
-      # AC #3 folded: pre-seeded +'broadcast_ack'+ ancestor is not
-      # silently upgraded to +'spv'+ during ingress. The merkle proof
-      # was NOT re-run for a seeded wtxid — upgrading the trust mark
-      # would be a lie.
-      it 'does not upgrade a pre-seeded broadcast_ack ancestor to spv' do
+      # The Sub 2 write path calls +mark_verified_batch+ on
+      # +newly_walked = verified_wtxids.keys - trusted.to_a+. With the
+      # trust set currently pinned to +'spv'+ only, this avoids
+      # redundantly re-marking an already-SPV ancestor. The split is
+      # ALSO load-bearing against a future re-admission of
+      # +'broadcast_ack'+ (or any weaker mark) — without the subtract,
+      # a pre-seeded broadcast_ack ancestor would be silently upgraded
+      # to +'spv'+ under the ratchet, claiming a merkle-proof re-run
+      # that didn't happen. #537 white-hat.
+      it 'does not re-mark a pre-seeded spv ancestor (newly_walked split)' do
+        built = build_verifiable_beef(satoshis: 500)
+        persist_and_mark(built[:ancestor],
+                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV)
+        original_verified_at = store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_at]
+
+        allow(store).to receive(:mark_verified_batch).and_call_original
+        import_ok(built)
+
+        # The spv batch call excludes the pre-seeded ancestor — its
+        # wtxid isn't in +newly_walked+.
+        expect(store).to have_received(:mark_verified_batch)
+          .with(hash_including(via: 'spv')) do |args|
+          expect(args[:wtxids]).not_to include(built[:ancestor].wtxid)
+        end
+        # And its verified_at doesn't churn.
+        expect(store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_at])
+          .to eq(original_verified_at)
+      end
+
+      # #537 decision: +VERIFIED_VIA_TRUSTED+ currently excludes
+      # +broadcast_ack+ pending its liveness mechanism. Regression test:
+      # a +broadcast_ack+-marked ancestor is NOT trusted, gets fully
+      # re-walked by +Tx#verify+, and is upgraded to +'spv'+ under the
+      # monotonic ratchet.
+      it 'upgrades a broadcast_ack ancestor to spv (broadcast_ack not in trust set)' do
         built = build_verifiable_beef(satoshis: 500)
         persist_and_mark(built[:ancestor],
                          via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_BROADCAST_ACK)
 
         import_ok(built)
 
-        state = store.verification_state(wtxid: built[:ancestor].wtxid)
-        expect(state[:verified_via]).to eq('broadcast_ack')
+        expect(store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_via])
+          .to eq('spv')
       end
 
       it 'marks newly walked ancestors as spv (unchanged Sub 2 write path)' do
@@ -838,7 +868,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       it 'skips the read-path short-circuit when the tracker is TrustedSelfChainTracker' do
         built = build_verifiable_beef(satoshis: 500)
         persist_and_mark(built[:ancestor],
-                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_BROADCAST_ACK)
+                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV)
 
         trusted_self_tracker = BSV::Wallet::TrustedSelfChainTracker.new(store)
         guarded_importer = described_class.new(
@@ -873,7 +903,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       it 'skips the short-circuit when the tracker lacks known_roots_for_heights' do
         built = build_verifiable_beef(satoshis: 500)
         persist_and_mark(built[:ancestor],
-                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_BROADCAST_ACK)
+                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV)
 
         # Minimal SDK-shape tracker: valid_root_for_height? + current_height,
         # NO known_roots_for_heights. Mirrors what an operator gets by

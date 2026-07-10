@@ -140,14 +140,18 @@ module BSV
             # and the white-hat review caught the drift).
             #
             # Sub 5 subtracts +trusted+ (pre-seeded wtxids) from the SDK
-            # accumulator's key set before marking. Without this,
-            # pre-seeded rows carrying +'broadcast_ack'+ would be silently
-            # upgraded to +'spv'+ under +mark_verified_batch+'s monotonic
-            # ladder — the merkle proof was NOT re-run for a seeded
-            # ancestor, so the SPV claim would be a lie. Newly walked
-            # rows carry a legitimate SPV mark; pre-seeded rows keep
-            # their prior +verified_via+ (already at least as strong as
-            # what they're being asked to survive).
+            # accumulator's key set before marking. With the trust set
+            # currently pinned to +'spv'+ only, +newly_walked+ is the
+            # set of wtxids +Tx#verify+ visited THIS walk that weren't
+            # already SPV-marked — issuing +mark_verified_batch(via: spv)+
+            # on already-SPV rows would be idempotent under the monotonic
+            # ratchet but wasteful. The split is also load-bearing if a
+            # future release re-admits +'broadcast_ack'+ (or a similar
+            # weaker mark) to the trust set: without the subtract, a
+            # pre-seeded +broadcast_ack+ row would be silently upgraded
+            # to +'spv'+ under the ladder — the merkle proof was NOT
+            # re-run for a seeded ancestor, so the SPV claim would be
+            # a lie.
             #
             # Non-atomic BEEF (BRC-62) sibling entries not reached by
             # +Tx#verify+ stay uncached — the accumulator only captures

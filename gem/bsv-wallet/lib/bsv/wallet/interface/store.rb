@@ -480,9 +480,10 @@ module BSV
         # at least +version_at_least+. Empty input short-circuits (no DB
         # round-trip). Chunked internally.
         #
-        # Callers pass +via_in: TxProof::VERIFIED_VIA_TRUSTED+ (which
-        # excludes +self_built+) to build the +verified:+ Set for
-        # +Tx#verify+'s kwarg (bsv-ruby-sdk #904).
+        # Callers pass +via_in: TxProof::VERIFIED_VIA_TRUSTED+ (currently
+        # +['spv']+ only — +broadcast_ack+ excluded pending its liveness
+        # mechanism, +self_built+ excluded on trust grounds) to build the
+        # +verified:+ Set for +Tx#verify+'s kwarg (bsv-ruby-sdk #904).
         #
         # @param wtxids [Array<String>] 32-byte binary wtxids
         # @param version_at_least [Integer]
