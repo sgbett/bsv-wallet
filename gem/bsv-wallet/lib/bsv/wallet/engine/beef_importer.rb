@@ -205,25 +205,25 @@ module BSV
 
         # HLR #516 Sub 5 — compute the read-path trust set for this
         # BEEF's ancestor graph. Returns an empty Set when the wallet
-        # cannot verify anchor liveness (missing / trusted-self chain
-        # tracker); otherwise delegates to a per-walk
-        # +AnchorLivenessCache+ that resolves fresh roots, invalidates
-        # stale anchors + their structural descendants, and returns the
-        # surviving trust set.
+        # cannot verify anchor liveness; otherwise delegates to a
+        # per-walk +AnchorLivenessCache+ that resolves fresh roots,
+        # invalidates stale anchors + their structural descendants, and
+        # returns the surviving trust set.
         #
-        # Guard on +TrustedSelfChainTracker+ is not paranoia: its
-        # +known_roots_for_heights+ stubs every height to +nil+
-        # (deliberate — the chain-tracker docstring says "safe but
-        # useless"). +AnchorLivenessCache+ treats +nil+ as
-        # +unknown ≠ mismatch+ and preserves the trust set intact —
-        # which for this tracker means every previously-verified wtxid
-        # remains "trusted" regardless of the actual chain state. Fine
-        # for a self-signed development configuration where nothing
-        # ever re-orgs; a funds-safety hazard the moment the wallet
-        # sees external BEEF traffic. Pay for the full walk instead.
+        # +chain_tracker_supports_liveness?+ combines a positive
+        # capability check (does the tracker implement
+        # +known_roots_for_heights+ at all?) with an explicit exclusion
+        # for +TrustedSelfChainTracker+ (implements the method but
+        # returns +nil+ for every height — "safe but useless" per its
+        # own docstring). Missing method would surface as
+        # +NoMethodError+ inside +AnchorLivenessCache#known_roots_for+,
+        # swallowed by the broad rescue in +filter_trusted+ as
+        # "unknown" → +invalidate_stale_anchors!+ preserves the full
+        # trust set → every previously-verified wtxid remains "trusted"
+        # regardless of the actual chain state. Fail closed on both
+        # variants: pay for the full walk instead. White-hat on #537.
         def pre_seed_trust_set(beef)
-          return Set.new unless @chain_tracker
-          return Set.new if @chain_tracker.is_a?(BSV::Wallet::TrustedSelfChainTracker)
+          return Set.new unless chain_tracker_supports_liveness?
 
           wtxids = beef.transactions.filter_map do |beef_tx|
             next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
@@ -234,6 +234,13 @@ module BSV
 
           AnchorLivenessCache.new(store: @store, chain_tracker: @chain_tracker)
                              .filter_trusted(wtxids)
+        end
+
+        def chain_tracker_supports_liveness?
+          return false unless @chain_tracker.respond_to?(:known_roots_for_heights)
+          return false if @chain_tracker.is_a?(BSV::Wallet::TrustedSelfChainTracker)
+
+          true
         end
 
         # Attach labels to the action via Store primitives. Two-call

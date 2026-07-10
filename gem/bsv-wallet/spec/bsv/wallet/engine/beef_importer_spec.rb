@@ -862,6 +862,45 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
 
         expect(BSV::Wallet::Engine::AnchorLivenessCache).not_to have_received(:new)
       end
+
+      # White-hat on #537 — capability check catches trackers that
+      # don't implement +known_roots_for_heights+ at all, not just
+      # +TrustedSelfChainTracker+. Without the +respond_to?+ half of
+      # the guard, +AnchorLivenessCache#known_roots_for+ raises
+      # +NoMethodError+, gets swallowed as "unknown" by the broad
+      # rescue in +filter_trusted+, and every previously-verified
+      # wtxid stays "trusted" regardless of chain state.
+      it 'skips the short-circuit when the tracker lacks known_roots_for_heights' do
+        built = build_verifiable_beef(satoshis: 500)
+        persist_and_mark(built[:ancestor],
+                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_BROADCAST_ACK)
+
+        # Minimal SDK-shape tracker: valid_root_for_height? + current_height,
+        # NO known_roots_for_heights. Mirrors what an operator gets by
+        # wiring the SDK's raw +BSV::Transaction::ChainTracker+ subclass
+        # or an external tracker that pre-dates the anchor-liveness API.
+        minimal_tracker = Class.new do
+          def valid_root_for_height?(_root, _height) = true
+          def current_height = 900_000
+        end.new
+        guarded_importer = described_class.new(
+          store: store, chain_tracker: minimal_tracker, hydrator: hydrator
+        )
+        allow(BSV::Wallet::Engine::AnchorLivenessCache).to receive(:new).and_call_original
+
+        guarded_importer.import(
+          tx: built[:beef_binary], description: 'minimal tracker guard',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'minimal tracker guard', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }]
+        )
+
+        expect(BSV::Wallet::Engine::AnchorLivenessCache).not_to have_received(:new)
+      end
     end
 
     # HLR #521 Sub 3 — the ingress atomic block records a +self_built+
