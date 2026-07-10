@@ -604,7 +604,10 @@ RSpec.describe BSV::Wallet::Store, :store do
 
     # #533 Copilot round-17 — reject mis-shaped binary at the boundary
     # rather than deferring to a DB CHECK violation deeper in the write.
-    it 'rejects a non-32-byte binary block_hash with a clear ArgumentError' do
+    # Class-agnostic match: the SQLite adapter wraps in-transaction
+    # +ArgumentError+ inside +Sequel::DatabaseError+; the assertion that
+    # matters is that the actionable message reaches the caller.
+    it 'rejects a non-32-byte binary block_hash with a clear length message' do
       height = 900_205
       wtxid = SecureRandom.random_bytes(32)
       short_binary = 'x'.b * 16
@@ -613,7 +616,7 @@ RSpec.describe BSV::Wallet::Store, :store do
                          proof: { raw_tx: 'x'.b * 20, height: height,
                                   merkle_root: SecureRandom.random_bytes(32),
                                   block_hash: short_binary })
-      end.to raise_error(ArgumentError, /expected 32-byte binary hash, got 16 bytes/)
+      end.to raise_error(/expected 32-byte binary hash, got 16 bytes/)
     end
   end
 
