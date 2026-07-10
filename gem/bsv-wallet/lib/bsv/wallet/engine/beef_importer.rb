@@ -69,6 +69,17 @@ module BSV
           # promotion) rolls the whole thing back — no dangling internal action
           # (#327 / #362). There is no broadcast to wait for, so the entire
           # incoming-BEEF ingress commits atomically.
+          #
+          # +CompetingBlockHeaderError+ (raised by +find_or_create_block+ when
+          # an ancestor's BUMP disagrees with the persisted +blocks+ row) is
+          # translated to +InvalidBeefError+ at this boundary so the
+          # +Interface::BeefImporter#import+ contract stays honest — every
+          # ingress failure surfaces as +InvalidBeefError+; consumers don't
+          # need to know a new error type exists. The re-org signal is not
+          # lost: the message carries the +competing_header+ tag, and
+          # anchor-liveness (once Sub 5 wires it) runs at ingress top before
+          # the ancestor loop, so a genuine re-org invalidates the stale
+          # +blocks+ row before we get here. #533 code-review.
           pending_hydrator_enrichments = []
           @store.db.transaction do
             action_result = @store.create_action(
@@ -153,6 +164,10 @@ module BSV
           flush_hydrator_enrichments(pending_hydrator_enrichments)
 
           { accepted: true }
+        rescue BSV::Wallet::CompetingBlockHeaderError => e
+          raise BSV::Wallet::InvalidBeefError,
+                "BEEF ancestor at height #{e.height} conflicts with persisted block header " \
+                '(cause=competing_header — likely re-org or torn BEEF)'
         end
 
         # Resolve the merkle path a BEEF entry carries, whether wired directly

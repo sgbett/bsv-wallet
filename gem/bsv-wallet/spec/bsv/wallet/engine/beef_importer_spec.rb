@@ -793,6 +793,29 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       end
     end
 
+    # #533 code-review — +CompetingBlockHeaderError+ from
+    # +find_or_create_block+ is translated to +InvalidBeefError+ at
+    # the ingress boundary so +Interface::BeefImporter#import+'s
+    # documented error contract stays honest. Every ingress failure
+    # surfaces as +InvalidBeefError+; consumers don't need to know
+    # about the new error type.
+    it 'translates CompetingBlockHeaderError from an ancestor into InvalidBeefError' do
+      built = build_verifiable_beef(satoshis: 500)
+      allow(store).to receive(:save_proof).and_raise(
+        BSV::Wallet::CompetingBlockHeaderError.new(800_000)
+      )
+
+      expect do
+        beef_importer.import(
+          tx: built[:beef_binary], description: 'competing header',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: { basket: 'x' }
+          }]
+        )
+      end.to raise_error(BSV::Wallet::InvalidBeefError, /competing_header/)
+    end
+
     # #533 code-review — Hydrator is an in-memory cache with no
     # rollback hook. Prior to the post-commit flush, an ingress that
     # raised mid-transaction would have already told the Hydrator

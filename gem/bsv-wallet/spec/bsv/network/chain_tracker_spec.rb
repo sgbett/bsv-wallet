@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'net/http'
+require 'sequel' # +persist_block+ rescues +Sequel::Error+ — constant must resolve in the spec harness
 
 RSpec.describe BSV::Network::ChainTracker do
   # --- Test helpers ---
@@ -272,6 +273,31 @@ RSpec.describe BSV::Network::ChainTracker do
       expect(store).to have_received(:record_block_header).with(
         height: height, merkle_root: merkle_root_wire, block_hash: nil
       )
+    end
+
+    # #533 code-review — the earlier broad +rescue StandardError+
+    # swallowed +CompetingBlockHeaderError+ (raised by
+    # +record_block_header+ when the persisted +blocks+ row disagrees
+    # with the fetched header — a real re-org signal). Now caught by
+    # a distinct clause that logs at +warn+ with +cause=competing_header+
+    # so operators can distinguish a fork from a transient outage.
+    it 'logs cause=competing_header when persist_block detects a fork' do
+      allow(store).to receive(:find_block).with(height: height).and_return(nil)
+      allow(services).to receive(:call).with(:get_block_header, height).and_return(
+        success('merkleroot' => merkle_root_hex, 'hash' => block_hash_hex)
+      )
+      allow(store).to receive(:record_block_header).and_raise(
+        BSV::Wallet::CompetingBlockHeaderError.new(height)
+      )
+      logger = double('logger')
+      captured = []
+      allow(logger).to receive(:warn) { |&block| captured << block.call }
+      allow(BSV).to receive(:logger).and_return(logger)
+
+      result = tracker.known_roots_for_heights([height])
+
+      expect(result).to eq(height => nil) # caller sees "unknown"
+      expect(captured.join).to include('cause=competing_header')
     end
   end
 end

@@ -130,6 +130,22 @@ module BSV
         block_hash_wire = valid_hex_root?(block_hash) ? [block_hash].pack('H*').reverse : nil
         persist_block(height: height, merkle_root: fetched_wire, block_hash: block_hash_wire)
         fetched_wire
+      rescue BSV::Wallet::CompetingBlockHeaderError => e
+        # Distinct rescue for the re-org signal. The base rescue below
+        # would swallow this as "unknown", which +AnchorLivenessCache+
+        # treats as +unknown ≠ mismatch+ (preserve trust on outage) —
+        # exactly the wrong response when the network fetch just proved
+        # our persisted +blocks+ row is stale. Log at +warn+ with the
+        # +competing_header+ cause so operators (and future readers of
+        # the trace) can distinguish a real fork from a transient
+        # outage; still return +nil+ so the caller doesn't gain a new
+        # exception path, but the log stream carries the truth.
+        # #533 code-review.
+        BSV.logger&.warn do
+          "[ChainTracker] known_roots_for_heights height=#{height} " \
+            "cause=competing_header — persisted blocks row disagrees with fetched header (#{e.message})"
+        end
+        nil
       rescue StandardError => e
         BSV.logger&.warn { "[ChainTracker] known_roots_for_heights height=#{height} error: #{e.message}" }
         nil
