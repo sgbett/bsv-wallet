@@ -310,10 +310,17 @@ module BSV
             # The former #296 Phase D monotonic enrichment invariant still
             # holds: every save_proof site still informs the substrate; the
             # substrate call just happens AFTER commit.
+            #
+            # Only enqueue when a Hydrator is attached, and reuse the
+            # bytes already computed for +proof+ — a large BEEF's
+            # multi-MB +raw_tx+ shouldn't be re-serialised into a
+            # discard hash. Copilot on #533.
+            next unless @hydrator
+
             pending_enrichments << {
               wtxid: wtxid,
-              raw_tx: beef_tx.transaction.to_binary,
-              merkle_path: merkle_path&.to_binary
+              raw_tx: proof[:raw_tx],
+              merkle_path: proof[:merkle_path]
             }
           end
 

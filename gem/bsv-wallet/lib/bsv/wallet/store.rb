@@ -2169,8 +2169,13 @@ module BSV
 
       # Safe wrapper around +chain_tracker.known_roots_for_heights+ for
       # the boot sweep. A tracker outage MUST NOT prevent boot; return
-      # an empty Hash on any exception. Consistent with the per-walk
-      # anchor-liveness cache's fail-closed-on-invalidation stance.
+      # an empty Hash on any exception. This is the divergence
+      # detector's fail-open posture: on outage we report zero
+      # divergences (rather than false-flagging every anchored row),
+      # aligning with the project-wide "unknown ≠ mismatch" outage
+      # semantics — the same "preserve trust on transient failure"
+      # rule +AnchorLivenessCache#known_roots_for+ applies to the
+      # per-walk invalidation path. Copilot on #533.
       def safe_known_roots_for(chain_tracker, heights)
         chain_tracker.known_roots_for_heights(heights)
       rescue StandardError => e
