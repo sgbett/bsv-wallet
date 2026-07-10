@@ -155,7 +155,7 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
       end
 
       chain = [root]
-      iterations = 30
+      iterations = 100
 
       iterations.times do |i|
         parent = chain.last
