@@ -98,17 +98,27 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
     }
   end
 
-  # HLR #516 Sub 5 — receive-path shape check via BeefImporter.
+  # HLR #516 Sub 5 — receive-path short-circuit assertion via BeefImporter.
   #
-  # The full three-wallet streamed workload (cross-wallet payment ping-pong,
-  # cold-vs-warm timing separation per AC #5) is bigger than Sub 5's wiring
-  # scope and moves to a follow-up integration HLR. This block covers the
-  # shape guard that matters most for Sub 5: iterating +BeefImporter#import+
-  # over unique subjects that all descend from the SAME proven ancestor
-  # should show flat per-iteration receive_ms because +filter_trusted+
-  # short-circuits the ancestor's subtree from the second iteration onwards.
+  # Iterates +BeefImporter#import+ over subjects whose ancestor chain
+  # GROWS by one link per iteration. Without Sub 5's pre-seed, verify
+  # walks +i+ nodes at iteration +i+ (and +mark_verified_batch+ marks
+  # all +i+ as SPV). With the pre-seed, all prior links are trusted
+  # cache hits and +mark_verified_batch+ marks only the fresh subject.
+  #
+  # Asserts on the mechanism, not wall-clock. Copilot on #537 flagged
+  # that the earlier static-ancestor setup left a broken cache
+  # indistinguishable from a working one, and a per-iteration timing
+  # ceiling is noisy under OP_TRUE scripts (verify cost is trivial;
+  # BEEF-serialise + save-proof machinery grows with chain regardless
+  # of cache state). Counting the +newly_walked+ set size sidesteps
+  # both problems.
+  #
+  # The full three-wallet streamed workload (cross-wallet payment
+  # ping-pong, cold-vs-warm timing separation per AC #5) is bigger
+  # than Sub 5's wiring scope and moves to a follow-up integration HLR.
   describe 'three-wallet workload' do
-    it 'iter-100 receive_ms stays within 2x of iter-10 via BeefImporter' do
+    it 'short-circuits every prior chain link (newly_walked is a singleton per iteration)' do
       chain_tracker = build_tracker({})
       allow(chain_tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
       hydrator = BSV::Wallet::Engine::Hydrator.new(store: store)
@@ -116,51 +126,58 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
         store: store, chain_tracker: chain_tracker, hydrator: hydrator
       )
 
-      # Proven ancestor at a known height — shared across every iteration
-      # so +filter_trusted+ has something to short-circuit.
       op_true = "\x51".b
-      ancestor = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
-      ancestor.add_output(BSV::Transaction::TransactionOutput.new(
-                            satoshis: 1_000_000,
-                            locking_script: BSV::Script::Script.from_binary(op_true)
-                          ))
-      sibling = SecureRandom.random_bytes(32)
-      ancestor.merkle_path = BSV::Transaction::MerklePath.new(
+      # Proven root ancestor at a known height. Every intermediate link
+      # descends from it. The BEEF at iteration +i+ carries the root + all
+      # +i-1+ prior subjects + the fresh subject — so verify without a
+      # working cache walks +i+ inputs.
+      root = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+      root.add_output(BSV::Transaction::TransactionOutput.new(
+                        satoshis: 1_000_000,
+                        locking_script: BSV::Script::Script.from_binary(op_true)
+                      ))
+      root_sibling = SecureRandom.random_bytes(32)
+      root.merkle_path = BSV::Transaction::MerklePath.new(
         block_height: 800_000,
         path: [[
-          BSV::Transaction::MerklePath::PathElement.new(offset: 2, hash: ancestor.wtxid, txid: true),
-          BSV::Transaction::MerklePath::PathElement.new(offset: 3, hash: sibling)
+          BSV::Transaction::MerklePath::PathElement.new(offset: 2, hash: root.wtxid, txid: true),
+          BSV::Transaction::MerklePath::PathElement.new(offset: 3, hash: root_sibling)
         ]]
       )
 
-      # Build a unique BEEF per iteration — same ancestor, distinct
-      # subject (varying lock_time keeps wtxids distinct so ingress
-      # doesn't dedup).
-      make_beef = lambda do |i|
+      # Spy on +mark_verified_batch(via: 'spv')+ to capture the newly-walked
+      # size per iteration. With Sub 5 wired: 1 (fresh subject only).
+      # Without: iteration i marks all i chain nodes.
+      newly_walked_sizes = []
+      allow(store).to receive(:mark_verified_batch).and_wrap_original do |m, **kwargs|
+        newly_walked_sizes << kwargs[:wtxids].size if kwargs[:via] == 'spv'
+        m.call(**kwargs)
+      end
+
+      chain = [root]
+      iterations = 30
+
+      iterations.times do |i|
+        parent = chain.last
         subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: i)
         subject_tx.add_input(BSV::Transaction::TransactionInput.new(
-                               prev_wtxid: ancestor.wtxid,
+                               prev_wtxid: parent.wtxid,
                                prev_tx_out_index: 0,
                                sequence: 0xFFFFFFFF,
                                unlocking_script: BSV::Script::Script.from_binary(op_true)
                              ))
-        subject_tx.inputs[0].source_transaction = ancestor
+        subject_tx.inputs[0].source_transaction = parent
         subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
                                 satoshis: 500,
                                 locking_script: BSV::Script::Script.from_binary(op_true)
                               ))
-        beef = BSV::Transaction::Beef.new
-        beef.merge_transaction(ancestor)
-        beef.merge_transaction(subject_tx)
-        [beef.to_atomic_binary(subject_tx.wtxid), subject_tx]
-      end
 
-      receive_ms = []
-      100.times do |i|
-        beef_binary, subject_tx = make_beef.call(i)
-        started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        beef = BSV::Transaction::Beef.new
+        chain.each { |tx| beef.merge_transaction(tx) }
+        beef.merge_transaction(subject_tx)
+
         importer.import(
-          tx: beef_binary,
+          tx: beef.to_atomic_binary(subject_tx.wtxid),
           description: "sub 5 iter #{i}",
           outputs: [{
             output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -171,13 +188,14 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
             }
           }]
         )
-        receive_ms << ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1000.0)
+        chain << subject_tx
       end
 
-      # Iter-10 vs iter-100 shape. The 2x ceiling is a catastrophic-
-      # regression guard, not a tight benchmark — CI noise floor
-      # dominates a run of this size.
-      expect(receive_ms[99]).to be < receive_ms[9] * 2.0
+      # Iteration 1 walks [root, subject_1] — both new, newly_walked = 2.
+      # Every subsequent iteration walks only the fresh subject —
+      # newly_walked = 1. Anything else is a broken short-circuit.
+      expect(newly_walked_sizes.first).to eq(2)
+      expect(newly_walked_sizes[1..]).to all(eq(1))
     end
   end
 

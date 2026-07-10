@@ -229,11 +229,17 @@ module BSV
         def pre_seed_trust_set(beef)
           return Set.new unless chain_tracker_supports_liveness?
 
-          wtxids = beef.transactions.filter_map do |beef_tx|
-            next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
-
-            beef_tx.transaction&.wtxid
-          end
+          # Include +TxidOnlyEntry+ wtxids. Under +trust_self: 'known'+
+          # the sender trimmed known ancestors to TXID-only and
+          # +hydrate_known_sources!+ wires them from the ProofStore
+          # BEFORE +Tx#verify+ runs. Those hydrated ancestors are
+          # exactly the ones whose subtrees the SDK will walk (and
+          # whose wtxids we can pre-seed to short-circuit). Excluding
+          # them here forces redundant re-verification of ancestors
+          # we already trust — defeating the +trust_self+ optimisation
+          # under Sub 5. +BeefTx#wtxid+ is defined on both concrete
+          # types so the collect is uniform. Copilot on #537.
+          wtxids = beef.transactions.filter_map(&:wtxid)
           return Set.new if wtxids.empty?
 
           AnchorLivenessCache.new(store: @store, chain_tracker: @chain_tracker)

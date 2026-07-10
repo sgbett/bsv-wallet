@@ -16,22 +16,30 @@ module BSV
             VERIFIED_VIA_BROADCAST_ACK
           ].freeze
           # Short-circuit trust set for BeefImporter Sub 5. Only +'spv'+
-          # rows are trusted for the SDK's +verified:+ pre-seed today —
-          # they carry a merkle proof + block anchor, so Sub 6's
-          # anchor-liveness pass (join on +blocks.id+) can invalidate
-          # them on re-org.
+          # rows are trusted for the SDK's +verified:+ pre-seed today.
+          #
+          # An +'spv'+ row can be either ANCHORED (carries a merkle proof
+          # + +block_id+) or UNANCHORED (intermediate ancestor visited by
+          # a prior +Tx#verify+ walk that terminated at a proven leaf
+          # further down the chain). Both classes are safe to pre-seed:
+          # anchored rows are re-verified directly by Sub 6.1's anchor-
+          # liveness pass (join on +blocks.id+); unanchored rows are
+          # cleared transitively by Sub 6.2's descendant walk when the
+          # anchor they depend on invalidates. Together they cover the
+          # re-org invalidation surface for the read path. Copilot on #537.
           #
           # +'broadcast_ack'+ is deliberately EXCLUDED even though HLR #516
-          # synthesis originally included it: the anchor-liveness join
-          # requires +block_id IS NOT NULL+, which a +broadcast_ack+ row
-          # (ARC accepted, not yet mined) does not carry. Trusting an
-          # unanchored row without a liveness mechanism would leave
-          # orphaned / RBF'd broadcast_ack ancestors as permanent trust
-          # sources — a phantom-balance vector. Adding
-          # +VERIFIED_VIA_BROADCAST_ACK+ back must land WITH its liveness
+          # synthesis originally included it: it doesn't fit either class
+          # above. +broadcast_ack+ rows carry +block_id = NULL+ AND are
+          # not necessarily downstream of any anchored ancestor (ARC
+          # accepted a submission that may never mine), so neither the
+          # direct nor the transitive invalidation path reaches them.
+          # Trusting an unanchored row without a liveness mechanism would
+          # leave orphaned / RBF'd broadcast_ack ancestors as permanent
+          # trust sources — a phantom-balance vector. Re-admitting
+          # +VERIFIED_VIA_BROADCAST_ACK+ must land WITH its liveness
           # design (proof-acquisition escalation, TTL, or equivalent).
-          # White-hat on #537 (I1); see #522 discussion for the decision
-          # trace.
+          # White-hat on #537 (I1); see #522 discussion for the trace.
           #
           # +self_built+ is intentionally excluded from short-circuit
           # trust (see docs/reference/verification-cache.md).
