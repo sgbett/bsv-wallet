@@ -77,6 +77,17 @@ RSpec.describe BSV::Network::SpvHeaderChainTracker, :store do
       height = start_height + 10
       expect(tracker.valid_root_for_height?(display_root(height), height)).to be false
     end
+
+    # #533 code-review — schema CHECK forbids +length(header) != 80+,
+    # but a raw-SQL bypass or migration bug could still land one.
+    # Read-time guard: refuse to return a slice from a truncated blob;
+    # the caller sees +nil+ (unknown) rather than a distorted root that
+    # never matches +compute_root+ outputs.
+    it 'refuses to slice a truncated header (defence in depth)' do
+      allow(store).to receive(:header_at).and_return("\x00".b * 60) # < 68 bytes
+      height = start_height + 10
+      expect(tracker.valid_root_for_height?(display_root(height), height)).to be false
+    end
   end
 
   describe 'coinbase maturity (the +100 over-sync)' do

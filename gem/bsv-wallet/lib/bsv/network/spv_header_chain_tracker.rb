@@ -145,6 +145,16 @@ module BSV
 
         raw = @store.header_at(height: height)
         return nil unless raw
+        # Defence in depth for a schema-forbidden state: the
+        # +header IS NULL OR length(header) = 80+ CHECK would prevent
+        # a truncated row from being persisted, but a raw-SQL bypass or
+        # migration bug could still land one. +raw.b[36, 32]+ silently
+        # returns a shorter binary string; that would then be memoised
+        # in +@known_roots+ and compared against real 32-byte
+        # +compute_root+ outputs, never match, and false-invalidate the
+        # whole height on every subsequent walk. Fail closed at read
+        # time. #533 code-review.
+        return nil unless raw.bytesize >= 68
 
         raw.b[36, 32]
       rescue StandardError => e

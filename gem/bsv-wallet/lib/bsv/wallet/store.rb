@@ -1905,9 +1905,17 @@ module BSV
       end
 
       # Convert a value to binary. If already binary-encoded, return as-is;
-      # otherwise treat as hex string and pack.
+      # otherwise treat as hex string and pack — after validating hex
+      # shape via +BSV::Primitives::Hex.valid?+. Unvalidated
+      # +pack('H*')+ silently pads odd-length input and coerces non-hex
+      # chars to zero, so a malformed caller-supplied hex root would
+      # persist a distorted binary in +blocks+ (funds-safety adjacent
+      # per #533 chain_tracker fix; extended here to close the same
+      # class of gap at the +save_proof+ public interface).
       def to_binary(value)
         return value if value.encoding == Encoding::BINARY
+
+        raise ArgumentError, "expected binary or valid hex string, got #{value.inspect}" unless BSV::Primitives::Hex.valid?(value)
 
         [value].pack('H*')
       end
@@ -2036,17 +2044,13 @@ module BSV
       # anchor-checked, so the trust mark is cleared to force a
       # re-verify on next reference. See #533 Copilot round-1.
       #
-      # +wtxid+ names which leaf of the BUMP owns this row — the SDK
-      # walks the leaves of +path[0]+ to disambiguate compound proofs.
-      # Wire-order 32 bytes, matching the +wtxid+ column.
+      # Delegates to +derive_merkle_root+ (the single home for the
+      # BUMP-parse-and-compute pattern; #533 code-review dedup) with
+      # the +wtxid:+ kwarg for compound-BUMP leaf disambiguation.
       def computed_root_for_path(merkle_path_binary, wtxid)
-        return nil unless merkle_path_binary && wtxid
+        return nil unless wtxid
 
-        paths = BSV::Transaction::MerklePath.from_binary(merkle_path_binary)
-        mp = paths.is_a?(Array) ? paths.first : paths
-        mp&.compute_root(wtxid)
-      rescue StandardError
-        nil
+        derive_merkle_root(merkle_path_binary, wtxid: wtxid)
       end
 
       # Invalidate every verified +tx_proofs+ row whose block sits at
@@ -2233,16 +2237,27 @@ module BSV
         end
       end
 
-      def derive_merkle_root(merkle_path_binary)
+      # BUMP-parse + compute_root, the single home for both the
+      # +find_or_create_block+ + +sanity_sweep_verified_anchors!+
+      # boundary path (compute_root with no arg, first-leaf) and the
+      # +invalidate_anchors_at_height+ per-row check (compute_root with
+      # the specific +wtxid+ leaf for compound-BUMP disambiguation).
+      # #533 code-review dedup.
+      #
+      # SDK's +MerklePath#compute_root+ returns wire-order (LE) bytes —
+      # the canonical internal byte order for the +blocks+ table (same
+      # convention as +wtxid+). Display-order conversion happens at
+      # boundaries (+ChainTracker+ on SDK/WoC ingress, logging, JSON).
+      #
+      # Rescues +StandardError+ → +nil+ so callers can uniformly treat
+      # unparseable input as "unknown" (schema state that cannot be
+      # anchor-checked).
+      def derive_merkle_root(merkle_path_binary, wtxid: nil)
         return unless merkle_path_binary
 
         paths = BSV::Transaction::MerklePath.from_binary(merkle_path_binary)
         mp = paths.is_a?(Array) ? paths.first : paths
-        # SDK's MerklePath#compute_root returns wire-order (LE) bytes —
-        # the canonical internal byte order for the blocks table (same
-        # convention as wtxid). Display-order conversion happens at
-        # boundaries (ChainTracker on SDK/WoC ingress, logging, JSON).
-        mp&.compute_root
+        wtxid ? mp&.compute_root(wtxid) : mp&.compute_root
       rescue StandardError
         nil
       end

@@ -135,12 +135,14 @@ module BSV
         nil
       end
 
-      # Reject anything that isn't 64 lowercase/uppercase hex characters.
-      # Merkle roots and block hashes are 32-byte SHA256d outputs; their
-      # display-order representation is always 64 hex chars. Anything
-      # else is malformed. Copilot on #533.
+      # Reject anything that isn't a 64-character hex string. Merkle
+      # roots and block hashes are 32-byte SHA256d outputs; their
+      # display-order representation is always 64 hex chars.
+      # Delegates hex-shape testing to +BSV::Primitives::Hex.valid?+
+      # (SDK) so all hex boundary guards in the wallet share one
+      # definition (#533 code-review — shared hex primitive).
       def valid_hex_root?(value)
-        value.is_a?(String) && value.match?(/\A[0-9a-fA-F]{64}\z/)
+        value.is_a?(String) && value.length == 64 && BSV::Primitives::Hex.valid?(value)
       end
 
       def persist_block(height:, merkle_root:, block_hash:)
