@@ -1416,7 +1416,11 @@ module BSV
 
           fields = { tx_status: tx_status }
           fields[:arc_status] = arc_status if arc_status
-          fields[:block_hash] = decode_hex(block_hash) if block_hash
+          # Provider responses give +blockHash+ in display-order hex;
+          # store wire-order to stay symmetric with +blocks.block_hash+
+          # and +ChainTracker+'s writes (#533 Copilot round-16 sibling).
+          hash_bin = hex_to_wire_binary(block_hash)
+          fields[:block_hash] = Sequel.blob(hash_bin) if hash_bin
           fields[:block_height] = block_height if block_height
           fields[:merkle_path] = decode_hex(merkle_path) if merkle_path
           fields[:extra_info] = extra_info if extra_info
@@ -1920,6 +1924,31 @@ module BSV
         [value].pack('H*')
       end
 
+      # Convert a 32-byte hash from display-order hex (BSV wire convention
+      # at BRC / provider boundaries — ARC's +blockHash+, RPC's
+      # +merkleroot+) to the wire-order binary the schema stores. Binary
+      # input passes through unchanged (matches +to_binary+'s
+      # binary-in / binary-out shape and lets +ChainTracker+'s pre-reversed
+      # writers still reach this path without a second reversal).
+      #
+      # Nil in → nil out. Non-binary that isn't a 64-char hex string is a
+      # caller bug — raise so a mis-shaped provider payload can't
+      # silently persist a corrupted row. Copilot on #533 identified the
+      # specific case: +Services+ normalises +blockHash+ as display-order
+      # hex, and the +save_proof+ / +record_broadcast_result+ paths were
+      # calling +to_binary+ without reversing — leaving +blocks.block_hash+
+      # / +broadcasts.block_hash+ in the opposite byte order from
+      # +ChainTracker+'s writes.
+      def hex_to_wire_binary(value)
+        return unless value
+        return value if value.encoding == Encoding::BINARY
+
+        raise ArgumentError, "expected binary or 64-char hex, got #{value.inspect}" \
+          unless value.length == 64 && BSV::Primitives::Hex.valid?(value)
+
+        [value].pack('H*').reverse
+      end
+
       # Write (or upgrade to) a validated, header-bearing +blocks+ row.
       # Append-or-reject at an occupied height — see {#record_block_header}.
       #
@@ -2004,8 +2033,16 @@ module BSV
         height = proof[:height]
         return unless height
 
+        # +derive_merkle_root+ returns wire-order binary from the SDK;
+        # +proof[:merkle_root]+ (if the caller supplies it directly) may
+        # be display-order hex from a provider response. Route both
+        # through +hex_to_wire_binary+ — binary passes through unchanged,
+        # hex reverses to the wire-order convention +blocks+ stores.
+        # Without this, a caller-supplied hex merkle_root would compare
+        # against +ChainTracker+'s wire-order writes as if it were a
+        # different block. #533 Copilot round-16.
         merkle_root = proof[:merkle_root] || derive_merkle_root(proof[:merkle_path])
-        root_bin = merkle_root ? to_binary(merkle_root) : nil
+        root_bin = merkle_root ? hex_to_wire_binary(merkle_root) : nil
 
         existing = models::Block.first(height: height)
         if existing
@@ -2022,7 +2059,13 @@ module BSV
 
         return unless merkle_root
 
-        hash_bin = proof[:block_hash] ? to_binary(proof[:block_hash]) : nil
+        # +block_hash+ arrives from +BSV::Network::Services+ as
+        # display-order hex (ARC's +blockHash+). Reverse to wire-order to
+        # match +ChainTracker+'s +persist_block+ writes; otherwise
+        # +blocks.block_hash+ would sit in the opposite byte order from
+        # every other writer and quietly break telemetry / future
+        # anchor-hash comparisons. #533 Copilot round-16.
+        hash_bin = hex_to_wire_binary(proof[:block_hash])
         models::Block.create(height: height, merkle_root: root_bin, block_hash: hash_bin).id
       rescue Sequel::UniqueConstraintViolation
         # A concurrent writer landed the +blocks+ row between our probe

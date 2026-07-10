@@ -574,6 +574,33 @@ RSpec.describe BSV::Wallet::Store, :store do
       end.not_to raise_error
       expect(store.find_block(height: height)).not_to be_nil
     end
+
+    # #533 Copilot round-16 — +Services+ normalises +blockHash+ as
+    # display-order hex; +find_or_create_block+ must store it as
+    # wire-order binary so it stays symmetric with +ChainTracker+'s
+    # writes. Regression test — the fix reverses the hex bytes before
+    # persisting.
+    it 'persists a display-order hex block_hash from proof as wire-order binary' do
+      height = 900_203
+      wire = SecureRandom.random_bytes(32)
+      display_hex = wire.reverse.unpack1('H*')
+      wtxid = SecureRandom.random_bytes(32)
+      store.save_proof(wtxid: wtxid,
+                       proof: { raw_tx: 'x'.b * 20, height: height,
+                                merkle_root: SecureRandom.random_bytes(32),
+                                block_hash: display_hex })
+      expect(store.find_block(height: height)[:block_hash]).to eq(wire)
+    end
+
+    it 'persists a display-order hex merkle_root from proof as wire-order binary' do
+      height = 900_204
+      wire = SecureRandom.random_bytes(32)
+      display_hex = wire.reverse.unpack1('H*')
+      wtxid = SecureRandom.random_bytes(32)
+      store.save_proof(wtxid: wtxid,
+                       proof: { raw_tx: 'x'.b * 20, height: height, merkle_root: display_hex })
+      expect(store.find_block(height: height)[:merkle_root]).to eq(wire)
+    end
   end
 
   # HLR #516 Sub 6.2 — transitive descendant invalidation. The shared
