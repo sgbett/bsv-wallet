@@ -98,14 +98,102 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
     }
   end
 
-  # Sub 5's forthcoming three-wallet workload will replace this
-  # +pending+ block with a real per-iteration receive. Kept as a marker
-  # so the Sub 5 developer sees "wire this here" instead of hunting for
-  # the harness surface.
+  # HLR #516 Sub 5 — receive-path short-circuit assertion via BeefImporter.
+  #
+  # Iterates +BeefImporter#import+ over subjects whose ancestor chain
+  # GROWS by one link per iteration. Only the ROOT ancestor carries a
+  # merkle path — every intermediate link is unproven. Without Sub 5's
+  # pre-seed, +Tx#verify+ chases +input.source_transaction+ pointers
+  # all the way to the root on every iteration and re-validates the
+  # merkle path via the chain tracker. With the pre-seed, the walk
+  # terminates at the first cached ancestor (iteration 2 onwards) and
+  # never re-reaches the root.
+  #
+  # The mechanism assertion is +chain_tracker.valid_root_for_height?+
+  # call count: exactly one across 100 iterations (iteration 1's root
+  # validation). Copilot on #537 (round-3) flagged that spying on
+  # +mark_verified_batch+ passes even when the SDK ignores the
+  # pre-seed — +newly_walked = keys - trusted+ dedupes at the wallet
+  # layer regardless of whether the SDK actually skipped recursion.
+  # Merkle-root validation happens INSIDE the SDK walk, so a call
+  # count there is the true mechanism signal.
+  #
+  # The full three-wallet streamed workload (cross-wallet payment
+  # ping-pong, cold-vs-warm timing separation per AC #5) is bigger
+  # than Sub 5's wiring scope and moves to a follow-up integration HLR.
   describe 'three-wallet workload' do
-    it 'iter-100 receive_ms stays within 2x of iter-10 (Sub 5 to land)' do
-      pending 'Sub 5 (HLR #516 read-path) will land the streamed BEEF workload here'
-      raise 'placeholder — remove pending in Sub 5'
+    it 'short-circuits the walk — chain_tracker validates the root exactly once across 100 iterations' do
+      chain_tracker = build_tracker({})
+      allow(chain_tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
+      hydrator = BSV::Wallet::Engine::Hydrator.new(store: store)
+      importer = BSV::Wallet::Engine::BeefImporter.new(
+        store: store, chain_tracker: chain_tracker, hydrator: hydrator
+      )
+
+      op_true = "\x51".b
+      # Proven root ancestor at a known height. Every intermediate link
+      # descends from it. The BEEF at iteration +i+ carries the root + all
+      # +i-1+ prior subjects + the fresh subject — so verify without a
+      # working cache walks +i+ inputs.
+      root = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
+      root.add_output(BSV::Transaction::TransactionOutput.new(
+                        satoshis: 1_000_000,
+                        locking_script: BSV::Script::Script.from_binary(op_true)
+                      ))
+      root_sibling = SecureRandom.random_bytes(32)
+      root.merkle_path = BSV::Transaction::MerklePath.new(
+        block_height: 800_000,
+        path: [[
+          BSV::Transaction::MerklePath::PathElement.new(offset: 2, hash: root.wtxid, txid: true),
+          BSV::Transaction::MerklePath::PathElement.new(offset: 3, hash: root_sibling)
+        ]]
+      )
+
+      chain = [root]
+      iterations = 100
+
+      iterations.times do |i|
+        parent = chain.last
+        subject_tx = BSV::Transaction::Tx.new(version: 1, lock_time: i)
+        subject_tx.add_input(BSV::Transaction::TransactionInput.new(
+                               prev_wtxid: parent.wtxid,
+                               prev_tx_out_index: 0,
+                               sequence: 0xFFFFFFFF,
+                               unlocking_script: BSV::Script::Script.from_binary(op_true)
+                             ))
+        subject_tx.inputs[0].source_transaction = parent
+        subject_tx.add_output(BSV::Transaction::TransactionOutput.new(
+                                satoshis: 500,
+                                locking_script: BSV::Script::Script.from_binary(op_true)
+                              ))
+
+        beef = BSV::Transaction::Beef.new
+        chain.each { |tx| beef.merge_transaction(tx) }
+        beef.merge_transaction(subject_tx)
+
+        importer.import(
+          tx: beef.to_atomic_binary(subject_tx.wtxid),
+          description: "sub 5 iter #{i}",
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'sub five iter', derivation_prefix: 'test',
+              derivation_suffix: subject_tx.wtxid.unpack1('H*')[0, 8],
+              sender_identity_key: 'self'
+            }
+          }]
+        )
+        chain << subject_tx
+      end
+
+      # The load-bearing assertion: +chain_tracker.valid_root_for_height?+
+      # is called ONCE across all iterations — for the root's merkle
+      # path validation on iteration 1. Iteration 2 onwards, the pre-seed
+      # terminates the walk at the previously verified subject before
+      # +Tx#verify+ ever reaches the root. A broken short-circuit
+      # (verified: kwarg ignored, no pre-seed, or filter_trusted always
+      # empty) makes this fire 100 times.
+      expect(chain_tracker).to have_received(:valid_root_for_height?).once
     end
   end
 

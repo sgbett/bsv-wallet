@@ -275,7 +275,11 @@ module BSV
           # +verified_via IS NULL+. Trust claim: wallet's +TxBuilder+ built
           # and signed this tx in-process. +self_built+ is lifecycle
           # metadata (Sub 5 excludes it from the trust set); the row upgrades
-          # to +'spv'+ later via HLR #517 or +'broadcast_ack'+ via HLR #522.
+          # to +'spv'+ later via HLR #517. (An earlier revision named
+          # +'broadcast_ack'+ as another upgrade path via HLR #522, but
+          # #522's read-path decision keeps +broadcast_ack+ out of the
+          # trust set pending a liveness mechanism — see the
+          # +VERIFIED_VIA_TRUSTED+ note in +tx_proof.rb+.)
           @engine.store.db.transaction do
             @engine.store.sign_action(
               action_id: @id, wtxid: built[:wtxid], raw_tx: built[:raw_tx],

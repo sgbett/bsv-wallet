@@ -57,9 +57,11 @@ A `verification_state_coherent` CHECK enforces that the three move together. `ve
 |---|---|---|
 | `'self_built'` | Wallet constructed this tx; trust comes from the builder, not from `Tx#verify` | **No** |
 | `'spv'` | Passed `Tx#verify(chain_tracker:)` end-to-end — the strongest local trust | Yes |
-| `'broadcast_ack'` | ARC returned an accepted status; the network has it | Yes |
+| `'broadcast_ack'` | ARC accepted the tx for relay/mining; not yet a network-wide fact (may be dropped, replaced, or fail to mine) | **No** (see below) |
 
 **`self_built` is excluded from the short-circuit trust set on purpose.** The wallet's sign path signs but does not run `Tx#verify_input` on what it just signed. `self_built` asserts construction provenance, not signature validity. A signer bug (or drift between the sign and verify sighash preimages) would cache a false verification claim if `self_built` were trusted. Conservative default; the async upgrade path (`self_built` → `spv` via a background worker) is tracked as HLR #517.
+
+**`broadcast_ack` is currently excluded from the short-circuit trust set** — HLR #516 synthesis originally included it, but the Sub 6 anchor-liveness pass joins `blocks` on `block_id`, and a `broadcast_ack` row (ARC accepted, not yet mined) carries `block_id = NULL` until proof acquisition upgrades it. Trusting an unanchored row without a liveness mechanism would leave orphaned or RBF'd broadcast_ack ancestors as permanent trust sources — a phantom-balance vector. Re-admitting `broadcast_ack` to the trust set is deferred until it ships with a liveness design (proof-acquisition escalation, TTL, or equivalent). Decision recorded on PR #537 (Sub 5 read-path, closes HLR #522) — see the white-hat I1 discussion in the review thread.
 
 Lifecycle: `self_built` → (broadcast) → `broadcast_ack` → (proof arrives, verify re-runs) → `spv`. Downstream consumers can distinguish "wallet made this" from "network confirmed this" from "verify walked this".
 
@@ -148,7 +150,7 @@ Cross-version writes (`existing verifier_version < current`) bypass the ratchet:
 
 ## The SDK seam
 
-The wallet's persistent cache short-circuits the SDK's verify-walk via a `verified:` kwarg on `Tx#verify` (bsv-ruby-sdk #904). The SDK already has an in-call dedup Hash — the kwarg pre-seeds it with wtxids the caller has previously verified. The wallet builds this set from `Store#verified_wtxids(wtxids:, version_at_least:)`, gating on `verified_via IN ('spv', 'broadcast_ack')` (excluding `'self_built'`).
+The wallet's persistent cache short-circuits the SDK's verify-walk via a `verified:` kwarg on `Tx#verify` (bsv-ruby-sdk #904). The SDK already has an in-call dedup Hash — the kwarg pre-seeds it with wtxids the caller has previously verified. The wallet builds this set from `Store#verified_wtxids(wtxids:, version_at_least:)`, gating on `verified_via IN ('spv')` — `broadcast_ack` and `self_built` are both excluded (see the trust-level table above for why each).
 
 ## Composition with other work
 

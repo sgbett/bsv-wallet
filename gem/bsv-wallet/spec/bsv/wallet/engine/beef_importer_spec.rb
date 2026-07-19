@@ -12,10 +12,16 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
   include_context 'engine setup'
 
   # Mock chain tracker that accepts all merkle roots — mirrors
-  # engine_spec.rb's #internalize_action setup.
+  # engine_spec.rb's #internalize_action setup. +known_roots_for_heights+
+  # stubs to a hash that returns the persisted +blocks.merkle_root+ for
+  # each height (Sub 6 anchor-liveness: no invalidation when the fresh
+  # root matches the persisted root).
   let(:chain_tracker) do
     tracker = double('ChainTracker')
     allow(tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
+    allow(tracker).to receive(:known_roots_for_heights) do |heights|
+      heights.to_h { |h| [h, store.find_block(height: h)&.[](:merkle_root)] }
+    end
     tracker
   end
 
@@ -734,6 +740,196 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         # verification stamp absent (Tx#verify never reached it).
         expect(store.find_proof(wtxid: sibling.wtxid)).not_to be_nil
         expect(store.verification_state(wtxid: sibling.wtxid)).to be_nil
+      end
+    end
+
+    # HLR #516 Sub 5 — read-path short-circuit. Pre-seeds the SDK's
+    # +verified:+ accumulator with the surviving trust set produced by
+    # +AnchorLivenessCache#filter_trusted+, so the SDK walk skips
+    # ancestor subtrees already verified in a prior session (and whose
+    # anchors are still live under the current chain view).
+    describe 'read-path trust set (HLR #516 Sub 5)' do
+      def import_ok(built)
+        beef_importer.import(
+          tx: built[:beef_binary], description: 'sub-5 read-path',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'sub five read', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }]
+        )
+      end
+
+      def persist_and_mark(tx, via:)
+        store.save_proof(wtxid: tx.wtxid, proof: {
+                           raw_tx: tx.to_binary, height: 800_000,
+                           merkle_path: tx.merkle_path.to_binary
+                         })
+        store.mark_verified(wtxid: tx.wtxid, via: via)
+      end
+
+      # The Sub 2 write path calls +mark_verified_batch+ on
+      # +newly_walked = verified_wtxids.keys - trusted.to_a+. With the
+      # trust set currently pinned to +'spv'+ only, this avoids
+      # redundantly re-marking an already-SPV ancestor. The split is
+      # ALSO load-bearing against a future re-admission of
+      # +'broadcast_ack'+ (or any weaker mark) — without the subtract,
+      # a pre-seeded broadcast_ack ancestor would be silently upgraded
+      # to +'spv'+ under the ratchet, claiming a merkle-proof re-run
+      # that didn't happen. #537 white-hat.
+      it 'does not re-mark a pre-seeded spv ancestor (newly_walked split)' do
+        built = build_verifiable_beef(satoshis: 500)
+        persist_and_mark(built[:ancestor],
+                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV)
+        original_verified_at = store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_at]
+
+        allow(store).to receive(:mark_verified_batch).and_call_original
+        import_ok(built)
+
+        # The spv batch call excludes the pre-seeded ancestor — its
+        # wtxid isn't in +newly_walked+.
+        expect(store).to have_received(:mark_verified_batch)
+          .with(hash_including(via: 'spv')) do |args|
+          expect(args[:wtxids]).not_to include(built[:ancestor].wtxid)
+        end
+        # And its verified_at doesn't churn.
+        expect(store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_at])
+          .to eq(original_verified_at)
+      end
+
+      # #537 decision: +VERIFIED_VIA_TRUSTED+ currently excludes
+      # +broadcast_ack+ pending its liveness mechanism. Regression test:
+      # a +broadcast_ack+-marked ancestor is NOT trusted, gets fully
+      # re-walked by +Tx#verify+, and is upgraded to +'spv'+ under the
+      # monotonic ratchet.
+      it 'upgrades a broadcast_ack ancestor to spv (broadcast_ack not in trust set)' do
+        built = build_verifiable_beef(satoshis: 500)
+        persist_and_mark(built[:ancestor],
+                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_BROADCAST_ACK)
+
+        import_ok(built)
+
+        expect(store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_via])
+          .to eq('spv')
+      end
+
+      it 'marks newly walked ancestors as spv (unchanged Sub 2 write path)' do
+        built = build_verifiable_beef(satoshis: 500)
+        # No pre-seed for the ancestor — the SDK walks it and marks it.
+        import_ok(built)
+
+        expect(store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_via]).to eq('spv')
+      end
+
+      # AC #3 — +'self_built'+ never appears in the trust set (via_in
+      # excludes it in +AnchorLivenessCache+'s +verified_wtxids+ read).
+      # Regression: a self-built subject reappearing as an incoming BEEF
+      # ancestor still gets the full re-verify, not a cache hit.
+      it 'does not pre-seed self_built ancestors' do
+        built = build_verifiable_beef(satoshis: 500)
+        persist_and_mark(built[:ancestor],
+                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT)
+
+        # Import upgrades the self_built mark to spv (SDK walked the ancestor
+        # this time; monotonic ladder allows self_built → spv). The
+        # observable is: the ancestor WAS in +newly_walked+ (not the
+        # pre-seed), otherwise the write would have been suppressed.
+        import_ok(built)
+
+        expect(store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_via]).to eq('spv')
+      end
+
+      # AC #4 — cross-wallet isolation. Structurally guaranteed: each
+      # +Store+ instance is its own DB; +AnchorLivenessCache+ reads
+      # +verified_wtxids+ via a SQL WHERE clause on the injected
+      # +store:+'s tables; a wtxid absent from that store's
+      # +tx_proofs+ can't appear in the returned Set. The observable
+      # test here is the local corollary — an unknown wtxid comes back
+      # empty. A multi-Store integration test would require careful
+      # teardown of +Sequel::Model.db+ (a process-global), so leave the
+      # true cross-wallet vector to an integration spec.
+      it 'returns empty for an unknown wtxid (structural isolation guarantee)' do
+        cache = BSV::Wallet::Engine::AnchorLivenessCache.new(
+          store: store, chain_tracker: chain_tracker
+        )
+        unknown = SecureRandom.random_bytes(32)
+
+        expect(cache.filter_trusted([unknown])).to be_empty
+      end
+
+      # TrustedSelfChainTracker cannot detect re-orgs (all heights stub
+      # to nil / unknown). Using it with +AnchorLivenessCache+ would
+      # preserve every prior trust mark regardless of chain state —
+      # safe by luck if nothing ever re-orgs, funds-risk if anything
+      # does. Sub 5 guards against this: the read-path short-circuit is
+      # skipped entirely, and every ancestor is re-walked.
+      it 'skips the read-path short-circuit when the tracker is TrustedSelfChainTracker' do
+        built = build_verifiable_beef(satoshis: 500)
+        persist_and_mark(built[:ancestor],
+                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV)
+
+        trusted_self_tracker = BSV::Wallet::TrustedSelfChainTracker.new(store)
+        guarded_importer = described_class.new(
+          store: store, chain_tracker: trusted_self_tracker, hydrator: hydrator
+        )
+        # If the guard were absent, +AnchorLivenessCache.new+ would be
+        # called and +filter_trusted+ would return the ancestor (all
+        # heights nil ⇒ no invalidation ⇒ full existing trust set).
+        allow(BSV::Wallet::Engine::AnchorLivenessCache).to receive(:new).and_call_original
+
+        guarded_importer.import(
+          tx: built[:beef_binary], description: 'trusted self guard',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'trusted self guard', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }]
+        )
+
+        expect(BSV::Wallet::Engine::AnchorLivenessCache).not_to have_received(:new)
+      end
+
+      # White-hat on #537 — capability check catches trackers that
+      # don't implement +known_roots_for_heights+ at all, not just
+      # +TrustedSelfChainTracker+. Without the +respond_to?+ half of
+      # the guard, +AnchorLivenessCache#known_roots_for+ raises
+      # +NoMethodError+, gets swallowed as "unknown" by the broad
+      # rescue in +filter_trusted+, and every previously-verified
+      # wtxid stays "trusted" regardless of chain state.
+      it 'skips the short-circuit when the tracker lacks known_roots_for_heights' do
+        built = build_verifiable_beef(satoshis: 500)
+        persist_and_mark(built[:ancestor],
+                         via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV)
+
+        # Minimal SDK-shape tracker: valid_root_for_height? + current_height,
+        # NO known_roots_for_heights. Mirrors what an operator gets by
+        # wiring the SDK's raw +BSV::Transaction::ChainTracker+ subclass
+        # or an external tracker that pre-dates the anchor-liveness API.
+        minimal_tracker = Class.new do
+          def valid_root_for_height?(_root, _height) = true
+          def current_height = 900_000
+        end.new
+        guarded_importer = described_class.new(
+          store: store, chain_tracker: minimal_tracker, hydrator: hydrator
+        )
+        allow(BSV::Wallet::Engine::AnchorLivenessCache).to receive(:new).and_call_original
+
+        guarded_importer.import(
+          tx: built[:beef_binary], description: 'minimal tracker guard',
+          outputs: [{
+            output_index: 0, protocol: :basket_insertion, satoshis: 500,
+            insertion_remittance: {
+              basket: 'minimal tracker guard', derivation_prefix: 'test',
+              derivation_suffix: '1', sender_identity_key: 'self'
+            }
+          }]
+        )
+
+        expect(BSV::Wallet::Engine::AnchorLivenessCache).not_to have_received(:new)
       end
     end
 

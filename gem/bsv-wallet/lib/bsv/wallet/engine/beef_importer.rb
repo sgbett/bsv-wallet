@@ -50,12 +50,18 @@ module BSV
           # so hydrate any unresolved inputs from our ProofStore before verification.
           hydrate_known_sources!(subject_tx) if trust_self == 'known'
 
-          # Full SPV verification: scripts, merkle proofs, and fee adequacy
-          # (output <= input). Replaces the former validate_beef! +
-          # validate_fee_adequacy! two-step. Accumulator captures the exact
-          # wtxid set +Tx#verify+ walked — used below to populate the
-          # persistent verification cache (HLR #516 Sub 2).
-          verified_wtxids = {}
+          # HLR #516 Sub 5 — read path. Pre-seed the SDK's +verified:+
+          # accumulator with wtxids the wallet has already verified in an
+          # earlier walk AND whose anchors are still live under the
+          # current chain view. +AnchorLivenessCache+ owns re-org
+          # invalidation before returning the trust set (Sub 6), so a
+          # cache-hit that would be stale by the time we consume it is
+          # already cleared. +TrustedSelfChainTracker+ can't detect
+          # re-orgs (every height stubs to +unknown+), so its trust set
+          # would be silently stale — skip the short-circuit in that
+          # configuration and pay for the full walk. Sub 5.
+          trusted = pre_seed_trust_set(beef)
+          verified_wtxids = trusted.to_h { |w| [w, true] }
           verify_incoming_transaction!(subject_tx, verified: verified_wtxids)
 
           # Resolve + validate the caller's outputs against the parsed subject
@@ -127,11 +133,25 @@ module BSV
             assert_proofs_complete!(beef)
 
             # HLR #516 Sub 2 — populate the verification cache. Trust claim:
-            # every wtxid in +verified_wtxids.keys+ is a tx that +Tx#verify+
-            # itself walked and validated in the call above, including the
-            # merkle-path short-circuit at proven leaves (SDK-owned; the
-            # wallet does not re-implement the walk — an earlier revision
-            # tried and the white-hat review caught the drift).
+            # every wtxid in +newly_walked+ is a tx that +Tx#verify+ itself
+            # walked and validated in the call above, including the merkle-
+            # path short-circuit at proven leaves (SDK-owned; the wallet
+            # does not re-implement the walk — an earlier revision tried
+            # and the white-hat review caught the drift).
+            #
+            # Sub 5 subtracts +trusted+ (pre-seeded wtxids) from the SDK
+            # accumulator's key set before marking. With the trust set
+            # currently pinned to +'spv'+ only, +newly_walked+ is the
+            # set of wtxids +Tx#verify+ visited THIS walk that weren't
+            # already SPV-marked — issuing +mark_verified_batch(via: spv)+
+            # on already-SPV rows would be idempotent under the monotonic
+            # ratchet but wasteful. The split is also load-bearing if a
+            # future release re-admits +'broadcast_ack'+ (or a similar
+            # weaker mark) to the trust set: without the subtract, a
+            # pre-seeded +broadcast_ack+ row would be silently upgraded
+            # to +'spv'+ under the ladder — the merkle proof was NOT
+            # re-run for a seeded ancestor, so the SPV claim would be
+            # a lie.
             #
             # Non-atomic BEEF (BRC-62) sibling entries not reached by
             # +Tx#verify+ stay uncached — the accumulator only captures
@@ -140,8 +160,9 @@ module BSV
             # Cache write joins this same +db.transaction+ block; a
             # downstream failure (promote_action) rolls back the marks
             # alongside the proof/action rows (ADR-033).
+            newly_walked = verified_wtxids.keys - trusted.to_a
             @store.mark_verified_batch(
-              wtxids: verified_wtxids.keys,
+              wtxids: newly_walked,
               via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV
             )
 
@@ -185,6 +206,52 @@ module BSV
         end
 
         private
+
+        # HLR #516 Sub 5 — compute the read-path trust set for this
+        # BEEF's ancestor graph. Returns an empty Set when the wallet
+        # cannot verify anchor liveness; otherwise delegates to a
+        # per-walk +AnchorLivenessCache+ that resolves fresh roots,
+        # invalidates stale anchors + their structural descendants, and
+        # returns the surviving trust set.
+        #
+        # +chain_tracker_supports_liveness?+ combines a positive
+        # capability check (does the tracker implement
+        # +known_roots_for_heights+ at all?) with an explicit exclusion
+        # for +TrustedSelfChainTracker+ (implements the method but
+        # returns +nil+ for every height — "safe but useless" per its
+        # own docstring). Missing method would surface as
+        # +NoMethodError+ inside +AnchorLivenessCache#known_roots_for+,
+        # swallowed by that method's own broad +rescue StandardError+ as
+        # "unknown" → +invalidate_stale_anchors!+ preserves the full
+        # trust set → every previously-verified wtxid remains "trusted"
+        # regardless of the actual chain state. Fail closed on both
+        # variants: pay for the full walk instead. White-hat on #537.
+        def pre_seed_trust_set(beef)
+          return Set.new unless chain_tracker_supports_liveness?
+
+          # Include +TxidOnlyEntry+ wtxids. Under +trust_self: 'known'+
+          # the sender trimmed known ancestors to TXID-only and
+          # +hydrate_known_sources!+ wires them from the ProofStore
+          # BEFORE +Tx#verify+ runs. Those hydrated ancestors are
+          # exactly the ones whose subtrees the SDK will walk (and
+          # whose wtxids we can pre-seed to short-circuit). Excluding
+          # them here forces redundant re-verification of ancestors
+          # we already trust — defeating the +trust_self+ optimisation
+          # under Sub 5. +BeefTx#wtxid+ is defined on both concrete
+          # types so the collect is uniform. Copilot on #537.
+          wtxids = beef.transactions.filter_map(&:wtxid)
+          return Set.new if wtxids.empty?
+
+          AnchorLivenessCache.new(store: @store, chain_tracker: @chain_tracker)
+                             .filter_trusted(wtxids)
+        end
+
+        def chain_tracker_supports_liveness?
+          return false unless @chain_tracker.respond_to?(:known_roots_for_heights)
+          return false if @chain_tracker.is_a?(BSV::Wallet::TrustedSelfChainTracker)
+
+          true
+        end
 
         # Attach labels to the action via Store primitives. Two-call
         # mirror of +Action.attach_labels+ inlined here so BeefImporter
