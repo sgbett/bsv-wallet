@@ -2,20 +2,15 @@
 
 # Shared multi-wallet no_send fanout primitive.
 #
-# The "Predicted Change Fanout" cascade is driven by two suites with the
-# same shape but different transports:
-#
-#   - #129 (spec/integration/stress_cascade_spec.rb) — CI stress-test,
-#     drives the bin/ CLI pipeline (create + receive subprocesses).
-#   - #126 (spec/e2e/e2e_workload_spec.rb) — e2e on-chain harness, fanout
-#     is the stage-3 precondition driven by in-process Engine#send_payment +
-#     #internalize_action before the broadcast workload.
-#
-# The *routing* is identical in both — for each wallet, send +count+
-# payments to a random not-self peer — so it lives here once. The
+# "Predicted Change Fanout" is one cascade shape — for each wallet, send
+# +count+ payments to a random not-self peer — run through whatever
+# transport the caller supplies. The *routing* lives here once; the
 # *transport* is the caller's: +Fanout.pass+ yields each hop to a block
-# that performs the actual payment however the suite needs. Neither path
-# broadcasts; this is no_send fanout that builds peer-to-peer state.
+# that performs the payment however it needs (in-process
+# Engine#send_payment + #internalize_action, or a bin/ CLI create|receive
+# pipeline). Neither path broadcasts; this is no_send fanout that builds
+# peer-to-peer state. Retained for the #126 e2e on-chain and #129
+# CLI-pipeline stress workloads (consumers pending rebuild).
 module Fanout
   module_function
 

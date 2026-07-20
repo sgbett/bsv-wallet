@@ -20,12 +20,6 @@ RSpec.describe 'wallet send (BEEF handover)' do # rubocop:disable RSpec/Describe
   let!(:dst_funds) { dst.available_funds } # rubocop:disable RSpec/ScatteredLet
 
   before do # rubocop:disable RSpec/ScatteredSetup
-    # +no_fee: true+ pins the build to zero fee (HLR #489) so the sender
-    # debit is exactly +sats+ — the equality below is then both the
-    # observation and the regression guard for the HLR #467 bug (debit
-    # below +sats+ would mean the recipient output is still classified as
-    # sender-spendable). The action never broadcasts (+--broadcast=none+)
-    # so ARC's zero-fee rejection doesn't apply.
     envelope = src.send(dst.identity_key, sats, no_fee: true)
     dst.receive(envelope)
   end
