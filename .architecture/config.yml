@@ -9,13 +9,20 @@ project:
 settings:
   pragmatic_mode: true
   review_depth: thorough
-  # date-prefixed sequential: YYYYMMDD_ADR-NNN-kebab-title.md
+  auto_detect_changes: true
+
+# Architecture Decision Record (ADR) configuration.
+# Standard framework schema so the numbering script (next-adr-number.sh) reads it deterministically.
+adr:
+  # Numbering format: sequential | date-based | date-prefixed-sequential
+  # date-prefixed-sequential: YYYYMMDD_ADR-NNN-kebab-title.md
   # YYYYMMDD = the AUTHORING date (ADRs begin as Draft, written at decision time).
   # Exception: the reconstructed ADR-001..024 raft was backdated to each
   # decision's date, since those decisions predated their write-up (and some
   # were ratified over time) — a one-off, not the forward rule.
-  adr_numbering: date-prefixed-sequential
-  auto_detect_changes: true
+  numbering_format: date-prefixed-sequential
+  sequential_format: "000"
+  date_format: "%Y%m%d"
 
 review:
   default_scope: full
