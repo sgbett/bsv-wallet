@@ -129,6 +129,29 @@ Practical consequences when designing new surface area:
 
 Full statement and worked examples: `docs/reference/state-boundaries.md`.
 
+## Security focus
+
+The wallet holds private keys, signs transactions and imports untrusted blockchain data from peers. Security reviews of this repository pay special attention to:
+
+- **Private key handling**: Exposure in memory, logs, error messages, serialisation
+- **Signature malleability**: DER encoding issues, low-S enforcement, sighash edge cases
+- **Transaction malleability**: Script manipulation that changes txid without invalidating
+- **Cryptographic implementation flaws**: RFC 6979 deterministic k-value generation, curve point validation, cofactor issues
+- **Script interpreter bugs**: Stack manipulation exploits, OP_CODE edge cases, script size limits
+- **Deserialisation of untrusted blockchain data**: Malformed transactions, scripts, merkle proofs
+- **Hash collision/preimage attacks**: Anywhere hashes are used for identity or commitment
+- **Fee manipulation**: Attacks via crafted transaction inputs/outputs
+- **Replay attacks**: Cross-chain or cross-fork transaction replay
+
+Changes to these areas always get a security review, however small:
+
+- **Cryptography** — the BRC-100 encrypt, decrypt, HMAC and signature methods in `gem/bsv-wallet/lib/bsv/wallet/brc100.rb`, and the WIF-derived callback token in `callback_token.rb`
+- **Keys and signatures** — `gem/bsv-wallet/lib/bsv/wallet/key_deriver.rb`, transaction signing in `engine/tx_builder.rb`, and secrets redaction in `cli/secrets.rb`
+- **BEEF** — `gem/bsv-wallet/lib/bsv/wallet/engine/beef_importer.rb` and `interface/beef_importer.rb`
+- **Merkle proofs** — `gem/bsv-wallet/lib/bsv/wallet/engine/merkle_path_normaliser.rb` and `engine/tx_proof.rb`, and the chain trackers that check merkle roots: `gem/bsv-wallet/lib/bsv/network/chain_tracker.rb`, `spv_header_chain_tracker.rb` and `gem/bsv-wallet/lib/bsv/wallet/trusted_self_chain_tracker.rb`
+
+The script interpreter lives in the SDK (`bsv-sdk`), so its review triggers live in that repository's `CLAUDE.md`.
+
 ## Database & Wallet Configuration
 
 This is a **Postgres-based** wallet. SQLite exists as a convenience for fast logic-only specs that don't depend on DB invariants — it is not the production target.
