@@ -26,9 +26,9 @@ module E2E
   #   - +DATABASE_URL_SDK+ / +DATABASE_URL_W1+ .. +DATABASE_URL_W5+ —
   #     derived from +BSV_WALLET_POSTGRES+ via +CLI.derive_postgres_url+.
   #     Explicit +DATABASE_URL_<NAME>+ values already in ENV are respected.
-  #     +e2e_workload_spec.rb+ reads these slots directly (stage 3 fanout
-  #     verification opens a fresh +Sequel.connect+ per wallet), so they
-  #     must be populated even though +CLI.boot+ would derive on its own.
+  #     the #126 e2e on-chain harness reads these slots directly (stage-3
+  #     fanout verification opens a fresh +Sequel.connect+ per wallet), so
+  #     they must be populated even though +CLI.boot+ would derive on its own.
   module WalletHarness
     SDK = 'sdk'
 
@@ -48,7 +48,7 @@ module E2E
     # Raises +KeyError+ when +BSV_WALLET_WIF_SDK+ is unset; raises a
     # clear error when +BSV_WALLET_POSTGRES+ is unset/blank (the
     # +Fixtures+ derivation would otherwise produce nil DB URLs and
-    # downstream readers like +e2e_workload_spec.rb+ would fail
+    # downstream readers like the #126 e2e harness would fail
     # confusingly).
     def install_fixtures!
       raise KeyError, 'key not found: "BSV_WALLET_POSTGRES"' if ENV['BSV_WALLET_POSTGRES'].to_s.strip.empty?
