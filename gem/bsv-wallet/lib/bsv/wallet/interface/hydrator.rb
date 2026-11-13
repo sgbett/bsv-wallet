@@ -30,7 +30,7 @@ module BSV
       #
       # ## One-way seam (+wire_ancestor+ is public)
       #
-      # +wire_ancestor+ is exposed as the public primitive +BeefInternalizer+
+      # +wire_ancestor+ is exposed as the public method +BeefInternalizer+
       # (ingress) consumes — incoming-BEEF trustSelf hydration depends on
       # this method to fill TXID-only entries from the local ProofStore
       # before verification. The dependency is one-way: ingress depends

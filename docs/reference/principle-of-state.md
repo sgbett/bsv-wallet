@@ -101,7 +101,7 @@ Caches and derived indexes are allowed when they make the wallet faster. They ar
 
 > Delete the cache. Rebuild from the database. The wallet behaves identically.
 
-`Engine::HydratedTxCache` (#269, rekeyed by wtxid in #296 Phase D) is a performance projection — a wtxid-keyed cache of raw-transaction and merkle-path bytes, so the broadcast EF build skips the `resolve_inputs_for_signing` JOIN and the Hydrator's ancestry walk skips proof-store reads. The cache lies in the same direction as truth (it can only be empty or correct), never against it: entries are immutable bytes, and they only progress toward database truth — a merkle path is filled in when a proof arrives and never cleared. Cold restart → empty cache → the wallet refills it from the database on first access.
+`Engine::HydratedTxCache` (#269, rekeyed by wtxid in #296 Phase D) is a performance projection — a wtxid-keyed cache of raw-transaction and merkle-path bytes, so the broadcast EF build skips the `resolve_inputs_for_signing` JOIN and the Hydrator's ancestry walk skips proof-store reads. The cache lies in the same direction as truth (it can only be empty or correct), never against it: entries are immutable bytes, and they only progress toward database truth — a merkle path is filled in when a proof arrives (through the Hydrator's `proof_arrived`, an eager broadcast-response proof, or a producer's hint over `BSV_WALLET_HINTS_SOCKET`; see [Daemon](../concepts/daemon.md)) and never cleared. Cold restart → empty cache → the wallet refills it from the database on first access.
 
 The same pattern applies to any future projection (block header cache, spendable set count, fee model state). Build *over* the schema; never *beside* it.
 

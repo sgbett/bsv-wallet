@@ -46,7 +46,7 @@ Trimming is the one place the "peer knows X, send less" instinct is correct.
 
 ## Two domains, one cache
 
-Broadcast and transmit are separate stateful *processes* (wallet side, per the stateless→SDK / stateful→wallet axis in `state-boundaries.md`) that, within an Engine, share one in-memory cache, the `Engine::HydratedTxCache`. Broadcast reads it directly for its EF build and fills it from hints and eager proofs; Transmission reaches it only through the Hydrator, which assembles the peer's BEEF:
+Broadcast and transmit are separate stateful *processes* (wallet side, per the stateless→SDK / stateful→wallet axis in `state-boundaries.md`) that, within an Engine, share one in-memory cache, the `Engine::HydratedTxCache`. Broadcast reads it directly for its EF build and fills it from eager broadcast-response proofs (walletd's Broadcast, over its own cache, also fills it from producers' hints); Transmission reaches it only through the Hydrator, which assembles the peer's BEEF:
 
 ```
        Engine::HydratedTxCache   ← shared: wtxid-keyed raw-tx + merkle-path bytes

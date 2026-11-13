@@ -207,8 +207,8 @@ module BSV
         # Returns the +PeerDelivery::Result+, or nil when no endpoint
         # was supplied (transmit intent +none+) or no delivery
         # transport was wired (unit-spec contexts). The envelope shape
-        # is the BRC-29-aligned superset of the +bin/create+ →
-        # +bin/receive+ stdin/stdout JSON: +beef+ (binary; the
+        # follows the +bin/wallet send+ → +bin/wallet receive+
+        # stdout/stdin JSON, without its +dtxid+: +beef+ (binary; the
         # +PeerDelivery+ hex-encodes for wire), +outputs+, and
         # +sender_identity_key+, plus an explicit +protocol_version: 1+
         # so Phase-2 additions (signed ACK, certificates, etc.) can be
