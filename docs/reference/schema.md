@@ -180,7 +180,7 @@ class Wallet::Action < Sequel::Model
 end
 ```
 
-`:internal` replaces the earlier `:nosend` label (the rename is a breaking change for consumers of `list_actions`). `'none'` is a load-bearing enum value distinct from the BRC-100 chained-send concept; it marks actions whose transaction is never going to ARC because it doesn't need to (incoming BEEF, imported root UTXOs, wbikd address locks, `send_payment` returning BEEF for out-of-band delivery). The BRC-100 noSend / sendWith primitives are deferred to #192 and are not part of this base wallet.
+`:internal` replaces the earlier `:nosend` label (the rename is a breaking change for consumers of `list_actions`). `'none'` is a load-bearing enum value distinct from the BRC-100 chained-send concept; it marks actions whose transaction is never going to ARC because it doesn't need to (incoming BEEF, imported root UTXOs, wbikd address locks, `send_payment` returning BEEF for out-of-band delivery). The BRC-100 noSend / sendWith options are deferred to #192 and are not part of this base wallet.
 
 ## 4. Broadcasts
 
@@ -1329,4 +1329,4 @@ LIMIT ? OFFSET ?;
 
 **Tags vs Labels:** Labels categorize actions (used with `listActions`). Tags categorize outputs (used with `listOutputs`). Both are purely organizational.
 
-**Chained-send / batching:** The BRC-100 `noSend` / `sendWith` / `noSendChange` / `knownTxids` primitives are not implemented in this base wallet. They are deferred to issue #192 as a separate subsystem. See [`.architecture/reviews/20260619_noSend-sendWith-design-notes.md`](../../.architecture/reviews/20260619_noSend-sendWith-design-notes.md) for the design analysis.
+**Chained-send / batching:** The BRC-100 `noSend` / `sendWith` / `noSendChange` / `knownTxids` options are not implemented in this base wallet. They are deferred to issue #192 as a separate subsystem. See [`.architecture/reviews/20260619_noSend-sendWith-design-notes.md`](../../.architecture/reviews/20260619_noSend-sendWith-design-notes.md) for the design analysis.

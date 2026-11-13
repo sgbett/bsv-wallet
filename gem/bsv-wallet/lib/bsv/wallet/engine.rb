@@ -6,18 +6,19 @@ using BSV::Wallet::Txid
 
 module BSV
   module Wallet
-    # Layer 3 — wallet-vocab primitive surface beneath BRC-100.
+    # Layer 3 — orchestration beneath BRC-100.
     #
-    # Receives Layer 2a components at construction time and exposes 28
-    # spec-aligned primitive methods (e.g. +#build_action+, +#sign_action+,
-    # +#encrypt+, +#get_public_key+ — per ADR-026 / #397 classification)
-    # plus two internals (+Engine::Policy#guard_balance!+,
-    # +Engine#dispatch_broadcast+). BRC-100 spec compliance lives one
-    # layer up, in +BSV::Wallet::BRC100+ (a class composed over an engine
-    # instance — reached via +Engine#brc100+ since #405 Stage 3 of #396
-    # retired the mixin). Engine contains no SQL, no ARC calls, no
-    # thread management — pure orchestration over the primitives'
-    # collaborators.
+    # Exposes Engine primitives and Engine porcelain composed over them
+    # (+#send_payment+, +#sweep+, ...). The Engine primitives are the 28
+    # the BRC-100 methods map onto (e.g. +#build_action+, +#sign_action+,
+    # +#encrypt+, +#get_public_key+; per ADR-026 / #397 classification)
+    # plus a few of its own, such as +#reject_action+. Receives +Store+ and
+    # +UTXOPool+ and constructs the other Layer 2a collaborators itself.
+    # BRC-100 spec compliance lives one layer up, in +BSV::Wallet::BRC100+
+    # (a class composed over an engine instance — reached via
+    # +Engine#brc100+ since #405 Stage 3 of #396 retired the mixin).
+    # Engine contains no SQL, no ARC calls, no thread management — pure
+    # orchestration over its collaborators.
     #
     # @example Via the CLI's auto-discovery (recommended for typical use)
     #   require 'bsv/wallet/cli'    # not autoloaded — CLI is opt-in
@@ -162,7 +163,7 @@ module BSV
       # BRC-100 wrap layer. Memoised — returns the same +BSV::Wallet::BRC100+
       # instance for the lifetime of this engine. The wrapper holds an
       # +@engine+ reference back to +self+; all 28 BRC-100 method calls
-      # route through it and dispatch to Engine's primitive surface.
+      # route through it and dispatch to Engine primitives.
       # Callers in this codebase use this accessor; external callers may
       # also construct +BSV::Wallet::BRC100.new(engine)+ directly.
       def brc100
@@ -180,9 +181,9 @@ module BSV
         { rejected: true, action_id: action_id }
       end
 
-      # ---- BRC-100 primitive surface (write-side) ------------------------
+      # ---- Engine primitives behind the BRC-100 methods (write-side) ------
       #
-      # Four thick primitives the +BSV::Wallet::BRC100+ wrap layer
+      # Four thick Engine primitives the +BSV::Wallet::BRC100+ wrap layer
       # calls through its memoised +@engine+ reference (e.g.
       # +@engine.build_action+, +@engine.sign_action+). Return shapes
       # are wallet vocab
@@ -418,7 +419,7 @@ module BSV
         )
       end
 
-      # ---- BRC-100 primitive surface (read-side, #402 Stage 2 PR 2) -------
+      # ---- Engine primitives behind the BRC-100 methods (read-side, #402 Stage 2 PR 2) ----
       #
       # 24 thin wrappers — the indivisible domain operations BRC100 maps
       # one-to-one to BRC-100 spec methods. Engine returns raw values
@@ -839,7 +840,7 @@ module BSV
         { imported: true, satoshis: satoshis, dtxid: dtxid }
       end
 
-      # --- Porcelain ---
+      # --- Engine porcelain ---
 
       # Scan the root key's address for unspent outputs and import each one.
       #
