@@ -138,10 +138,10 @@ module BSV
         # +delivery:+ slot is wired with +Network::PeerDelivery+ here
         # (#390): SSRF gate via +EndpointPolicy+, ACK validation with
         # wtxid binding, bounded HTTP timeouts. The HTTP transport is
-        # only invoked when a caller passes +endpoint:+ to
-        # +#transmit+ — the deferred caller-driven path (return BEEF,
-        # let the operator shuttle it) still works. See ADR-025 / HLR
-        # #385 / docs/reference/transactions.md.
+        # only invoked when a caller passes +endpoint:+ to +#transmit+
+        # (transmit intent +inline+); with +endpoint: nil+ (transmit
+        # intent +none+) the BEEF is returned for the caller to deliver.
+        # See ADR-025 / HLR #385 / docs/reference/transactions.md.
         @transmission = Transmission.new(
           store: @store, hydrator: @hydrator, delivery: Network::PeerDelivery.new
         )
@@ -1341,9 +1341,9 @@ module BSV
       # wtxid derived from the BEEF (see +Engine::Broadcast#hints_pull!+),
       # and a deferred-sign produces a different wtxid from the staged
       # unsigned one, so the sign-path entry never collides with any
-      # earlier create-time entry. The deferred-broadcast path now
-      # benefits from the same +find_action+ + JOIN skip as the inline
-      # create path.
+      # earlier create-time entry. The broadcast after deferred signing
+      # now benefits from the same +find_action+ + JOIN skip as the
+      # inline create path.
       def dispatch_broadcast(action_id, atomic_beef, intent:)
         publish_beef_hint(action_id, atomic_beef) if atomic_beef
         @broadcast_worker.process(action_id) if intent == :inline

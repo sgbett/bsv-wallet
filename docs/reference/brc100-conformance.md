@@ -99,7 +99,7 @@ This is ADR-026's "Engine speaks wallet vocab, BRC-100 wraps" principle applied 
 | `customInstructions` (per output) | Implemented (core) | Column on `outputs`. |
 | `outputDescription` (per output) | Implemented (core) | Column on `outputs`. |
 | `knownTxids` | Implemented (core) | Ancestry import optimisation; the parameter name `txids` is BRC-100 spec vocabulary at the boundary, values are wire-order wtxids internally. |
-| `noSend` / `sendWith` | Deferred | Engine decomposition precondition complete (ADR-024); restoration tracked by #192. The lifecycle exists structurally; the deferred-send orchestration on top is the missing piece. |
+| `noSend` / `sendWith` | Deferred | Engine decomposition precondition complete (ADR-024); restoration tracked by #192. The lifecycle exists structurally; the `sendWith` batching on top is the missing piece. |
 | `acceptDelayedBroadcast` | Implemented (core) | Maps to declarative broadcast intent (ADR-019). |
 | `randomizeOutputs` | Implemented (core) | Boundary shuffle before signing. |
 | `include` (`'locking scripts'` / `'entire transactions'`) | Implemented (core) | Result shape control for `listOutputs`. |

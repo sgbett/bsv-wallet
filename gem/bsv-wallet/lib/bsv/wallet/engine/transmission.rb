@@ -24,11 +24,12 @@ module BSV
       # state is the deciding difference and lives here, never in
       # +Broadcast+.
       #
-      # Synchronicity is an invocation mode, not a property of +#transmit+.
-      # v1 ships sync (an inline caller awaits a self-contained
-      # +#transmit+), and the same operation must be drivable async by the
-      # daemon later — single code path, mirroring +Broadcast+'s
-      # +broadcast_intent+ inline/delayed split (ADR-024 / #183
+      # Transmit intent is an invocation mode, not a property of
+      # +#transmit+. v1 ships +inline+ (the caller awaits a self-contained
+      # +#transmit+) and +none+ (no +endpoint:+; the caller delivers the
+      # returned BEEF). A daemon-driven +delayed+ transmit is not built
+      # (#385 Phase 2); it would run over the same code path, as
+      # +broadcast_intent+ +inline+ and +delayed+ do (ADR-024 / #183
       # inline-equals-delayed robustness).
       class Transmission
         # BRC-43 canonical counterparty hex: compressed pubkey (02|03
@@ -112,10 +113,8 @@ module BSV
         # two-phase boundary stays intact: +transmission_txids+ are
         # only ever written on confirmed delivery, so a future BEEF
         # can never over-trim against a stale knowledge claim. When
-        # +endpoint:+ is nil (deferred-by-caller path), the row is
-        # recorded and the caller decides how/when to deliver — same
-        # shape as +Engine::Broadcast+ which separates +submit+ from
-        # the delayed broadcast worker.
+        # +endpoint:+ is nil (transmit intent +none+), the row is
+        # recorded and the caller decides how and when to deliver.
         #
         # @param counterparty [String] BRC-43 identity pubkey hex
         #   (66-char compressed, +02+/+03+ prefix, **lowercase**).
@@ -206,7 +205,7 @@ module BSV
 
         # Build the Phase-1 wire envelope and hand it to +@delivery+.
         # Returns the +PeerDelivery::Result+, or nil when no endpoint
-        # was supplied (deferred caller-driven delivery) or no delivery
+        # was supplied (transmit intent +none+) or no delivery
         # transport was wired (unit-spec contexts). The envelope shape
         # is the BRC-29-aligned superset of the +bin/create+ →
         # +bin/receive+ stdin/stdout JSON: +beef+ (binary; the

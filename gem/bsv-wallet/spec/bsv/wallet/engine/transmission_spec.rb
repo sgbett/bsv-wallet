@@ -628,7 +628,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
       expect(call_order).to eq(%i[record deliver ack])
     end
 
-    it 'with endpoint nil (caller-driven delivery) does not invoke @delivery' do
+    it 'with endpoint nil (transmit intent none) does not invoke @delivery' do
       # Stub the spy before asserting +not_to have_received+ so the
       # double has the method to inspect even if it goes uncalled.
       allow(delivery).to receive(:deliver)
