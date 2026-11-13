@@ -9,7 +9,7 @@ module BSV
       # cache (HLR #516 Sub 6.1).
       #
       # Per-verify-walk collaborator: constructed fresh for each
-      # +BeefImporter#import+ so the batched +known_roots_for_heights+
+      # +BeefInternalizer#internalize+ so the batched +known_roots_for_heights+
       # memo cannot leak across walks. The tick-scoped
       # +current_height+ memo lives elsewhere (chain-tracker instance);
       # this class only memoises the height→root map for the walk it

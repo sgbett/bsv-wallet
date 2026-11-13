@@ -2046,8 +2046,8 @@ RSpec.describe BSV::Wallet::Engine do
     # in spec/bsv/wallet/engine/broadcast_spec.rb.
     #
     # Private-method tests for verify_incoming_transaction!, parse_beef,
-    # and replace_known_ancestors! live in beef_importer_spec.rb — those
-    # helpers were extracted from Engine::Action to Engine::BeefImporter
+    # and replace_known_ancestors! live in beef_internalizer_spec.rb — those
+    # helpers were extracted from Engine::Action to Engine::BeefInternalizer
     # in #340 and are exercised there directly.
   end
 

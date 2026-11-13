@@ -372,9 +372,9 @@ RSpec.describe BSV::Wallet::Engine::Action do
 
   describe 'internalize (via Engine#internalize_action)' do
     # +Action.internalize+ is gone — incoming-BEEF ingestion now lives
-    # on +Engine::BeefImporter+ (HLR #357). This smoke covers the
+    # on +Engine::BeefInternalizer+ (HLR #357). This smoke covers the
     # public Engine surface that delegates to it; isolation specs
-    # exist in +beef_importer_spec.rb+.
+    # exist in +beef_internalizer_spec.rb+.
     let(:chain_tracker_mock) do
       tracker = double('ChainTracker')
       allow(tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
@@ -453,7 +453,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       expect(action[:outgoing]).to be(false)
     end
 
-    it 'delegates to Engine::BeefImporter (the ingress collaborator)' do
+    it 'delegates to Engine::BeefInternalizer (the ingress collaborator)' do
       beef_data, = build_internalize_beef(satoshis: 700)
 
       result = engine_with_tracker.brc100.internalize_action(
@@ -471,7 +471,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       )
 
       expect(result).to eq({ accepted: true })
-      expect(engine_with_tracker.beef_importer).to be_a(BSV::Wallet::Engine::BeefImporter)
+      expect(engine_with_tracker.beef_internalizer).to be_a(BSV::Wallet::Engine::BeefInternalizer)
     end
   end
 
@@ -552,5 +552,5 @@ RSpec.describe BSV::Wallet::Engine::Action do
   # wire_ancestor specs migrated to engine/hydrator_spec.rb in #345 along
   # with the method itself. The +verify_incoming_transaction!+ /
   # TXID-only-survival blocks that used to live here moved to
-  # +beef_importer_spec.rb+ in #357 along with the ingress helpers.
+  # +beef_internalizer_spec.rb+ in #357 along with the ingress helpers.
 end

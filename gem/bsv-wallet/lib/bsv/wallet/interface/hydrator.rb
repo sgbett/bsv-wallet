@@ -30,7 +30,7 @@ module BSV
       #
       # ## One-way seam (+wire_ancestor+ is public)
       #
-      # +wire_ancestor+ is exposed as the public primitive +BeefImporter+
+      # +wire_ancestor+ is exposed as the public primitive +BeefInternalizer+
       # (ingress) consumes — incoming-BEEF trustSelf hydration depends on
       # this method to fill TXID-only entries from the local ProofStore
       # before verification. The dependency is one-way: ingress depends
@@ -59,7 +59,7 @@ module BSV
         # circular references (genuine Bitcoin transactions cannot form
         # cycles, but ProofStore entries can).
         #
-        # Public surface: +BeefImporter+ (ingress) consumes this directly
+        # Public surface: +BeefInternalizer+ (ingress) consumes this directly
         # for trustSelf hydration of incoming BEEFs whose TXID-only
         # entries we already hold proofs for.
         #
@@ -97,7 +97,7 @@ module BSV
         # +merkle_path+ when (and only when) a proof has landed. Sites that
         # call this include +Engine::TxProof+ (daemon proof acquisition),
         # +Engine::Broadcast+ (eager broadcast-response proof),
-        # +Engine::BeefImporter+ (every BEEF entry, merkle-bearing or not),
+        # +Engine::BeefInternalizer+ (every BEEF entry, merkle-bearing or not),
         # and +Engine#import_utxo+ (root UTXO import). The shared cache
         # then short-circuits future +wire_ancestor+ walks: through the
         # +wtxid+ as a proven terminal when +merkle_path+ is present, or

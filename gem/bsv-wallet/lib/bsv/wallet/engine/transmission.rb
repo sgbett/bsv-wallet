@@ -12,7 +12,7 @@ module BSV
       #
       # Background-worker sibling shape: no +Interface::Transmission+
       # module (only shape-extracted services consumed cross-sibling, e.g.
-      # +Hydrator+ and +BeefImporter+, carry interface modules). This
+      # +Hydrator+ and +BeefInternalizer+, carry interface modules). This
       # matches +Broadcast+ and +TxProof+.
       #
       # Domain distinction: broadcast ships Extended Format to the miner
@@ -41,7 +41,7 @@ module BSV
         BRC43_COMPRESSED_LOWERCASE = /\A0[23][0-9a-f]{64}\z/
 
         # Explicit DI — no engine back-reference. Mirrors sibling shape
-        # (+Broadcast+, +TxProof+, +Hydrator+, +BeefImporter+).
+        # (+Broadcast+, +TxProof+, +Hydrator+, +BeefInternalizer+).
         #
         # @param store     [BSV::Wallet::Store]
         # @param hydrator  [BSV::Wallet::Engine::Hydrator] shared-substrate

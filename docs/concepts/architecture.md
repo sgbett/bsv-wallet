@@ -25,10 +25,10 @@ This page is the narrative shape of the system. For canonical principle statemen
   │   Store   │ │  UTXOPool  │  │ FundingStrategy│ │ TxBuilder│ │ Hydrator │
   │persistence│ │  selection │  │  input loop    │ │  build   │ │ BEEF egr │
   └───────────┘ └────────────┘  └────────────────┘ └──────────┘ └──────────┘
-  ┌────────────┐
-  │BeefImporter│
-  │  ingress   │
-  └────────────┘
+  ┌──────────────────┐
+  │ BeefInternalizer │
+  │     ingress      │
+  └──────────────────┘
    Layer 2a — six contracted collaborators behind Interface::* modules
 
   ┌────────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
@@ -53,7 +53,7 @@ This page is the narrative shape of the system. For canonical principle statemen
 - **`FundingStrategy`** — input acquisition and the build fixpoint. Contract in `Interface::FundingStrategy`.
 - **`TxBuilder`** — store-free transaction construction, fee balancing, and signing. Contract in `Interface::TxBuilder`.
 - **`Hydrator`** — proof-store hydration, egress BEEF assembly, and the egress SPV-honesty check. Contract in `Interface::Hydrator`. See [Transactions & BEEF](transactions-and-beef.md).
-- **`BeefImporter`** — incoming BEEF parsing, SPV verification, proof persistence, and output promotion. Contract in `Interface::BeefImporter`. See [Transactions & BEEF](transactions-and-beef.md).
+- **`BeefInternalizer`** — incoming BEEF parsing, SPV verification, proof persistence, and output promotion. Contract in `Interface::BeefInternalizer`. See [Transactions & BEEF](transactions-and-beef.md).
 
 **Layer 2b — four concrete collaborators.** These have a single implementation and no `Interface::*` module. Per-counterparty state or sole provider routing means they aren't replaceable in the same way.
 
@@ -83,7 +83,7 @@ engine = BSV::Wallet::Engine.new(
 )
 ```
 
-Engine then constructs the rest of the collaborators in its own initialiser from those building blocks: `TxBuilder`, `Hydrator`, `BeefImporter`, `FundingStrategy`, `Transmission`, the inline `Broadcast` worker, the shared `HydratedTxCache`, the `Policy` guard.
+Engine then constructs the rest of the collaborators in its own initialiser from those building blocks: `TxBuilder`, `Hydrator`, `BeefInternalizer`, `FundingStrategy`, `Transmission`, the inline `Broadcast` worker, the shared `HydratedTxCache`, the `Policy` guard.
 
 Two consequences matter:
 

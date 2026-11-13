@@ -38,7 +38,7 @@ module BSV
     class Engine
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :AnchorLivenessCache,   'bsv/wallet/engine/anchor_liveness_cache'
-      autoload :BeefImporter,          'bsv/wallet/engine/beef_internalizer'
+      autoload :BeefInternalizer,      'bsv/wallet/engine/beef_internalizer'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
       autoload :Hydrator,              'bsv/wallet/engine/hydrator'
@@ -62,7 +62,7 @@ module BSV
       RETRYABLE_IMPORT_BACKOFF_BASE_S = 1.0
 
       attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker,
-                  :funding_strategy, :tx_builder, :hydrator, :beef_importer,
+                  :funding_strategy, :tx_builder, :hydrator, :beef_internalizer,
                   :transmission
 
       # Engine collaborator surface exposed for Engine::Action use.
@@ -125,12 +125,12 @@ module BSV
         # (build_atomic_beef) + egress SPV honesty contract
         # (validate_for_handoff!). See ADR-024 / #343.
         @hydrator = Hydrator.new(store: @store, cache: @hydrated_tx_cache)
-        # BeefImporter — ingress counterpart to Hydrator. Owns the whole
+        # BeefInternalizer — ingress counterpart to Hydrator. Owns the whole
         # incoming-BEEF flow (parse, SPV verify, persist ancestor
         # proofs, promote outputs). Consumes Hydrator#wire_ancestor for
         # trustSelf hydration; one-way (ingress → Hydrator). See
         # ADR-024 / #357.
-        @beef_importer = BeefImporter.new(
+        @beef_internalizer = BeefInternalizer.new(
           store: @store, chain_tracker: @chain_tracker, hydrator: @hydrator
         )
         # Transmission — wallet-to-peer BEEF delivery domain, sibling to
@@ -411,7 +411,7 @@ module BSV
 
       def import_beef(tx:, outputs:, description:, labels: nil,
                       trust_self: nil, known_txids: nil)
-        @beef_importer.import(
+        @beef_internalizer.internalize(
           tx: tx, outputs: outputs, description: description,
           labels: labels, trust_self: trust_self, known_txids: known_txids
         )
@@ -788,7 +788,7 @@ module BSV
           @store.link_proof(action_id: import_action[:id], tx_proof_id: proof_id)
           # Inform the shared Hydrator cache so any subsequent wire_ancestor
           # walk through +wtxid+ terminates here without re-fetching. Mirrors
-          # the BeefImporter / Broadcast / TxProof discipline — every
+          # the BeefInternalizer / Broadcast / TxProof discipline — every
           # save_proof + merkle site notifies the substrate. #296 Phase D.
           @hydrator&.proof_arrived(wtxid: wtxid, raw_tx: raw_tx, merkle_path: merkle_path_binary)
           output_ids = @store.promote_action(

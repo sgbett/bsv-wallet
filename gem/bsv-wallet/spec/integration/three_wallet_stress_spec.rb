@@ -98,9 +98,9 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
     }
   end
 
-  # HLR #516 Sub 5 — receive-path short-circuit assertion via BeefImporter.
+  # HLR #516 Sub 5 — receive-path short-circuit assertion via BeefInternalizer.
   #
-  # Iterates +BeefImporter#import+ over subjects whose ancestor chain
+  # Iterates +BeefInternalizer#internalize+ over subjects whose ancestor chain
   # GROWS by one link per iteration. Only the ROOT ancestor carries a
   # merkle path — every intermediate link is unproven. Without Sub 5's
   # pre-seed, +Tx#verify+ chases +input.source_transaction+ pointers
@@ -126,7 +126,7 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
       chain_tracker = build_tracker({})
       allow(chain_tracker).to receive_messages(valid_root_for_height?: true, current_height: 900_000)
       hydrator = BSV::Wallet::Engine::Hydrator.new(store: store)
-      importer = BSV::Wallet::Engine::BeefImporter.new(
+      internalizer = BSV::Wallet::Engine::BeefInternalizer.new(
         store: store, chain_tracker: chain_tracker, hydrator: hydrator
       )
 
@@ -171,7 +171,7 @@ RSpec.describe 'HLR #516 regression harness (Sub 6.3 co-release)', :store do # r
         chain.each { |tx| beef.merge_transaction(tx) }
         beef.merge_transaction(subject_tx)
 
-        importer.import(
+        internalizer.internalize(
           tx: beef.to_atomic_binary(subject_tx.wtxid),
           description: "sub 5 iter #{i}",
           outputs: [{

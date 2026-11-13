@@ -91,7 +91,7 @@ This is ADR-026's "Engine speaks wallet vocab, BRC-100 wraps" principle applied 
 | Parameter | Stance | Notes |
 |---|---|---|
 | `inputs` / `outputs` | Implemented (core) | Action construction. |
-| `inputBEEF` | Implemented (core) | Ancestry import via `Engine::BeefImporter`. |
+| `inputBEEF` | Implemented (core) | Stored with the action (`actions.input_beef`). |
 | `description` | Implemented (core) | `actions.description` column. |
 | `labels` (on action) | Implemented (core) | `tx_labels` / `tx_labels_map` tables. |
 | `tags` (on output) | Implemented (core) | `output_tags` / `output_tags_map` tables. |

@@ -452,7 +452,7 @@ module BSV
         # bind-parameter limit.
         #
         # All rows in the batch get the same +via+ / +at_time+ (typical use:
-        # BeefImporter marks every walked wtxid as +'spv'+ in one call).
+        # BeefInternalizer marks every walked wtxid as +'spv'+ in one call).
         #
         # @param wtxids [Array<String>] 32-byte binary wtxids
         # @param via [String] see +#mark_verified+
@@ -474,7 +474,7 @@ module BSV
           raise NotImplementedError
         end
 
-        # Batch trust-set query for the read path (BeefImporter Sub 5).
+        # Batch trust-set query for the read path (BeefInternalizer Sub 5).
         # Returns the subset of +wtxids+ whose stored +verified_via+ is in
         # the caller-supplied +via_in+ set AND whose +verifier_version+ is
         # at least +version_at_least+. Empty input short-circuits (no DB

@@ -84,7 +84,7 @@ Sequel.migration do
       # returned an accepted status. See ADR-033 and
       # docs/reference/verification-cache.md for the trust semantics of
       # each value. 'self_built' is explicitly NOT trusted for the
-      # short-circuit path in BeefImporter (HLR #516 specialist review).
+      # short-circuit path in BeefInternalizer (HLR #516 specialist review).
       create_enum(:verification_source, %w[self_built spv broadcast_ack])
     end
 

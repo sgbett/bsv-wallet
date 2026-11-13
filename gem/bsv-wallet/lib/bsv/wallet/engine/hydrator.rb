@@ -21,7 +21,7 @@ module BSV
       # Hydrator owns, not an engine dependency.
       #
       # +wire_ancestor+ is public — the one-way primitive the later
-      # BeefImporter (ingress) extraction consumes for trustSelf
+      # BeefInternalizer (ingress) extraction consumes for trustSelf
       # hydration of incoming BEEFs.
       class Hydrator
         include BSV::Wallet::Interface::Hydrator
@@ -77,7 +77,7 @@ module BSV
         #
         # Outgoing BEEF: constructed from our own ProofStore —
         # verification is for incoming untrusted data only (see
-        # +BeefImporter#verify_incoming_transaction!+).
+        # +BeefInternalizer#verify_incoming_transaction!+).
         def build_atomic_beef(raw_tx, action_id)
           tx = BSV::Transaction::Tx.from_binary(raw_tx)
           resolved_inputs = @store.resolve_inputs_for_signing(action_id: action_id)

@@ -67,7 +67,7 @@ Intent is stated, never inferred (ADR-019, ADR-031). Broadcast and transmit take
 
 ### Components
 
-- **Hydrator** — the Engine component that wires a transaction's ancestry from stored proofs and assembles the Atomic BEEF the wallet hands out: the return value of `build_action` and `sign_action`, and a transmit's payload. Transmission and BeefImporter call it; TxProof only tells it when a proof arrives. Broadcast doesn't use it: it builds its own EF.
+- **Hydrator** — the Engine component that wires a transaction's ancestry from stored proofs and assembles the Atomic BEEF the wallet hands out: the return value of `build_action` and `sign_action`, and a transmit's payload. Transmission and BeefInternalizer call it; TxProof only tells it when a proof arrives. Broadcast doesn't use it: it builds its own EF.
 - **HydratedTxCache** — the in-memory, wtxid-keyed cache of raw-transaction and merkle-path bytes (not `Transaction::Tx` objects) that the Hydrator's ancestry walk and Broadcast's EF build both read and fill, so a parent loaded by one is a hit for the other (#296).
 - **core** — Engine plus Store: build, sign, broadcast, observe, account. See [core vs conformance](core-vs-conformance.md) (ADR-027).
 

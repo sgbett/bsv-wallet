@@ -12,7 +12,7 @@ require_relative '../../network/synthetic_chain'
 # == What "end-to-end" means here
 #
 # The real ingress seam is exercised: an incoming Atomic BEEF flows
-# through +Engine::BeefImporter+ →
+# through +Engine::BeefInternalizer+ →
 # +#verify_incoming_transaction!+ → +Transaction::Tx#verify(chain_tracker:)+,
 # with a *real* {BSV::Network::SpvHeaderChainTracker} over a *real* Store
 # (the +:store+ context). Only the network edge is stubbed: +services.call+
@@ -59,9 +59,9 @@ RSpec.describe 'spv_headers BEEF verification (HLR #335)', :store do # rubocop:d
   # covered yet close enough to keep the synthetic chain small.
   let(:proof_height) { checkpoint_height + 10 }
 
-  # A real Hydrator over the shared Store — the BeefImporter's one-way
+  # A real Hydrator over the shared Store — the BeefInternalizer's one-way
   # dependency. Never exercised here (no trustSelf), but required by the
-  # constructor, mirroring +beef_importer_spec+.
+  # constructor, mirroring +beef_internalizer_spec+.
   let(:hydrator) { BSV::Wallet::Engine::Hydrator.new(store: store) }
 
   # Stubbed network edge: answer +:get_block_header+ from the supplied
@@ -86,8 +86,8 @@ RSpec.describe 'spv_headers BEEF verification (HLR #335)', :store do # rubocop:d
 
   # A subject transaction carrying a single-level, offset-2 merkle path
   # (proven leaf; non-coinbase so no maturity gate). The output uses the
-  # suite's root P2PKH literal so a no-derivation +basket_insertion+ import
-  # lands a structurally valid root output (HLR #467).
+  # suite's root P2PKH literal so internalizing it as a no-derivation
+  # +basket_insertion+ lands a structurally valid root output (HLR #467).
   #
   # @return [BSV::Transaction::Tx]
   def build_proven_subject(height:, satoshis: 500)
@@ -153,11 +153,11 @@ RSpec.describe 'spv_headers BEEF verification (HLR #335)', :store do # rubocop:d
     )
   end
 
-  # A BeefImporter wired with the given tracker over the shared Store —
-  # the same construction +cli.rb+ performs once it has selected a tracker
-  # from +config.trust_model+.
-  def importer_with(tracker)
-    BSV::Wallet::Engine::BeefImporter.new(store: store, chain_tracker: tracker, hydrator: hydrator)
+  # A BeefInternalizer wired with the given tracker over the shared Store —
+  # the same construction +Engine#initialize+ performs with the tracker
+  # +cli.rb+ selects from +config.trust_model+.
+  def internalizer_with(tracker)
+    BSV::Wallet::Engine::BeefInternalizer.new(store: store, chain_tracker: tracker, hydrator: hydrator)
   end
 
   # The no-derivation basket_insertion output spec for a root-pattern UTXO
@@ -170,25 +170,25 @@ RSpec.describe 'spv_headers BEEF verification (HLR #335)', :store do # rubocop:d
 
   # ------------------------------------------------------------------
   # The SPV verification step itself (verify_incoming_transaction!), the
-  # exact seam BeefImporter#import drives. Asserting here isolates the
+  # exact seam BeefInternalizer#internalize drives. Asserting here isolates the
   # header-chain decision from the downstream HLR #467 output-shape rules.
   # ------------------------------------------------------------------
   describe 'verify_incoming_transaction! through the validated header chain' do
     it 'passes for a proof the validated header chain covers and commits to' do
       subject = build_proven_subject(height: proof_height)
       tracker = spv_tracker_for(chain_committing_to(subject.merkle_path.compute_root))
-      importer = importer_with(tracker)
+      internalizer = internalizer_with(tracker)
 
-      expect { importer.send(:verify_incoming_transaction!, subject) }.not_to raise_error
+      expect { internalizer.send(:verify_incoming_transaction!, subject) }.not_to raise_error
     end
 
     it 'fails closed when the validated header commits to a DIFFERENT root (tampered)' do
       subject = build_proven_subject(height: proof_height)
       tampered_root = SecureRandom.random_bytes(32)
       tracker = spv_tracker_for(chain_committing_to(tampered_root))
-      importer = importer_with(tracker)
+      internalizer = internalizer_with(tracker)
 
-      expect { importer.send(:verify_incoming_transaction!, subject) }
+      expect { internalizer.send(:verify_incoming_transaction!, subject) }
         .to raise_error(BSV::Wallet::InvalidBeefError, /SPV verification failed.*invalid_merkle_proof/)
     end
 
@@ -197,9 +197,9 @@ RSpec.describe 'spv_headers BEEF verification (HLR #335)', :store do # rubocop:d
       # The chain is irrelevant — the height is beneath the anchor, so the
       # tracker rejects before any sync.
       tracker = spv_tracker_for(chain_committing_to(below.merkle_path.compute_root))
-      importer = importer_with(tracker)
+      internalizer = internalizer_with(tracker)
 
-      expect { importer.send(:verify_incoming_transaction!, below) }
+      expect { internalizer.send(:verify_incoming_transaction!, below) }
         .to raise_error(BSV::Wallet::InvalidBeefError, /SPV verification failed.*invalid_merkle_proof/)
     end
 
@@ -207,7 +207,7 @@ RSpec.describe 'spv_headers BEEF verification (HLR #335)', :store do # rubocop:d
       subject = build_proven_subject(height: proof_height)
       tracker = spv_tracker_for(chain_committing_to(subject.merkle_path.compute_root))
 
-      importer_with(tracker).send(:verify_incoming_transaction!, subject)
+      internalizer_with(tracker).send(:verify_incoming_transaction!, subject)
 
       # The tip advanced past the proof under PoW+linkage validation — not
       # a single trusted-service answer, but a verified chain from the
@@ -218,18 +218,18 @@ RSpec.describe 'spv_headers BEEF verification (HLR #335)', :store do # rubocop:d
   end
 
   # ------------------------------------------------------------------
-  # The full ingress: an incoming Atomic BEEF flowing through #import end
+  # The full ingress: an incoming Atomic BEEF flowing through #internalize end
   # to end, accepting the consistent case and rolling back the tampered
-  # one (principle of state — no half-imported action).
+  # one (principle of state — no half-internalized action).
   # ------------------------------------------------------------------
-  describe '#import end-to-end under :spv_headers' do
+  describe '#internalize end-to-end under :spv_headers' do
     it 'accepts a consistent BEEF and persists the incoming action + subject proof' do
       subject = build_proven_subject(height: proof_height)
       tracker = spv_tracker_for(chain_committing_to(subject.merkle_path.compute_root))
 
-      result = importer_with(tracker).import(
+      result = internalizer_with(tracker).internalize(
         tx: atomic_beef_for(subject),
-        description: 'spv_headers consistent import',
+        description: 'spv_headers consistent internalize',
         labels: ['incoming'],
         outputs: root_internalize_outputs
       )
@@ -249,9 +249,9 @@ RSpec.describe 'spv_headers BEEF verification (HLR #335)', :store do # rubocop:d
       tracker = spv_tracker_for(chain_committing_to(tampered_root))
 
       expect do
-        importer_with(tracker).import(
+        internalizer_with(tracker).internalize(
           tx: atomic_beef_for(subject),
-          description: 'spv_headers tampered import',
+          description: 'spv_headers tampered internalize',
           outputs: root_internalize_outputs
         )
       end.to raise_error(BSV::Wallet::InvalidBeefError, /SPV verification failed/)
@@ -274,19 +274,19 @@ RSpec.describe 'spv_headers BEEF verification (HLR #335)', :store do # rubocop:d
       # committed root, so the proof checks out.
       chain = chain_committing_to(subject.merkle_path.compute_root)
       tracker = BSV::Network::ChainTracker.new(store: store, services: stub_services(chain))
-      importer = importer_with(tracker)
+      internalizer = internalizer_with(tracker)
 
-      expect { importer.send(:verify_incoming_transaction!, subject) }.not_to raise_error
+      expect { internalizer.send(:verify_incoming_transaction!, subject) }.not_to raise_error
     end
 
-    it 'accepts the same consistent BEEF through #import on the default path' do
+    it 'accepts the same consistent BEEF through #internalize on the default path' do
       subject = build_proven_subject(height: proof_height)
       chain = chain_committing_to(subject.merkle_path.compute_root)
       tracker = BSV::Network::ChainTracker.new(store: store, services: stub_services(chain))
 
-      result = importer_with(tracker).import(
+      result = internalizer_with(tracker).internalize(
         tx: atomic_beef_for(subject),
-        description: 'trusted_service consistent import',
+        description: 'trusted_service consistent internalize',
         outputs: root_internalize_outputs
       )
 

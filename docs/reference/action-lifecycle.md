@@ -10,7 +10,7 @@ The wallet's action flows are **not** single atomic transactions. Each is a chai
 
 This document is the current-state map of those transitions across every multi-step flow: the atomic Store units, the recovery mechanisms, and a per-flow gap/owner audit. (The crash-recovery work that produced it — and the history of each gap as it was found and closed — lives in #324 and its sub-issues/PRs, not here.)
 
-Source of truth: `gem/bsv-wallet/lib/bsv/wallet/engine/action.rb`, `gem/bsv-wallet/lib/bsv/wallet/engine/beef_importer.rb`, `gem/bsv-wallet/lib/bsv/wallet/engine.rb`, `gem/bsv-wallet/lib/bsv/wallet/store.rb`, `gem/bsv-wallet/lib/bsv/wallet/engine/broadcast.rb`, and `gem/bsv-wallet/lib/bsv/wallet/scheduler.rb`.
+Source of truth: `gem/bsv-wallet/lib/bsv/wallet/engine/action.rb`, `gem/bsv-wallet/lib/bsv/wallet/engine/beef_internalizer.rb`, `gem/bsv-wallet/lib/bsv/wallet/engine.rb`, `gem/bsv-wallet/lib/bsv/wallet/store.rb`, `gem/bsv-wallet/lib/bsv/wallet/engine/broadcast.rb`, and `gem/bsv-wallet/lib/bsv/wallet/scheduler.rb`.
 
 ## Atomic Store units
 
@@ -31,7 +31,7 @@ Each is one `@db.transaction` — all-or-nothing.
 | `reap_action` | per-ID reclaim: clear dependents, delete action (cascades inputs → releases locks) |
 | `abort_action` | clear dependents + delete action (cascades inputs); refuses broadcasts-row / promoted |
 | `reject_action` / `do_reject` | recursive post-order DAG teardown; refuses internal / network-accepted |
-| internalize (`BeefImporter#import`) | create + sign + save_proof + labels + save_beef_proofs + promote — **one transaction** |
+| internalize (`BeefInternalizer#internalize`) | create + sign + save_proof + labels + save_beef_proofs + promote — **one transaction** |
 | `import_utxo` Phase 1 | create + sign + save_proof + link_proof + promote (root UTXO) — **one transaction** |
 
 ## Recovery mechanisms
@@ -80,7 +80,7 @@ A *signed* internal action with no promotion (a deliberately-parked / OP_RETURN 
 
 `apply_spends` (sign) → `sign_action` (broadcasts row) → `save_proof` → BEEF build/validate → broadcast per intent. Structurally the broadcast path: it never promotes synchronously — promotion happens on broadcast accept via `record_broadcast_result`. Owners are identical to the broadcast paths above. (The `no_send` return is unreachable in the base wallet: deferred + `no_send` isn't creatable — that combination belongs to #192.)
 
-## `internalizeAction` (`BeefImporter#import`)
+## `internalizeAction` (`BeefInternalizer#internalize`)
 
 Parse Atomic BEEF → SPV verify → **resolve + validate outputs before any write** → one transaction (`create` + `sign` + `save_proof` + labels + `save_beef_proofs` + `promote`).
 
