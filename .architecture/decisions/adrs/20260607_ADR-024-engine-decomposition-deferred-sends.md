@@ -87,3 +87,7 @@ The refactor earns its place not as generic monolith-cleanup but as the precondi
 ## Implementation evolution
 
 **#405 (Stage 3 of #396).** This ADR refers to "the `BRC100` module" (line 35) — accurate at write time, when BRC100 was a `module` included into Engine as a mixin facade (#364 Phase 7 of #291). #405 promoted it from `module` to `class` composed over an engine instance (`BSV::Wallet::BRC100.new(engine)`; reached via `Engine#brc100`). The extraction sequence + four-phase invariants this ADR records are unchanged; only BRC100's runtime shape evolved. See ADR-026 + HLR #405 for the composition rationale.
+
+## Terminology note (2026-11-13)
+
+This ADR's "deferred sends" are BRC-100's `noSend`/`sendWith` chained sends and batching (#192). In the glossary's terms (`docs/reference/glossary.md`), `noSend` is broadcast intent `none`, a later `sendWith` broadcasts the batch, and "send" in BRC-100's options means broadcast. "Deferred" now means signing only. The decision is unchanged.
