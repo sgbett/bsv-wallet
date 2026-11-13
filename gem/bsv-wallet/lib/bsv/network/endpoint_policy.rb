@@ -85,7 +85,7 @@ module BSV
       #   recipient's identity inference (BRC-29
       #   +sender_identity_key+), and the ability to forge a 200 ACK.
       # @param max_body_bytes [Integer] cap on POST body size. Default
-      #   32MiB. A trimmed BEEF for a routine payment is a few kB; this
+      #   32MiB. A BEEF for a routine payment is a few kB; this
       #   bound is a defence against either a runaway hydration walk or
       #   a malicious request to ship oversize bundles over peer links.
       def initialize(allow_private: ENV['BSV_WALLET_ALLOW_PRIVATE_ENDPOINTS'] == '1',

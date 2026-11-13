@@ -63,9 +63,10 @@ A bare HTTP 200 alone proves nothing. A captive portal at the operator's
 coffee shop, a misconfigured load balancer, a wrong host on the other end
 of a typo — any of them happily returns 200 OK. Without binding the ACK
 to the specific BEEF we sent, the wallet would record those as
-deliveries; the BeefParty trimmer would then over-trim future BEEFs to
-that "peer", and the actual peer would silently miss everything we had
-already "delivered" to the portal.
+deliveries; the known-set for that "peer" would then claim wtxids the
+actual peer never received, and once per-peer trimming lands (#552) the
+actual peer would silently miss everything we had already "delivered"
+to the portal.
 
 Mismatch -> outcome `:wrong_acked_wtxid`; no `acked_at` written, no
 `transmission_txids` written. See

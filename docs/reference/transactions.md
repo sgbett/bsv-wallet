@@ -16,7 +16,7 @@ There are **two** ways a signed transaction leaves the wallet, and conflating th
 | Verb | `Engine::Broadcast#submit` | `Engine::Transmission#transmit` |
 | Outcome | MINED / REJECTED / DOUBLE_SPEND | DELIVERED / ACK'd / refused |
 | Resolution | SSE + block-watch (global chain state) | peer internalize ACK (point-to-point) |
-| Per-recipient memory | none — a tx is a tx | **BeefParty** — what has peer X already seen |
+| Per-recipient memory | none — a tx is a tx | **`transmission_txids`** — what has peer X already acknowledged |
 | Cardinality per action | 0..1 | 0..N (one per counterparty) |
 
 ## The distinction is the recipient's *job*, not its *knowledge*
@@ -40,7 +40,7 @@ BEEF is a strict superset of EF for the subject transaction. This is why the bro
 
 ## Trimming is an orthogonal axis (BEEF only)
 
-"How much does the recipient already hold?" *is* a real dimension — but it is **orthogonal** to the format choice and applies only to BEEF. It is the **trimming** optimisation: ancestors a counterparty already has are reduced to TXID-only entries (`make_txid_only`), so the wire carries only what is new. The SDK's `Transaction::BeefParty` is the per-counterparty bookkeeping layer for this. It rides *on top of* BEEF and never applies to EF — EF is already minimal for a miner's job, with nothing to trim against the miner's knowledge.
+"How much does the recipient already hold?" *is* a real dimension — but it is **orthogonal** to the format choice and applies only to BEEF. It is the **trimming** optimisation: ancestors a counterparty already has are reduced to TXID-only entries (`make_txid_only`), so the wire carries only what is new. A TXID-only entry resolves only at a receiver that has agreed to fill it from its own store, and none does by default (`bin/wallet receive` doesn't pass `trust_self: 'known'`; wallet-toolbox's `internalizeAction` rejects TXID-only entries), so transmit sends full ancestors and trimming waits for the receiver's agreement (#552). It rides *on top of* BEEF and never applies to EF — EF is already minimal for a miner's job, with nothing to trim against the miner's knowledge.
 
 Trimming is the one place the "peer knows X, send less" instinct is correct.
 
@@ -54,12 +54,12 @@ Broadcast and transmit are separate stateful *processes* (wallet side, per the s
   Engine::Broadcast    Engine::Transmission
    #submit  → EF→miner   #transmit → BEEF→peer
    resolve: SSE/blocks   resolve: peer HTTP ACK (wtxid-bound)
-   stateless-about-who   stateful-about-who (BeefParty, per counterparty)
+   stateless-about-who   stateful-about-who (transmission_txids, per counterparty)
 ```
 
-The per-recipient-memory row is the deciding difference: broadcast is stateless about *who* (a tx is global), transmission is stateful about *who* (BeefParty is inherently per-counterparty). That state cannot be bolted onto `Engine::Broadcast` without smuggling a foreign model in — hence a sibling domain, not a flag.
+The per-recipient-memory row is the deciding difference: broadcast is stateless about *who* (a tx is global), transmission is stateful about *who* (what each peer has acknowledged is inherently per-counterparty). That state cannot be bolted onto `Engine::Broadcast` without smuggling a foreign model in — hence a sibling domain, not a flag.
 
-`Engine::Transmission` is thinner than it first looks: it is transport + per-peer trimming + delivery-outcome, *on top of* the shared Hydrator. It is not a fork of Broadcast.
+`Engine::Transmission` is thinner than it first looks: it is transport + per-peer accounting + delivery-outcome, *on top of* the shared Hydrator. It is not a fork of Broadcast.
 
 A note on the verb: `transmit`, not `send` — `send` is poisoned by Ruby's `Object#send`. `submit` stays as the inner HTTP verb of the broadcast subsystem. `Broadcast` and `Transmission` are the domain nouns; `submit` and `transmit` are their actions.
 
@@ -78,22 +78,22 @@ A design constraint that follows: **delivery synchronicity is an invocation mode
 Both edges are now first-class processes; the historical asymmetry — broadcast fully built, transmit a CLI pipe — was the subject of HLR #385 (PR #408) and is closed:
 
 - **Broadcast (→ network).** `Engine::Broadcast`, OMQ PULL sockets, SSE resolution, callback handlers, crash-recovery — the daemon is built around it. Both the inline and daemon paths ship EF (#252 closed the daemon-side raw-hex gap).
-- **Transmit (→ peer).** `Engine::Transmission#transmit` sits as a sibling to `Engine::Broadcast` and `Engine::TxProof` over the shared `Engine::Hydrator` substrate. The `transmissions` and `transmission_txids` tables hold per-peer knowledge at grain (action × counterparty); status is **derived** from the presence of `acked_at` (no status column — principle-of-state). Per-peer trimming is wired through `Transaction::BeefParty`. Delivery is synchronous HTTP POST of a JSON envelope to a caller-supplied endpoint (`Network::PeerDelivery`), guarded by `Network::EndpointPolicy` (SSRF gate); the ACK is wtxid-bound so a captive portal cannot impersonate delivery. The CLI surface is `bin/transmit` (mirroring `bin/create` and `bin/receive`).
+- **Transmit (→ peer).** `Engine::Transmission#transmit` sits as a sibling to `Engine::Broadcast` and `Engine::TxProof` over the shared `Engine::Hydrator` substrate. The `transmissions` and `transmission_txids` tables hold per-peer knowledge at grain (action × counterparty); status is **derived** from the presence of `acked_at` (no status column — principle-of-state). It sends full ancestors; per-peer trimming waits for the receiver's agreement (#552). Delivery is synchronous HTTP POST of a JSON envelope to a caller-supplied endpoint (`Network::PeerDelivery`), guarded by `Network::EndpointPolicy` (SSRF gate); the ACK is wtxid-bound so a captive portal cannot impersonate delivery. The CLI surface is `bin/transmit` (mirroring `bin/create` and `bin/receive`).
 
 What v1 deliberately omits, and what stays for Phase 2: an identity-key → endpoint directory (peers must be reached by URL today), a daemon-driven async delivery path (`#transmit` is shaped to be drivable both ways over one code path — same invariant as `broadcast_intent`), a peer-signed ACK protocol (the `transmissions.ack_signature bytea NULL` column is reserved now so Phase 2 lands without a schema migration), retry/backoff, and knowledge-revocation when a peer prunes.
 
 ### Per-table responsibilities
 
 - `transmissions` — one row per (action, counterparty); `acked_at` set on confirmed delivery; `ack_signature` reserved nullable for Phase 2; CASCADE on the action FK (reaper-parity with the rest of the schema).
-- `transmission_txids` — pure membership: which wtxids each transmission's BEEF carried. The per-counterparty BeefParty trim source. Populated only by `mark_transmission_acked`, never by `record_transmission` — see *Two-phase delivery* below.
+- `transmission_txids` — pure membership: which wtxids each transmission's BEEF carried. The known-set per-peer trimming will read (#552). Populated only by `mark_transmission_acked`, never by `record_transmission` — see *Two-phase delivery* below.
 
 ## The egress completeness check is a transmit precondition
 
-`Engine::Hydrator#validate_for_handoff!` (the structural-only verify with `TrustedSelfChainTracker`) answers exactly one question: *is this BEEF fit to hand to a peer?* It is therefore a **Transmission precondition**, and is now called from `Engine::Transmission#transmit` over the **peer-specific, trimmed** wire bytes — i.e. after per-peer BeefParty trimming and before the row is written. The substrate method stays on `Hydrator` (it works on bytes and a subject wtxid; it has no per-peer state), but the call site that matters at runtime is Transmission's.
+`Engine::Hydrator#validate_for_handoff!` (the structural-only verify with `TrustedSelfChainTracker`) answers exactly one question: *is this BEEF fit to hand to a peer?* It is therefore a **Transmission precondition**, and is now called from `Engine::Transmission#transmit` over the wire bytes it is about to ship, before the row is written. The substrate method stays on `Hydrator` (it works on bytes and a subject wtxid; it has no per-peer state), but the call site that matters at runtime is Transmission's.
 
-The check takes an `allow_txid_only:` kwarg. Transmission passes `allow_txid_only: true` because the trim step deliberately produces `TxidOnlyEntry` records — entries the peer already holds — and a structural verify must tolerate them. Build-time call sites (`Engine#build_action`, `#sign_action`) keep the default `allow_txid_only: false`, since the BEEF the wallet hands back to its own caller is the full bundle: nothing has been trimmed against any peer yet. The two regimes diverge only on this flag; the verifier is one method.
+The check takes an `allow_txid_only:` kwarg, and every call site keeps the default `allow_txid_only: false`: the BEEF the wallet hands back to its own caller (`Engine#build_action`, `#sign_action`) and the BEEF it transmits are both full bundles, so any `TxidOnlyEntry` is a defect. The flag is for per-peer trimming a receiver has agreed to (#552), where TXID-only entries are legitimate; the verifier stays one method.
 
-The wallet trusts its own persisted proofs (validated against a real `Network::ChainTracker` at proof-arrival time), so structural completeness — every input path terminates at a `merkle_path`, wires through to one, or is a `TxidOnlyEntry` the peer is expected to resolve from local state — is the only thing left to assert at egress. Failure raises `EgressBeefInvalidError` and means an upstream proof-closure gap (or a trim step that produced a mis-resolved bundle), not a chain-validity problem.
+The wallet trusts its own persisted proofs (validated against a real `Network::ChainTracker` at proof-arrival time), so structural completeness — every input path terminates at a `merkle_path` or wires through to one — is the only thing left to assert at egress. Failure raises `EgressBeefInvalidError` and means an upstream proof-closure gap, not a chain-validity problem.
 
 Note also that the check fails the **delivery**, not the wallet's state: the DB transition has already committed atomically; the BEEF is a read-only projection over committed state, so a failed projection raises to the caller without rolling anything back (principle-of-state — `principle-of-state.md`). The transmission row itself is **only** written after this check passes — see *Two-phase delivery* below.
 
@@ -133,7 +133,7 @@ A successful peer ACK is **HTTP 200 + `Content-Type: application/json`**, with a
 
 The `wtxid` field MUST match the subject's dtxid. Mismatch → the wallet records the delivery outcome as `:wrong_acked_wtxid` and **does not write `acked_at`** (nor the known-set txids — see *Two-phase delivery*).
 
-**The wtxid binding is mandatory and load-bearing.** A bare HTTP 200 alone proves nothing: a captive portal at the operator's coffee shop, a misconfigured load balancer, a wrong host on the other end of a typo — any of them happily returns 200 OK. Without binding the ACK to the specific BEEF we sent, the wallet would record those as deliveries; the BeefParty trimmer would then over-trim future BEEFs to that "peer", and the actual peer (when it eventually got reached) would silently miss everything we'd already "delivered" to the portal. The wtxid binding is what makes the ACK a statement about *this* delivery, not about the existence of an HTTP 200 somewhere on the network.
+**The wtxid binding is mandatory and load-bearing.** A bare HTTP 200 alone proves nothing: a captive portal at the operator's coffee shop, a misconfigured load balancer, a wrong host on the other end of a typo — any of them happily returns 200 OK. Without binding the ACK to the specific BEEF we sent, the wallet would record those as deliveries; its known-set for that "peer" would then claim wtxids the actual peer never received, and once per-peer trimming lands (#552) the actual peer would silently miss everything we'd already "delivered" to the portal. The wtxid binding is what makes the ACK a statement about *this* delivery, not about the existence of an HTTP 200 somewhere on the network.
 
 **Phase 2: signed ACK.** The peer signs over `(wtxid, transmission_attempt_id)` with its identity key. The `transmissions.ack_signature bytea NULL` column is reserved from day one (migration 001 §20) so Phase 2 lands without a schema migration: v1 ACKs leave the column NULL, Phase 2 ACKs write the signature. The bare HTTP-200-plus-wtxid contract is the v1 honest minimum; the signed variant is the eventual cryptographic minimum.
 
@@ -158,7 +158,7 @@ A rejection raises `Network::EndpointPolicy::Violation` (a `BSV::Wallet::Error` 
 
 ## Two-phase delivery
 
-The wallet writes the parent `transmissions` row at one point and the `transmission_txids` known-set rows at a different point. The boundary is the crypto-safety property that makes the BeefParty trim mechanism honest.
+The wallet writes the parent `transmissions` row at one point and the `transmission_txids` known-set rows at a different point. The boundary is the crypto-safety property that keeps the known-set honest.
 
 - **`Store#record_transmission(action_id:, counterparty:)`** writes (or upserts) the parent row. Re-transmit refreshes `updated_at` and returns the same id (atomic `INSERT … ON CONFLICT (action_id, counterparty) DO UPDATE … RETURNING id`). This method **never** writes `transmission_txids`.
 - **`Store#mark_transmission_acked(action_id:, counterparty:, wtxids:)`** writes `acked_at` AND the `transmission_txids` rows, in a single DB transaction. Batched `INSERT … ON CONFLICT (transmission_id, wtxid) DO NOTHING` — no N+1, no loops.
@@ -246,6 +246,6 @@ Tracked as follow-up HLRs filed post-merge of #460:
 - [`.architecture/reviews/20260619_noSend-sendWith-design-notes.md`](../../.architecture/reviews/20260619_noSend-sendWith-design-notes.md) — `noSend`/`sendWith` batching. This is a **Broadcast** concern, not Transmission: #192 builds a chain of transactions *locally* (spending not-yet-broadcast change) then flushes the batch to the **network** atomically. Its "chained-send" is intra-wallet UTXO chaining, distinct from the inter-wallet BEEF cascade that motivates transmission.
 - `.architecture/decisions/adrs/20260619_ADR-025-transmission-distinct-domain.md` — the decision record establishing Transmission as a sibling domain to Broadcast (not a method or mode flag on it).
 - HLR #385 / PR #408 — the Transmission domain implementation (`transmissions` + `transmission_txids` schema, `Engine::Transmission`, BeefParty trim, egress validation, `Network::PeerDelivery` + `Network::EndpointPolicy`, `bin/transmit`).
-- `Transaction::BeefParty` (BSV Ruby SDK) — the per-counterparty trim mechanism. `make_txid_only` + `trimmed_beef_for_party` drive the wire shrink; `add_known_wtxids_for_party` seeds the peer's known-set from `transmission_known_wtxids`.
+- #551 — transmit sends full ancestors. It had trimmed through `Transaction::BeefParty` (BSV Ruby SDK), whose `trimmed_beef_for_party` dropped known ancestors rather than leaving TXID-only entries, and no receiver resolves TXID-only entries by default anyway. #552 brings trimming back once the receiver agrees to it.
 - #296 — BEEF chain integrity + hydration: extracts the shared `Engine::Hydrator` substrate both domains read.
-- #192 — noSend/sendWith subsystem (Broadcast-domain extension). The only mechanic shared with Transmission is `knownTxids` trimming (BeefParty), which lives on the shared substrate, not in either process. The two domains stay separate; a future Transmission composes alongside #192's batch broadcast rather than absorbing it.
+- #192 — noSend/sendWith subsystem (Broadcast-domain extension). The only mechanic shared with Transmission is `knownTxids` trimming (deferred for Transmission until #552), which lives on the shared substrate, not in either process. The two domains stay separate; a future Transmission composes alongside #192's batch broadcast rather than absorbing it.

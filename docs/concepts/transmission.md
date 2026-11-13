@@ -33,8 +33,8 @@ engine.transmission.transmit(
 
 Two modes from one operation:
 
-- **With `endpoint:`** — the trimmed BEEF is POSTed synchronously by `Network::PeerDelivery`, the ACK is validated against the subject wtxid, and a successful delivery flips the transmission to *acked*.
-- **Without `endpoint:`** — the trimmed BEEF is returned for the caller to shuttle out-of-band (a queue, an email attachment, a file). The transmission row is recorded; ACK arrives later through whatever path the deployment uses.
+- **With `endpoint:`** — the BEEF is POSTed synchronously by `Network::PeerDelivery`, the ACK is validated against the subject wtxid, and a successful delivery flips the transmission to *acked*.
+- **Without `endpoint:`** — the BEEF is returned for the caller to shuttle out-of-band (a queue, an email attachment, a file). The transmission row is recorded; ACK arrives later through whatever path the deployment uses.
 
 Validation order is deliberate: **counterparty hex shape is checked at the engine boundary before any database write or BEEF construction**. A typo'd pubkey must never produce a phantom `transmissions` row. Shape matches the Postgres CHECK constraint exactly (`/\A0[23][0-9a-f]{64}\z/`), so engine and schema reject the same inputs.
 
@@ -49,7 +49,7 @@ A successful peer ACK is HTTP 200 + `Content-Type: application/json`. The body i
 }
 ```
 
-**The field is named `wtxid` but its value is a `dtxid` — a 64-character display-order hex string of the subject transaction**, not 32 raw wire-order bytes hex-encoded. This is a load-bearing detail. A peer implementer reading `wtxid` literally — emitting `wtxid.unpack1('H*')` (32 wire-order bytes hex-encoded, 64 chars in reversed order from what the wallet expects) — would produce 200 OKs that look correct but mismatch the wallet's subject every time. The wallet would record `:wrong_acked_wtxid` on every delivery; trimming would never engage; over-shipping the same ancestors would scale linearly with the relationship.
+**The field is named `wtxid` but its value is a `dtxid` — a 64-character display-order hex string of the subject transaction**, not 32 raw wire-order bytes hex-encoded. This is a load-bearing detail. A peer implementer reading `wtxid` literally — emitting `wtxid.unpack1('H*')` (32 wire-order bytes hex-encoded, 64 chars in reversed order from what the wallet expects) — would produce 200 OKs that look correct but mismatch the wallet's subject every time. The wallet would record `:wrong_acked_wtxid` on every delivery and never learn what the peer holds, so per-peer trimming (#552) could never engage.
 
 The convention in this codebase: the field name on the wire is `wtxid` for backwards-compatibility, but the **value** is the 64-character display-order hex string (`dtxid` in our vocabulary). The wallet computes it as `subject_wtxid.reverse.unpack1('H*')` before emitting; a peer's ACK must do the equivalent. The reference document is unambiguous about this — see [Transactions (reference) — ACK contract (v1)](../reference/transactions.md#ack-contract-v1).
 
@@ -69,22 +69,15 @@ A wallet that POSTs to a URL supplied by the caller is one URL away from being a
 
 For e2e harnesses that genuinely need to deliver to a loopback fixture, `BSV_WALLET_ALLOW_PRIVATE_ENDPOINTS=1` opens the policy explicitly. **This variable is production-dangerous.** Setting it disables every range check in step 4 — the wallet will deliver to `127.0.0.1`, `169.254.169.254`, and anything else the caller supplies. It is the only way through the gate, and it is intended for development and CI fixtures, not production. A production wallet leaves it unset; an operator who flips it on is choosing to accept the SSRF-credential-exfiltration risk that the gate was built to prevent.
 
-## Per-peer trim: BeefParty
+## Full ancestors: no per-peer trim yet
 
-Each peer ought to receive only the parts of the ancestor graph they do not already hold. The two-phase write of `transmission_txids` is what makes that knowable.
+Every transmission carries the subject's full ancestry as `Hydrator#build_atomic_beef` builds it, including ancestors the wallet's records say the peer already holds. Reducing those to TXID-only entries would shrink the bundle, but a TXID-only entry resolves only at a receiver that has agreed to fill it from its own store, and none does by default: `bin/wallet receive` doesn't pass `trust_self: 'known'`, and wallet-toolbox's `internalizeAction` rejects TXID-only entries as a trust boundary. Trimming therefore waits for the receiver's agreement (#552).
 
-For every transmission, the engine:
-
-1. Fetches the peer's already-known wtxids in one query (`transmission_known_wtxids(counterparty:)`).
-2. Builds the *full* Atomic BEEF via `Hydrator#build_atomic_beef`.
-3. Hands the full BEEF and the known-set to a fresh `BSV::Transaction::BeefParty`. Known ancestors are demoted to `TxidOnlyEntry` via `make_txid_only`; the SDK's `trimmed_beef_for_party` then drops those entries.
-4. Re-asserts the **subject** is still present and still a real entry — defence against a poisoned `transmission_txids` row that would otherwise demote the subject to a TXID-only stub and ship an unverifiable bundle.
-
-A fresh `BeefParty` per call matters. `BeefParty#merge_txid_only` mutates the receiving party's state; reusing an instance across counterparties would leak TXID-only entries from one peer's bundle into another's.
+The wallet still records what each peer has acknowledged (`transmission_txids`, below), so per-peer trimming will have an honest known-set to work from.
 
 ## Egress SPV-honesty: `validate_for_handoff!`
 
-After trim and *before* recording the transmission, the trimmed bytes are re-parsed and handed to `Hydrator#validate_for_handoff!(allow_txid_only: true)`. The kwarg is essential — trim deliberately produces TXID-only entries — but everything else is a strict SPV check: every input resolvable in the bundle, every proof anchored, the subject not demoted. Failure raises `EgressBeefInvalidError`, distinct from `InvalidBeefError` (which is for incoming peer data) so an operator can tell at a glance whether the wallet's own state or a peer's bundle is the cause.
+*Before* recording the transmission, the bytes that will ship are re-parsed and handed to `Hydrator#validate_for_handoff!` with its default `allow_txid_only: false`: a strict SPV check, with every input resolvable in the bundle, every proof anchored and no TXID-only entries. Failure raises `EgressBeefInvalidError`, distinct from `InvalidBeefError` (which is for incoming peer data) so an operator can tell at a glance whether the wallet's own state or a peer's bundle is the cause.
 
 The check uses `TrustedSelfChainTracker` — a tracker that returns `true` for all header lookups, because the wallet's stored proofs were validated against real headers at import time. This is structural completeness against the wallet's own truth, not chain validation; the chain has been consulted already.
 
@@ -103,7 +96,7 @@ transmissions          transmission_txids
    UNIQUE(action_id, counterparty)
 ```
 
-Grain is one row per `(action_id, counterparty)`: a re-transmission to the same peer updates in place rather than fanning. `acked_at` is null until the peer's ACK is recorded. `transmission_txids` — the set of wtxids the peer has now seen — is populated **only** when an ACK arrives, never at record time. That ordering is the gate: a transmission the peer did not accept does not enlarge the wallet's view of the peer's known-set, so the next trim cannot accidentally strip a transaction the peer never actually received.
+Grain is one row per `(action_id, counterparty)`: a re-transmission to the same peer updates in place rather than fanning. `acked_at` is null until the peer's ACK is recorded. `transmission_txids` — the set of wtxids the peer has now seen — is populated **only** when an ACK arrives, never at record time. That ordering is the gate: a transmission the peer did not accept does not enlarge the wallet's view of the peer's known-set, so per-peer trimming, once a receiver agrees to it (#552), cannot strip a transaction the peer never actually received.
 
 `ack_signature` is reserved for Phase 2 (BRC-31 signed ACK); v1 leaves it null. The detailed per-table responsibilities are in [Transactions (reference) — Per-table responsibilities](../reference/transactions.md#per-table-responsibilities).
 
