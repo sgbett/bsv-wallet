@@ -187,7 +187,7 @@ module BSV
         # +seek_permission:+ accepted as part of the BRC-100 contract
         # but not forwarded — conformance vocabulary stops here
         # (ADR-026 decision 7).
-        @engine.import_beef(
+        @engine.internalize_beef(
           tx: tx, outputs: outputs, description: description,
           labels: labels, trust_self: trust_self, known_txids: known_txids
         )

@@ -409,8 +409,8 @@ module BSV
         action.abort!
       end
 
-      def import_beef(tx:, outputs:, description:, labels: nil,
-                      trust_self: nil, known_txids: nil)
+      def internalize_beef(tx:, outputs:, description:, labels: nil,
+                           trust_self: nil, known_txids: nil)
         @beef_internalizer.internalize(
           tx: tx, outputs: outputs, description: description,
           labels: labels, trust_self: trust_self, known_txids: known_txids

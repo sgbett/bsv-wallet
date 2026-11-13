@@ -62,7 +62,7 @@ Intent is stated, never inferred (ADR-019, ADR-031). Broadcast and transmit take
 ### Coming in
 
 - **import** — a user-triggered, one-off bootstrap. `import_utxo` and `import_wallet` find funds held by the root key on chain and move them into the wallet with a self-payment (ADR-014).
-- **internalize** — recording someone else's transaction as an incoming action and taking ownership of the named outputs: BRC-100's noun. `internalize_wbikd_utxo`, and `import_beef` until #549 renames it `internalize_beef`.
+- **internalize** — recording someone else's transaction as an incoming action and taking ownership of the named outputs: BRC-100's noun. `internalize_beef` and `internalize_wbikd_utxo`.
 - **receive** — the user-level process: obtain a transaction, then internalize it. The ways in today are an envelope on stdin (`bin/wallet receive`) and a scan of receive addresses (`scan_receive_addresses`); a transmit listener in `walletd` is #544.
 
 ### Components

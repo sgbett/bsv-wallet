@@ -1263,11 +1263,11 @@ RSpec.describe BSV::Wallet::Engine do
     end
   end
 
-  describe '#import_beef (wallet-vocab primitive)' do
+  describe '#internalize_beef (wallet-vocab primitive)' do
     it 'does not consume conformance-only BRC-100 vocabulary' do
       # ADR-026 decision 7 — +originator:+ and +seek_permission:+
       # belong at the BRC100 wrap layer, not on Engine primitives.
-      method = engine.method(:import_beef)
+      method = engine.method(:internalize_beef)
       params = method.parameters.map { |_kind, name| name }
       expect(params).not_to include(:originator, :seek_permission)
 
@@ -1284,7 +1284,7 @@ RSpec.describe BSV::Wallet::Engine do
 
   describe '#list_actions (wallet-vocab primitive)' do
     it 'does not consume conformance-only BRC-100 vocabulary' do
-      # Mirror of the #import_beef invariant: ADR-026 decision 7 keeps
+      # Mirror of the #internalize_beef invariant: ADR-026 decision 7 keeps
       # +originator:+ and +seek_permission:+ at the BRC100 wrap layer.
       # Locked in here so a future contributor doesn't restore them
       # "for symmetry" with read-side BRC100 wrapper signatures.
