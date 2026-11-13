@@ -38,7 +38,7 @@ module BSV
     class Engine
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :AnchorLivenessCache,   'bsv/wallet/engine/anchor_liveness_cache'
-      autoload :BeefImporter,          'bsv/wallet/engine/beef_importer'
+      autoload :BeefImporter,          'bsv/wallet/engine/beef_internalizer'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
       autoload :Hydrator,              'bsv/wallet/engine/hydrator'

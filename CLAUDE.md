@@ -159,7 +159,7 @@ Changes to these areas always get a security review, however small:
 
 - **Cryptography** — the BRC-100 encrypt, decrypt, HMAC and signature methods in `gem/bsv-wallet/lib/bsv/wallet/brc100.rb`, and the WIF-derived callback token in `callback_token.rb`
 - **Keys and signatures** — `gem/bsv-wallet/lib/bsv/wallet/key_deriver.rb`, transaction signing in `engine/tx_builder.rb`, and secrets redaction in `cli/secrets.rb`
-- **BEEF** — `gem/bsv-wallet/lib/bsv/wallet/engine/beef_importer.rb` and `interface/beef_importer.rb`
+- **BEEF** — `gem/bsv-wallet/lib/bsv/wallet/engine/beef_internalizer.rb` and `interface/beef_internalizer.rb`
 - **Merkle proofs** — `gem/bsv-wallet/lib/bsv/wallet/engine/merkle_path_normaliser.rb` and `engine/tx_proof.rb`, and the chain trackers that check merkle roots: `gem/bsv-wallet/lib/bsv/network/chain_tracker.rb`, `spv_header_chain_tracker.rb` and `gem/bsv-wallet/lib/bsv/wallet/trusted_self_chain_tracker.rb`
 
 The script interpreter lives in the SDK (`bsv-sdk`), so its review triggers live in that repository's `CLAUDE.md`.
