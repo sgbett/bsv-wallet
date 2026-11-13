@@ -28,7 +28,7 @@ The wallet's vocabulary, by context. Within a context a word means one thing. Wh
 
 - **transaction** — a Bitcoin transaction. Bare "transaction" always means this; the other kind is always a *database transaction*. The Ruby class is `Transaction::Tx` (see CLAUDE.md).
 - **action** — the wallet's record of a transaction and its metadata: in BRC-100's words, "a Bitcoin transaction augmented with descriptive metadata". A row in `actions`.
-- **unpromoted** — an output written before its action is accepted by the network. Promotion (ADR-011, ADR-023) makes it part of the canonical UTXO set.
+- **unpromoted** — an action with no `promotions` row, and the rows written for it (its outputs and their caller metadata). Promotion writes that row and puts the outputs in the UTXO set (`spendable` rows). When it happens depends on the path, and some actions are never promoted (a parked internal action, for one); see [action lifecycle](action-lifecycle.md). The row replaced the `outputs.promoted` flag of ADR-011 (post-broadcast promotion); see ADR-023.
 
 ### Engine primitives and porcelain
 
@@ -100,6 +100,6 @@ Intent is stated, never inferred (ADR-019, ADR-031). Broadcast and transmit take
 | caller-delivered, deferred-by-caller | transmit intent `none` |
 | deferred broadcast; `async` as a broadcast mode | broadcast intent `delayed` |
 | BRC-100 primitive | BRC-100 method |
-| staged, for an output awaiting acceptance | unpromoted |
+| staged, for outputs or caller metadata written before promotion | unpromoted |
 | import, for an incoming transaction | internalize |
 | primitive, porcelain (unqualified) | name the layer |

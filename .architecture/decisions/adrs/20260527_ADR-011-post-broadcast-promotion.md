@@ -100,4 +100,4 @@ None.
 
 ## Terminology note (2026-11-13)
 
-This ADR uses "staged" for an output written before its action is accepted. The glossary (`docs/reference/glossary.md`) calls such an output *unpromoted* and reserves "staged" for an action awaiting deferred signing (`Store#stage_action`). The decision is unchanged.
+This ADR uses "staged" for an output written before its action is accepted. The glossary (`docs/reference/glossary.md`) calls such an output *unpromoted* and reserves "staged" for an action awaiting deferred signing (`Store#stage_action`). The decision text is unchanged.

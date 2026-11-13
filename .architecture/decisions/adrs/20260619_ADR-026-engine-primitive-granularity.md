@@ -91,4 +91,4 @@ This ADR does not specify primitive implementations — only the granularity rul
 
 ## Terminology note (2026-11-13)
 
-"Primitive" throughout means Engine primitive. Of decision 1's examples, `import_beef` is being renamed `internalize_beef` (#549): in the glossary (`docs/reference/glossary.md`), internalizing records someone else's transaction, and import is the user-triggered bootstrap of root-key funds. The "defer" in `broadcast_or_defer` is what the glossary calls a delayed broadcast; "deferred" now means signing only. The shared "substrate" is the Hydrator. The decision is unchanged.
+"Primitive" throughout means Engine primitive. Of decision 1's examples, `import_beef` is being renamed `internalize_beef` (#549): in the glossary (`docs/reference/glossary.md`), internalizing records someone else's transaction, and import is the user-triggered bootstrap of root-key funds. The "defer" in `broadcast_or_defer` is what the glossary calls a delayed broadcast; "deferred" now means signing only. The shared "substrate" is the Hydrator. The decision text is unchanged.

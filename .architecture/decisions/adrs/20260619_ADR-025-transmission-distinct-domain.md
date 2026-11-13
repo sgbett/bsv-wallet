@@ -106,4 +106,4 @@ BRC-100 specifies the *interface* — `createAction` returns the BEEF, `internal
 
 ## Terminology note (2026-11-13)
 
-In the glossary's terms (`docs/reference/glossary.md`), the "async" or "daemon" delivery left to phase 2 is transmit intent `delayed`; the BRC-100 baseline where "the caller delivers it" is transmit intent `none`; and synchronous delivery is `inline`. The shared "substrate" is the Hydrator and its HydratedTxCache. The decision is unchanged.
+In the glossary's terms (`docs/reference/glossary.md`), the "async" or "daemon" delivery left to phase 2 is transmit intent `delayed`; the BRC-100 baseline where "the caller delivers it" is transmit intent `none`; and synchronous delivery is `inline`. The shared "substrate" is the Hydrator and its HydratedTxCache. The decision text is unchanged.

@@ -105,7 +105,7 @@ The canonical list is `docs/reference/glossary.md`; check it before naming anyth
 - **Core adopts BRC-100's nouns, never its options.** `action` and `internalize` are fine in core; `noSend` and `acceptDelayedBroadcast` stay in `BRC100`, and core says `broadcast_intent`.
 - **Broadcast** (→ miners, EF) and **transmit** (→ a peer, Atomic BEEF) are separate domains. **Send** is the user's intent, fulfilled by either or both; in BRC-100's `noSend`/`sendWith`, "send" means broadcast.
 - **Intent**, for broadcast and transmit alike: `inline` (now), `delayed` (by `walletd`, later), `none` (the wallet doesn't; for a transmit the BEEF is handed back). `delayed` changes when, `none` changes who.
-- **Deferred** means signing only. An action awaiting deferred signing is **staged**; an output awaiting acceptance is **unpromoted**.
+- **Deferred** means signing only, and an action awaiting deferred signing is **staged**. Outputs and caller metadata whose action has no `promotions` row are **unpromoted**, never "staged".
 - **Import** is the user-triggered bootstrap of root-key funds; **internalize** records someone else's transaction as an incoming action; **receive** is the user-level process that ends in internalizing.
 - Bare **transaction** is a Bitcoin transaction; say *database transaction* for the other. **Primitive** and **porcelain** are always qualified by layer (SDK primitive, Engine primitive, CLI porcelain). BRC-100's unit is the **method**.
 - Don't write **substrate**: name the Hydrator, the HydratedTxCache or core's domain model.

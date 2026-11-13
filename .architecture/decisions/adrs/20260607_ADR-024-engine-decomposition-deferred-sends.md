@@ -90,4 +90,4 @@ The refactor earns its place not as generic monolith-cleanup but as the precondi
 
 ## Terminology note (2026-11-13)
 
-This ADR's "deferred sends" are BRC-100's `noSend`/`sendWith` chained sends and batching (#192). In the glossary's terms (`docs/reference/glossary.md`), `noSend` is broadcast intent `none`, a later `sendWith` broadcasts the batch, and "send" in BRC-100's options means broadcast. "Deferred" now means signing only. The decision is unchanged.
+This ADR's "deferred sends" are BRC-100's `noSend`/`sendWith` chained sends and batching (#192). In the glossary's terms (`docs/reference/glossary.md`), `noSend` is broadcast intent `none`, a later `sendWith` broadcasts the batch, and "send" in BRC-100's options means broadcast. "Deferred" now means signing only. The decision text is unchanged.
