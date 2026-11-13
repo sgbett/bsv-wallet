@@ -25,7 +25,7 @@ Each is one `@db.transaction` — all-or-nothing.
 | `save_proof` | TxProof upsert (raw_tx, plus merkle material when present) |
 | `complete_internal_action` | `sign_action` + `save_proof` + `promote_action` + `promote_change_to_spendable` — **one transaction** (internal `no_send` completion) |
 | `promote_action` | promotions row + output rows + spendable rows (wallet-owned) |
-| `promote_action_outputs` | promotions row + spendable rows for existing outputs (send path, on broadcast accept); idempotent |
+| `promote_action_outputs` | promotions row + spendable rows for existing wallet-owned outputs (send path, on broadcast accept); idempotent |
 | `promote_change_to_spendable` | promotions row + spendable rows for change |
 | `record_broadcast_result` | broadcasts status update **+ `promote_action_outputs` in the same transaction** when not rejected |
 | `reap_action` | per-ID reclaim: clear dependents, delete action (cascades inputs → releases locks) |

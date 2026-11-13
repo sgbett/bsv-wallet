@@ -28,7 +28,7 @@ The wallet's vocabulary, by context. Within a context a word means one thing. Wh
 
 - **transaction** — a Bitcoin transaction. Bare "transaction" always means this; the other kind is always a *database transaction*. The Ruby class is `Transaction::Tx` (see CLAUDE.md).
 - **action** — the wallet's record of a transaction and its metadata: in BRC-100's words, "a Bitcoin transaction augmented with descriptive metadata". A row in `actions`.
-- **unpromoted** — an action with no `promotions` row, and the rows written for it (its outputs and their caller metadata). Promotion writes that row and puts the outputs in the UTXO set (`spendable` rows). When it happens depends on the path, and some actions are never promoted (a parked internal action, for one); see [action lifecycle](action-lifecycle.md). The row replaced the `outputs.promoted` flag of ADR-011 (post-broadcast promotion); see ADR-023.
+- **unpromoted** — an action with no `promotions` row, and the rows written for it (its outputs and their caller metadata). Promotion writes that row and puts the action's outputs with `spendable_intent = 'spendable'` in the UTXO set (`spendable` rows); an output with intent `none`, such as a payment to someone else, never joins it. When it happens depends on the path, and some actions are never promoted (a parked internal action, for one); see [action lifecycle](action-lifecycle.md). The row replaced the `outputs.promoted` flag of ADR-011 (post-broadcast promotion); see ADR-023.
 
 ### Engine primitives and porcelain
 
@@ -67,8 +67,8 @@ Intent is stated, never inferred (ADR-019, ADR-031). Broadcast and transmit take
 
 ### Components
 
-- **Hydrator** — the Engine component that assembles a transaction with its ancestry for sending out (EF for a broadcast, BEEF for a transmit). Broadcast, Transmission and TxProof share it.
-- **HydratedTxCache** — the in-memory, wtxid-keyed cache of assembled transactions that both outgoing paths read through (#296).
+- **Hydrator** — the Engine component that wires a transaction's ancestry from stored proofs and assembles the Atomic BEEF the wallet hands out: the return value of `build_action` and `sign_action`, and a transmit's payload. Transmission and BeefImporter call it; TxProof only tells it when a proof arrives. Broadcast doesn't use it: it builds its own EF.
+- **HydratedTxCache** — the in-memory, wtxid-keyed cache of raw-transaction and merkle-path bytes (not `Transaction::Tx` objects) that the Hydrator's ancestry walk and Broadcast's EF build both read and fill, so a parent loaded by one is a hit for the other (#296).
 - **core** — Engine plus Store: build, sign, broadcast, observe, account. See [core vs conformance](core-vs-conformance.md) (ADR-027).
 
 ## Conformance (BRC-100)
