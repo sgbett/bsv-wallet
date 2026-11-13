@@ -337,14 +337,14 @@ module BSV
         # caller to flush AFTER the outer +db.transaction+ commits.
         #
         # Why accumulate rather than call +proof_arrived+ inline: the
-        # Hydrator is an in-memory cache with no rollback hook. If a
-        # later step in the outer transaction (or a subsequent ancestor
-        # in this loop) raises, the +db.transaction+ rolls back every
-        # +tx_proofs+ row — but any +proof_arrived+ side-effects
-        # already applied to the Hydrator survive, poisoning the cache
+        # HydratedTxCache behind the Hydrator is in memory, with no
+        # rollback hook. If a later step in the outer transaction (or a
+        # subsequent ancestor in this loop) raises, the +db.transaction+
+        # rolls back every +tx_proofs+ row — but any +proof_arrived+
+        # side-effects already applied to the cache survive, poisoning it
         # with terminals that don't exist in the DB. Returning the
         # enrichments lets +#internalize+ flush them post-commit, so
-        # rollback leaves the Hydrator untouched. #533 code-review.
+        # rollback leaves the cache untouched. #533 code-review.
         def save_beef_proofs(beef, subject_wtxid, action_id)
           BSV::Primitives::Hex.validate_wtxid!(subject_wtxid, name: 'save_beef_proofs subject_wtxid')
           subject_proof_id = nil
@@ -373,10 +373,10 @@ module BSV
             subject_proof_id = proof_id if wtxid == subject_wtxid && merkle_path
             # Accumulate for post-commit flush — see method docstring.
             # Without post-commit flushing, a mid-transaction raise would
-            # leave the Hydrator with ghost anchors the DB doesn't back.
+            # leave the cache with ghost anchors the DB doesn't back.
             # The former #296 Phase D monotonic enrichment invariant still
-            # holds: every save_proof site still informs the substrate; the
-            # substrate call just happens AFTER commit.
+            # holds: every proof saved here still reaches the shared
+            # HydratedTxCache through the Hydrator, just AFTER commit.
             #
             # Only enqueue when a Hydrator is attached, and reuse the
             # bytes already computed for +proof+ — a large BEEF's
@@ -397,7 +397,7 @@ module BSV
 
         # Post-commit flush of the Hydrator enrichments accumulated
         # during +save_beef_proofs+. Runs OUTSIDE the outer
-        # +db.transaction+ so a rollback leaves the Hydrator cache
+        # +db.transaction+ so a rollback leaves the HydratedTxCache
         # untouched. #533 code-review.
         def flush_hydrator_enrichments(enrichments)
           return unless @hydrator

@@ -260,9 +260,9 @@ module BSV
 
         # Prime the shared cache from a hint's BEEF: every non-TXID-only
         # transaction lands keyed by its own wtxid, carrying its merkle_path
-        # when the BEEF proved it. wtxid-keyed (not action_id) so the entries
-        # serve both the EF broadcast path here and any deep wire_ancestor
-        # walk through the same substrate. #296 Phase D.
+        # when the BEEF carries one. wtxid-keyed (not action_id) so the
+        # entries serve both the EF broadcast path here and any deep
+        # wire_ancestor walk through the same cache. #296 Phase D.
         def cache_beef_transactions(beef)
           beef.transactions.each do |beef_tx|
             next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)

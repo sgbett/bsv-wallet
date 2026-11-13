@@ -107,7 +107,7 @@ The daemon's hot path is sized by four environment variables. Defaults are calib
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `BSV_WALLET_TX_CACHE_SIZE` | `20000` | Capacity (in entries) of `Engine::HydratedTxCache`, the shared wtxid-keyed cache that hydrated transactions live in across `Broadcast`, `TxProof`, and `Transmission`. Larger = fewer rehydrations at the cost of resident memory. |
+| `BSV_WALLET_TX_CACHE_SIZE` | `20000` | Capacity (in entries) of `Engine::HydratedTxCache`, the wtxid-keyed cache of raw-transaction and merkle-path bytes. In `walletd`, `Broadcast` reads it for its EF build and fills it from hints and eager proofs, and `TxProof` fills it through the Hydrator when a proof arrives. Larger = fewer store reads at the cost of resident memory. |
 | `BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS` | `16` | Size of the Sequel connection pool, sized in coordination with Async's `fiber_concurrency` extension so each running fibre can hold its own connection without serialising. Floor for sustained concurrency, not a max-clients knob. |
 | `BSV_WALLET_REAP_THRESHOLD_S` | `3600` | Age (seconds) past which the reaper deletes unpromoted actions. Lower = aggressive UTXO release; higher = more tolerant of long-running deferred signing flows. |
 | `BSV_WALLET_FEE_RATE_SATS_PER_KB` | `100` | Default fee rate. The same value is used by `estimate_sweep_fee` and the funding loop's `SatoshisPerKilobyte` model, so the wallet never charges more or less than it quotes. |

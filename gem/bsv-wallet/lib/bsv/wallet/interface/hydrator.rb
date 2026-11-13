@@ -38,14 +38,15 @@ module BSV
       #
       # ## The shared hydration cache (#296 Phase D)
       #
-      # The Hydrator owns the +HydratedTxCache+ — a wtxid-keyed,
-      # immutable-bytes, LRU-only substrate (no broadcast-lifecycle
-      # eviction; superseded the action_id-keyed #269 cache). +wire_ancestor+
-      # reads through it (a cached merkle terminal stops the walk) and
-      # +proof_arrived+ enriches it monotonically when a proof lands. The
-      # same instance is injected into +Engine::Broadcast+, whose shallow EF
+      # The Hydrator reads and enriches a +HydratedTxCache+ — a wtxid-keyed,
+      # immutable-bytes, LRU-only cache (no broadcast-lifecycle eviction;
+      # superseded the action_id-keyed #269 cache) — but doesn't own it:
+      # Engine and the daemon each construct one and inject it into both
+      # the Hydrator and +Engine::Broadcast+. +wire_ancestor+ reads through
+      # it (a cached merkle terminal stops the walk) and +proof_arrived+
+      # enriches it monotonically when a proof lands. Broadcast's shallow EF
       # path (+hydrated_transaction_for+) attaches per-input source data from
-      # cached parent bytes — so one substrate serves both egress shapes.
+      # cached parent bytes, so one cache serves both egress shapes.
       # +InputSource+ remains a standalone shared module (TxBuilder +
       # +apply_spends+ + Broadcast all depend on it).
       module Hydrator
@@ -90,18 +91,21 @@ module BSV
           raise NotImplementedError
         end
 
-        # Monotonic substrate-enrichment hook (#296 Phase D).
+        # Monotonic cache-enrichment hook (#296 Phase D).
         #
-        # Called whenever the wallet learns durable information about a
+        # Called when the wallet learns durable information about a
         # +wtxid+: at minimum the +raw_tx+ bytes; additionally a
-        # +merkle_path+ when (and only when) a proof has landed. Sites that
-        # call this include +Engine::TxProof+ (daemon proof acquisition),
-        # +Engine::Broadcast+ (eager broadcast-response proof),
-        # +Engine::BeefInternalizer+ (every BEEF entry, merkle-bearing or not),
-        # and +Engine#import_utxo+ (root UTXO import). The shared cache
-        # then short-circuits future +wire_ancestor+ walks: through the
-        # +wtxid+ as a proven terminal when +merkle_path+ is present, or
-        # at minimum serving the +raw_tx+ on cache hit.
+        # +merkle_path+ when (and only when) a proof has landed. Callers:
+        # +Engine::TxProof+ (daemon proof acquisition),
+        # +Engine::BeefInternalizer+ (every BEEF entry, merkle-bearing or not,
+        # after commit), +Engine#import_utxo+ (root UTXO import) and Engine's
+        # +fetch_and_link_proof+ (+internalize_wbikd_utxo+'s best-effort
+        # proof fetch). +Engine::Broadcast+ doesn't call it: it holds the
+        # cache and puts hint BEEF entries and eager broadcast-response
+        # proofs into it directly. The shared cache then short-circuits
+        # future +wire_ancestor+ walks: through the +wtxid+ as a proven
+        # terminal when +merkle_path+ is present, or at minimum serving the
+        # +raw_tx+ on cache hit.
         #
         # Enrichment is monotonic — never invalidates. A +merkle_path+
         # already present is never cleared; +nil+ in this call is a

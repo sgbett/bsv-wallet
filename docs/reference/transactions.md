@@ -44,13 +44,15 @@ BEEF is a strict superset of EF for the subject transaction. This is why the bro
 
 Trimming is the one place the "peer knows X, send less" instinct is correct.
 
-## Two domains over one substrate
+## Two domains, one cache
 
-Broadcast and transmit are separate stateful *processes* (wallet side, per the stateless→SDK / stateful→wallet axis in `state-boundaries.md`) sitting on a shared *operational* substrate:
+Broadcast and transmit are separate stateful *processes* (wallet side, per the stateless→SDK / stateful→wallet axis in `state-boundaries.md`) that, within an Engine, share one in-memory cache, the `Engine::HydratedTxCache`. Broadcast reads it directly for its EF build and fills it from hints and eager proofs; Transmission reaches it only through the Hydrator, which assembles the peer's BEEF:
 
 ```
-            Engine::Hydrator   ← shared: wtxid-keyed bytes cache → wired Transaction::Tx
-             /            \
+       Engine::HydratedTxCache   ← shared: wtxid-keyed raw-tx + merkle-path bytes
+          /                \
+         /              Engine::Hydrator   ← wires Transaction::Tx ancestry, assembles Atomic BEEF
+        /                       |
   Engine::Broadcast    Engine::Transmission
    #submit  → EF→miner   #transmit → BEEF→peer
    resolve: SSE/blocks   resolve: peer HTTP ACK (wtxid-bound)
@@ -59,7 +61,7 @@ Broadcast and transmit are separate stateful *processes* (wallet side, per the s
 
 The per-recipient-memory row is the deciding difference: broadcast is stateless about *who* (a tx is global), transmission is stateful about *who* (what each peer has acknowledged is inherently per-counterparty). That state cannot be bolted onto `Engine::Broadcast` without smuggling a foreign model in — hence a sibling domain, not a flag.
 
-`Engine::Transmission` is thinner than it first looks: it is transport + per-peer accounting + delivery-outcome, *on top of* the shared Hydrator. It is not a fork of Broadcast.
+`Engine::Transmission` is thinner than it first looks: it is transport + per-peer accounting + delivery-outcome, *on top of* the Hydrator's BEEF assembly. It is not a fork of Broadcast.
 
 A note on the verb: `transmit`, not `send` — `send` is poisoned by Ruby's `Object#send`. `submit` stays as the inner HTTP verb of the broadcast subsystem. `Broadcast` and `Transmission` are the domain nouns; `submit` and `transmit` are their actions.
 
@@ -78,7 +80,7 @@ A design constraint that follows: **transmit intent is an invocation mode, not a
 Both edges are now first-class processes; the historical asymmetry — broadcast fully built, transmit a CLI pipe — was the subject of HLR #385 (PR #408) and is closed:
 
 - **Broadcast (→ network).** `Engine::Broadcast`, OMQ PULL sockets, SSE resolution, callback handlers, crash-recovery — the daemon is built around it. Both the inline and daemon paths ship EF (#252 closed the daemon-side raw-hex gap).
-- **Transmit (→ peer).** `Engine::Transmission#transmit` sits as a sibling to `Engine::Broadcast` and `Engine::TxProof` over the shared `Engine::Hydrator` substrate. The `transmissions` and `transmission_txids` tables hold per-peer knowledge at grain (action × counterparty); status is **derived** from the presence of `acked_at` (no status column — principle-of-state). It sends full ancestors; per-peer trimming waits for the receiver's agreement (#552). Delivery is synchronous HTTP POST of a JSON envelope to a caller-supplied endpoint (`Network::PeerDelivery`), guarded by `Network::EndpointPolicy` (SSRF gate); the ACK is wtxid-bound so a captive portal cannot impersonate delivery. The CLI surface is `bin/transmit`.
+- **Transmit (→ peer).** `Engine::Transmission#transmit` sits as a sibling to `Engine::Broadcast` and `Engine::TxProof`, assembling the peer's BEEF through `Engine::Hydrator`. The `transmissions` and `transmission_txids` tables hold per-peer knowledge at grain (action × counterparty); status is **derived** from the presence of `acked_at` (no status column — principle-of-state). It sends full ancestors; per-peer trimming waits for the receiver's agreement (#552). Delivery is synchronous HTTP POST of a JSON envelope to a caller-supplied endpoint (`Network::PeerDelivery`), guarded by `Network::EndpointPolicy` (SSRF gate); the ACK is wtxid-bound so a captive portal cannot impersonate delivery. The CLI surface is `bin/transmit`.
 
 What v1 deliberately omits, and what stays for Phase 2: an identity-key → endpoint directory (peers must be reached by URL today), a daemon-driven `delayed` transmit (`#transmit` is shaped to be drivable both ways over one code path — same invariant as `broadcast_intent`), a peer-signed ACK protocol (the `transmissions.ack_signature bytea NULL` column is reserved now so Phase 2 lands without a schema migration), retry/backoff, and knowledge-revocation when a peer prunes.
 
@@ -89,7 +91,7 @@ What v1 deliberately omits, and what stays for Phase 2: an identity-key → endp
 
 ## The egress completeness check is a transmit precondition
 
-`Engine::Hydrator#validate_for_handoff!` (the structural-only verify with `TrustedSelfChainTracker`) answers exactly one question: *is this BEEF fit to hand to a peer?* It is therefore a **Transmission precondition**, and is now called from `Engine::Transmission#transmit` over the wire bytes it is about to ship, before the row is written. The substrate method stays on `Hydrator` (it works on bytes and a subject wtxid; it has no per-peer state), but the call site that matters at runtime is Transmission's.
+`Engine::Hydrator#validate_for_handoff!` (the structural-only verify with `TrustedSelfChainTracker`) answers exactly one question: *is this BEEF fit to hand to a peer?* It is therefore a **Transmission precondition**, and is now called from `Engine::Transmission#transmit` over the wire bytes it is about to ship, before the row is written. The method stays on `Hydrator` (it works on bytes and a subject wtxid; it has no per-peer state), but the call site that matters at runtime is Transmission's.
 
 The check takes an `allow_txid_only:` kwarg, and every call site keeps the default `allow_txid_only: false`: the BEEF the wallet hands back to its own caller (`Engine#build_action`, `#sign_action`) and the BEEF it transmits are both full bundles, so any `TxidOnlyEntry` is a defect. The flag is for per-peer trimming a receiver has agreed to (#552), where TXID-only entries are legitimate; the verifier stays one method.
 
@@ -247,5 +249,5 @@ Tracked as follow-up HLRs filed post-merge of #460:
 - `.architecture/decisions/adrs/20260619_ADR-025-transmission-distinct-domain.md` — the decision record establishing Transmission as a sibling domain to Broadcast (not a method or mode flag on it).
 - HLR #385 / PR #408 — the Transmission domain implementation (`transmissions` + `transmission_txids` schema, `Engine::Transmission`, BeefParty trim, egress validation, `Network::PeerDelivery` + `Network::EndpointPolicy`, `bin/transmit`).
 - #551 — transmit sends full ancestors. It had trimmed through `Transaction::BeefParty` (BSV Ruby SDK), whose `trimmed_beef_for_party` dropped known ancestors rather than leaving TXID-only entries, and no receiver resolves TXID-only entries by default anyway. #552 brings trimming back once the receiver agrees to it.
-- #296 — BEEF chain integrity + hydration: extracts the shared `Engine::Hydrator` substrate both domains read.
-- #192 — noSend/sendWith subsystem (Broadcast-domain extension). The only mechanic shared with Transmission is `knownTxids` trimming (deferred for Transmission until #552), which lives on the shared substrate, not in either process. The two domains stay separate; a future Transmission composes alongside #192's batch broadcast rather than absorbing it.
+- #296 — BEEF chain integrity + hydration: the egress check `validate_for_handoff!` (Phase B, now on `Engine::Hydrator`, which #343 extracted) and the wtxid-keyed `Engine::HydratedTxCache` the Hydrator shares with `Engine::Broadcast` (Phase D).
+- #192 — noSend/sendWith subsystem (Broadcast-domain extension). The only mechanic shared with Transmission is `knownTxids` trimming (deferred for Transmission until #552), which is the SDK's `Transaction::BeefParty`, not either process's. The two domains stay separate; a future Transmission composes alongside #192's batch broadcast rather than absorbing it.

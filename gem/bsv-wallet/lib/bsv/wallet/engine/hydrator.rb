@@ -34,8 +34,8 @@ module BSV
         # +cache+ is the shared +HydratedTxCache+ (#296 Phase D) the deep
         # walk reads through and proof-arrival enriches. Defaults to a
         # private cache so a bare +Hydrator.new(store:)+ still memoises;
-        # the daemon/engine inject a single shared instance so the same
-        # substrate serves +Broadcast+ (EF) and proof acquisition.
+        # Engine and the daemon inject the instance they also give
+        # +Broadcast+, so a parent either one caches is a hit for the other.
         def initialize(store:, cache: nil)
           @store = store
           @cache = cache || HydratedTxCache.from_config

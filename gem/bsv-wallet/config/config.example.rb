@@ -46,8 +46,8 @@ BSV::Wallet.configure do |c|
 
   # --- EF hint cache (#269) ---
 
-  # Shared hydration cache capacity (entries) — the wtxid-keyed substrate
-  # the broadcast EF path and the Hydrator's deep BEEF walk both read.
+  # HydratedTxCache capacity (entries) — the wtxid-keyed cache the
+  # broadcast EF path and the Hydrator's deep BEEF walk both read.
   # Default 20000 (sized for multi-hop cascade working sets); reads
   # +BSV_WALLET_TX_CACHE_SIZE+.
   # c.tx_cache_size = 20000

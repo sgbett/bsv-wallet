@@ -72,9 +72,9 @@ module BSV
           # carries the X-CallbackToken header. The SSE listener subscribed
           # to the same token receives the resulting status frames; without
           # the header set, Arcade has nowhere to publish the event. See #266.
-          # Shared hydration cache (#296 Phase D): the daemon's Broadcast
-          # (EF reads + hint writes) and the Hydrator that TxProof enriches
-          # on proof arrival read/write one wtxid-keyed substrate.
+          # Shared HydratedTxCache (#296 Phase D): the daemon's Broadcast
+          # (EF reads, hint and eager-proof writes) and the Hydrator that
+          # TxProof enriches on proof arrival share one wtxid-keyed cache.
           hydrated_tx_cache = Engine::HydratedTxCache.from_config
           hydrator = Engine::Hydrator.new(store: @store, cache: hydrated_tx_cache)
           broadcast = Engine::Broadcast.new(

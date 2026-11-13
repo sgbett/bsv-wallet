@@ -22,7 +22,7 @@ When an action is built, `Engine::Hydrator#build_atomic_beef` walks the ancestor
 
 Hydration is wtxid-cached. A shared `Engine::HydratedTxCache` sits between `Hydrator` (deep BEEF walks) and `Engine::Broadcast` (Extended Format parent reads at submit time), so a transaction warmed by one path is visible to the other. The cache is bounded and monotonically enriched, configured by `BSV_WALLET_TX_CACHE_SIZE`.
 
-The two-step model — Hydrator owns the egress walk, BeefInternalizer owns the ingress — keeps the directions one-way and decoupled. The shared substrate is the cache, not a back-edge.
+The two-step model — Hydrator owns the egress walk, BeefInternalizer owns the ingress — keeps the directions one-way and decoupled. What they share is the cache, not a back-edge.
 
 ## Incoming: parse, then verify, then trust
 

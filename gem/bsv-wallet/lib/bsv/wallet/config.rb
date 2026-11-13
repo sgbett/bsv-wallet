@@ -60,10 +60,9 @@ module BSV
       # Sequel connection pool size for walletd.
       attr_accessor :daemon_pool_size
 
-      # Shared hydration cache capacity (entries). The wtxid-keyed
-      # substrate both the EF broadcast path and the Hydrator's deep BEEF
-      # walk read; default sized for multi-hop cascade working sets
-      # (#296 Phase D).
+      # HydratedTxCache capacity (entries). The wtxid-keyed cache both
+      # the EF broadcast path and the Hydrator's deep BEEF walk read;
+      # default sized for multi-hop cascade working sets (#296 Phase D).
       attr_accessor :tx_cache_size
 
       # Optional cross-process EF hint socket path. +nil+ = feature off.

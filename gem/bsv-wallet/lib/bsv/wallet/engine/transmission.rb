@@ -6,9 +6,9 @@ module BSV
   module Wallet
     class Engine
       # Wallet-to-peer BEEF delivery domain — sibling to +Engine::Broadcast+
-      # and +Engine::TxProof+ over the shared +Engine::Hydrator+ substrate.
-      # Tracked by HLR #385; design recorded in ADR-025 and
-      # +docs/reference/transactions.md+.
+      # and +Engine::TxProof+; it assembles the peer's BEEF through
+      # +Engine::Hydrator+. Tracked by HLR #385; design recorded in
+      # ADR-025 and +docs/reference/transactions.md+.
       #
       # Background-worker sibling shape: no +Interface::Transmission+
       # module (only shape-extracted services consumed cross-sibling, e.g.
@@ -45,8 +45,8 @@ module BSV
         # (+Broadcast+, +TxProof+, +Hydrator+, +BeefInternalizer+).
         #
         # @param store     [BSV::Wallet::Store]
-        # @param hydrator  [BSV::Wallet::Engine::Hydrator] shared-substrate
-        #   owner of +#build_atomic_beef+ (the BEEF the peer receives).
+        # @param hydrator  [BSV::Wallet::Engine::Hydrator] assembles the
+        #   BEEF the peer receives (+#build_atomic_beef+).
         # @param delivery  [#deliver, nil] Phase-2 transport seam, wired
         #   in #390 (caller-supplied-endpoint synchronous HTTP delivery
         #   via +Network::PeerDelivery+). Nil-tolerant in unit-spec

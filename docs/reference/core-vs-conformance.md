@@ -64,7 +64,7 @@ Code at or above the conformance layer **may** speak BRC-100 vocabulary, but is 
 
 These are part of being a Bitcoin wallet. They live in the schema and the Engine, not at the conformance layer:
 
-- **Transactions, inputs, outputs, broadcasts, proofs.** The Bitcoin substrate.
+- **Transactions, inputs, outputs, broadcasts, proofs.** Core's domain model.
 - **Action lifecycle.** Build → sign → broadcast → resolve. The 4-phase atomicity defended by the schema (`principle-of-state.md`).
 - **UTXO selection, fees, change.** Funding mechanics (ADR-013).
 - **Key derivation.** BRC-42/43 key derivation lives in the SDK, called by Engine collaborators. Identity-shaped pubkeys (hex) vs derived pubkeys (binary) per ADR-008.

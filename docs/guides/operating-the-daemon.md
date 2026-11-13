@@ -63,8 +63,8 @@ local view of block headers.
 ## Peer transmission
 
 `Engine::Transmission` is the wallet-to-peer BEEF delivery domain — a
-sibling to `Broadcast` and `TxProof` over the shared `Hydrator` substrate.
-It is **not driven by the daemon** in v1: when a caller invokes
+sibling to `Broadcast` and `TxProof` that assembles its BEEF through the
+`Hydrator`. It is **not driven by the daemon** in v1: when a caller invokes
 `engine.transmission.transmit(endpoint:, ...)`, the HTTP POST runs
 inline and the caller awaits the ACK. A daemon-driven `delayed` transmit is
 shaped to drop in at #385 Phase 2, mirroring broadcast intent `inline` and

@@ -104,7 +104,7 @@ module BSV
         # loop uses. Eliminates the parallel +inline_broadcast+ codepath
         # that pre-#271 duplicated submit's 202 / 400 / 503 dispatch and
         # the post-submit accept / reject / promote bookkeeping.
-        # Shared hydration cache (#296 Phase D): one wtxid-keyed substrate
+        # Shared HydratedTxCache (#296 Phase D): one wtxid-keyed cache
         # serving the broadcast EF path and the Hydrator's deep BEEF walk.
         # Injected into both so a create_action that warms it (or an eager
         # proof on broadcast) is visible to a later wire_ancestor.
@@ -133,8 +133,9 @@ module BSV
         @beef_internalizer = BeefInternalizer.new(
           store: @store, chain_tracker: @chain_tracker, hydrator: @hydrator
         )
-        # Transmission — wallet-to-peer BEEF delivery domain, sibling to
-        # Broadcast/TxProof over the shared Hydrator substrate. The
+        # Transmission — wallet-to-peer BEEF delivery domain. It
+        # assembles the peer's BEEF through the Hydrator, its only route
+        # to the HydratedTxCache it shares with Broadcast. The
         # +delivery:+ slot is wired with +Network::PeerDelivery+ here
         # (#390): SSRF gate via +EndpointPolicy+, ACK validation with
         # wtxid binding, bounded HTTP timeouts. The HTTP transport is
@@ -786,10 +787,11 @@ module BSV
             proof: { raw_tx: raw_tx, merkle_path: merkle_path_binary, height: block_height }
           )
           @store.link_proof(action_id: import_action[:id], tx_proof_id: proof_id)
-          # Inform the shared Hydrator cache so any subsequent wire_ancestor
-          # walk through +wtxid+ terminates here without re-fetching. Mirrors
-          # the BeefInternalizer / Broadcast / TxProof discipline — every
-          # save_proof + merkle site notifies the substrate. #296 Phase D.
+          # Inform the shared HydratedTxCache, through the Hydrator, so any
+          # subsequent wire_ancestor walk through +wtxid+ terminates here
+          # without re-fetching. Mirrors the BeefInternalizer / Broadcast /
+          # TxProof discipline — every save_proof + merkle site updates the
+          # cache. #296 Phase D.
           @hydrator&.proof_arrived(wtxid: wtxid, raw_tx: raw_tx, merkle_path: merkle_path_binary)
           output_ids = @store.promote_action(
             action_id: import_action[:id],
@@ -1697,9 +1699,10 @@ module BSV
 
         proof_id = @store.save_proof(wtxid: wtxid, proof: proof)
         @store.link_proof(action_id: action_id, tx_proof_id: proof_id)
-        # Inform the shared Hydrator cache so any subsequent wire_ancestor
-        # walk through +wtxid+ terminates here (when merkle present) or at
-        # least short-circuits the store lookup for raw_tx. #296 Phase D.
+        # Inform the shared HydratedTxCache, through the Hydrator, so any
+        # subsequent wire_ancestor walk through +wtxid+ terminates here
+        # (when merkle present) or at least short-circuits the store lookup
+        # for raw_tx. #296 Phase D.
         @hydrator&.proof_arrived(wtxid: wtxid, raw_tx: raw_tx, merkle_path: merkle_path)
       end
 

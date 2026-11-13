@@ -15,12 +15,13 @@ module BSV
       class TxProof
         include OmqSupport
 
-        # +hydrator+ (optional) is the shared-cache owner notified on a
-        # fresh proof via +proof_arrived+ (#296 Phase D). The daemon injects
-        # the same Hydrator instance whose cache +Engine::Broadcast+ reads,
-        # so a newly mined ancestor becomes a terminal for future
-        # +wire_ancestor+ walks without a store round-trip. Nil-tolerant:
-        # configurations without the shared cache simply skip enrichment.
+        # +hydrator+ (optional) is the Hydrator notified on a fresh proof
+        # via +proof_arrived+ (#296 Phase D). The daemon injects the same
+        # HydratedTxCache into that Hydrator and into +Engine::Broadcast+,
+        # so a newly mined transaction's bytes and proof are in the cache
+        # Broadcast's EF build reads, without a store round-trip.
+        # Nil-tolerant: configurations without the shared cache simply
+        # skip enrichment.
         def initialize(store:, broadcaster:, hydrator: nil)
           @store = store
           @broadcaster = broadcaster
