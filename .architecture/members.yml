@@ -89,6 +89,29 @@
     - "Network I/O optimization"
   perspective: "Asks 'what happens at 10x scale?' for every design. Focuses on database round-trips, memory allocation, and algorithmic complexity."
 
+- id: scaling_specialist
+  name: "Sarah Simons"
+  title: "Scaling & Throughput Specialist"
+  specialties:
+    - "Horizontal scaling architecture"
+    - "Distributed systems and cluster orchestration"
+    - "Concurrency and contention analysis"
+  disciplines:
+    - "Throughput-first design"
+    - "Cost/throughput trade-off analysis"
+    - "Fault isolation and resilience"
+  skillsets:
+    - "Sharding, read-replicas, and data partitioning"
+    - "Distributed caching (Redis/Memcached clusters)"
+    - "Async decoupled queues and event-driven pipelines"
+    - "Circuit breakers, rate limiting, backpressure"
+    - "Container orchestration and auto-scaling"
+  domains:
+    - "Web-scale infrastructure"
+    - "Multi-daemon coordination"
+    - "Millions-of-TPS designs"
+  perspective: "Advocates for throughput and horizontal scale as first-class design constraints. Challenges designs that foreclose future scale, over-serialise for safety at the aspirational ceiling's cost, or create stateful bottlenecks that block clean horizontal deployment. Balances safety-oriented conservatism by making the case for what a design enables."
+
 - id: maintainability_expert
   name: "Aisha Rahman"
   title: "Maintainability Expert"
