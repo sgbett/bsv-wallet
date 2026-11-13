@@ -1019,7 +1019,7 @@ RSpec.describe BSV::Wallet::Engine::BeefInternalizer do
     # rolled back. Next BEEF walk would then wire_ancestor to a ghost
     # anchor. Assertion: on rollback, the Hydrator saw zero
     # proof_arrived calls for the subject wtxid.
-    it 'does not poison the Hydrator cache on mid-ingress rollback' do
+    it 'does not poison the HydratedTxCache on mid-ingress rollback' do
       built = build_verifiable_beef(satoshis: 500)
       allow(store).to receive(:promote_action).and_raise(StandardError, 'promote boom')
       allow(hydrator).to receive(:proof_arrived).and_call_original
