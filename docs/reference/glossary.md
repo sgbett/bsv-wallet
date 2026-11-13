@@ -33,7 +33,7 @@ The wallet's vocabulary, by context. Within a context a word means one thing. Wh
 ### Engine primitives and porcelain
 
 - **Engine primitive** — a public Engine method at per-domain-operation granularity, in wallet vocabulary (ADR-026): `build_action`, `sign_action`, `abort_action`. Not a lifecycle step.
-- **Engine porcelain** — a public Engine method composed over Engine primitives for convenience, such as `send_payment` over `build_action`. Sorting every public Engine method into one or the other is #549.
+- **Engine porcelain** — a public Engine method composed over Engine primitives for convenience, such as `send_payment` over `build_action`. [Architecture](../concepts/architecture.md#what-the-engine-actually-exposes) sorts every public Engine method into one or the other.
 
 ### Sending out
 
@@ -90,7 +90,7 @@ Intent is stated, never inferred (ADR-019, ADR-031). Broadcast and transmit take
 - **porcelain** — `bin/wallet`'s user-facing commands: `balance`, `list`, `send`, `receive`, `import`, `reject`, `sweep`, `consolidate`.
 - **plumbing** — commands that would expose single Engine primitives: `build`, `sign`, `broadcast`. Not shipped; ADR-030 defers them until the Engine can hold the intermediate state.
 - **send** — the user's intent to pay a recipient, fulfilled by a broadcast and/or a transmit. The command may infer part of the intent from context: given an identity key, it emits the BEEF envelope on stdout (transmit `none`); a base58 address has no peer to transmit to. It settles an explicit intent before calling the Engine and reports each part. "Sent" is never a status on its own.
-- **`--broadcast=inline|async|none`** — the broadcast intent, where `async` means `delayed`. #549 renames it.
+- **`--broadcast=inline|async|none`** — the broadcast intent, where `async` means `delayed`. #548 renames it.
 
 ## Retired terms
 
