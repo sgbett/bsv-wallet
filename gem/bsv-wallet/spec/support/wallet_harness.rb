@@ -26,7 +26,7 @@ module E2E
   #   - +DATABASE_URL_SDK+ / +DATABASE_URL_W1+ .. +DATABASE_URL_W5+ —
   #     derived from +BSV_WALLET_POSTGRES+ via +CLI.derive_postgres_url+.
   #     Explicit +DATABASE_URL_<NAME>+ values already in ENV are respected.
-  #     the #126 e2e on-chain harness reads these slots directly (stage-3
+  #     The #126 e2e on-chain harness reads these slots directly (stage-3
   #     fanout verification opens a fresh +Sequel.connect+ per wallet), so
   #     they must be populated even though +CLI.boot+ would derive on its own.
   module WalletHarness

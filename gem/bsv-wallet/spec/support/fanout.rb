@@ -7,8 +7,9 @@
 # transport the caller supplies. The *routing* lives here once; the
 # *transport* is the caller's: +Fanout.pass+ yields each hop to a block
 # that performs the payment however it needs (in-process
-# Engine#send_payment + #internalize_action, or a bin/ CLI create|receive
-# pipeline). Neither path broadcasts; this is no_send fanout that builds
+# Engine#send_payment + BRC100#internalize_action, or a
+# +bin/wallet send --broadcast=none+ | +bin/wallet receive+ pipeline).
+# Neither path broadcasts; this is no_send fanout that builds
 # peer-to-peer state. Retained for the #126 e2e on-chain and #129
 # CLI-pipeline stress workloads (consumers pending rebuild).
 module Fanout
