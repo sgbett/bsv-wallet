@@ -10,25 +10,19 @@ module E2E
   #
   # Reuses +BSV::Wallet::CLI.boot+ — it already does the right thing
   # (Store + Engine + multi-provider Services). The harness's only job
-  # is to derive the five test WIFs from +BSV_WALLET_WIF_SDK+ and stash
-  # them in ENV under the conventional +BSV_WALLET_WIF_<NAME>+ slots so
-  # +CLI.boot(wallet_name: 'w1')+ picks them up.
+  # is to derive the five test WIFs from +BSV_WALLET_WIF_SDK+ and
+  # register all six wallets in +BSV::Wallet::Fixtures+, which
+  # +CLI.boot(wallet_name: 'w1')+ reads (see +install_fixtures!+).
+  # Nothing is written to ENV.
   #
   # Env vars consumed:
   #   - +BSV_WALLET_WIF_SDK+   — the funding key (mandatory)
-  #   - +BSV_WALLET_POSTGRES+  — base Postgres URL (mandatory); +CLI.boot+
-  #     derives each wallet's DB as +{base}/bsv_wallet_{name}+ via
-  #     +derive_postgres_url+. Per-wallet +DATABASE_URL_<NAME>+ overrides
-  #     are still respected (CLI prefers explicit overrides).
+  #   - +BSV_WALLET_POSTGRES+  — base Postgres URL (mandatory); each
+  #     wallet's DB derives as +{base}/bsv_wallet_{name}+.
   #
-  # Env vars written (in-process, never persisted):
-  #   - +BSV_WALLET_WIF_W1+ .. +BSV_WALLET_WIF_W5+ — derived from SDK
-  #   - +DATABASE_URL_SDK+ / +DATABASE_URL_W1+ .. +DATABASE_URL_W5+ —
-  #     derived from +BSV_WALLET_POSTGRES+ via +CLI.derive_postgres_url+.
-  #     Explicit +DATABASE_URL_<NAME>+ values already in ENV are respected.
-  #     +e2e_workload_spec.rb+ reads these slots directly (stage 3 fanout
-  #     verification opens a fresh +Sequel.connect+ per wallet), so they
-  #     must be populated even though +CLI.boot+ would derive on its own.
+  # Warning: these registrations replace the gem default's for +sdk+ and
+  # +w1+..+w5+ (see +config/fixtures.rb+), so +DATABASE_URL_SDK+ and
+  # +DATABASE_URL_W<n>+ overrides are not honoured in-process.
   module WalletHarness
     SDK = 'sdk'
 
@@ -48,7 +42,7 @@ module E2E
     # Raises +KeyError+ when +BSV_WALLET_WIF_SDK+ is unset; raises a
     # clear error when +BSV_WALLET_POSTGRES+ is unset/blank (the
     # +Fixtures+ derivation would otherwise produce nil DB URLs and
-    # downstream readers like +e2e_workload_spec.rb+ would fail
+    # downstream readers like the #126 e2e harness would fail
     # confusingly).
     def install_fixtures!
       raise KeyError, 'key not found: "BSV_WALLET_POSTGRES"' if ENV['BSV_WALLET_POSTGRES'].to_s.strip.empty?

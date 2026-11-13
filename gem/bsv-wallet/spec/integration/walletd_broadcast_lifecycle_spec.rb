@@ -46,8 +46,8 @@ RSpec.describe 'Engine::Broadcast#process lifecycle (#270)', :postgres do # rubo
      'd02bdbf459a37a62c5baef3fb06d1159b55597ffffffff01f0991600000000001976a9141f36a49fcf6ada' \
      '1f74f82377b33b17b68f7a016188acd3740e00'].pack('H*')
   end
-  let(:wtxid)  { BSV::Transaction::Tx.from_binary(raw_tx).wtxid }
-  let(:dtxid)  { wtxid.reverse.unpack1('H*') }
+  let(:wtxid) { BSV::Transaction::Tx.from_binary(raw_tx).wtxid }
+  let(:dtxid) { wtxid.reverse.unpack1('H*') }
 
   # Provider double — each context overrides +broadcast_response+ to
   # exercise a different decision branch.

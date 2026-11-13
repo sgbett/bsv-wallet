@@ -153,8 +153,15 @@ RSpec.describe BSV::Wallet::Daemon do
       # (also a spawned fiber); in this spec broadcast is mocked so we
       # bind a stand-in PULL here so the PUSH connect completes
       # immediately and the fiber proceeds to construct the listener.
+      # The binder must outlive the connect, as the real receive loop
+      # does: OMQ >= 0.29 spawns each accepted connection as a child of
+      # the binding task, and a finished task raises
+      # Async::Task::FinishedError on +async+.
       def bind_statuses_pull!(task)
-        task.async { OMQ::PULL.bind('inproc://statuses.pull') }
+        task.async do
+          OMQ::PULL.bind('inproc://statuses.pull')
+          sleep
+        end
       end
 
       it 'constructs SSEListener with the supplied token and the daemon store' do

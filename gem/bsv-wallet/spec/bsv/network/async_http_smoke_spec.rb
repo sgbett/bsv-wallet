@@ -4,8 +4,7 @@ require 'async'
 require 'async/http/client'
 require 'async/http/endpoint'
 
-# rubocop:disable RSpec/SpecFilePathFormat
-RSpec.describe Async::HTTP::Client do
+RSpec.describe Async::HTTP::Client do # rubocop:disable RSpec/SpecFilePathFormat
   it 'is loadable and constructible inside an Async reactor' do
     client = nil
     Async do
@@ -17,4 +16,3 @@ RSpec.describe Async::HTTP::Client do
     expect(client).to be_a(described_class)
   end
 end
-# rubocop:enable RSpec/SpecFilePathFormat
