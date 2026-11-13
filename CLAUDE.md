@@ -212,17 +212,21 @@ Override the gem default by writing `~/.bsv-wallet/fixtures.rb` (or setting `BSV
 Specs must run from the gem directory, not the repo root.
 
 ```bash
-# Wallet unit specs (Postgres — primary target)
-cd gem/bsv-wallet && BSV_WALLET_POSTGRES=postgres://postgres:postgres@localhost:5433/ bundle exec rspec spec/bsv spec/bin
+# Wallet unit specs (Postgres — primary target; .rspec excludes spec/integration)
+cd gem/bsv-wallet && BSV_WALLET_POSTGRES=postgres://postgres:postgres@localhost:5433/ bundle exec rspec
 
 # Wallet unit specs against SQLite (augmentation — proves SQLite still works)
-cd gem/bsv-wallet && bundle exec rspec spec/bsv spec/bin
+cd gem/bsv-wallet && bundle exec rspec
 
-# Wallet integration specs (require BSV_WALLET_POSTGRES + BSV_WALLET_WIF_ALICE/BOB/CAROL, each WIF funded with >= 1m sats)
-cd gem/bsv-wallet && bundle exec rspec spec/integration
+# Wallet integration specs. The override is required: .rspec's exclusion also
+# applies to a directory argument, and a run that loads nothing fails.
+# Specs skip when their env is missing (BSV_WALLET_POSTGRES; funded
+# BSV_WALLET_WIF_ALICE/BOB, BSV_WALLET_WIF_SDK; BSV_WALLET_VERIFY_TRACE=1).
+# Warning: the funded ones truncate the alice/bob and sdk/w1 fixture databases.
+cd gem/bsv-wallet && bundle exec rspec spec/integration --exclude-pattern ''
 
 # All wallet specs (unit + integration)
-cd gem/bsv-wallet && bundle exec rspec
+cd gem/bsv-wallet && bundle exec rspec spec --exclude-pattern ''
 
 # RuboCop
 cd gem/bsv-wallet && bundle exec rubocop

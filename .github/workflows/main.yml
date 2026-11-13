@@ -141,10 +141,14 @@ jobs:
             PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -c "CREATE DATABASE bsv_wallet_${db};"
           done
 
+      # .rspec excludes spec/integration from the default lane, and RSpec
+      # applies that exclusion to directory arguments too — without the
+      # override this step loads 0 examples and passes (#546).
       - name: Run integration specs
-        run: bundle exec rspec spec/integration
+        run: bundle exec rspec spec/integration --exclude-pattern ''
         working-directory: gem/bsv-wallet
         env:
+          BSV_WALLET_VERIFY_TRACE: '1'
           BSV_WALLET_WIF_ALICE: ${{ secrets.BSV_WALLET_WIF_ALICE }}
           BSV_WALLET_WIF_BOB: ${{ secrets.BSV_WALLET_WIF_BOB }}
           BSV_WALLET_WIF_CAROL: ${{ secrets.BSV_WALLET_WIF_CAROL }}
