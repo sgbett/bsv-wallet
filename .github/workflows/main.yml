@@ -151,11 +151,9 @@ jobs:
           DATABASE_URL_ALICE: postgres://postgres:postgres@localhost:5433/bsv_wallet_alice
           DATABASE_URL_BOB: postgres://postgres:postgres@localhost:5433/bsv_wallet_bob
           DATABASE_URL_CAROL: postgres://postgres:postgres@localhost:5433/bsv_wallet_carol
-          # Generic Postgres URL for :postgres-tagged integration specs that
-          # don't need a wallet-specific DB. Without this, the
-          # +skip unless ENV['DATABASE_URL']+ guards in those specs hide
-          # failures in CI while they surface locally.
-          DATABASE_URL: postgres://postgres:postgres@localhost:5433/bsv_wallet_test
+          # Base for the shared test database (<base>/bsv_wallet_test). Unset,
+          # the store falls back to SQLite and :postgres-tagged specs skip.
+          BSV_WALLET_POSTGRES: postgres://postgres:postgres@localhost:5433/
 
   # The single required status check (see the "Block unless CI green" ruleset).
   # The spec jobs above are matrix / job-level-`if:` gated, so on docs-only

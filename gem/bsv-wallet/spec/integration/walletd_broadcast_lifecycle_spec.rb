@@ -29,10 +29,12 @@ require 'net/http'
 require 'securerandom'
 require 'sequel'
 require 'bsv-wallet'
+require_relative '../bsv/wallet/store/shared_context'
 
 RSpec.describe 'Engine::Broadcast#process lifecycle (#270)', :postgres do # rubocop:disable RSpec/DescribeClass
-  let(:database_url) { ENV.fetch('DATABASE_URL') }
-  let(:store) { BSV::Wallet::Store.connect(database_url).tap(&:migrate!) }
+  # The dedicated test database, never +DATABASE_URL+: the +before+ below
+  # truncates every table, and +DATABASE_URL+ is the operator's wallet.
+  let(:store) { STORE_INSTANCE }
 
   # Real signed P2PKH transaction — parseable by Transaction::Tx.from_binary
   # so +Engine::Broadcast#hydrated_transaction_for+ can reconstruct it
@@ -82,8 +84,6 @@ RSpec.describe 'Engine::Broadcast#process lifecycle (#270)', :postgres do # rubo
   end
 
   before do
-    skip 'Postgres-only spec' unless ENV['DATABASE_URL'].to_s.start_with?('postgres')
-
     store.db.tables.each do |table|
       next if table == :schema_info
 
