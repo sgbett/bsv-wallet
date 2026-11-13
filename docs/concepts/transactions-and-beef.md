@@ -41,10 +41,10 @@ The internalised action is `broadcast_intent: 'none'` — an [internal action](a
 
 ## `trustSelf`: not re-proving what you already know
 
-When two parties transact repeatedly, the sender's BEEF will keep including ancestors the recipient *already has proofs for*. Re-shipping and re-verifying them is wasted work. The `trustSelf: 'known'` option optimises this in both directions:
+When two parties transact repeatedly, the sender's BEEF will keep including ancestors the recipient *already has proofs for*. Re-shipping and re-verifying them is wasted work. Each direction has its own optimisation:
 
-- **Sending** — `Hydrator#replace_known_ancestors!` rewrites the BEEF so that ancestors the recipient is known to hold become **TXID-only entries**: a reference rather than the full transaction and proof. The envelope shrinks to just the novel part of the graph.
-- **Receiving** — `Hydrator#hydrate_known_sources!` fills those TXID-only entries back in from the wallet's own stored transactions before verification, so SPV still runs over a complete graph.
+- **Sending** — `Engine::Transmission` trims the outgoing BEEF per peer (the SDK's `BeefParty`), so that ancestors the recipient is known to hold travel as **TXID-only entries**: a reference rather than the full transaction and proof. The envelope shrinks to just the novel part of the graph. (The code currently drops those entries altogether, which fails its own egress check: #551.)
+- **Receiving** — under `trustSelf: 'known'`, `BeefImporter#hydrate_known_sources!` fills TXID-only entries back in from the wallet's own stored transactions before verification, so SPV still runs over a complete graph, and `BeefImporter#replace_known_ancestors!` reduces ancestors the wallet already holds proofs for to TXID-only, so they aren't verified again.
 
 The trust is bounded and explicit: only ancestors the wallet itself already holds are elided, and they are rehydrated from local truth, not taken on faith from the sender.
 

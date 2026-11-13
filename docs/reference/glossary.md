@@ -39,9 +39,9 @@ The wallet's vocabulary, by context. Within a context a word means one thing. Wh
 
 - **broadcast** — wallet → miners, carrying EF. `Engine::Broadcast`; at most one per action.
 - **submit** — the HTTP POST to ARC inside a broadcast (the private `Engine::Broadcast#submit`).
-- **transmit** — wallet → a named peer, carrying Atomic BEEF trimmed to what that peer already holds. `Engine::Transmission#transmit`; any number per action. Beyond BRC-100, which is silent on transport (ADR-025).
+- **transmit** — wallet → a named peer, carrying Atomic BEEF trimmed of what that peer already holds. `Engine::Transmission#transmit`; any number per action. Beyond BRC-100, which is silent on transport (ADR-025).
 - **deliver** — the HTTP POST inside a transmit (`Network::PeerDelivery#deliver`). The outcome is `:delivered` only on a 200 with a valid ACK for the right wtxid.
-- **trim** — reducing the ancestors a peer already knows to txid-only entries (BeefParty), on outgoing BEEF only. `replace_known_ancestors!` on incoming BEEF is a different operation with the opposite trust model.
+- **trim** — reducing the ancestors a peer already knows to txid-only entries (BeefParty), on outgoing BEEF only. The code currently drops those entries altogether, which fails its own egress check (#551). `replace_known_ancestors!` on incoming BEEF is a different operation with the opposite trust model.
 - **publish** — ADR-030's candidate name for the step that makes a persisted action public. Undecided until #192.
 
 ### Intent
