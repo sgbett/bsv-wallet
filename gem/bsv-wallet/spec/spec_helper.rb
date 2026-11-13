@@ -19,6 +19,9 @@ RSpec.configure do |config|
 
   config.shared_context_metadata_behavior = :apply_to_host_groups
   config.filter_run_when_matching :focus
+  # A run that loads nothing is a misconfiguration, not a pass: .rspec's
+  # --exclude-pattern silently emptied the CI integration lane for months (#546).
+  config.fail_if_no_examples = true
   config.disable_monkey_patching!
   config.order = :random
   Kernel.srand config.seed
