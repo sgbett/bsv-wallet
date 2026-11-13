@@ -82,3 +82,7 @@ The deletion is not erosion of immutability — it is measured against the only 
 ## Unverified claims
 
 None.
+
+## Terminology note (2026-11-13)
+
+This ADR uses "staged" and "stageable" for rows and caller metadata written before an action is accepted. The glossary (`docs/reference/glossary.md`) calls those *unpromoted* and reserves "staged" for an action awaiting deferred signing (`Store#stage_action`). The decision text is unchanged.

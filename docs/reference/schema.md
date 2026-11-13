@@ -287,7 +287,7 @@ COMMIT
 - `spendable`: untouched — the `spendable.action_id → promotions(action_id)` FK structurally prevents any spendable row from existing without authorisation (Phase 4)
 - `broadcasts`: one row, `broadcast_at IS NULL` (the daemon will stamp it before POSTing to ARC)
 
-**Internal path (`broadcast_intent = 'none'`)** does not produce a Phase 3. Phases 1, 2, and 4 commit synchronously inside `create_action` (see **internalizeAction** and the equivalent porcelain paths below). Internal outputs are written, a `promotions` row is inserted with `intent = 'none'` and `authorising_status = NULL` (the `promo_path` CHECK admits this combination), and `spendable` rows are inserted in the same transaction. No broadcasts row is ever created.
+**Internal path (`broadcast_intent = 'none'`)** does not produce a Phase 3. Phases 1, 2, and 4 commit synchronously inside `create_action` (see **internalizeAction** and the equivalent porcelain paths below). Internal outputs are written, a `promotions` row is inserted with `intent = 'none'` and `authorising_status = NULL` (the `promo_path` CHECK admits this combination), and `spendable` rows are inserted in the same transaction for the outputs with `spendable_intent = 'spendable'`. No broadcasts row is ever created.
 
 #### Phase 3: Broadcast (managed by Engine::Broadcast)
 
@@ -346,7 +346,7 @@ BEGIN
 COMMIT
 ```
 
-On the **internal path** (`broadcast_intent = 'none'`), Phase 4 is committed inside the same transaction as Phase 1+2 by `Store#promote_action`. The promotions row is inserted with `intent = 'none'` and `authorising_status = NULL` (the `promo_path` CHECK admits the internal disjunction; the composite FK to `broadcasts` skips on NULL via MATCH SIMPLE). Spendable rows are inserted alongside. No broadcast acceptance trigger is involved.
+On the **internal path** (`broadcast_intent = 'none'`), Phase 4 is committed inside the same transaction as Phase 1+2 by `Store#promote_action`. The promotions row is inserted with `intent = 'none'` and `authorising_status = NULL` (the `promo_path` CHECK admits the internal disjunction; the composite FK to `broadcasts` skips on NULL via MATCH SIMPLE). Spendable rows are inserted alongside for the outputs with `spendable_intent = 'spendable'`. No broadcast acceptance trigger is involved.
 
 **Database state after Phase 4 (send path):**
 - `outputs`: unchanged from Phase 2 — same rows, untouched.
@@ -793,7 +793,7 @@ end
 
 ## 7. Promotions
 
-Promote-authorisation as a row. The existence of a `promotions` row for an action IS the canonical-state fact: "this action's outputs are in the UTXO set." This replaces the earlier `outputs.promoted` boolean (#307 / ADR-023), which was a per-row UPDATE deviation from append-only outputs; with promotion modelled as row-existence, `outputs` returns to pure INSERT-only.
+Promote-authorisation as a row. The existence of a `promotions` row for an action IS the canonical-state fact: "this action's outputs are canonical." Those with `spendable_intent = 'spendable'` join the UTXO set through `spendable` rows, which are FK-gated on it. This replaces the earlier `outputs.promoted` boolean (#307 / ADR-023), which was a per-row UPDATE deviation from append-only outputs; with promotion modelled as row-existence, `outputs` returns to pure INSERT-only.
 
 A single row per action — promotion was always a per-action fact, and the PK is `action_id` (a non-auto PK that is also an FK to `actions`). The gate is declarative: two CHECKs on the row itself, plus two composite FKs that tie it to its parent action's intent and (for the send path) to a non-rejected broadcast status. **No trigger on the Phase 4 hot path** — the hot send path carries only the INSERT + the FK lookups (#221, ADR-019). A separate trigger does exist on the cold `actions` DELETE path — see *Defence-in-depth* below — but it never fires under normal traffic.
 
@@ -1317,7 +1317,7 @@ LIMIT ? OFFSET ?;
 
 **Creation:** `createAction` creates an Action (a Bitcoin transaction + metadata). Requires at least one input or output. Inputs require `inputBEEF` for SPV context. Outputs without `basket` are untracked. Can return a `signableTransaction` reference for deferred signing.
 
-**Signing:** `signAction` completes a deferred transaction. The caller provides unlocking scripts for inputs they control; the wallet signs remaining P2PKH inputs with derived keys. Output rows were already written during `createAction` (no `promotions` row yet — the spendable→promotions FK keeps them out of the UTXO set); `signAction` updates the action row (wtxid, signed raw_tx) and creates the broadcasts row. Phase 4 fires later on broadcast acceptance, inserting the promotions row and the spendable rows. See **Deferred Signing — signAction** in the lifecycle section.
+**Signing:** `signAction` completes a deferred transaction. The caller provides unlocking scripts for inputs they control; the wallet signs remaining P2PKH inputs with derived keys. Output rows were already written during `createAction` (no `promotions` row yet — the spendable→promotions FK keeps them out of the UTXO set); `signAction` updates the action row (wtxid, signed raw_tx) and creates the broadcasts row. Phase 4 fires later on broadcast acceptance, inserting the promotions row and the spendable rows for its wallet-owned outputs. See **Deferred Signing — signAction** in the lifecycle section.
 
 **Aborting:** `abortAction` cancels an in-progress action that has not yet been broadcast. Clears dependent rows under the RESTRICT FK, then deletes the action; CASCADE on inputs frees the locked UTXOs.
 

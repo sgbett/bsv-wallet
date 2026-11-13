@@ -98,6 +98,18 @@ These four supports explain the identity-pubkey carve-out specifically. Derived 
 
 The reasoning is recorded in `project_pubkey_hex_exception` (memory). The decision was made at PR #18, cemented by HLR #28 (BRC-100 SDK alignment), and formalised in HLR #300 after the audit recovered the trace.
 
+## Vocabulary
+
+The canonical list is `docs/reference/glossary.md`; check it before naming anything. Terms used in two senses have cost real rework here (broadcast once covered both miners and peers), so a word means one thing within each context (SDK, core, BRC-100 conformance, CLI), and translation happens explicitly at the boundaries. The rules that catch most slips:
+
+- **Core adopts BRC-100's nouns, never its options.** `action` and `internalize` are fine in core; `noSend` and `acceptDelayedBroadcast` stay in `BRC100`, and core says `broadcast_intent`.
+- **Broadcast** (→ miners, EF) and **transmit** (→ a peer, Atomic BEEF) are separate domains. **Send** is the user's intent, fulfilled by either or both; in BRC-100's `noSend`/`sendWith`, "send" means broadcast.
+- **Intent**, for broadcast and transmit alike: `inline` (now), `delayed` (by `walletd`, later), `none` (the wallet doesn't; for a transmit the BEEF is handed back). `delayed` changes when, `none` changes who.
+- **Deferred** means signing only, and an action awaiting deferred signing is **staged**. Outputs and caller metadata whose action has no `promotions` row are **unpromoted**, never "staged".
+- **Import** is the user-triggered bootstrap of root-key funds; **internalize** records someone else's transaction as an incoming action; **receive** is the user-level process that ends in internalizing.
+- Bare **transaction** is a Bitcoin transaction; say *database transaction* for the other. **Primitive** and **porcelain** are always qualified by layer (SDK primitive, Engine primitive, CLI porcelain). BRC-100's unit is the **method**.
+- Don't write **substrate**: name the Hydrator, the HydratedTxCache or core's domain model.
+
 ## Load-bearing Principles
 
 Two design principles shape the wallet from the outside in. Both are documented in `docs/reference/`; the canonical wording lives there, this section is the at-a-glance summary for coding sessions. New behaviour that contradicts either is almost certainly wrong.

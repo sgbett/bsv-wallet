@@ -254,7 +254,7 @@ module BSV
       # Internal-path Phase 4: write outputs as already promoted, insert
       # spendable rows in the same transaction. Used by incoming actions
       # (internalize_action, import_utxo, wbikd) where broadcast_intent == 'none'
-      # — outputs join the canonical UTXO set immediately.
+      # — outputs with spendable_intent 'spendable' join the UTXO set immediately.
       def promote_action(action_id:, outputs:)
         @db.transaction do
           # The promotions row (the canonical-state fact) must exist before any

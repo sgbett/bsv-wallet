@@ -103,3 +103,7 @@ BRC-100 specifies the *interface* — `createAction` returns the BEEF, `internal
 * #296 — BEEF chain integrity + hydration: extracts the wtxid-keyed Hydrator substrate (enabler, not blocker).
 * #192 — noSend/sendWith (Broadcast-domain batching); kept separate, composed alongside later.
 * SDK `Transaction::BeefParty` — per-counterparty trimming bookkeeping adopted by Transmission.
+
+## Terminology note (2026-11-13)
+
+In the glossary's terms (`docs/reference/glossary.md`), the "async" or "daemon" delivery left to phase 2 is transmit intent `delayed`; the BRC-100 baseline where "the caller delivers it" is transmit intent `none`; and synchronous delivery is `inline`. Where this ADR says the two domains share one "substrate" (`Engine::Hydrator`), what they share in the code as built is the HydratedTxCache: Transmission assembles its BEEF through the Hydrator, which reads the cache, while Broadcast builds its own EF from the cache and never calls the Hydrator. The decision text is unchanged.
