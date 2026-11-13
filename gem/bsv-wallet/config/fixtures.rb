@@ -25,7 +25,7 @@ BSV::Wallet::Fixtures.configure do |f|
   f.wallet :alice, wif: ENV.fetch('BSV_WALLET_WIF_ALICE', nil),
                    database_url: ENV.fetch('DATABASE_URL_ALICE', nil)
   f.wallet :bob,   wif: ENV.fetch('BSV_WALLET_WIF_BOB',   nil),
-                   database_url: ENV.fetch('DATABASE_URL_BOB',   nil)
+                   database_url: ENV.fetch('DATABASE_URL_BOB', nil)
   f.wallet :carol, wif: ENV.fetch('BSV_WALLET_WIF_CAROL', nil),
                    database_url: ENV.fetch('DATABASE_URL_CAROL', nil)
 
