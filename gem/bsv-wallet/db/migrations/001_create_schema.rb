@@ -808,8 +808,8 @@ Sequel.migration do
     end
 
     # 21. transmission_txids — pure membership: which wtxids each transmission's
-    #     BEEF carried, so a later transmission to the same counterparty trims
-    #     (BeefParty) to only what the peer lacks. The per-counterparty known
+    #     BEEF carried, so per-peer trimming (#552) can send a counterparty
+    #     only what it lacks. The per-counterparty known
     #     set is the union of these rows across all of that peer's
     #     transmissions. wtxid stays binary (wire-order), per the
     #     wtxid/dtxid convention.

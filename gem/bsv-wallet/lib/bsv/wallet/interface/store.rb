@@ -206,8 +206,8 @@ module BSV
         end
 
         # The wtxids +counterparty+ has acknowledged across every
-        # transmission to them — the BeefParty known set for trimming
-        # the next BEEF.
+        # transmission to them — the known set per-peer trimming would
+        # read once the receiver agrees to it (#552).
         #
         # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
         # @return [Array<String>] wire-order binary wtxids (deduplicated)

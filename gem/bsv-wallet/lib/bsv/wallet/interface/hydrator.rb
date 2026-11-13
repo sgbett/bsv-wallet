@@ -130,27 +130,22 @@ module BSV
         #
         # ## Callers and +allow_txid_only:+
         #
-        # Two egress sites call this method:
-        #
-        # - +Engine#build_action+ / +Engine#sign_action+ — full BEEF, no
-        #   peer-specific trim. Default +allow_txid_only: false+: any
-        #   +TxidOnlyEntry+ is a defect because nothing should have trimmed
-        #   yet.
-        # - +Engine::Transmission#transmit+ — peer-specific BEEF whose
-        #   trim step (BeefParty, #388) deliberately produces
-        #   +TxidOnlyEntry+ records for ancestors the peer already holds.
-        #   Pass +allow_txid_only: true+ so the structural walk treats
-        #   those trimmed slots as known terminals (the peer fills them
-        #   from local state).
+        # Both egress sites — +Engine#build_action+ / +Engine#sign_action+
+        # and +Engine::Transmission#transmit+ — ship the full BEEF and
+        # keep the default +allow_txid_only: false+: any +TxidOnlyEntry+
+        # is a defect. Transmit sends full ancestors because no receiver
+        # resolves a txid-only entry by default (#551). The flag is for
+        # per-peer trimming the receiver has agreed to (#552), where the
+        # structural walk treats those entries as known terminals the
+        # peer fills from local state.
         #
         # @param atomic_beef [String] BEEF binary as built by
         #   +#build_atomic_beef+
         # @param subject_wtxid [String] 32-byte wire-order wtxid of the
         #   subject transaction (the action's own tx)
         # @param allow_txid_only [Boolean] tolerate +TxidOnlyEntry+ records
-        #   during structural verification (default +false+). Set to +true+
-        #   from +Engine::Transmission#transmit+ post-trim; leave default
-        #   at build-time call sites.
+        #   during structural verification (default +false+). No caller
+        #   sets it yet; see above.
         # @raise [BSV::Wallet::EgressBeefInvalidError] when the subject
         #   is missing from the constructed BEEF, or when verification
         #   fails (almost always an upstream proof-closure gap that

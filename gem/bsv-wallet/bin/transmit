@@ -7,10 +7,9 @@
 # up the action by its dtxid, and calls Engine::Transmission#transmit
 # with the caller-supplied --to (counterparty) and --endpoint. The
 # envelope is delivered over HTTP via Network::PeerDelivery (#385
-# Task 5 / #390); the trimmed BEEF rebuild happens inside the engine,
-# not in this script (so the BEEF on stdin is the producer's atomic
-# bundle, but what crosses the wire is per-peer trimmed via BeefParty
-# — Task 3, #388).
+# Task 5 / #390); the BEEF is rebuilt inside the engine, not in this
+# script (so the BEEF on stdin is the producer's atomic bundle, but what
+# crosses the wire is the engine's, with every ancestor in full — #551).
 #
 # Composable pipe (the substituting shape for bin/send | bin/receive
 # on the send side):
