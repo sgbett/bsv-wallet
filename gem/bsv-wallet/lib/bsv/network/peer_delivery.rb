@@ -85,9 +85,9 @@ module BSV
       #
       # Without the wtxid binding, a captive portal or a wrong-host
       # endpoint returning generic 200 OK would be recorded as a
-      # successful delivery — the BeefParty trimmer would then over-trim
-      # the next transmit to that "peer", and the actual peer would
-      # silently miss everything thereafter.
+      # successful delivery — the peer's known set would then claim
+      # wtxids it never received, and per-peer trimming (#552) would
+      # leave them out of every later transmit to it.
       #
       # @param endpoint [String] absolute URI (https:// in prod)
       # @param envelope [Hash] +{ beef:, outputs:, sender_identity_key:,

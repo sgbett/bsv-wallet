@@ -106,5 +106,5 @@ programmatically in a `configure` block):
 
 The composable porcelain for a peer-to-peer payment is the
 `bin/create | bin/transmit` pipe on the sender side (signs, builds the
-trimmed BEEF, delivers over HTTP) and `bin/receive` on the recipient side
+BEEF, delivers over HTTP) and `bin/receive` on the recipient side
 (reads the JSON envelope on stdin and internalises the outputs).

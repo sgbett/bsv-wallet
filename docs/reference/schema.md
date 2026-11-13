@@ -1189,7 +1189,7 @@ Wallet→peer BEEF delivery, at grain `(action_id, counterparty)` — the wallet
 - `UNIQUE (action_id, counterparty)` — the grain. Re-transmitting the same action to the same peer upserts the existing row (idempotent) rather than inserting a duplicate.
 - `INDEX (counterparty, id)` — composite, drives the per-peer known-wtxids query (filter on counterparty, then JOIN to `transmission_txids` by id) without a sequential scan as the table grows.
 
-**`counterparty` is hex, not `bytea`.** It is a BRC-43 identity public key (66-char compressed hex), an identity-shaped pubkey — the deliberate carve-out from the binary-internal principle (see CLAUDE.md "Public Key Convention"). It crosses the BRC boundary as a hex interchange identifier, the same as `outputs.sender_identity_key` and the `certificates` identity fields. The shape CHECK lives in migration 003 alongside `description_length` (structural-CHECK precedent).
+**`counterparty` is hex, not `bytea`.** It is a BRC-43 identity public key (66-char compressed hex), an identity-shaped pubkey — the deliberate carve-out from the binary-internal principle (see CLAUDE.md "Public Key Convention"). It crosses the BRC boundary as a hex interchange identifier, the same as `outputs.sender_identity_key` and the `certificates` identity fields. The shape CHECK lives in `001_create_schema.rb` alongside `description_length` (structural-CHECK precedent).
 
 **`ack_signature` is reserved nullable from day 1.** v1 ACK is a bare HTTP 200 receipt and leaves this column NULL; the Phase 2 signed-ACK protocol (HLR #385) writes a peer signature over the ack'd wtxid here without a schema migration. Carrying the column reservation now avoids a Phase 2 migration of a table that may already be large.
 
@@ -1201,7 +1201,7 @@ Wallet→peer BEEF delivery, at grain `(action_id, counterparty)` — the wallet
 
 ## 21. Transmission Txids
 
-Pure membership: which wtxids each transmission's BEEF carried. The per-counterparty *known set* — what BeefParty trims a future BEEF against — is the union of these rows across all of that counterparty's transmissions.
+Pure membership: which wtxids each transmission's BEEF carried. The per-counterparty *known set* — what per-peer trimming will trim a future BEEF against once the receiver agrees to it (#552) — is the union of these rows across all of that counterparty's transmissions.
 
 | col | type | attributes |
 | --- | --- | --- |
@@ -1213,7 +1213,7 @@ Pure membership: which wtxids each transmission's BEEF carried. The per-counterp
 - `wtxid` is wire-order binary (`bytea`), per the wtxid/dtxid convention — these are structural transaction identifiers, not interchange tokens.
 - No timestamps: like `spendable`, this is a pure membership table, append-only for the lifetime of its parent transmission, and cascades away with it.
 
-**Two-phase write — load-bearing.** Rows are populated only in `Store#mark_transmission_acked`, never at `record_transmission` time. Recording a wtxid the peer never received would over-trim a future BEEF against this peer (BeefParty would drop ancestors the peer cannot verify), so the known-set must reflect what the peer *acknowledged*, not what we attempted to send. The same call atomically updates `transmissions.acked_at` and batch-inserts the new wtxids via `INSERT … ON CONFLICT (transmission_id, wtxid) DO NOTHING`.
+**Two-phase write — load-bearing.** Rows are populated only in `Store#mark_transmission_acked`, never at `record_transmission` time. Recording a wtxid the peer never received would let a future trimmed BEEF (#552) leave out an ancestor the peer cannot verify, so the known-set must reflect what the peer *acknowledged*, not what we attempted to send. The same call atomically updates `transmissions.acked_at` and batch-inserts the new wtxids via `INSERT … ON CONFLICT (transmission_id, wtxid) DO NOTHING`.
 
 The known-set query joins through to `transmissions` and filters on `counterparty`, deduplicating across transmissions:
 

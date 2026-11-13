@@ -107,3 +107,7 @@ BRC-100 specifies the *interface* — `createAction` returns the BEEF, `internal
 ## Terminology note (2026-11-13)
 
 In the glossary's terms (`docs/reference/glossary.md`), the "async" or "daemon" delivery left to phase 2 is transmit intent `delayed`; the BRC-100 baseline where "the caller delivers it" is transmit intent `none`; and synchronous delivery is `inline`. Where this ADR says the two domains share one "substrate" (`Engine::Hydrator`), what they share in the code as built is the HydratedTxCache: Transmission assembles its BEEF through the Hydrator, which reads the cache, while Broadcast builds its own EF from the cache and never calls the Hydrator. The decision text is unchanged.
+
+## Implementation note (2026-11-13)
+
+Transmission no longer trims (#551). It adopted `Transaction::BeefParty` as listed above, but BeefParty's trim drops known ancestors rather than leaving txid-only entries, and no receiver resolves a txid-only entry by default, so transmit sends full ancestors and per-peer trimming waits for the receiver's agreement (#552). The per-recipient memory this ADR turns on is `transmission_txids`, which transmit still records. The decision is unchanged.

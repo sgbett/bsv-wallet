@@ -808,16 +808,16 @@ Sequel.migration do
     end
 
     # 21. transmission_txids — pure membership: which wtxids each transmission's
-    #     BEEF carried, so a later transmission to the same counterparty trims
-    #     (BeefParty) to only what the peer lacks. The per-counterparty known
+    #     BEEF carried, so per-peer trimming (#552) can send a counterparty
+    #     only what it lacks. The per-counterparty known
     #     set is the union of these rows across all of that peer's
     #     transmissions. wtxid stays binary (wire-order), per the
     #     wtxid/dtxid convention.
     #
     #     Two-phase write (HLR #385, Crypto + Security gate): rows are populated
     #     only in Store#mark_transmission_acked, never at record_transmission
-    #     time — recording a wtxid the peer never received would over-trim a
-    #     future BEEF into unverifiability.
+    #     time — recording a wtxid the peer never received would let per-peer
+    #     trimming (#552) over-trim a future BEEF into unverifiability.
     create_table(:transmission_txids) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres

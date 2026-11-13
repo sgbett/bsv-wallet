@@ -43,12 +43,12 @@ The internalised action is `broadcast_intent: 'none'` — an [internal action](a
 
 When two parties transact repeatedly, the sender's BEEF will keep including ancestors the recipient *already has proofs for*. Re-shipping and re-verifying them is wasted work. Each direction has its own optimisation:
 
-- **Sending** — `Engine::Transmission` trims the outgoing BEEF per peer (the SDK's `BeefParty`), so that ancestors the recipient is known to hold travel as **TXID-only entries**: a reference rather than the full transaction and proof. The envelope shrinks to just the novel part of the graph. (The code currently drops those entries altogether, which fails its own egress check: #551.)
+- **Sending** — trimming the outgoing BEEF per peer, so that ancestors the recipient is known to hold travel as **TXID-only entries** (a reference rather than the full transaction and proof), would shrink the envelope to just the novel part of the graph. `Engine::Transmission` sends full ancestors for now: trimming needs the receiver's agreement (#552).
 - **Receiving** — under `trustSelf: 'known'`, `BeefImporter#hydrate_known_sources!` fills TXID-only entries back in from the wallet's own stored transactions before verification, so SPV still runs over a complete graph. Stored proofs alone don't skip verification: what does, whatever `trustSelf` says, is `pre_seed_trust_set`, which starts the walk from ancestors the verification cache already marks as verified, after its anchor-liveness checks (#516).
 
 The trust is bounded and explicit: only ancestors the wallet itself already holds are elided, and they are rehydrated from local truth, not taken on faith from the sender.
 
-The same trim mechanism, layered on top with per-counterparty accounting, is what [Transmission](transmission.md) uses to ship each peer only the parts of the ancestor graph they have not already seen.
+The same trim mechanism, layered on top with per-counterparty accounting, is what [Transmission](transmission.md) will use (#552) to ship each peer only the parts of the ancestor graph they have not already seen.
 
 ## The chain tracker
 
@@ -88,5 +88,5 @@ Test vectors for these formats live in the BRC repositories themselves — `brc-
 
 - [Transactions (reference)](../reference/transactions.md) — the canonical broadcast/transmit distinction, ACK contract, error taxonomy.
 - [Action lifecycle](action-lifecycle.md) — how an internalised BEEF becomes an `:internal` action with promoted outputs.
-- [Transmission](transmission.md) — wallet-to-peer BEEF delivery, which uses the same Atomic BEEF format with per-peer trim.
+- [Transmission](transmission.md) — wallet-to-peer BEEF delivery, which uses the same Atomic BEEF format.
 - [Schema](../reference/schema.md) — `actions.raw_tx`, `tx_proofs`, `blocks` table reference.

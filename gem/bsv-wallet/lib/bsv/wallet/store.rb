@@ -334,8 +334,9 @@ module BSV
       #
       # NOTE: this does NOT write +transmission_txids+ rows. The known-set
       # is written only on ack (+mark_transmission_acked+) — recording
-      # wtxids the peer never received would over-trim a future BEEF into
-      # unverifiability (HLR #385 two-phase gate).
+      # wtxids the peer never received would let per-peer trimming (#552)
+      # over-trim a future BEEF into unverifiability (HLR #385 two-phase
+      # gate).
       #
       # @param action_id [Integer]
       # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
@@ -354,9 +355,9 @@ module BSV
       end
 
       # The set of wtxids +counterparty+ has acknowledged across every
-      # transmission to them — the BeefParty known set for trimming the
-      # next BEEF. Wire-order binary wtxids; deduplicated across
-      # transmissions.
+      # transmission to them — the known set per-peer trimming would
+      # read once the receiver agrees to it (#552). Wire-order binary
+      # wtxids; deduplicated across transmissions.
       #
       # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
       # @return [Array<String>] wire-order binary wtxids

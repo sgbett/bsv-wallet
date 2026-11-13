@@ -263,11 +263,11 @@ RSpec.describe BSV::Wallet::Engine::Hydrator do
     end
 
     it 'passes a trimmed BEEF (TxidOnly ancestor) when allow_txid_only:true' do
-      # The Engine::Transmission#transmit egress path. Trim demotes
-      # ancestors the peer already holds to TxidOnlyEntry; the structural
-      # walk must treat them as known terminals (the peer fills them
-      # locally). Beef#verify(..., allow_txid_only:true) accepts the
-      # shape; validate_for_handoff! returns without raising.
+      # The receiver-agreed trim path (#552): ancestors the peer already
+      # holds travel as TxidOnlyEntry, and the structural walk must treat
+      # them as known terminals (the peer fills them locally).
+      # Beef#verify(..., allow_txid_only:true) accepts the shape;
+      # validate_for_handoff! returns without raising.
       source_tx = make_fake_tx(satoshis: 5000)
       source_tx.merkle_path = make_merkle_path(wtxid: source_tx.wtxid)
       subject_tx = make_fake_tx(satoshis: 4500, inputs: [{ prev_wtxid: source_tx.wtxid }])

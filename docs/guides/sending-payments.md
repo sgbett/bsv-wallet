@@ -129,7 +129,7 @@ engine.transmission.transmit(
 # => { transmission_id:, beef:, sent_wtxids:, outputs:, sender_identity_key:, delivery: }
 ```
 
-With an `endpoint`, the wallet POSTs the per-peer-trimmed BEEF over HTTPS and
+With an `endpoint`, the wallet POSTs the BEEF over HTTPS and
 records the ACK on success; with `endpoint: nil` it returns the envelope and
 you take responsibility for delivery. The `counterparty` must be a canonical
 BRC-43 compressed pubkey (lowercase, `02`/`03` prefix) — `self`/`anyone`

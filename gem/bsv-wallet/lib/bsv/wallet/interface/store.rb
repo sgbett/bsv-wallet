@@ -195,8 +195,8 @@ module BSV
         # re-transmit refreshes +updated_at+ and returns the same id.
         # This does NOT populate +transmission_txids+ — the known-set is
         # written only on ack (#mark_transmission_acked), two-phase, so a
-        # failed delivery never trims the peer's next BEEF below
-        # verifiability.
+        # failed delivery can never lead per-peer trimming (#552) to cut
+        # the peer's next BEEF below verifiability.
         #
         # @param action_id [Integer]
         # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
@@ -206,8 +206,8 @@ module BSV
         end
 
         # The wtxids +counterparty+ has acknowledged across every
-        # transmission to them — the BeefParty known set for trimming
-        # the next BEEF.
+        # transmission to them — the known set per-peer trimming would
+        # read once the receiver agrees to it (#552).
         #
         # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
         # @return [Array<String>] wire-order binary wtxids (deduplicated)
