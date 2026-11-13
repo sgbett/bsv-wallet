@@ -816,8 +816,8 @@ Sequel.migration do
     #
     #     Two-phase write (HLR #385, Crypto + Security gate): rows are populated
     #     only in Store#mark_transmission_acked, never at record_transmission
-    #     time — recording a wtxid the peer never received would over-trim a
-    #     future BEEF into unverifiability.
+    #     time — recording a wtxid the peer never received would let per-peer
+    #     trimming (#552) over-trim a future BEEF into unverifiability.
     create_table(:transmission_txids) do
       column :id, :bigint, primary_key: true, identity: :always if postgres
       primary_key :id if !postgres

@@ -175,7 +175,8 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
 
   describe '#transmit (peer already holds an ancestor — #551)' do
     # Our records say the peer acknowledged the ancestor in an earlier
-    # transmission. It still travels in full: a txid-only entry resolves
+    # transmission (the known-set stub), so a trim that read them would
+    # fail this block. It still travels in full: a txid-only entry resolves
     # only at a receiver that has agreed to trust its own store for it,
     # and none does by default (#552).
     before do
@@ -197,7 +198,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
       expect(result[:sent_wtxids]).to contain_exactly(subject_wtxid, ancestor_wtxid)
     end
 
-    context 'when the peer internalizes it without opting into trust_self' do
+    context 'when the peer internalises it without opting into trust_self' do
       let(:receiver_store) { STORE_INSTANCE }
       let(:receiver) do
         BSV::Wallet::Engine::BeefImporter.new(

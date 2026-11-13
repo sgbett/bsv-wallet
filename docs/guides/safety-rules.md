@@ -80,8 +80,8 @@ known-set `transmission_txids` rows are written only via
 `Store#mark_transmission_acked`, and only when the ACK has been validated.
 Transport failure, timeout, mismatched wtxid — any non-`:delivered`
 outcome — leaves the peer **not** recorded as knowing the wtxids we tried
-to ship. The next transmission cannot over-trim against a knowledge claim
-that was never confirmed. See
+to ship. Once per-peer trimming lands (#552), the next transmission cannot
+over-trim against a knowledge claim that was never confirmed. See
 [`reference/transactions.md` § Two-phase delivery](../reference/transactions.md#two-phase-delivery).
 
 ### `BSV_WALLET_ALLOW_PRIVATE_ENDPOINTS=1` — **production-dangerous**

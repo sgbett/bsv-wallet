@@ -195,8 +195,8 @@ module BSV
         # re-transmit refreshes +updated_at+ and returns the same id.
         # This does NOT populate +transmission_txids+ — the known-set is
         # written only on ack (#mark_transmission_acked), two-phase, so a
-        # failed delivery never trims the peer's next BEEF below
-        # verifiability.
+        # failed delivery can never lead per-peer trimming (#552) to cut
+        # the peer's next BEEF below verifiability.
         #
         # @param action_id [Integer]
         # @param counterparty [String] BRC-43 identity pubkey (66-char hex)

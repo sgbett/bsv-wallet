@@ -334,8 +334,9 @@ module BSV
       #
       # NOTE: this does NOT write +transmission_txids+ rows. The known-set
       # is written only on ack (+mark_transmission_acked+) — recording
-      # wtxids the peer never received would over-trim a future BEEF into
-      # unverifiability (HLR #385 two-phase gate).
+      # wtxids the peer never received would let per-peer trimming (#552)
+      # over-trim a future BEEF into unverifiability (HLR #385 two-phase
+      # gate).
       #
       # @param action_id [Integer]
       # @param counterparty [String] BRC-43 identity pubkey (66-char hex)
