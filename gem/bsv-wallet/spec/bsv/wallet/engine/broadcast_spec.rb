@@ -1594,6 +1594,25 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
         expect(File.exist?(socket_file)).to be(false)
       end
 
+      it 'refuses an ipc:// path held by a regular file, leaving the file in place' do
+        File.write(socket_file, 'wallet data')
+
+        expect(crash_for("ipc://#{socket_file}")&.fetch(:error)).to include("not this user's socket")
+        expect(File.read(socket_file)).to eq('wallet data')
+      end
+
+      it 'bounds the receive queue, so queued hints cannot pile up unchecked' do
+        allow(OMQ::PULL).to receive(:new).and_call_original
+
+        in_reactor do |task|
+          broadcast.hints_pull!(task: task, socket_path: hints_socket)
+          sleep 0.01
+        end
+
+        expect(OMQ::PULL).to have_received(:new).with(recv_hwm: described_class::HINTS_RECV_HWM)
+        expect(described_class::HINTS_RECV_HWM).to be <= 16
+      end
+
       it 'binds an owner-only ipc:// socket in an owner-only directory and receives hints over it' do
         in_reactor do |task|
           broadcast.hints_pull!(task: task, socket_path: "ipc://#{socket_file}")

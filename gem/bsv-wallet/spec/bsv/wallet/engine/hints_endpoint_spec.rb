@@ -99,6 +99,40 @@ RSpec.describe BSV::Wallet::Engine::HintsEndpoint do
         .to raise_error(BSV::Wallet::ConfigurationError, /does not exist/)
     end
 
+    it 'checks the directory the bind will use, not a ~-expanded one' do
+      expect { described_class.bind(socket, 'ipc://~/hints.sock') }
+        .to raise_error(BSV::Wallet::ConfigurationError, /does not exist/)
+      expect(socket).not_to have_received(:bind)
+    end
+
+    it 'refuses a path held by a regular file, which the bind would delete' do
+      File.write(path, 'wallet data')
+
+      expect { described_class.bind(socket, endpoint) }
+        .to raise_error(BSV::Wallet::ConfigurationError, /not this user's socket/)
+      expect(File.read(path)).to eq('wallet data')
+      expect(socket).not_to have_received(:bind)
+    end
+
+    it 'refuses a path held by a symlink' do
+      target = File.join(dir, 'target')
+      File.write(target, 'wallet data')
+      File.symlink(target, path)
+
+      expect { described_class.bind(socket, endpoint) }
+        .to raise_error(BSV::Wallet::ConfigurationError, /not this user's socket/)
+      expect(File.symlink?(path)).to be(true)
+      expect(socket).not_to have_received(:bind)
+    end
+
+    it 'binds over a stale socket of its own' do
+      UNIXServer.new(path).close
+
+      described_class.bind(socket, endpoint)
+
+      expect(socket).to have_received(:bind).with(endpoint)
+    end
+
     it 'refuses a tcp:// endpoint before binding' do
       expect { described_class.bind(socket, 'tcp://127.0.0.1:0') }
         .to raise_error(BSV::Wallet::ConfigurationError, %r{tcp://})
