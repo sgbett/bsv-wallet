@@ -66,6 +66,14 @@ RSpec.describe DocsGuard::CodeIndex do
     expect(results).to eq([true, true, false])
   end
 
+  it 'counts as universal a module mixed into every class after this file loaded' do
+    mixin = Module.new { def fixture_to_json; end }
+    hydrator.extend(mixin)
+    allow(Class).to(receive(:ancestors).and_wrap_original { |original| original.call + [mixin] })
+
+    expect(index.resolves?('Hydrator', '.', 'fixture_to_json')).to be(false)
+  end
+
   it 'resolves a method that exists only through a refinement' do
     string_index = described_class.new(modules + [String])
 

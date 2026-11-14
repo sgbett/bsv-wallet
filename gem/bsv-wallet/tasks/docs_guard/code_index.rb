@@ -14,11 +14,6 @@ module DocsGuard
   # Reflection only: names come from untrusted doc text, so nothing here
   # calls a method by that name.
   class CodeIndex
-    # Methods every object or every class has. Without this filter
-    # +Hydrator#select+ would resolve to Kernel's private +select+ long
-    # after the real one was deleted.
-    UNIVERSAL_OWNERS = (Object.ancestors + Class.ancestors).uniq.freeze
-
     # A placeholder for the schema's identity CHECK; the store holds no keys.
     PLACEHOLDER_IDENTITY_HASH = ("\0" * 20).b.freeze
 
@@ -62,6 +57,12 @@ module DocsGuard
     def initialize(modules = ObjectSpace.each_object(Module).to_a, local_root: nil)
       @modules = modules.select { |m| m.name && !m.singleton_class? }
       @local_root = local_root && File.expand_path(local_root)
+      # Owners of the methods every object or every class has: without
+      # them +Hydrator#select+ would resolve to Kernel's private +select+
+      # long after the real one was deleted. Read here, not when this file
+      # loads, because the wallet's gems mix more into Object as they load
+      # (JSON's +to_json+).
+      @universal_owners = (Object.ancestors + Class.ancestors).uniq
     end
 
     # @param const [String] +A::B+, with or without its leading namespaces
@@ -110,7 +111,7 @@ module DocsGuard
       return false if owner.nil?
 
       # Object#send is a fair reference; Hydrator#send is not.
-      UNIVERSAL_OWNERS.include?(mod) || (separator == '.' && name == :new) || !UNIVERSAL_OWNERS.include?(owner)
+      @universal_owners.include?(mod) || (separator == '.' && name == :new) || !@universal_owners.include?(owner)
     end
 
     def method_owner(mod, name)

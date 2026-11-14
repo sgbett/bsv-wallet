@@ -28,7 +28,7 @@ module DocsGuard
     DIAGRAM_REFERENCE = /(?<![\w:])(?<const>[A-Z]\w*(?:::[A-Z]\w*)+)(?:(?<sep>#)(?<meth>#{METHOD}))?/
     BINARY = %r{\Abin/(?<name>[a-z][a-z0-9_]*)\b}
     PATH_TAIL = /[\w-]\.(?:rb|rake|md|yml|yaml|json|sql)/
-    FILE_PATH = %r{\A(?![~/.])(?!\w+://)[\w./-]*#{PATH_TAIL}\z}
+    FILE_PATH = %r{\A(?![~/])(?!\.\.?/)(?!\w+://)[\w./-]*#{PATH_TAIL}\z}
     RELATIVE_PATH = %r{\A\.\.?/[\w./-]*#{PATH_TAIL}\z}
     MIGRATION = %r{\bmigrations?\s+(?<number>\d{3})\b|\b(?<number>\d{3})_[a-z][a-z0-9_]*\.rb\b|\bdb/migrations/(?<number>\d{3})\b}
     FILE_EXTENSIONS = %w[md rb rake yml yaml json lock txt sh html css js toml sql].freeze
@@ -53,9 +53,9 @@ module DocsGuard
     end
 
     def findings
-      allowed = Set.new
-      found = markdown_files.flat_map { |path| findings_in(path, allowed) }
-      found + stale_allowances(allowed)
+      used = Set.new
+      found = markdown_files.flat_map { |path| findings_in(path, used) }
+      found + stale_allowances(used)
     end
 
     private
@@ -69,16 +69,20 @@ module DocsGuard
         @skip.none? { |s| path == s || path.start_with?("#{s}/") }
     end
 
-    def findings_in(path, allowed)
+    # @param used [Set<String>] collects the allowlist entries that
+    #   suppressed a finding
+    def findings_in(path, used)
       lines = File.read(File.join(@root, path), encoding: 'UTF-8').scrub.lines
       kinds = line_kinds(lines)
       dir = File.dirname(path)
       lines.each_with_index.flat_map do |text, index|
         next [] if DocsGuard.dated_entry?(text)
 
-        @allow.each_key { |name| allowed << name if text.include?(name) }
         problems_in(text, kinds[index], dir).filter_map do |reference, problem|
-          next if @allow.key?(reference)
+          if @allow.key?(reference)
+            used << reference
+            next
+          end
 
           Finding.new(path: path, line: index + 1, reference: reference, problem: problem)
         end
@@ -96,16 +100,18 @@ module DocsGuard
       end
     end
 
+    # Paths come before code: +CLAUDE.md+ also reads as +Const.method+.
+    #
     # @return [Array(String, String), nil] the reference and what's wrong with it
     def check_span(span, dir)
-      if (m = CODE_REFERENCE.match(span))
-        check_code(m)
-      elsif (m = BINARY.match(span))
+      if (m = BINARY.match(span))
         check_binary(m[:name])
       elsif MIGRATION.match?(span)
         nil # check_migrations reads the whole line, code spans included
       elsif FILE_PATH.match?(span) || RELATIVE_PATH.match?(span)
         check_path(span, dir)
+      elsif (m = CODE_REFERENCE.match(span))
+        check_code(m)
       end
     end
 
@@ -138,7 +144,7 @@ module DocsGuard
     # must exist exactly there; any other path may name a file anywhere by
     # its trailing segments (+engine/tx_builder.rb+).
     def check_path(path, dir)
-      found = if path.start_with?('.')
+      found = if RELATIVE_PATH.match?(path)
                 @files.include?(File.expand_path(path, "/#{dir}").delete_prefix('/'))
               else
                 @files.any? { |f| f == path || f.end_with?("/#{path}") }
@@ -158,29 +164,27 @@ module DocsGuard
     # marker) or :diagram (inside a fence with no language: ASCII diagrams,
     # where class names drift as easily as in prose).
     def line_kinds(lines)
-      fence = nil
-      lines.map do |line|
-        if (marker = line.match(DocsGuard::FENCE))
-          fence = fence ? nil : fence_kind(line, marker[1])
+      DocsGuard.each_line_with_fence(lines).map do |_line, _index, fence, edge|
+        if fence.nil?
+          :prose
+        elsif edge || !fence.info.empty?
           :code
         else
-          fence || :prose
+          :diagram
         end
       end
     end
 
-    def fence_kind(line, marker)
-      line.strip == marker ? :diagram : :code
-    end
-
-    def stale_allowances(allowed)
-      @allow.filter_map do |name, reason|
-        problem = if !allowed.include?(name)
-                    "allowlisted (#{reason}) but no doc mentions it; remove it"
-                  elsif check_span(name, '.').nil?
+    # An entry that suppressed nothing is stale: what it names resolves
+    # now, or no doc names it as a whole reference on a checked line.
+    def stale_allowances(used)
+      @allow.except(*used).map do |name, reason|
+        problem = if check_span(name, '.').nil?
                     "allowlisted (#{reason}) but now resolves; remove it"
+                  else
+                    "allowlisted (#{reason}) but no doc mentions it; remove it"
                   end
-        Finding.new(path: CONFIG, line: 1, reference: name, problem: problem) if problem
+        Finding.new(path: CONFIG, line: 1, reference: name, problem: problem)
       end
     end
   end

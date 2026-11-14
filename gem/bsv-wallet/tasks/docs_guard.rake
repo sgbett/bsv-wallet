@@ -36,8 +36,7 @@ namespace :docs do
   task :retired_terms do
     Regexp.timeout = 1.0
     check = DocsGuard::RetiredTerms.from_file(File.join(__dir__, 'docs_guard/retired_terms.yml'), root: DocsGuard::ROOT)
-    findings = check.findings
-    violations = findings.reject { |f| f.term.pending }
+    violations = check.violations
     problems = check.problems
 
     DocsGuard.report(violations.map do |f|
@@ -45,8 +44,9 @@ namespace :docs do
     end, 'Retired term')
     DocsGuard.report(problems.map { |p| ['gem/bsv-wallet/tasks/docs_guard/retired_terms.yml', 1, p] }, 'Term list')
 
-    pending = findings.select { |f| f.term.pending }.group_by(&:term)
-    pending.each { |term, hits| puts "pending (#{term.pending}): #{term.retired} — #{hits.size} hit(s), not enforced yet" }
+    check.pending.group_by(&:term).each do |term, hits|
+      puts "pending (#{term.pending}): #{term.retired} — #{hits.size} hit(s), not enforced yet"
+    end
     abort "docs:retired_terms — #{violations.size + problems.size} problem(s)" unless violations.empty? && problems.empty?
 
     puts 'docs:retired_terms OK'

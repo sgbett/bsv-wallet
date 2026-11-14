@@ -110,7 +110,7 @@ RSpec.describe DocsGuard::RetiredTerms do
     no_send = term('no_send', '\bno_send\b', pending: '#548')
     guard = check(terms: [no_send])
 
-    expect([guard.findings.size, guard.violations, guard.problems]).to eq([1, [], []])
+    expect([guard.pending.size, guard.violations, guard.problems]).to eq([1, [], []])
   end
 
   describe 'problems with the term list itself' do

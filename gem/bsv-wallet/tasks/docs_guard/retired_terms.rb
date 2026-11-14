@@ -65,6 +65,11 @@ module DocsGuard
       findings.reject { |f| f.term.pending }
     end
 
+    # @return [Array<Finding>] the hits on pending terms, reported without failing
+    def pending
+      findings - violations
+    end
+
     # Ways the term list itself has gone stale.
     #
     # @return [Array<String>]
@@ -150,13 +155,10 @@ module DocsGuard
     def quoted_sources(lines)
       quoted = {}
       source = nil
-      fenced = false
-      lines.each_with_index do |line, index|
-        if DocsGuard::FENCE.match?(line)
-          fenced = !fenced
-          source = nil unless fenced
-        elsif fenced
-          quoted[index] = source if source
+      DocsGuard.each_line_with_fence(lines) do |line, index, fence, edge|
+        if fence
+          quoted[index] = source if source && edge.nil?
+          source = nil if edge == :close
         elsif (marker = line.match(GENERATED_FROM))
           source = marker[1]
         elsif !line.strip.empty?

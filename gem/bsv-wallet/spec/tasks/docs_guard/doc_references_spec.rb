@@ -14,6 +14,8 @@ RSpec.describe DocsGuard::DocReferences do
       gem/bsv-wallet/db/migrations/001_create_schema.rb
       gem/bsv-wallet/db/migrations/002_triggers.rb
       docs/concepts/architecture.md
+      CLAUDE.md
+      .architecture/principles.md
     ]
   end
 
@@ -52,7 +54,7 @@ RSpec.describe DocsGuard::DocReferences do
   end
 
   it 'ignores bare words and file names that look like Const.method' do
-    expect(references("`MINED`, `DATABASE_URL`, `Hydrator`, `CLAUDE.md`, `Gemfile.lock`\n")).to be_empty
+    expect(references("`MINED`, `DATABASE_URL`, `Hydrator`, `Gemfile.lock`\n")).to be_empty
   end
 
   it 'checks bin/ executables' do
@@ -66,6 +68,14 @@ RSpec.describe DocsGuard::DocReferences do
 
     it 'reports a path to a file that is not there' do
       expect(references("`engine/beef_importer.rb`\n")).to eq(['engine/beef_importer.rb'])
+    end
+
+    it 'checks a capitalised file name as a path, not as Const.method' do
+      expect(references("`CLAUDE.md` but not `README.md` or `Gone.rb`\n")).to eq(%w[README.md Gone.rb])
+    end
+
+    it 'checks a path under a dot directory from the repository root' do
+      expect(references("`.architecture/principles.md` but not `.architecture/gone.md`\n")).to eq(['.architecture/gone.md'])
     end
 
     it 'resolves a relative path from the doc' do
@@ -84,6 +94,12 @@ RSpec.describe DocsGuard::DocReferences do
     expect(findings_for(markdown).map { |f| [f.line, f.reference] }).to eq([[6, 'Engine::Gone']])
   end
 
+  it 'closes a fence only on its own marker, as long or longer' do
+    markdown = "~~~markdown\n```ruby\n`Engine::Gone` here\n~~~~\n`Engine::Gone`\n"
+
+    expect(findings_for(markdown).map(&:line)).to eq([5])
+  end
+
   it 'skips dated change-log entries' do
     expect(references("- *2026-06-24* — renamed `Engine::BeefImporter`\n")).to be_empty
   end
@@ -97,6 +113,18 @@ RSpec.describe DocsGuard::DocReferences do
       findings = findings_for("nothing here\n", allow: { 'bin/brc100' => 'proposed, #431' })
 
       expect(findings.map(&:problem)).to contain_exactly(a_string_including('no doc mentions it'))
+    end
+
+    it 'reports an entry a doc names only inside fenced code' do
+      findings = findings_for("```sh\nopen `foo.md`\n```\n", allow: { 'foo.md' => 'placeholder' })
+
+      expect(findings.map(&:problem)).to contain_exactly(a_string_including('no doc mentions it'))
+    end
+
+    it 'reports an entry a doc names only as part of a longer reference' do
+      findings = findings_for("`barfoo.md`\n", allow: { 'foo.md' => 'placeholder' })
+
+      expect(findings.map(&:reference)).to contain_exactly('barfoo.md', 'foo.md')
     end
 
     it 'reports an entry that now resolves' do
