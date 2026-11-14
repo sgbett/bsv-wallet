@@ -29,6 +29,7 @@ Style/NumericPredicate:
 Metrics/BlockLength:
   Exclude:
     - 'gem/*/lib/**/*'
+    - 'gem/*/tasks/**/*'
     - 'gem/*/spec/**/*'
     - 'gem/*/db/**/*'
 
@@ -62,24 +63,28 @@ Lint/UnusedMethodArgument:
 Metrics/AbcSize:
   Exclude:
     - 'gem/*/lib/**/*'
+    - 'gem/*/tasks/**/*'
     - 'gem/*/spec/**/*'
     - '**/Rakefile'
 
 Metrics/MethodLength:
   Exclude:
     - 'gem/*/lib/**/*'
+    - 'gem/*/tasks/**/*'
     - 'gem/*/spec/**/*'
     - '**/Rakefile'
 
 Metrics/CyclomaticComplexity:
   Exclude:
     - 'gem/*/lib/**/*'
+    - 'gem/*/tasks/**/*'
     - 'gem/*/spec/**/*'
     - '**/Rakefile'
 
 Metrics/PerceivedComplexity:
   Exclude:
     - 'gem/*/lib/**/*'
+    - 'gem/*/tasks/**/*'
     - 'gem/*/spec/**/*'
 
 Metrics/ModuleLength:
@@ -90,10 +95,12 @@ Metrics/ModuleLength:
 Metrics/ClassLength:
   Exclude:
     - 'gem/*/lib/**/*'
+    - 'gem/*/tasks/**/*'
 
 Metrics/ParameterLists:
   Exclude:
     - 'gem/*/lib/**/*'
+    - 'gem/*/tasks/**/*'
     - 'gem/*/spec/**/*'
 
 # Migrations use `if !postgres` for linear readability — the negated
