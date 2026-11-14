@@ -5,7 +5,7 @@ nav_order: 1
 
 # BSV Wallet
 
-A [BRC-100](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md) single-key wallet engine and daemon for Ruby. Transaction management, key derivation, encryption, certificates, identity verification — all 28 spec methods surfaced, with porcelain on top for payments, sweeps and peer delivery.
+A [BRC-100](https://github.com/bsv-blockchain/BRCs/blob/master/wallet/0100.md) single-key wallet engine and daemon for Ruby. Transaction management, key derivation, encryption, certificates, identity verification — all 28 spec methods surfaced, with Engine and CLI porcelain on top for payments, sweeps and peer delivery.
 
 ## What this is not
 

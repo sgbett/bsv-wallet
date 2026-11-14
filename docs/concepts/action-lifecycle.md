@@ -84,8 +84,8 @@ Combining deferred signing with `broadcast_intent: :none` (BRC-100's `noSend`) i
 
 A wallet can receive a payment two ways:
 
-- **Internalise a BEEF envelope** that arrived out-of-band (file, queue, pipe). `internalize_action` runs the full SPV verification before any output enters the wallet. See [Transactions & BEEF](transactions-and-beef.md).
-- **Accept a transmission** from a peer that POSTed it directly. The HTTP layer is `Network::PeerDelivery`; the SSRF gate is `Network::EndpointPolicy`. See [Transmission](transmission.md).
+- **Internalise a BEEF envelope** that arrived out-of-band (file, queue, pipe). `internalize_action` runs the full SPV verification before any output enters the wallet. A peer's [transmission](transmission.md) arrives this way too: the wallet has no listener for peer POSTs yet (#544). See [Transactions & BEEF](transactions-and-beef.md).
+- **Scan a receive address.** `scan_receive_addresses` looks up each outstanding WBIKD receive address on the network and internalizes any payment it finds (`internalize_wbikd_utxo`), for senders who can only pay a P2PKH address. See [Keys & Cryptography](keys-and-cryptography.md#wbikd-recoverable-receive-addresses).
 
 Both paths produce an `:internal` action. The structural promise is the same: the moment the row is written, it is wallet truth.
 

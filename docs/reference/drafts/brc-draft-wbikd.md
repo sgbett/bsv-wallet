@@ -10,7 +10,7 @@ Simon Bettison (simon@bettison.org)
 
 ## Abstract
 
-This proposal defines a method for generating legacy P2PKH receive addresses using only the primitives defined by the [BRC-100](../wallet/0100.md) wallet interface. A wallet creates pre-funded UTXO "slots" in a dedicated basket, locks each slot with a zero-output action to reserve an address, and derives the address deterministically using [BRC-42](../key-derivation/0042.md) key derivation. An on-chain OP_RETURN marker enables address recovery from the identity key alone, without requiring any specific storage implementation.
+This proposal defines a method for generating legacy P2PKH receive addresses using only the methods defined by the [BRC-100](../wallet/0100.md) wallet interface. A wallet creates pre-funded UTXO "slots" in a dedicated basket, locks each slot with a zero-output action to reserve an address, and derives the address deterministically using [BRC-42](../key-derivation/0042.md) key derivation. An on-chain OP_RETURN marker enables address recovery from the identity key alone, without requiring any specific storage implementation.
 
 ## Motivation
 
@@ -37,7 +37,7 @@ This specification addresses three problems:
 The wallet creates slot UTXOs by broadcasting a self-payment into the slot basket.
 
 1. Generate a random derivation prefix and suffix<sup>[1](#footnote-1)</sup>
-2. Derive a public key using [BRC-42](../key-derivation/0042.md) with `counterparty = "self"`, `protocolId = [2, prefix]`, `keyId = suffix`
+2. Derive a public key using [BRC-42](../key-derivation/0042.md) with `counterparty = "self"`, the [BRC-29](../payments/0029.md) payment protocol `protocolId = [2, "3241645161d8"]`, and `keyId = prefix + " " + suffix`
 3. Construct a [P2PKH](../scripts/0016.md) locking script from the derived public key
 4. Create an action via [BRC-100 `createAction`](../wallet/0100.md) with:
    - One output locked to the derived script, assigned to basket `p wbikd`
@@ -63,7 +63,7 @@ To generate a receive address, the wallet locks an available slot and derives a 
 4. Compute derivation parameters:
    - `derivationPrefix` — the transaction ID (display-order hex) of the slot's source transaction
    - `derivationSuffix` — the output index (vout) of the slot, encoded as a decimal string
-5. Derive a public key using [BRC-42](../key-derivation/0042.md) with `counterparty = "self"`, `protocolId = [2, derivationPrefix]`, `keyId = derivationSuffix`
+5. Derive a public key using [BRC-42](../key-derivation/0042.md) with `counterparty = "self"`, `protocolId = [2, "3241645161d8"]` (as in §1), and `keyId = derivationPrefix + " " + derivationSuffix`
 6. Compute the P2PKH address: `Base58Check(0x00 || HASH160(derivedPublicKey))`
 7. Return the address string and derivation parameters to the caller
 
@@ -92,7 +92,7 @@ When funds are discovered at a monitored address:
 
 Aborting the locking action releases the slot output back to basket `p wbikd`, making it available for future address generation. The slot is recycled — no new funds need to be committed.
 
-The recorded output is immediately spendable. The wallet derives the corresponding private key using the same [BRC-42](../key-derivation/0042.md) parameters that were used to derive the public key. How the wallet records the output — whether by constructing a BEEF envelope and calling `internalizeAction`, or via an internal import mechanism — is an implementation detail.
+The recorded output is immediately spendable. The wallet derives the corresponding private key using the same [BRC-42](../key-derivation/0042.md) parameters that were used to derive the public key. How the wallet records the output — whether by constructing a BEEF envelope and calling `internalizeAction`, or by a wallet-internal mechanism — is an implementation detail.
 
 ### 5. On-Chain Recovery Markers
 
@@ -145,7 +145,7 @@ Sweep scanning addresses the case where a sender makes a second payment to a pre
    [Monitor]              Scan derived address for UTXOs
         |
         v
-   [Internalize]          Import funds with derivation params, tag "wbikd"
+   [Internalize]          Record funds with derivation params, tag "wbikd"
         |
         v
    [Recycle Slot]         Abort locking action → slot returns to basket
@@ -168,7 +168,7 @@ Sweep scanning addresses the case where a sender makes a second payment to a pre
 
 ## Implementations
 
-This specification is designed to be implementable by any [BRC-100](../wallet/0100.md) compliant wallet. It uses only standard wallet primitives:
+This specification is designed to be implementable by any [BRC-100](../wallet/0100.md) compliant wallet. It uses only standard building blocks:
 
 - `createAction` with baskets, labels, and the wallet's internal non-broadcast action mechanism
 - `abortAction` for slot recycling
