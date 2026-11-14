@@ -91,7 +91,7 @@ Parse Atomic BEEF → SPV verify → **resolve + validate outputs before any wri
 
 ## `import_utxo`
 
-Fetch tx + merkle proof from the network (pre-persistence) → **Phase 1** (atomic: create + sign + save_proof + link + promote the root UTXO as spendable) → **Phase 2** (`create_action(no_send)` — atomic, the internal path above) that spends the root output to a BRC-42-derived address.
+Fetch tx + merkle proof from the network (pre-persistence) → **Phase 1** (atomic: create + sign + save_proof + link + promote the root UTXO as spendable) → **Phase 2** (`build_action` with the caller's `broadcast_intent:` — the internal path above for `:none`, otherwise a broadcast path) that spends the root output to a BRC-42-derived address.
 
 | Gap | Valid intermediate state | Owner |
 |-----|--------------------------|-------|
@@ -100,7 +100,7 @@ Fetch tx + merkle proof from the network (pre-persistence) → **Phase 1** (atom
 
 ## `sweep`
 
-Computes the fee and **fails fast on a dust-only wallet before locking any inputs** (no orphan), then delegates to `create_action` (`no_send` → atomic internal completion; broadcast → the broadcast paths). No completion logic of its own, so no new gap.
+Computes the fee and **fails fast on a dust-only wallet before locking any inputs** (no orphan), then delegates to `build_action` (`:none` → atomic internal completion; `:inline` / `:delayed` → the broadcast paths). No completion logic of its own, so no new gap.
 
 ## `abort` / `reject`
 

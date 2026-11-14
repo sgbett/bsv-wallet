@@ -76,7 +76,7 @@ This is the throughput-versus-safety trade made explicit: the wallet is eager to
 
 ## Deferred signing
 
-`build_action` can return a *signable transaction* handle instead of a finished one, by separating creation from signing. The caller later completes it with `sign_action(spends:, reference:)`. This supports flows where signing authority is held elsewhere, or where inputs must be reviewed before committing.
+`build_action` can return a *signable transaction* handle instead of a finished one, by separating creation from signing. The caller later completes it with `sign_action(reference:, spends:, broadcast_intent:)`. This supports flows where signing authority is held elsewhere, or where inputs must be reviewed before committing.
 
 Combining deferred signing with `broadcast_intent: :none` (BRC-100's `noSend`) is explicitly **not** implemented in the base wallet. The `noSend × sendWith` chained-send combination — building a chain of transactions locally and flushing the batch atomically — is deferred to **#192** (see [`.architecture/reviews/20260619_noSend-sendWith-design-notes.md`](../../.architecture/reviews/20260619_noSend-sendWith-design-notes.md) for the design notes). It requires a `batches` entity in the schema with constraints that enforce "a batch cannot partially succeed"; bringing it back without that structural backing would reintroduce the drift the strict 4-phase design was built to prevent.
 
