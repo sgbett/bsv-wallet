@@ -14,7 +14,7 @@ This page is the operational narrative. The canonical wire envelope, ACK contrac
 
 `Engine::Transmission` is a sibling to `Engine::Broadcast` and `Engine::TxProof`. It assembles the peer's BEEF through `Engine::Hydrator`, its only route to the `Engine::HydratedTxCache` it shares with Broadcast. The Engine accessor is `engine.transmission`; transmission is a wallet-vocab operation — peer delivery is not part of the BRC-100 standard surface.
 
-Background-worker shape, like its siblings: no `Interface::Transmission` contract module. Transmissions are not a cross-replaceable service the way `Store` or `Hydrator` are; the deciding axis is per-counterparty state, owned in one place.
+Like `Engine::Broadcast` and `Engine::TxProof`, it has no contract module under `BSV::Wallet::Interface`; those modules exist for the services other components consume by shape, such as `Store`, `Hydrator` and `BeefInternalizer`. Transmissions are not a cross-replaceable service; the deciding axis is per-counterparty state, owned in one place.
 
 ## The `transmit` operation
 
@@ -65,7 +65,8 @@ A wallet that POSTs to a URL supplied by the caller is one URL away from being a
 2. **Hostname present and resolvable** — DNS resolution happens *once*, inside `validate!`; the resolved IP is returned and PeerDelivery dials it directly while setting the `Host:` header for SNI. This closes the DNS TOCTOU window where a name resolves to a public IP at check time and a private one at connect time.
 3. **IPv4-mapped IPv6 unwrap** — `validate_ip!` calls `.native` on the resolved address before any range comparison. `::ffff:127.0.0.1` is reduced to `127.0.0.1` so the loopback range matches. This is the **primary** defence against mapped-address evasion.
 4. **Private-range refusal** — the resolved IP is rejected if it falls in any of the canonical SSRF ranges. The reference list (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16` — includes the cloud-metadata endpoint at `169.254.169.254` —, `224.0.0.0/4`, `255.255.255.255/32`, `::1/128`, `fc00::/7`, and `::ffff:0:0/96`) is canonicalised in [Transactions (reference) — Endpoint policy / SSRF defence](../reference/transactions.md#endpoint-policy-ssrf-defence). The `::ffff:0:0/96` entry on that list is a **belt-and-braces** defence: a mapped IPv6 address that somehow bypassed the step-3 `.native` reduction would still match here. The first line of defence is the unwrap; the membership check is the second.
-5. **Body size cap** — defaults to 32 MiB; large responses are truncated to bound exposure if a peer misbehaves.
+
+Separately from `validate!`, `PeerDelivery` checks the encoded envelope against the policy's body cap (`EndpointPolicy#allow_body?`, 32 MiB by default) before sending. An envelope over the cap is not sent, and the outcome is `:body_too_large`.
 
 For e2e harnesses that genuinely need to deliver to a loopback fixture, `BSV_WALLET_ALLOW_PRIVATE_ENDPOINTS=1` opens the policy explicitly. **This variable is production-dangerous.** Setting it disables every range check in step 4 — the wallet will deliver to `127.0.0.1`, `169.254.169.254`, and anything else the caller supplies. It is the only way through the gate, and it is intended for development and CI fixtures, not production. A production wallet leaves it unset; an operator who flips it on is choosing to accept the SSRF-credential-exfiltration risk that the gate was built to prevent.
 
@@ -103,12 +104,14 @@ Grain is one row per `(action_id, counterparty)`: a re-transmission to the same 
 ## CLI
 
 ```bash
-# alice builds an action but does not broadcast, then transmits to bob
-bin/create alice "$BOB_IDENTITY_KEY" 500 --no-send \
+# alice commits a payment to bob without broadcasting it, then transmits it to bob
+bin/wallet --wallet=alice send "$BOB_IDENTITY_KEY" 500 --broadcast=none \
   | bin/transmit alice --to "$BOB_IDENTITY_KEY" --endpoint https://bob.example/internalize
 ```
 
-`bin/transmit` reads the BEEF envelope on stdin, looks up the matching action, and calls `engine.transmission.transmit` with the supplied counterparty and endpoint. Logs are redacted: the endpoint host but not the full URL, the counterparty's last 8 hex chars but not the whole key, and the BEEF body never. The JSON result on stdout is `{ transmission_id, outcome, delivered, http_status, dtxid }`.
+Given an identity-key recipient, `bin/wallet send` writes its envelope (`beef`, `dtxid`, `sender_identity_key`, `outputs`) to stdout whatever the broadcast mode. `bin/transmit` reads it on stdin, looks up the action by its dtxid, and calls `engine.transmission.transmit` with the supplied counterparty and endpoint; the engine rebuilds the BEEF rather than forwarding the one on stdin. `bin/transmit` takes the wallet name as its first positional argument, not as `--wallet=`, and the counterparty must be lowercase hex, which the engine boundary requires. With `--broadcast=none` the sending wallet never broadcasts the transaction, and this wallet's receive path records an incoming transaction without broadcasting it either; leave the flag off to broadcast as well as transmit.
+
+Logs are redacted: the endpoint host but not the full URL, the counterparty's last 8 hex chars but not the whole key, and the BEEF body never. The JSON result on stdout is `{ transmission_id, outcome, delivered, http_status, dtxid }`.
 
 The complete delivery-outcome taxonomy (`:delivered`, `:endpoint_policy_violation`, `:dns_failure`, `:tls_failure`, `:non_200`, `:transport_error`, `:timeout`, `:body_too_large`, `:malformed_ack`, `:wrong_acked_wtxid`) is canonicalised in [Transactions (reference) — Delivery outcomes](../reference/transactions.md#delivery-outcomes). The transmission row is recorded for every outcome; only `:delivered` flips it to acked.
 
