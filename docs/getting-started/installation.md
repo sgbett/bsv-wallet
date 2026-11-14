@@ -92,9 +92,10 @@ Two conveniences apply to backend selection:
 >
 > - it must be an `ipc://` filesystem path; a `tcp://` endpoint or a Linux abstract socket (`ipc://@name`) is refused
 > - the socket's directory must belong to the wallet's user and be writable by nobody else, so a shared directory such as `/tmp` is refused
+> - the path must be free or hold a stale socket of the user's own, since binding deletes whatever is there; a file or symlink there is refused
 > - the socket file is created owner-only (mode `0600`)
 >
-> A refused endpoint leaves `walletd` running without hints and emits a `fiber.crashed` event that names the reason. The example config's `~/.bsv-wallet/hints.sock`, with `~/.bsv-wallet` at mode `0700`, meets all three.
+> `~` and relative paths are not expanded. A refused endpoint leaves `walletd` running without hints and emits a `fiber.crashed` event that names the reason. The example config's `~/.bsv-wallet/hints.sock` (built with `Dir.home`), with `~/.bsv-wallet` at mode `0700`, meets all of these.
 
 ## Executables
 

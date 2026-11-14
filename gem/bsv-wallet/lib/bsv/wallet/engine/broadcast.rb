@@ -18,6 +18,10 @@ module BSV
       class Broadcast
         include OmqSupport
 
+        # At up to 32 MiB a hint, OMQ's default queue of 1000 messages could
+        # hold 32 GiB. A short queue makes a fast sender wait instead.
+        HINTS_RECV_HWM = 16
+
         # @param store        [BSV::Wallet::Store]
         # @param broadcaster  [BSV::Network::Broadcaster]
         # @param applicator   [Store::EventApplicator, nil] consumes statuses
@@ -251,7 +255,7 @@ module BSV
         # The frame cap has OMQ drop a peer that sends an oversized frame
         # before reading it in, rather than leaving the check to decode.
         def bind_hints_socket(endpoint)
-          pull = OMQ::PULL.new
+          pull = OMQ::PULL.new(recv_hwm: HINTS_RECV_HWM)
           pull.max_message_size = HintEnvelope.max_bytes
           HintsEndpoint.bind(pull, endpoint)
           pull

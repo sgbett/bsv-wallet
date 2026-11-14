@@ -47,16 +47,22 @@ module BSV
         # Bind +socket+ to +endpoint+ once the endpoint passes {.validate!}.
         # For an +ipc://+ path, the socket's directory must belong to the
         # wallet's user and be writable by nobody else, so no one else can
-        # replace the socket, and the socket file is created owner-only.
+        # replace the socket; the path must be free or hold a stale socket
+        # of the user's own; and the socket file is created owner-only.
         #
         # @param socket [OMQ::Socket] an unbound socket
         # @param endpoint [String]
-        # @raise [ConfigurationError] when the endpoint or its directory is refused
+        # @raise [ConfigurationError] when the endpoint, its directory or
+        #   whatever already sits at its path is refused
         def bind(socket, endpoint)
           validate!(endpoint)
           return socket.bind(endpoint) if endpoint.start_with?(INPROC)
 
-          check_directory!(File.dirname(File.expand_path(endpoint.delete_prefix(IPC))))
+          # Neither +~+ nor a relative path is expanded: the bind resolves
+          # the path as given, so the checks must see the same directory.
+          path = endpoint.delete_prefix(IPC)
+          check_directory!(File.dirname(path))
+          check_path_free!(path)
           bind_owner_only(socket, endpoint)
         end
 
@@ -73,6 +79,18 @@ module BSV
           raise ConfigurationError, "hints socket directory #{dir} does not exist"
         end
 
+        # OMQ deletes whatever is at the path before it binds, so a
+        # mistyped path must not reach it.
+        def check_path_free!(path)
+          return unless File.exist?(path) || File.symlink?(path)
+
+          stat = File.lstat(path)
+          return if stat.socket? && stat.owned?
+
+          raise ConfigurationError,
+                "hints socket path #{path} already exists and is not this user's socket; binding would delete it"
+        end
+
         # Warning: the umask is process-wide, so a file another thread
         # creates during the bind is also created owner-only: more
         # private, never less. Setting the mode after the bind instead
@@ -84,7 +102,7 @@ module BSV
           File.umask(saved) if saved
         end
 
-        private_class_method :check_directory!, :bind_owner_only
+        private_class_method :check_directory!, :check_path_free!, :bind_owner_only
       end
     end
   end
