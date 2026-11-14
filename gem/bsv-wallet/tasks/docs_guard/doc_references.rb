@@ -106,8 +106,8 @@ module DocsGuard
     def check_span(span, dir)
       if (m = BINARY.match(span))
         check_binary(m[:name])
-      elsif MIGRATION.match?(span)
-        nil # check_migrations reads the whole line, code spans included
+      elsif (m = MIGRATION.match(span))
+        check_migration_file(span, m[:number])
       elsif FILE_PATH.match?(span) || RELATIVE_PATH.match?(span)
         check_path(span, dir)
       elsif (m = CODE_REFERENCE.match(span))
@@ -150,6 +150,18 @@ module DocsGuard
                 @files.any? { |f| f == path || f.end_with?("/#{path}") }
               end
       [path, 'no such file in the repository'] unless found
+    end
+
+    # A full migration file name must exist. A missing number is reported by
+    # +check_migrations+, which reads the whole line, so it isn't reported twice.
+    def check_migration_file(span, number)
+      return unless span.end_with?('.rb')
+
+      dir = 'gem/bsv-wallet/db/migrations'
+      return unless @files.any? { |f| f.start_with?("#{dir}/#{number}_") }
+
+      name = File.basename(span)
+      [span, "no #{dir}/#{name}"] unless @files.include?("#{dir}/#{name}")
     end
 
     def check_migrations(text)

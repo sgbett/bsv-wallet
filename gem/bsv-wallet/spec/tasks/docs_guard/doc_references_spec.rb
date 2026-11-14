@@ -83,6 +83,15 @@ RSpec.describe DocsGuard::DocReferences do
     end
   end
 
+  it 'checks a full migration file name when its number exists' do
+    expect(references("`001_create_schema.rb`, `001_removed.rb` and `db/migrations/002_gone.rb`\n"))
+      .to eq(%w[001_removed.rb db/migrations/002_gone.rb])
+  end
+
+  it 'reports a migration file with a missing number once, as the number' do
+    expect(references("`005_gone.rb`\n")).to eq(['migration 005'])
+  end
+
   it 'reports a migration number with no migration file, in prose as well as in code' do
     expect(references("CHECKs in migration 003 and `010_sse_cursors.rb`, not migration 001.\n"))
       .to eq(['migration 003', 'migration 010'])
