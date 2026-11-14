@@ -434,9 +434,9 @@ module BSV
             }
           )
           @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
-          # Monotonic cache enrichment: the eager proof makes this wtxid a
+          # Cache enrichment: the eager proof makes this wtxid a
           # proven terminal for any future wire_ancestor walk. Equivalent to
-          # Hydrator#proof_arrived (both are monotonic puts on the shared
+          # Hydrator#proof_arrived (both are puts on the shared
           # cache); done direct here since Broadcast holds the cache. #296 Phase D.
           @hydrated_tx_cache.put(wtxid, raw_tx: action[:raw_tx], merkle_path: merkle_path)
           BSV.logger&.debug do

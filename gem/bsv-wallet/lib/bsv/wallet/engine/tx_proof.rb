@@ -112,7 +112,7 @@ module BSV
             }
           )
           @store.link_proof(action_id: action_id, tx_proof_id: proof_id)
-          # Monotonic cache enrichment: this wtxid is now a proven terminal.
+          # Cache enrichment: this wtxid is now a proven terminal.
           @hydrator&.proof_arrived(wtxid: action[:wtxid], raw_tx: action[:raw_tx], merkle_path: merkle_path)
           BSV::Wallet.emit('task.succeeded', task: 'proof_acquisition', id: action_id,
                                              latency_ms: latency_ms, outcome: :acquired)

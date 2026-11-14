@@ -56,7 +56,8 @@ namespace :docs do
   task :references do
     Regexp.timeout = 1.0
     lib = File.expand_path('../lib', __dir__)
-    DocsGuard::CodeIndex.load_all!(lib, namespaces: %w[BSV])
+    unloaded = DocsGuard::CodeIndex.load_all!(lib, namespaces: %w[BSV])
+    unloaded.each { |name| puts "not indexed (failed to load): #{name}" }
     index = DocsGuard::CodeIndex.new(local_root: lib)
     check = DocsGuard::DocReferences.from_file(
       File.join(__dir__, 'docs_guard/doc_references.yml'),

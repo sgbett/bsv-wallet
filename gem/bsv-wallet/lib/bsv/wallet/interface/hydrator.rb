@@ -93,7 +93,7 @@ module BSV
           raise NotImplementedError
         end
 
-        # Monotonic cache-enrichment hook (#296 Phase D).
+        # Cache-enrichment hook (#296 Phase D).
         #
         # Called when the wallet learns durable information about a
         # +wtxid+: at minimum the +raw_tx+ bytes; additionally a

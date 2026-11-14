@@ -128,7 +128,7 @@ bin/wallet --wallet=bob receive --file=payment.json
 {: .warning }
 > **Gotchas to know about**
 >
-> - **Limp mode** refuses any outbound spend that would leave the wallet's balance below 50,000 sats (importing is exempt). Set `LIMP_THRESHOLD` (or `c.limp_threshold` in `~/.bsv-wallet/config.rb`) to move the threshold; it can't go below 10,000.
+> - **Limp mode** refuses any outbound spend that would leave the wallet's balance below 50,000 sats (importing and sweeping are exempt). Set `LIMP_THRESHOLD` (or `c.limp_threshold` in `~/.bsv-wallet/config.rb`) to move the threshold; it can't go below 10,000.
 > - **The broadcast intent has no default.** Pass `broadcast_intent: :none` to build a BEEF envelope without publishing.
 > - **One wallet per process** — never boot two in the same process.
 >   Each `bin/` script is its own OS process for this reason.

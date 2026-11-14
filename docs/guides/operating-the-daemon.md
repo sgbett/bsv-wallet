@@ -52,10 +52,7 @@ Two collaborators split the network surface:
 - **`BSV::Network::Broadcaster`** owns the broadcast path —
   broadcast-only providers (Arcade/ARC via GorillaPool). The Engine receives
   it as the `broadcaster:` collaborator.
-- **`BSV::Network::Services`** routes chain queries (`get_tx`,
-  `get_utxos`, `get_merkle_path`, `get_block_header`) to WhatsOnChain, with
-  rate limiting and fallback. The Engine's `network_provider` for direct
-  lookups is the WhatsOnChain provider itself; those lookups bypass Services.
+- **`BSV::Network::Services`** routes chain queries (`get_tx`, `get_utxos`, `get_merkle_path`, `get_block_header`) to WhatsOnChain, with rate limiting and fallback. The Engine's `network_provider` for direct lookups is the WhatsOnChain provider itself; those lookups bypass Services.
 
 The routing and rate-limiting internals are reference-grade — see the
 [API reference](../reference/api/index.md). `BSV::Network::ChainTracker` is

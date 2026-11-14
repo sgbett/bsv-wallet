@@ -216,7 +216,7 @@ Override the gem default by writing `~/.bsv-wallet/fixtures.rb` (or setting `BSV
 - Unit spec helper branches on `BSV_WALLET_POSTGRES`: unset → in-memory SQLite, set → `<base>/bsv_wallet_test`. The helper **ignores `DATABASE_URL`** — keeps an operator's working end-user `DATABASE_URL` from silently hijacking the spec run. Both backends run in CI (matrix job).
 - Integration specs require **both** `BSV_WALLET_POSTGRES` and `BSV_WALLET_WIF_ALICE/BOB/CAROL` (each WIF funded with ≥ 1m sats on chain).
 - E2E specs use the `sdk` wallet (`BSV_WALLET_WIF_SDK` + `<base>/bsv_wallet_sdk`) plus the `w1`..`w5` derived fleet for the multi-wallet harness.
-- Postgres-specific behavior (CHECK violations, ENUM rejections, RESTRICT FK semantics, the `check_internal_action_delete` trigger) MUST have a spec that runs against Postgres — SQLite carries those via translation and won't surface a regression.
+- Postgres-specific behaviour (CHECK violations, ENUM rejections, RESTRICT FK semantics, the `check_internal_action_delete` trigger) MUST have a spec that runs against Postgres — SQLite carries those via translation and won't surface a regression.
 - New DB-touching test helpers must read the configured DB URL, never hardcode `sqlite://`.
 
 ## Running Specs
