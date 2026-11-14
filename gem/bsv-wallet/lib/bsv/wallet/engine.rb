@@ -42,6 +42,7 @@ module BSV
       autoload :BeefInternalizer,      'bsv/wallet/engine/beef_internalizer'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
+      autoload :HintEnvelope,          'bsv/wallet/engine/hint_envelope'
       autoload :Hydrator,              'bsv/wallet/engine/hydrator'
       autoload :Reaper,                'bsv/wallet/engine/reaper'
       autoload :Transmission,          'bsv/wallet/engine/transmission'
@@ -1378,7 +1379,7 @@ module BSV
         socket_path = BSV::Wallet.config.hints_socket
         return unless socket_path
 
-        payload = Marshal.dump(action_id: action_id, beef: atomic_beef)
+        payload = HintEnvelope.encode(action_id: action_id, beef: atomic_beef)
 
         @hints_socket_lock ||= Mutex.new
         @hints_socket_lock.synchronize do

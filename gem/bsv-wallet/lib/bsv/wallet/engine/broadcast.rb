@@ -118,30 +118,19 @@ module BSV
         # Optional: when +socket_path+ is nil, no fiber is started and the
         # cache fills only via intra-process producers.
         #
-        # Trust boundary: +Marshal.load+ runs on bytes from anyone with
-        # write permission to the socket inode. On ipc:// that means file-
-        # system perms on the socket path; operators sharing the path with
-        # untrusted users are responsible for the consequences. #269.
+        # Each message is a +HintEnvelope+: data only, so a sender can hand
+        # this fiber bytes to parse but no object to instantiate (#556).
         def hints_pull!(task:, socket_path:)
           return self unless socket_path
 
           task.async do
-            pull = bind_or_die('hints_worker') { OMQ::PULL.bind(socket_path) }
+            pull = bind_or_die('hints_worker') { bind_hints_socket(socket_path) }
             while (msg = pull.receive)
               begin
-                hint = Marshal.load(msg.first) # rubocop:disable Security/MarshalLoad
-                # Shape guard: anyone with write access to the socket
-                # inode (the documented trust boundary, see issue #280)
-                # could push arbitrary Marshalled data; without this check
-                # a malformed envelope would feed garbage into
-                # Beef.from_binary. Drop it early. (The cache now keys on
-                # wtxid derived from the BEEF, not on +action_id+, but the
-                # envelope still carries +action_id+ so the guard stays.)
-                next unless hint.is_a?(Hash) &&
-                            hint[:action_id].is_a?(Integer) &&
-                            hint[:beef].is_a?(String)
-
+                hint = HintEnvelope.decode(msg)
                 cache_beef_transactions(BSV::Transaction::Beef.from_binary(hint[:beef]))
+              rescue HintEnvelope::MalformedError => e
+                BSV.logger&.warn { "[Engine::Broadcast] hints_pull dropped a malformed hint: #{e.message}" }
               rescue StandardError => e
                 BSV.logger&.error { "[Engine::Broadcast] hints_pull error: #{e.message}" }
               end
@@ -256,6 +245,18 @@ module BSV
 
           tx.inputs.each_with_index { |input, idx| InputSource.attach!(input, sources[idx]) }
           tx
+        end
+
+        # The frame cap has OMQ drop a peer that sends an oversized frame
+        # before reading it in, rather than leaving the check to decode.
+        def bind_hints_socket(endpoint)
+          pull = OMQ::PULL.new
+          pull.max_message_size = HintEnvelope.max_bytes
+          pull.bind(endpoint)
+          pull
+        rescue StandardError
+          pull&.close
+          raise
         end
 
         # Prime the shared cache from a hint's BEEF: every non-TXID-only

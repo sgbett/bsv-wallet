@@ -76,15 +76,17 @@ RSpec.describe BSV::Wallet::Engine::HintEnvelope do
     end
 
     it 'refuses a BEEF over the cap' do
+      message = valid
       stub_const("#{described_class}::MAX_BEEF_BYTES", beef.bytesize - 1)
 
-      expect { described_class.decode([valid]) }.to raise_error(described_class::MalformedError, /exceeds/)
+      expect { described_class.decode([message]) }.to raise_error(described_class::MalformedError, /exceeds/)
     end
 
     it 'accepts a BEEF exactly at the cap' do
+      message = valid
       stub_const("#{described_class}::MAX_BEEF_BYTES", beef.bytesize)
 
-      expect(described_class.decode([valid])[:beef]).to eq(beef)
+      expect(described_class.decode([message])[:beef]).to eq(beef)
     end
   end
 

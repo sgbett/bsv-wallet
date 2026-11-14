@@ -3,6 +3,7 @@
 require 'spec_helper'
 require 'bsv-wallet'
 require 'fileutils'
+require 'omq'
 require 'tmpdir'
 
 RSpec.describe BSV::Wallet::Engine::HintsEndpoint do
