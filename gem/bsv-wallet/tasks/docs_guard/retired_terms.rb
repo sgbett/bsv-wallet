@@ -17,6 +17,7 @@ module DocsGuard
 
     GLOSSARY = 'docs/reference/glossary.md'
     GLOSSARY_SECTION = 'Retired terms'
+    GENERATED_FROM = /\A\s*<!--\s*generated from\s+([^\s#]+)/
 
     # @param config_path [String] the YAML term list
     # @param root [String] repository root; every path in the config is relative to it
@@ -129,15 +130,40 @@ module DocsGuard
 
       lines = content.lines
       exempt = exempt_lines(path, lines)
+      quoted = quoted_sources(lines)
       lines.each_with_index.flat_map do |text, index|
         next [] if exempt.include?(index) || DocsGuard.dated_entry?(text)
 
         @terms.filter_map do |term|
-          next if term.exempt.include?(path) || !term.pattern.match?(text)
+          next if term.exempt.include?(path) || term.exempt.include?(quoted[index]) || !term.pattern.match?(text)
 
           Finding.new(path: path, line: index + 1, term: term, text: text.strip)
         end
       end
+    end
+
+    # A fenced block right after a +<!-- generated from <path>#… -->+ marker
+    # quotes that file, so it inherits the file's exemptions: the BRC100
+    # code a doc quotes may use BRC-100's option names, as BRC100 does.
+    #
+    # @return [Hash{Integer => String}] line index → quoted path
+    def quoted_sources(lines)
+      quoted = {}
+      source = nil
+      fenced = false
+      lines.each_with_index do |line, index|
+        if DocsGuard::FENCE.match?(line)
+          fenced = !fenced
+          source = nil unless fenced
+        elsif fenced
+          quoted[index] = source if source
+        elsif (marker = line.match(GENERATED_FROM))
+          source = marker[1]
+        elsif !line.strip.empty?
+          source = nil
+        end
+      end
+      quoted
     end
 
     # Line indexes inside an exempted section: from its heading to the

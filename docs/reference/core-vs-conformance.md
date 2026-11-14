@@ -14,8 +14,6 @@ The two answers carry different obligations.
 
 > **Core wallet** is the operations that make a single-key holder a Bitcoin participant: build, sign, broadcast, observe, account. **BRC-100 conformance** is the interface contract that lets external applications drive the wallet to do those things. The wallet implements both, but they sit on opposite sides of an internal boundary: the conformance layer adapts BRC-100 vocabulary onto core operations, the core never reaches outward into conformance vocabulary.
 
-The code fell short of the last clause when this note was added (November 2026): some Engine signatures still took BRC-100 option names, and two Engine methods called back into `BSV::Wallet::BRC100`. #548 tracks bringing the code in line; the principle stands.
-
 The wallet has been built — instinctively at first, then deliberately — by keeping these two responsibilities separable. Several BRC-100 concepts that look load-bearing in the spec turn out to be conformance concerns the core can live without. We have deferred or amputated them, and the core stays faster and simpler for it.
 
 ## Why the boundary matters

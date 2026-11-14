@@ -447,7 +447,7 @@ module BSV
         # 400 / terminal-body branch -- under HLR #182's atomic invariant,
         # the broadcasts row already exists by submit time. Use reject_action
         # to cascade-unwind any speculatively-promoted descendants and
-        # release locked UTXOs. If the cascade hits a no_send descendant
+        # release locked UTXOs. If the cascade hits an internal (intent +none+) descendant
         # the call raises -- bump retry_count, leave the row alive for the
         # next resolution-loop pass, and emit a failure event.
         def handle_submit_terminal(action_id, response)
@@ -495,7 +495,7 @@ module BSV
         # Store#reject_action, which cascades-forward through any child
         # action that consumed this action's outputs and unwinds the
         # speculative promotion in one transaction. CannotRejectInternalActionError
-        # is the no_send-descendant invariant guard -- bump retry_count and
+        # is the internal-descendant invariant guard -- bump retry_count and
         # leave the row alive for the next resolution-loop pass.
         def poll_status(action_id, action, status:, started_at:)
           unless action[:wtxid]

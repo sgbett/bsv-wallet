@@ -62,7 +62,7 @@ module BSV
 
         # Two invariant guards from Store#reject_action:
         #
-        # CannotRejectInternalActionError is the no_send-descendant guard --
+        # CannotRejectInternalActionError is the internal-descendant guard --
         # transient, so bump retry_count and leave the row alive for the
         # next pass, matching Engine::Broadcast#poll_status.
         #

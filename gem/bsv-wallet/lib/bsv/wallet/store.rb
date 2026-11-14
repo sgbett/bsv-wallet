@@ -210,7 +210,7 @@ module BSV
         end
       end
 
-      # Atomically complete an internal (+no_send+) action in one transition:
+      # Atomically complete an internal (+broadcast_intent = 'none'+) action in one transition:
       # sign, save its proof, promote its outputs, and make change spendable —
       # so a crash can never strand a signed-but-unpromoted internal action
       # (#327) or a promoted action with unspendable change (#328).

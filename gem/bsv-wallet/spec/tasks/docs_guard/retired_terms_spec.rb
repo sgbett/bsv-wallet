@@ -88,6 +88,23 @@ RSpec.describe DocsGuard::RetiredTerms do
     expect(check(terms: [no_send]).violations.map(&:path)).to eq(['lib/engine.rb'])
   end
 
+  it 'lets a fenced block quoting an exempt file inherit its exemption, and nothing else' do
+    write('docs/a.md', <<~MD)
+      <!-- generated from lib/brc100.rb#map_intent -->
+      ```ruby
+      def map_intent(no_send) = no_send
+      ```
+
+      ```ruby
+      engine.build_action(no_send: true)
+      ```
+    MD
+    no_send = term('no_send', '\bno_send\b', exempt: ['lib/brc100.rb'])
+    write('lib/brc100.rb', "no_send\n")
+
+    expect(check(terms: [no_send]).violations.map(&:line)).to eq([7])
+  end
+
   it 'reports a pending term without failing on it' do
     write('lib/engine.rb', "no_send: false\n")
     no_send = term('no_send', '\bno_send\b', pending: '#548')

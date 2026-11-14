@@ -11,7 +11,7 @@ module BSV
       # terminal state (a crash between +lock_inputs+ and +sign_action+, an
       # abandoned funding-loop top-up). Deleting the action cascades its
       # +inputs+ rows, releasing the locked UTXOs back to the spendable set.
-      # Promoted actions are protected; the internal +no_send+ path is left to
+      # Promoted actions are protected; the internal (+broadcast_intent = none+) path is left to
       # #327.
       #
       # Follows the same discovery → PULL → +process+ shape as Engine::Broadcast

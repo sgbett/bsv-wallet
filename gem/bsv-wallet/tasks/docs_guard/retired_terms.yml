@@ -50,9 +50,14 @@ terms:
     use_instead: transmit intent `none`
 
   - retired: deferred broadcast
-    row: 'deferred broadcast; `async` as a broadcast mode'
+    row: 'deferred broadcast; `async` as a broadcast mode, including `--broadcast=async`'
     pattern: '\bdeferred[ -]broadcasts?\b'
     use_instead: broadcast intent `delayed`
+
+  - retired: '--broadcast=async'
+    row: 'deferred broadcast; `async` as a broadcast mode, including `--broadcast=async`'
+    pattern: '--broadcast=[a-z|]*\basync\b'
+    use_instead: '--broadcast=delayed'
 
   - retired: BRC-100 primitive
     row: BRC-100 primitive
@@ -63,27 +68,34 @@ terms:
     pattern: '\bbin/(create|send|receive)\b'
     use_instead: bin/wallet send, bin/wallet receive
 
-  # #548 renames these in core. BRC100 keeps the spec's own option names, so
-  # the conformance layer stays exempt.
-  - retired: '--broadcast=async'
-    pattern: '--broadcast=[a-z|]*\basync\b'
-    use_instead: broadcast intent `delayed`
-    pending: '#548'
-
+  # BRC-100's call-shape options stay legal in the conformance layer, which
+  # keeps the spec's own names and translates them (#548).
+  # The CLI keeps its `--no-send` flag, and the option key mirrors the flag.
   - retired: no_send
+    row: '`no_send:` / `accept_delayed_broadcast:` on an Engine method'
     pattern: '\bno_send\b'
-    use_instead: broadcast intent `none`
-    exempt: [gem/bsv-wallet/lib/bsv/wallet/brc100.rb, docs/reference/brc100-conformance.md]
-    pending: '#548'
+    use_instead: '`broadcast_intent: :none`'
+    exempt:
+      - gem/bsv-wallet/lib/bsv/wallet/brc100.rb
+      - docs/reference/brc100-conformance.md
+      - gem/bsv-wallet/lib/bsv/wallet/cli/commands/consolidate.rb
+      - gem/bsv-wallet/lib/bsv/wallet/cli/commands/import.rb
+      - gem/bsv-wallet/lib/bsv/wallet/cli/commands/sweep.rb
 
   - retired: accept_delayed_broadcast
+    row: '`no_send:` / `accept_delayed_broadcast:` on an Engine method'
     pattern: '\baccept_delayed_broadcast\b'
-    use_instead: broadcast intent `delayed`
+    use_instead: '`broadcast_intent: :delayed`'
     exempt: [gem/bsv-wallet/lib/bsv/wallet/brc100.rb, docs/reference/brc100-conformance.md]
-    pending: '#548'
+
+  - retired: sign_and_process
+    row: '`sign_and_process:` on an Engine method'
+    pattern: '\bsign_and_process\b'
+    use_instead: '`defer_signing:`'
+    exempt: [gem/bsv-wallet/lib/bsv/wallet/brc100.rb, docs/reference/brc100-conformance.md]
 
   - retired: randomize_outputs
+    row: '`randomize_outputs:`; "randomize" for output order'
     pattern: '\brandomize_outputs\b'
-    use_instead: 'the core name #548 settles'
+    use_instead: '`shuffle_outputs:`'
     exempt: [gem/bsv-wallet/lib/bsv/wallet/brc100.rb, docs/reference/brc100-conformance.md]
-    pending: '#548'
