@@ -23,7 +23,7 @@ Each is one `@db.transaction` — all-or-nothing.
 | `sign_action` | wtxid + raw_tx, TxProof upsert, **broadcasts row (only if intent ≠ none)**, pending + change output rows |
 | `stage_action` | wtxid + raw_tx, TxProof upsert, pending outputs — deferred path; **no broadcasts row** |
 | `save_proof` | TxProof upsert (raw_tx, plus merkle material when present) |
-| `complete_internal_action` | `sign_action` + `save_proof` + `promote_action` + `promote_change_to_spendable` — **one transaction** (internal `no_send` completion) |
+| `complete_internal_action` | `sign_action` + `save_proof` + `promote_action` + `promote_change_to_spendable` — **one transaction** (internal completion, broadcast intent `none`) |
 | `promote_action` | promotions row + output rows + spendable rows (wallet-owned) |
 | `promote_action_outputs` | promotions row + spendable rows for existing wallet-owned outputs (send path, on broadcast accept); idempotent |
 | `promote_change_to_spendable` | promotions row + spendable rows for change |
@@ -40,7 +40,7 @@ Each is one `@db.transaction` — all-or-nothing.
 - **Broadcast submission loop** — `pending_submissions` (broadcasts rows with `broadcast_at IS NULL`), every 5 s. Drives `Engine::Broadcast#submit`.
 - **Broadcast resolution loop** — `pending_resolutions` (`broadcast_at` set, non-terminal `tx_status`), every 30 s. Drives `poll_status` → `record_broadcast_result` (status + promotion atomic).
 - **Proof acquisition loop** — `Engine::TxProof`, every 30 s.
-- **Atomic completions** — `complete_internal_action` (internal `no_send`), the internalize ingress, `import_utxo` Phase 1, and `record_broadcast_result` (send-path promotion) each commit their multi-row work in one transaction, so no recovery owner is needed *between* their steps.
+- **Atomic completions** — `complete_internal_action` (internal, broadcast intent `none`), the internalize ingress, `import_utxo` Phase 1, and `record_broadcast_result` (send-path promotion) each commit their multi-row work in one transaction, so no recovery owner is needed *between* their steps.
 - **`reject_action` / `abort_action`** — terminal teardowns for network-rejected sends and operator/CLI aborts.
 
 ## Send paths — `createAction`
@@ -54,7 +54,7 @@ Each is one `@db.transaction` — all-or-nothing.
 | before `stage_action` | inputs locked, `wtxid IS NULL`, no broadcasts row | **Reaper** (pre-sign arm). |
 | staged, awaiting `signAction` | wtxid (placeholder) set, intent delayed, **no broadcasts row**, unpromoted | **Reaper** after threshold — correct once the signer never returns; see **Known limitations** (#383) for the slow-signer caveat. |
 
-### Internal `no_send` (`broadcast_intent = 'none'`)
+### Internal (`broadcast_intent = 'none'`)
 
 `create_action` → `lock_inputs` → `complete_internal_action` (atomic) → read-only BEEF build/validate (post-commit).
 
@@ -78,7 +78,7 @@ A *signed* internal action with no promotion (a deliberately-parked / OP_RETURN 
 
 ## `signAction` (deferred completion)
 
-`apply_spends` (sign) → `sign_action` (broadcasts row) → `save_proof` → BEEF build/validate → broadcast per intent. Structurally the broadcast path: it never promotes synchronously — promotion happens on broadcast accept via `record_broadcast_result`. Owners are identical to the broadcast paths above. (The `no_send` return is unreachable in the base wallet: deferred + `no_send` isn't creatable — that combination belongs to #192.)
+`apply_spends` (sign) → `sign_action` (broadcasts row) → `save_proof` → BEEF build/validate → broadcast per intent. Structurally the broadcast path: it never promotes synchronously — promotion happens on broadcast accept via `record_broadcast_result`. Owners are identical to the broadcast paths above. (The intent-`none` return is unreachable in the base wallet: deferred signing with broadcast intent `none` isn't creatable — that combination belongs to #192.)
 
 ## `internalizeAction` (`BeefInternalizer#internalize`)
 

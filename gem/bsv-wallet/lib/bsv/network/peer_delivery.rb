@@ -74,8 +74,8 @@ module BSV
       #
       # The wire envelope is the JSON encoding of +envelope+ with +beef:+
       # rendered as hex (BEEF is binary; JSON is text). Mirror of the
-      # existing +bin/create+ → +bin/receive+ stdin/stdout shape, lifted
-      # to HTTP for Phase-1 transport.
+      # +bin/wallet send+ → +bin/wallet receive+ stdout/stdin envelope,
+      # lifted to HTTP for Phase-1 transport.
       #
       # ACK contract (Phase-1):
       #   - 200 OK
@@ -124,7 +124,7 @@ module BSV
       private
 
       # BEEF is binary; over-the-wire JSON carries it as hex. The
-      # +bin/create+ → +bin/receive+ JSON shape uses the same
+      # +bin/wallet send+ → +bin/wallet receive+ envelope uses the same
       # representation, so a Phase-1 peer keeps its existing decoder.
       def envelope_with_hex_beef(envelope)
         envelope.merge(beef: envelope[:beef].unpack1('H*'))

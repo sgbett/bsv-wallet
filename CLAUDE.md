@@ -37,7 +37,7 @@ Third-party conventions stay as-is: `PathElement#txid` (boolean flag), `txOrId` 
 
 ### Source
 
-`Transaction::Tx#wtxid` returns wire order (SDK v0.17.0+). `Transaction::Tx#txid` returns display order — a convenience method, never used in the data path. The `BSV::Wallet::Txid` refinement provides `String#to_dtxid` (wtxid binary → dtxid hex) — the wallet's single home for the conversion; activate it per file with `using BSV::Wallet::Txid`.
+`Transaction::Tx#wtxid` returns wire order (SDK v0.17.0+). `Transaction::Tx#dtxid` (an alias of `#txid_hex`) returns display order — a convenience method, never used in the data path. The `BSV::Wallet::Txid` refinement provides `String#to_dtxid` (wtxid binary → dtxid hex) — the wallet's single home for the conversion; activate it per file with `using BSV::Wallet::Txid`.
 
 ## Transaction Class Convention: `Transaction::Tx` in prose
 
@@ -216,7 +216,7 @@ Override the gem default by writing `~/.bsv-wallet/fixtures.rb` (or setting `BSV
 - Unit spec helper branches on `BSV_WALLET_POSTGRES`: unset → in-memory SQLite, set → `<base>/bsv_wallet_test`. The helper **ignores `DATABASE_URL`** — keeps an operator's working end-user `DATABASE_URL` from silently hijacking the spec run. Both backends run in CI (matrix job).
 - Integration specs require **both** `BSV_WALLET_POSTGRES` and `BSV_WALLET_WIF_ALICE/BOB/CAROL` (each WIF funded with ≥ 1m sats on chain).
 - E2E specs use the `sdk` wallet (`BSV_WALLET_WIF_SDK` + `<base>/bsv_wallet_sdk`) plus the `w1`..`w5` derived fleet for the multi-wallet harness.
-- Postgres-specific behavior (CHECK violations, ENUM rejections, RESTRICT FK semantics, the `prevent_outbound_spendable` trigger) MUST have a spec that runs against Postgres — SQLite carries those via translation and won't surface a regression.
+- Postgres-specific behaviour (CHECK violations, ENUM rejections, RESTRICT FK semantics, the `check_internal_action_delete` trigger) MUST have a spec that runs against Postgres — SQLite carries those via translation and won't surface a regression.
 - New DB-touching test helpers must read the configured DB URL, never hardcode `sqlite://`.
 
 ## Running Specs
@@ -242,6 +242,10 @@ cd gem/bsv-wallet && bundle exec rspec spec --exclude-pattern ''
 
 # RuboCop
 cd gem/bsv-wallet && bundle exec rubocop
+
+# Docs guards (CI job "Docs guards"; no database): retired vocabulary, and
+# doc references to classes, methods, bin/ names, files or migrations that don't exist
+cd gem/bsv-wallet && bundle exec rake docs:retired_terms docs:references
 ```
 
 ## Changelog

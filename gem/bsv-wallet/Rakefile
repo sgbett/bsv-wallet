@@ -13,8 +13,9 @@ task default: :spec
 
 # Load tasks from lib/tasks/*.rake (operator plumbing — fixtures rebuild
 # lives there to keep the orchestration class unit-testable, with the
-# rake file as a thin wrapper).
-Dir.glob(File.expand_path('lib/tasks/*.rake', __dir__)).each { |t| load t }
+# rake file as a thin wrapper) and tasks/*.rake (repository tooling, such
+# as the docs guards, which stays out of the packaged gem).
+Dir.glob(File.expand_path('{lib/tasks,tasks}/*.rake', __dir__)).each { |t| load t }
 
 namespace :brc29 do
   desc 'Refuse inline BRC-29 key_id composition outside lib/bsv/wallet/brc29.rb. ' \

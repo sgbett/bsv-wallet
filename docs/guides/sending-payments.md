@@ -6,7 +6,7 @@ nav_order: 1
 
 # Sending Payments
 
-Task recipes for the wallet porcelain. Each call returns a hash; per-keyword
+Task recipes for the Engine porcelain. Each call returns a hash; per-keyword
 detail and the lower-level BRC-100 methods are in the
 [API reference](../reference/api/index.md).
 
@@ -27,8 +27,8 @@ engine.send_payment(
   broadcast_intent: :delayed
 )
 # => {
-#      txid:                "<32-byte binary wtxid>",
-#      beef:                "<Atomic BEEF binary>",
+#      wtxid:               "<32-byte binary wtxid>",
+#      atomic_beef:         "<Atomic BEEF binary>",
 #      sender_identity_key: "<66-char hex>",
 #      outputs: [
 #        { vout: 0, satoshis: 5_000,
@@ -37,11 +37,7 @@ engine.send_payment(
 #    }
 ```
 
-The `txid:` key is the subject's wire-order wtxid (32-byte binary). The name
-follows the BRC-100 boundary convention — keep it as-is when threading the
-value through spec-shaped calls. For logging or display, convert to hex via
-the `BSV::Wallet::Txid` refinement: `using BSV::Wallet::Txid;
-result[:txid].to_dtxid`.
+The `wtxid:` key is the subject's wire-order wtxid (32-byte binary); `send_payment` speaks wallet vocabulary, and only the BRC-100 wrapper renames it `txid:`. For logging or display, convert it to a dtxid with the `BSV::Wallet::Txid` refinement: `using BSV::Wallet::Txid; result[:wtxid].to_dtxid`.
 
 `send_payment` generates BRC-42 derivation parameters, derives a P2PKH locking
 script for the recipient, and delegates to `build_action`, whose funding loop
@@ -81,7 +77,7 @@ engine.generate_receive_address
 # => { address:, derivation_prefix:, derivation_suffix: }
 
 engine.list_receive_addresses   # outstanding (pending) addresses
-engine.scan_receive_addresses   # scan + import any funds received
+engine.scan_receive_addresses   # scan + internalize any funds received
 ```
 
 Each receive address derives deterministically from on-chain data (a slot's
@@ -97,7 +93,7 @@ engine.consolidate_step(target_inputs: 20, broadcast_intent: :delayed)
 # picks the smallest N outputs plus the largest as a fee anchor,
 # self-pays with a single change output
 
-engine.sweep(recipient: '02a1b2...', broadcast_intent: :delayed) # one consolidation pass to a recipient
+engine.sweep(recipient: '02a1b2...', broadcast_intent: :delayed) # every spendable output, less fee, to the recipient's root P2PKH
 engine.sweep_to_root(target_inputs: 20)     # loop consolidate_step, then sweep to root (recipient defaults to self — the wallet's own identity)
 engine.estimate_sweep_fee(input_count:, recipient_script:) # fee preview
 ```

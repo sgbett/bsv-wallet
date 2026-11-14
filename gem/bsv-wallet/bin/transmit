@@ -1,20 +1,21 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Transmit a BRC-100 BEEF envelope to a named peer (porcelain).
+# Transmit an action's Atomic BEEF to a named peer.
 #
-# Reads a JSON envelope from stdin (as produced by bin/create), looks
-# up the action by its dtxid, and calls Engine::Transmission#transmit
-# with the caller-supplied --to (counterparty) and --endpoint. The
-# envelope is delivered over HTTP via Network::PeerDelivery (#385
-# Task 5 / #390); the BEEF is rebuilt inside the engine, not in this
-# script (so the BEEF on stdin is the producer's atomic bundle, but what
-# crosses the wire is the engine's, with every ancestor in full — #551).
+# Reads the JSON envelope that +bin/wallet send <identity_key> <sats>+
+# writes to stdout, looks up the action by its dtxid, and calls
+# Engine::Transmission#transmit with the caller-supplied --to
+# (counterparty) and --endpoint. The envelope is delivered over HTTP
+# via Network::PeerDelivery (#385 Task 5 / #390); the BEEF is rebuilt
+# inside the engine, not in this script (so the BEEF on stdin is the
+# producer's atomic bundle, but what crosses the wire is the engine's,
+# with every ancestor in full — #551).
 #
-# Composable pipe (the substituting shape for bin/send | bin/receive
-# on the send side):
+# The sender's half of a peer-to-peer payment. The wallet name is
+# positional here (as for bin/walletd), not bin/wallet's --wallet=:
 #
-#   bin/create alice <bob_key> 500 --no-send \
+#   bin/wallet --wallet=alice send <bob_key> 500 --broadcast=none \
 #     | bin/transmit alice --to <bob_key> --endpoint https://peer.example/internalize
 #
 # Stdout: JSON result envelope
@@ -58,10 +59,9 @@ sender  = envelope[:sender_identity_key] || abort('Missing "sender_identity_key"
 ctx = BSV::Wallet::CLI.boot(wallet_name: wallet_name)
 engine = ctx[:engine]
 
-# Lookup action via wtxid: dtxid is display-order hex, but the store
-# keys on the wire-order binary wtxid (Sequel bytea column). The
-# established idiom for this conversion is [hex].pack('H*').reverse —
-# the inverse of bin/create's `result[:txid].reverse.unpack1('H*')`.
+# The envelope carries a display-order dtxid, but the store keys on
+# the wire-order binary wtxid (Sequel bytea column), so this reverses
+# bin/wallet send's `result[:wtxid].reverse.unpack1('H*')`.
 wtxid = [dtxid].pack('H*').reverse
 action = engine.store.find_action(wtxid: wtxid) || abort("No action found for dtxid=#{dtxid}")
 
@@ -86,8 +86,9 @@ BSV::Wallet::CLI::Output.write_json(out)
 # Log redaction (HLR #385 Security AC):
 # - endpoint surfaces as host only — never the full URL (avoids
 #   leaking credentialled URIs into logs/CI).
-# - counterparty: last 8 hex chars only (mirrors the engine-side
-#   debug line in Engine::Transmission#deliver_envelope).
+# - counterparty: last 8 hex chars only. The engine-side debug line
+#   in Engine::Transmission#deliver_envelope shows the first 8, so
+#   the two lines can't be matched on the key fragment.
 # - BEEF body never echoed (not even on failure).
 # - dtxid is the primary log key — matches existing CLI convention.
 host = URI(options[:endpoint]).host

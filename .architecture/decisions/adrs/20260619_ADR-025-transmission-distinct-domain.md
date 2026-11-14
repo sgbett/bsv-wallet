@@ -111,3 +111,13 @@ In the glossary's terms (`docs/reference/glossary.md`), the "async" or "daemon" 
 ## Implementation note (2026-11-13)
 
 Transmission no longer trims (#551). It adopted `Transaction::BeefParty` as listed above, but BeefParty's trim drops known ancestors rather than leaving txid-only entries, and no receiver resolves a txid-only entry by default, so transmit sends full ancestors and per-peer trimming waits for the receiver's agreement (#552). The per-recipient memory this ADR turns on is `transmission_txids`, which transmit still records. The decision is unchanged.
+
+## Amendment note (2026-11-14)
+
+Three items under Decision and Components Affected weren't built as written:
+
+* **There is no `Interface::Transmission`.** `Engine::Transmission` took the shape of its siblings `Engine::Broadcast` and `Engine::TxProof`, which have no interface module either; interface modules belong to the extracted services other components consume, such as `Interface::Hydrator` and `Interface::BeefInternalizer`.
+* **`validate_for_handoff!` stayed on `Engine::Hydrator`.** `Engine::Transmission#transmit` calls it on the bytes it is about to send, before it records the transmission, so it is a Transmission precondition by call site rather than by ownership. `Engine#build_action` and `Engine#sign_action` still call it on the BEEF they return.
+* **`replace_known_ancestors!` stayed in `Engine::BeefInternalizer`** (`BeefImporter` until #549). The #389 investigation found it isn't egress trimming: it runs on incoming BEEF under `trust_self: 'known'`, after verification and proof saving, and reduces ancestors the wallet already holds to txid-only entries. That is the opposite trust model from trimming outgoing BEEF for a peer, so it stayed where it was, and egress trimming was built separately in Transmission (since removed; see the implementation note above).
+
+The decision that Transmission is a domain distinct from Broadcast stands.

@@ -12,7 +12,7 @@ Peer delivery and the SSRF gate live in their own domain — `Engine::Transmissi
 
 ## `Network::Services` — chain queries
 
-`Services` is the porcelain routing layer for the **read-only chain commands** the wallet uses to verify, fetch, and look things up:
+`Services` is the routing layer for the **read-only chain commands** the wallet uses to verify, fetch, and look things up:
 
 ```ruby
 services = BSV::Network::Services.new(providers: [woc, jungle_bus])
@@ -28,7 +28,7 @@ Providers are supplied in **priority order** and frozen at construction. Broadca
 
 Different providers serve different commands. `candidates_for` builds the ordered list of providers that actually declare a given command (`provider.commands.include?(command)`), and the dispatcher tries them in order. If no provider serves a command, `call` returns a synthetic "no provider serves `:command`" error response rather than raising — the caller handles it like any other failure.
 
-A typical deployment wires WhatsOnChain as the primary for chain queries, with JungleBus as a secondary (and as the source for the sibling memo, below).
+`CLI.boot` wires two providers, in this order: GorillaPool (its Ordinals and JungleBus APIs serve chain queries) and WhatsOnChain. Both declare the chain commands the wallet uses, so each query goes to GorillaPool first and to WhatsOnChain on a retryable failure. JungleBus is also the source for the sibling memo, below.
 
 ### Fallback and backoff
 
@@ -39,7 +39,7 @@ A typical deployment wires WhatsOnChain as the primary for chain queries, with J
 - **Retryable error** → try the next candidate provider.
 - **Non-retryable error** → stop and return it.
 
-Within a single provider, `call_with_backoff` retries transient failures up to `RETRYABLE_ATTEMPTS = 3` with **exponential backoff (1 s, 2 s, 4 s)**. The two layers are deliberately distinct: cross-provider fallback handles "this provider can't help"; per-provider backoff handles "this provider is briefly unhappy (a 429 or 5xx)".
+Within a single provider, `call_with_backoff` makes up to `RETRYABLE_ATTEMPTS = 3` attempts at a transient failure, with **exponential backoff between them (1 s, then 2 s)**. The two layers are deliberately distinct: cross-provider fallback handles "this provider can't help"; per-provider backoff handles "this provider is briefly unhappy (a 429 or 5xx)".
 
 ### Two kinds of rate control
 
@@ -72,7 +72,7 @@ broadcaster.broadcast(raw_tx, wtxid: subject_wtxid, callback_token: token)
 broadcaster.get_tx_status(wtxid: subject_wtxid, dtxid: display_txid)
 ```
 
-It is **required by the Engine** — the constructor takes a `broadcaster:` kwarg, and an `inline_broadcast` with no broadcaster wired raises rather than silently routing through some other path.
+It is **required by the Engine**: `broadcaster:` is a required constructor keyword, and inline and daemon broadcasts both submit through it (via `Engine::Broadcast`), so there is no other path to the miners.
 
 ### Affinity, persisted
 
@@ -80,15 +80,15 @@ When a wallet broadcasts a transaction through one provider, that provider is th
 
 Persistence matters: the daemon and inline broadcast paths share a single `broadcasts` table, so a transaction submitted inline can be resolved by the daemon's polling loop on the right provider without re-discovering which one took it. Affinity lives in the database, not an in-memory hash.
 
-A `Broadcaster#broadcast` call that succeeds also forwards the optional `callback_token` as the `X-CallbackToken` header, so Arcade knows where to publish the resulting status frames.
+`Broadcaster#broadcast` also forwards the optional `callback_token` as the `X-CallbackToken` header, so Arcade knows where to publish the resulting status frames.
 
 ## `Network::ChainTracker` — block headers
 
-`ChainTracker` is the **write-through cache** that backs SPV verification. It answers `valid_root_for_height?` and `current_height` from a local `blocks` table, fetching and persisting headers through `Services` on a miss. It subclasses the SDK's `ChainTracker` so it drops straight into `Transaction#verify`.
+`ChainTracker` is the **write-through cache** that backs SPV verification. It answers `valid_root_for_height?` from a local `blocks` table, fetching and persisting headers through `Services` on a miss; `current_height` asks `Services`, falling back to the highest stored block. It subclasses the SDK's `ChainTracker` so it drops straight into `Transaction::Tx#verify`. It is the default tracker (`config.trust_model` of `:trusted_service`): the root a chain-query service reports is believed. The opt-in `SpvHeaderChainTracker` answers from a locally PoW-validated header chain instead; see [SPV header verification](../reference/spv-header-verification.md).
 
 It **fails closed**: a header lookup that errors returns `false` (root invalid) rather than raising or guessing. See [Transactions & BEEF](transactions-and-beef.md).
 
-For *egress* validation only, the wallet uses `TrustedSelfChainTracker` — a tracker that returns `true` for all lookups, since the wallet's own proofs were validated against the real chain at import time.
+For *egress* validation only, the wallet uses `TrustedSelfChainTracker`, which returns `true` for every lookup: the hand-off check is structural, over proofs the wallet already holds, so header validity isn't re-checked there. It is never used for incoming data.
 
 ## `Network::SSEListener` — Arcade status push
 

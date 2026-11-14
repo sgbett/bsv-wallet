@@ -52,10 +52,12 @@ BSV::Wallet.configure do |c|
   # +BSV_WALLET_TX_CACHE_SIZE+.
   # c.tx_cache_size = 20000
 
-  # Optional cross-process EF hint socket. When set, producers (CLI,
-  # API) PUSH hints to walletd via this socket, eliminating the
-  # broadcast-time DB JOIN. Pick a path writable by all producer
-  # processes and readable by walletd. Default +nil+ (feature off);
-  # reads +BSV_WALLET_HINTS_SOCKET+.
-  # c.hints_socket = '/tmp/bsv-wallet-hints.sock'
+  # Optional cross-process EF hint socket: an OMQ endpoint walletd
+  # binds and producers (CLI, API) PUSH hints to, eliminating the
+  # broadcast-time DB JOIN. It is unauthenticated, so use an +ipc://+
+  # socket in a directory only the wallet's user can access (such as
+  # +~/.bsv-wallet+ at mode 0700), never a shared directory or a network
+  # endpoint (#556). Default +nil+ (feature off); reads
+  # +BSV_WALLET_HINTS_SOCKET+.
+  # c.hints_socket = "ipc://#{Dir.home}/.bsv-wallet/hints.sock"
 end

@@ -222,8 +222,8 @@ module BSV
           end
 
           # Validate a basket name against the schema's DB CHECK rules
-          # (mirrors all seven +baskets_name_*+ constraints in
-          # +001_create_schema.rb:266-272+). Without this gate, invalid
+          # (mirrors the seven +name_*+ CHECKs on +baskets+ in
+          # +001_create_schema.rb+). Without this gate, invalid
           # names reach the engine and bubble as
           # +Sequel::CheckConstraintViolation+ — outside the dispatcher's
           # never-raises-uncaught rescue chain.

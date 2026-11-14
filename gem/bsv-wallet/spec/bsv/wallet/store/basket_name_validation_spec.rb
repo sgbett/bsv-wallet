@@ -92,11 +92,11 @@ RSpec.describe 'baskets.name BRC-100 CHECK constraints (#428)', :store do
     end
   end
 
-  # SQLite +alter_table { add_constraint … }+ rebuilds the baskets table.
-  # Per project_sqlite_schema_under_enforces this rebuild can silently drop
-  # the +baskets_name_unique+ index. Migration 004 re-asserts the index;
-  # this spec guards the re-assertion. Matrix-aware (Postgres also has the
-  # unique constraint by design).
+  # A SQLite +alter_table+ on baskets rebuilds the table and can silently
+  # drop +baskets_name_unique+. 001_create_schema.rb declares the unique
+  # and the name CHECKs in one CREATE TABLE so no rebuild happens; this
+  # spec catches one being reintroduced. Matrix-aware (Postgres also has
+  # the unique constraint by design).
   describe 'baskets_name_unique post-migration integrity' do
     it 'rejects a duplicate name with UniqueConstraintViolation' do
       db[:baskets].insert(name: 'unique check')

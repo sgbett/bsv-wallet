@@ -159,6 +159,36 @@ jobs:
           # the store falls back to SQLite and :postgres-tagged specs skip.
           BSV_WALLET_POSTGRES: postgres://postgres:postgres@localhost:5433/
 
+  # Documentation drift guards (#545): retired vocabulary, and references to
+  # classes, methods, bin/ executables, files and migrations that no longer
+  # exist. No `needs: changes` and no `if:`: a docs-only PR can reintroduce
+  # drift, and a code-only rename can strand a doc, so this runs on every push.
+  guards:
+    runs-on: ubuntu-latest
+    name: Docs guards
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+          working-directory: gem/bsv-wallet
+          bundler-cache: true
+
+      - name: Retired terms
+        run: bundle exec rake docs:retired_terms
+        working-directory: gem/bsv-wallet
+
+      - name: Doc references
+        run: bundle exec rake docs:references
+        working-directory: gem/bsv-wallet
+
   # The single required status check (see the "Block unless CI green" ruleset).
   # The spec jobs above are matrix / job-level-`if:` gated, so on docs-only
   # changes they don't expand — they report once under the un-expanded name
@@ -170,7 +200,7 @@ jobs:
   # actually failed or was cancelled. Require `ci` instead of the matrix names.
   ci:
     name: ci
-    needs: [changes, test, integration]
+    needs: [changes, test, integration, guards]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -179,11 +209,18 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           TEST: ${{ needs.test.result }}
           INTEGRATION: ${{ needs.integration.result }}
+          GUARDS: ${{ needs.guards.result }}
         run: |
-          echo "changes=$CHANGES test=$TEST integration=$INTEGRATION"
+          echo "changes=$CHANGES test=$TEST integration=$INTEGRATION guards=$GUARDS"
           for result in "$CHANGES" "$TEST" "$INTEGRATION"; do
             if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
               echo "::error::A required CI job did not pass (result=$result)"
               exit 1
             fi
           done
+          # The guards never skip, so anything but success (a skip included)
+          # means they were switched off or didn't run.
+          if [[ "$GUARDS" != "success" ]]; then
+            echo "::error::Docs guards did not pass (result=$GUARDS)"
+            exit 1
+          fi

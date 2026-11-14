@@ -13,31 +13,48 @@ module BSV
       # Both egress paths read through one shared instance:
       #
       #   - +Hydrator#wire_ancestor+ (deep, BEEF): a hit whose
-      #     +merkle_path+ is present is a proven terminal — return without
-      #     descending. A hit without one is recursed over. A miss reads
-      #     +Store#find_proof+ and populates the entry.
+      #     +merkle_path+ is present is treated as a proven terminal —
+      #     return without descending. A hit without one is recursed over.
+      #     A miss reads +Store#find_proof+ and populates the entry.
       #   - +Broadcast#hydrated_transaction_for+ (shallow, EF): a hit on an
       #     input's parent wtxid supplies that input's source satoshis +
       #     locking script (from +outputs[vout]+) without the
       #     +resolve_inputs_for_signing+ JOIN — which stays the floor on a
-      #     miss.
+      #     miss. A Broadcast miss doesn't fill the cache.
       #
-      # ## Monotonic enrichment, no invalidation
+      # ## Keys
       #
-      # State only ever progresses: entries are added; an entry's
-      # +merkle_path+ is filled in place when a proof arrives
-      # (+Hydrator#proof_arrived+ → +put+); nothing degrades except by LRU
-      # age-out under memory pressure. +put+ never clears a +merkle_path+
-      # that is already set, so a proven terminal stays proven regardless
-      # of call order. There are no lifecycle eviction hooks — broadcast
-      # outcome is irrelevant to the cache (cf. #269, which this inverts).
+      # Nothing here hashes +raw_tx+ against its key; the pairing is the
+      # writer's. Hint, ingress and import entries
+      # (+Broadcast#cache_beef_transactions+, +BeefInternalizer#save_beef_proofs+,
+      # +Engine#import_utxo+, +Engine#internalize_wbikd_utxo+) are keyed by
+      # the wtxid of the transaction parsed from their own bytes. Store
+      # refills (+Hydrator#wire_ancestor+) and the proof puts from
+      # +Engine::TxProof+ and Broadcast's eager broadcast-response proof are
+      # keyed by the wtxid stored beside those bytes in +tx_proofs+ or
+      # +actions+.
+      #
+      # ## Enrichment, no invalidation
+      #
+      # Entries are added, and leave only by LRU age-out under memory
+      # pressure. +put+ keeps an entry's +merkle_path+ when given +nil+, so
+      # a caller holding only +raw_tx+ cannot clear a proven terminal; a
+      # non-nil path replaces whatever is there. There are no lifecycle
+      # eviction hooks — broadcast outcome is irrelevant to the cache
+      # (cf. #269, which this inverts).
       #
       # ## Principle of state
       #
-      # The cache is a pure projection over the proof store: each value
-      # mirrors a +tx_proofs+ row. Drop the cache and rebuild from the DB
-      # and behaviour is identical — correctness rides on the DB,
-      # performance rides on the cache. See +docs/reference/principle-of-state.md+.
+      # A cached +merkle_path+ is not self-authenticating: +wire_ancestor+
+      # trusts whatever path it finds. An entry filled from +tx_proofs+, or
+      # put once the wallet has committed the proof, mirrors that row, and
+      # dropping it and rebuilding from the DB gives the same behaviour.
+      # +Engine#import_utxo+ is the exception for now: it puts its entry
+      # inside the transaction that saves the proof, so a rollback leaves
+      # an entry with no row (#558). Hint-fed entries mirror no row: their
+      # paths are unverified, replace any stored path for the same wtxid,
+      # and are trusted only as far as the hints socket is (#556). See
+      # +docs/reference/principle-of-state.md+.
       #
       # Implementation: Ruby's +Hash+ preserves insertion order (MRI 1.9+),
       # so +#delete+-then-+#[]=+ moves an entry to the MRU end; LRU eviction
@@ -64,12 +81,12 @@ module BSV
           @lock = Mutex.new
         end
 
-        # Insert or update the entry for +wtxid+. Monotonic on
-        # +merkle_path+: a +nil+ argument never clears an already-present
-        # path, so callers that only hold +raw_tx+ (an unconfirmed wire-up)
-        # cannot regress a proven terminal. +raw_tx+ is immutable for a
-        # given wtxid, so overwriting it is a no-op in practice. Promotes
-        # the entry to MRU.
+        # Insert or update the entry for +wtxid+ and promote it to MRU. A
+        # +nil+ +merkle_path+ keeps the path already present, so callers
+        # that only hold +raw_tx+ (an unconfirmed wire-up) cannot clear a
+        # proven terminal; a non-nil one replaces it. +raw_tx+ is always
+        # replaced, which is harmless only while every writer keys by the
+        # wtxid of the bytes it passes — not checked here.
         #
         # @param wtxid [String] 32-byte wire-order wtxid
         # @param raw_tx [String] transaction bytes (wire format)
@@ -79,8 +96,6 @@ module BSV
 
           @lock.synchronize do
             existing = @entries.delete(wtxid)
-            # Monotonic: keep an already-present merkle_path when the caller
-            # supplies none.
             kept_path = merkle_path || existing&.fetch(:merkle_path, nil)
             # +dup.freeze+ the String values so a caller that retains a
             # reference and later mutates in place cannot corrupt cached

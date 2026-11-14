@@ -47,7 +47,7 @@ Pure operations only. The SDK Provider abstraction owns wire dispatch for semant
 - **Action lifecycle.** `createAction` → `signAction` → broadcast → resolution is a process that spans calls, persists at every step, and survives restart. The SDK cannot own any part of it.
 - **Affinity persistence.** Which provider broadcast a given tx is recorded in `broadcasts.provider` so the resolution path re-asks the right instance after daemon restart (#250).
 - **Push-resolution consumption.** SSE listeners with cursor management (#251) — long-lived outbound connections, durable `Last-Event-ID` checkpoints, idempotent event application. By definition stateful.
-- **Block-driven reconciliation.** Matching new block contents against in-flight wtxids to drive → MINED transitions. Requires the in-flight set, which only the wallet has.
+- **Block-driven reconciliation.** Matching new block contents against in-flight wtxids to drive → MINED transitions. Requires the in-flight set, which only the wallet has. Not built yet (#246).
 
 ### Broadcast resolution physics — a worked example
 
@@ -55,10 +55,10 @@ The broadcast subsystem makes the boundary concrete:
 
 | Edge | Transition | Mechanism | Why this mechanism |
 |------|------------|-----------|--------------------|
-| 1 | → MINED | Block-driven resolver | Block data is globally shared across all ARC instances — immune to the per-instance problem by construction. |
+| 1 | → MINED | Block-driven resolver (#246, not yet built) | Block data is globally shared across all ARC instances — immune to the per-instance problem by construction. |
 | 2 | → SEEN_ON_NETWORK / REJECTED / DOUBLE_SPEND_ATTEMPTED | Push (SSE) from the metamorph instance that holds the tx | Mempool outcomes never land in a block; the block resolver is structurally blind to them. Only a push signal from the holding instance can deliver them. |
 
-The structural fact behind the table — block data globally shared, mempool outcomes per-instance — is a property of BSV's protocol surface, not a design choice. It dictates that **the wallet must run a push consumer** (only it can own that long-lived connection + cursor) and that **the wallet must run a block reconciler** (only it knows what is in flight). Both are stateful, both live in the wallet for that reason. See issues #250 and #251 for the implementation that landed on this basis.
+The structural fact behind the table — block data globally shared, mempool outcomes per-instance — is a property of BSV's protocol surface, not a design choice. It dictates that **the wallet must run a push consumer** (only it can own that long-lived connection + cursor) and that **the wallet must run a block reconciler** (only it knows what is in flight). Both are stateful, both live in the wallet for that reason. The push consumer landed on this basis (#251, with broadcast affinity in #250); the block reconciler is #246, and until it lands, the wallet learns a transaction is mined by push and by the proof-acquisition loop polling ARC.
 
 ## Test for new surface area
 

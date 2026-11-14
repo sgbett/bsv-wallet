@@ -120,3 +120,7 @@ Naming a principle that has already governed seven months of design decisions is
 * ADR-026 — Engine primitive surface; codified "Engine doesn't speak BRC-100" for the primitive layer; this ADR generalises that to the whole core.
 * ADR-028 (this branch) — per-user databases as the multi-user primitive; one forward application of this principle.
 * ADR-029 (this branch) — originator deferral and DBAP direction; another forward application.
+
+## Amendment note (2026-11-14)
+
+When this note was written, the code fell short of the decision's last clause ("the core never reaches outward into conformance vocabulary"), of consequence 1, and of the first Validation item. Engine methods that build or broadcast took BRC-100's call-shape options under snake_case names (`no_send:`, `accept_delayed_broadcast:`, `sign_and_process:`, `randomize_outputs:`), mapping the broadcast ones onto `broadcast_intent` internally; two Engine error messages named `createAction` and `signAction`; and `Engine#list_receive_addresses` and `Engine#internalize_wbikd_utxo` called back into `BSV::Wallet::BRC100`. #548 brought the code in line: the Engine takes a required `broadcast_intent:`, `defer_signing:` and `shuffle_outputs:`, and `BSV::Wallet::BRC100` maps the spec options onto them. The principle stands.

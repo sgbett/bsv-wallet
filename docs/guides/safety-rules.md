@@ -41,11 +41,7 @@ external attack surface. The SSRF gate rejects, by default:
   RFC 1122 "this network" (`0.0.0.0/8` — Linux/macOS route `0.0.0.0` to
   loopback).
 
-A rejection raises `Network::EndpointPolicy::Violation` and surfaces
-through `PeerDelivery::Result#outcome` as `:endpoint_policy_violation`.
-**No `transmissions` row is written.** See
-[`reference/transactions.md` § Endpoint policy / SSRF defence](../reference/transactions.md#endpoint-policy-ssrf-defence)
-for the canonical list and rationale.
+A rejection raises `Network::EndpointPolicy::Violation` and surfaces through `PeerDelivery::Result#outcome` as `:endpoint_policy_violation`. The parent `transmissions` row is already written (it precedes the POST), but it gets no `acked_at`, and **no `transmission_txids` rows are written**. See [`reference/transactions.md` § Endpoint policy / SSRF defence](../reference/transactions.md#endpoint-policy-ssrf-defence) for the canonical list and rationale.
 
 ### TLS verification on by default
 

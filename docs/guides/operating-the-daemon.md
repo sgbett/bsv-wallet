@@ -17,13 +17,14 @@ bin/walletd [wallet_name] [network]
 bin/walletd alice mainnet
 ```
 
-It boots a `Store` and `Network::Services` (it needs neither the Engine nor
-a key deriver — it only schedules work) and runs an Async reactor hosting:
+It boots a `Store` and a `Network::Broadcaster` (it doesn't construct the Engine, and builds a `KeyDeriver` only for the boot-time schema check) and runs an Async reactor hosting:
 
 - `Engine::Broadcast` — submits queued transactions to ARC and polls their
   status.
+- `Network::SSEListener` — consumes Arcade's status stream for the wallet's callback token and hands each event to `Engine::Broadcast`.
 - `Engine::TxProof` — acquires merkle proofs once a transaction is mined.
-- `Scheduler` — three discovery loops that poll the Store and push work
+- `Engine::Reaper` — reclaims abandoned actions and releases their input locks.
+- `Scheduler` — four discovery loops that poll the Store and push work
   over OMQ in-process sockets:
 
 | Loop | Interval | Picks up |
@@ -31,6 +32,7 @@ a key deriver — it only schedules work) and runs an Async reactor hosting:
 | Broadcast submission | 5 s | Newly queued broadcasts (`broadcast_at IS NULL`) |
 | Broadcast resolution | 30 s | Attempted, non-terminal broadcasts |
 | Proof acquisition | 30 s | Mined transactions awaiting a proof |
+| Reaper | 60 s | Stale actions with no promotions or broadcasts row, other than signed internal ones (`BSV_WALLET_REAP_THRESHOLD_S`, default 1 h) |
 
 Submission runs fastest because users wait on outputs becoming spendable.
 
@@ -50,10 +52,7 @@ Two collaborators split the network surface:
 - **`BSV::Network::Broadcaster`** owns the broadcast path —
   broadcast-only providers (Arcade/ARC via GorillaPool). The Engine receives
   it as the `broadcaster:` collaborator.
-- **`BSV::Network::Services`** routes chain queries (`get_tx`,
-  `get_utxos`, `get_merkle_path`, `get_block_header`) to WhatsOnChain, with
-  rate limiting and fallback. It is also the Engine's `network_provider`
-  for direct lookups.
+- **`BSV::Network::Services`** routes chain queries (`get_tx`, `get_utxos`, `get_merkle_path`, `get_block_header`) to WhatsOnChain, with rate limiting and fallback. The Engine's `network_provider` for direct lookups is the WhatsOnChain provider itself; those lookups bypass Services.
 
 The routing and rate-limiting internals are reference-grade — see the
 [API reference](../reference/api/index.md). `BSV::Network::ChainTracker` is

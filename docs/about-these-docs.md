@@ -37,6 +37,8 @@ The rule prevents the docs from becoming a circular graph where any change rever
 
 If a fact appears in both a Concepts page and a Reference page in two slightly different forms, one of them is wrong and they will drift further over time. The cure is to delete the Concepts copy and replace it with a link to Reference, not to keep them in sync by hand. A runnable grep-check (documented below) reports any section heading duplicated between sibling Concepts and Reference pages; promoting it to a CI gate is a follow-up.
 
+Two CI guards (the "Docs guards" job) catch the drift a pattern can find. `rake docs:retired_terms` fails on vocabulary the [glossary](reference/glossary.md#retired-terms) retires, in `docs/`, the gem's `lib/` and `bin/`, and `CLAUDE.md`. `rake docs:references` fails when a doc names, in inline code, a class, module, method, `bin/` executable, file or migration that doesn't exist. Run both from `gem/bsv-wallet` with `bundle exec rake docs:retired_terms docs:references`. A failure names the file and line. The term list and the allowlist of deliberate references, each entry with its reason, live in `gem/bsv-wallet/tasks/docs_guard/`.
+
 ## Cross-link policy
 
 - **Sibling-relative paths** inside `docs/`: `[Phases](../reference/action-lifecycle.md#phases)`. Not absolute, not site-root.

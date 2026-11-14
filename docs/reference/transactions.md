@@ -13,9 +13,11 @@ There are **two** ways a signed transaction leaves the wallet, and conflating th
 | Recipient | the miner network (anonymous, fungible) | a *named* peer wallet (identity key) |
 | Wire format | **Extended Format (EF)** | **Atomic BEEF (BRC-95)** |
 | What the recipient does | consensus validation (scripts + fees) | SPV verification (BRC-67) |
-| Verb | `Engine::Broadcast#submit` | `Engine::Transmission#transmit` |
-| Outcome | MINED / REJECTED / DOUBLE_SPEND | DELIVERED / ACK'd / refused |
-| Resolution | SSE + block-watch (global chain state) | peer internalize ACK (point-to-point) |
+| Domain | `Engine::Broadcast` | `Engine::Transmission` |
+| Verb | broadcast | transmit (`Engine::Transmission#transmit`) |
+| HTTP POST inside it | submit (the private `Engine::Broadcast#submit`, to ARC) | deliver (`Network::PeerDelivery#deliver`, to the peer) |
+| Outcome | ARC `txStatus`: MINED, REJECTED, DOUBLE_SPEND_ATTEMPTED, … | `:delivered`, or one of nine failure outcomes (see *Delivery outcomes*) |
+| Resolution | SSE + status polling (global chain state) | the peer's HTTP ACK, bound to the wtxid (point-to-point) |
 | Per-recipient memory | none — a tx is a tx | **`transmission_txids`** — what has peer X already acknowledged |
 | Cardinality per action | 0..1 | 0..N (one per counterparty) |
 
@@ -23,20 +25,22 @@ There are **two** ways a signed transaction leaves the wallet, and conflating th
 
 The tempting wrong model is "a peer knows nothing so needs everything; a miner has most of it so needs less." That is not the driver. The driver is **what the recipient does with the transaction**:
 
-- **A miner does consensus validation.** It checks scripts and fees, and confirms the inputs are unspent against its own UTXO/mempool state. For that it needs the *immediate* input scripts and amounts — **one level deep** — and **no** merkle proofs, because a miner does not re-verify history; it is the thing that establishes it. That is exactly what **EF** carries: the raw tx plus, for each input, the source satoshis and source locking script inlined. EF exists so the node need not do a UTXO lookup per input — supply the prevout data and it validates statelessly. A raw-tx submit fails with `'PreviousTx' not supplied`.
+- **A miner does consensus validation.** It checks scripts and fees, and confirms the inputs are unspent against its own UTXO/mempool state. For that it needs the *immediate* input scripts and amounts — **one level deep** — and **no** merkle proofs, because a miner does not re-verify history; it is the thing that establishes it. That is exactly what **EF** carries: the raw tx plus, for each input, the source satoshis and source locking script inlined. EF exists so the node need not do a UTXO lookup per input — supply the prevout data and it validates statelessly. Arcade rejects a raw-tx submit with `'PreviousTx' not supplied`.
 
 - **A receiving wallet does SPV.** It must prove to itself, trusting no one, that every ancestor was really mined. That requires the **full proven ancestry** back to anchors, carrying **merkle proofs (BUMPs)**. Even a peer that already knew every txid would still need the proofs to verify. That is **BEEF**.
 
 So depth and proofs are fixed by the validation model, not by recipient knowledge.
 
-## Both formats are projections of one hydrated transaction
+## Two formats, built separately over one cache
 
-EF and BEEF are not separately constructed. Both derive from the same in-memory `Transaction::Tx` whose inputs have `source_transaction` wired (the *hydrated* object — see `Engine::Hydrator`):
+EF and BEEF are built separately, each from the action's signed `raw_tx`; neither is derived from the other. They differ in how far they wire the inputs:
 
-- `to_ef_hex` → keep one level, drop proofs → **EF for a miner**
-- `to_atomic_binary` → keep the full wired graph → **BEEF for a peer**
+- **EF, for a miner.** `Engine::Broadcast#hydrated_transaction_for` parses the `raw_tx` into a `Transaction::Tx` and attaches one level of source data to each input: the satoshis and locking script of the output it spends. When every input's parent is in the `Engine::HydratedTxCache`, it takes them from the parents' cached raw-tx bytes; on any miss it takes them all from the spent `outputs` rows instead (`Store#resolve_inputs_for_signing`), which exist for every action the wallet built. The SDK's ARC and Arcade protocols serialise the result with `Transaction::Tx#to_ef_hex`. Broadcast never calls the Hydrator.
+- **BEEF, for a peer.** `Engine::Hydrator#build_atomic_beef` wires each input's `source_transaction` recursively (`Engine::Hydrator#wire_ancestor`) until each branch reaches an ancestor with a merkle path, merges the graph into a `BSV::Transaction::Beef` and serialises it with `BSV::Transaction::Beef#to_atomic_binary`, passing the subject's wtxid. It reads ancestors through the same cache, falling back to `Store#find_proof` and filling the cache on a miss.
 
-BEEF is a strict superset of EF for the subject transaction. This is why the broadcast daemon can prime its cache with the BEEF the producer already built for the caller's return value and simply call `to_ef` on it — no second hydration (`Engine::Broadcast#hydrated_transaction_for`).
+What the two share is the cache: raw-tx and merkle-path bytes keyed by wtxid, never `Transaction::Tx` objects, so a parent loaded by one path is a hit for the other. The BEEF that `build_action` and `sign_action` return also reaches walletd's Broadcast as a hint: when a hints socket is configured and the action is to be broadcast, the Engine pushes the BEEF to walletd, and `Engine::Broadcast#cache_beef_transactions` breaks it into one cache entry per transaction, with the raw-tx bytes and, where the BEEF carries a proof, the merkle-path bytes. Those entries are trusted only as far as the hints socket is (#556).
+
+A BEEF holds everything its subject's EF needs, the subject and each input's parent, which is why a hint lets walletd skip the `outputs` JOIN. That holds only while the BEEF is untrimmed: trimming reduces known ancestors to TXID-only entries, which carry no bytes to cache (#552).
 
 ## Trimming is an orthogonal axis (BEEF only)
 
@@ -55,7 +59,7 @@ Broadcast and transmit are separate stateful *processes* (wallet side, per the s
         /                       |
   Engine::Broadcast    Engine::Transmission
    #submit  → EF→miner   #transmit → BEEF→peer
-   resolve: SSE/blocks   resolve: peer HTTP ACK (wtxid-bound)
+   resolve: SSE/polls    resolve: peer HTTP ACK (wtxid-bound)
    stateless-about-who   stateful-about-who (transmission_txids, per counterparty)
 ```
 
@@ -63,7 +67,7 @@ The per-recipient-memory row is the deciding difference: broadcast is stateless 
 
 `Engine::Transmission` is thinner than it first looks: it is transport + per-peer accounting + delivery-outcome, *on top of* the Hydrator's BEEF assembly. It is not a fork of Broadcast.
 
-A note on the verb: `transmit`, not `send` — `send` is poisoned by Ruby's `Object#send`. `submit` stays as the inner HTTP verb of the broadcast subsystem. `Broadcast` and `Transmission` are the domain nouns; `submit` and `transmit` are their actions.
+A note on the verb: `transmit`, not `send` — `send` is poisoned by Ruby's `Object#send`. `Broadcast` and `Transmission` are the domain nouns, and broadcast and transmit their verbs. Each wraps an HTTP POST with a verb of its own: *submit* inside a broadcast (to ARC) and *deliver* inside a transmit (to the peer). See the [glossary](glossary.md#sending-out).
 
 ## Broadcast and transmit are parallel, not sequential
 
@@ -71,16 +75,16 @@ They are independent edges off the same action, not a pipeline. BEEF/SPV exists 
 
 ## Relationship to BRC-100
 
-BRC-100 specifies the *interface* (`createAction` returns the BEEF, `internalizeAction` consumes it) and is **deliberately silent on transport**. The spec's model is "the wallet hands you the tx object; how it reaches the peer is your concern." So transmit intent `none` — return the BEEF and let the caller deliver it, as the `bin/wallet send <identity key> <sats> | bin/wallet receive` pipe does — **is** the BRC-100-compliant baseline, and it remains available alongside the `bin/transmit` porcelain. `Engine::Transmission` is an **original, beyond-spec extension** — there is no reference implementation; the peer acceptance/rejection taxonomy and delivery semantics are the wallet's to design. Conceptual lineage: peer-to-peer / IP-to-IP direct payments (the whitepaper's "direct" channel).
+BRC-100 specifies the *interface* (`createAction` returns the BEEF, `internalizeAction` consumes it) and is **deliberately silent on transport**. The spec's model is "the wallet hands you the tx object; how it reaches the peer is your concern." So transmit intent `none` — return the BEEF and let the caller deliver it, as the `bin/wallet send <identity key> <sats> | bin/wallet receive` pipe does — **is** the BRC-100-compliant baseline, and it remains available alongside `bin/transmit`. `Engine::Transmission` is an **original, beyond-spec extension** — there is no reference implementation; the peer acceptance/rejection taxonomy and delivery semantics are the wallet's to design. Conceptual lineage: peer-to-peer / IP-to-IP direct payments (the whitepaper's "direct" channel).
 
 A design constraint that follows: **transmit intent is an invocation mode, not a property of `transmit`.** In v1 the wallet delivers `inline` (the caller awaits a self-contained `transmit`) or, with intent `none`, leaves delivery to the caller; the same operation must be drivable `delayed` by the daemon later (#385 Phase 2). This mirrors `broadcast_intent` (`inline` and `delayed` over one code path) — see `Engine::Broadcast`.
 
-## Current state (2026-06)
+## Current state (2026-11)
 
 Both edges are now first-class processes; the historical asymmetry — broadcast fully built, transmit a CLI pipe — was the subject of HLR #385 (PR #408) and is closed:
 
 - **Broadcast (→ network).** `Engine::Broadcast`, OMQ PULL sockets, SSE resolution, callback handlers, crash-recovery — the daemon is built around it. Both the inline and daemon paths ship EF (#252 closed the daemon-side raw-hex gap).
-- **Transmit (→ peer).** `Engine::Transmission#transmit` sits as a sibling to `Engine::Broadcast` and `Engine::TxProof`, assembling the peer's BEEF through `Engine::Hydrator`. The `transmissions` and `transmission_txids` tables hold per-peer knowledge at grain (action × counterparty); status is **derived** from the presence of `acked_at` (no status column — principle-of-state). It sends full ancestors; per-peer trimming waits for the receiver's agreement (#552). Delivery is synchronous HTTP POST of a JSON envelope to a caller-supplied endpoint (`Network::PeerDelivery`), guarded by `Network::EndpointPolicy` (SSRF gate); the ACK is wtxid-bound so a captive portal cannot impersonate delivery. The CLI surface is `bin/transmit`.
+- **Transmit (→ peer).** `Engine::Transmission#transmit` sits as a sibling to `Engine::Broadcast` and `Engine::TxProof`, assembling the peer's BEEF through `Engine::Hydrator`. The `transmissions` and `transmission_txids` tables hold per-peer knowledge at grain (action × counterparty); status is **derived** from the presence of `acked_at` (no status column — principle-of-state). It sends full ancestors; per-peer trimming waits for the receiver's agreement (#552). Delivery is synchronous HTTP POST of a JSON envelope to a caller-supplied endpoint (`Network::PeerDelivery`), guarded by `Network::EndpointPolicy` (SSRF gate); the ACK is wtxid-bound so a captive portal cannot impersonate delivery. The CLI surface is `bin/transmit` (see *CLI surface* below). #464 proposes separating the BEEF transport from the BRC-29 envelope in `Engine::Transmission`, so that `transmit` ships only BEEF and the conformance layer builds the envelope.
 
 What v1 deliberately omits, and what stays for Phase 2: an identity-key → endpoint directory (peers must be reached by URL today), a daemon-driven `delayed` transmit (`#transmit` is shaped to be drivable both ways over one code path — same invariant as `broadcast_intent`), a peer-signed ACK protocol (the `transmissions.ack_signature bytea NULL` column is reserved now so Phase 2 lands without a schema migration), retry/backoff, and knowledge-revocation when a peer prunes.
 
@@ -120,7 +124,7 @@ Content-Type: application/json
 - **`sender_identity_key`** — BRC-43 compressed pubkey hex (the identity pubkey carve-out from CLAUDE.md applies: hex everywhere this value appears, no binary representation). The peer needs it to complete BRC-42 derivation on each output.
 - **`protocol_version: 1`** — forward-compat. Phase 2 will add `certificates`, `ack_signature` and similar fields; bumping this field is the negotiation point.
 
-The wallet ships the envelope through `Network::PeerDelivery` (the v1 transport seam — `Engine::Transmission` takes a `delivery:` kwarg, so the Phase 2 deliverer for a `delayed` transmit drops in by constructor argument without touching the engine). The transport defaults to no cross-host redirects, a 5-second connect timeout, a 30-second read timeout, and TLS verification on.
+The wallet ships the envelope through `Network::PeerDelivery` (the v1 transport seam — `Engine::Transmission` takes a `delivery:` kwarg, so the Phase 2 deliverer for a `delayed` transmit drops in by constructor argument without touching the engine). The transport follows no redirects, and defaults to a 5-second connect timeout, a 30-second read timeout, and TLS verification on.
 
 ## ACK contract (v1)
 
@@ -146,17 +150,17 @@ The `wtxid` field MUST match the subject's dtxid. Mismatch → the wallet record
 ## Endpoint policy / SSRF defence
 {: #endpoint-policy-ssrf-defence }
 
-`Network::EndpointPolicy` is the SSRF gate. The peer endpoint is caller- supplied — by construction the wallet's external attack surface — so the defaults are deliberately strict:
+`Network::EndpointPolicy` is the SSRF gate. The peer endpoint is caller-supplied — by construction the wallet's external attack surface — so the defaults are deliberately strict:
 
 - **HTTPS only in production** (`require_https: true`). Plain HTTP gives an on-path attacker the BEEF, the BRC-29 `sender_identity_key`, and the ability to forge a 200 ACK.
 - **TLS verification on.** No silent acceptance of self-signed certificates.
-- **Private/loopback/link-local destinations rejected.** The reject list: `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` (includes the cloud-metadata endpoint at `169.254.169.254` — the canonical SSRF target for credential exfiltration on AWS / GCP / Azure), `::1/128`, `fc00::/7`. A misconfigured wallet shipping its BEEF and its identity key to the metadata service is a credible loss-of-funds path; this list closes it by default.
-- **No cross-host redirects.** A peer cannot 302 the bundle into the metadata range.
+- **Private/loopback/link-local destinations rejected.** The reject list (`EndpointPolicy::PRIVATE_RANGES`): `0.0.0.0/8`, `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10`, `169.254.0.0/16` (includes the cloud-metadata endpoint at `169.254.169.254` — the canonical SSRF target for credential exfiltration on AWS / GCP / Azure), `224.0.0.0/4`, `255.255.255.255/32`, `::1/128`, `fc00::/7` and `::ffff:0:0/96`; an IPv4-mapped IPv6 address is unwrapped and checked against the IPv4 ranges. A misconfigured wallet shipping its BEEF and its identity key to the metadata service is a credible loss-of-funds path; this list closes it by default.
+- **No redirects followed.** A 3xx is a `:non_200` outcome, so a peer cannot 302 the bundle into the metadata range.
 - **Body size cap.** Default 32 MiB; defence against a runaway hydration walk or a deliberately oversized payload.
 - **DNS TOCTOU mitigation.** The policy resolves the host once at `validate!` time and the deliverer dials the resolved IP, with `Host:` set to the original hostname so TLS SNI and virtual-host routing still work. This closes the window where `Net::HTTP` would re-resolve and land on a different (private) IP than the one the policy approved.
 - **Dev/test opt-out.** `BSV_WALLET_ALLOW_PRIVATE_ENDPOINTS=1` allows the e2e harness to talk to fixture wallets on `127.0.0.1`. The variable is read once at policy construction; production wallets leave it unset.
 
-A rejection raises `Network::EndpointPolicy::Violation` (a `BSV::Wallet::Error` subclass), surfaced through the deliverer as a `:endpoint_policy_violation` outcome. No row is written.
+A rejection raises `Network::EndpointPolicy::Violation` (a `BSV::Wallet::Error` subclass), which `Network::PeerDelivery#deliver` returns as an `:endpoint_policy_violation` outcome. Transmit has already written the `transmissions` row by then (see *Two-phase delivery*), but sets no `acked_at` and records no known-set wtxids.
 
 ## Two-phase delivery
 
@@ -171,7 +175,9 @@ Failure between record and ACK — transport error, timeout, mismatched wtxid, a
 
 ## CLI surface
 
-`bin/transmit` is the porcelain. It reads the envelope `bin/wallet send <identity key> <sats>` writes to stdout, finds the action by its `dtxid` and transmits it — a `bin/wallet send … | bin/transmit --to <identity_key> --endpoint <url>` pipe. See `bin/transmit --help` for the current flag set.
+`bin/transmit` reads the envelope `bin/wallet send <identity key> <sats>` writes to stdout, finds the action by its `dtxid` and transmits it — a `bin/wallet send … | bin/transmit --to <identity_key> --endpoint <url>` pipe. See `bin/transmit --help` for the current flag set.
+
+It is a binary of its own rather than a `bin/wallet` command because `bin/wallet transmit` waits on #464. Today `transmit` takes the BRC-29 envelope's `outputs` and `sender_identity_key` alongside the BEEF; #464 proposes that the engine layer ship only the BEEF and the conformance layer build the envelope.
 
 ## BRC-29 derivation convention
 
@@ -180,7 +186,7 @@ Every BRC-29-shaped payment derivation in the wallet — outbound to a counterpa
 Two symbols are the only sanctioned producers:
 
 - `BSV::Wallet::BRC29::PROTOCOL_ID` — the protocol identifier. Currently aliases `BSV::Auth::AuthFetch::PAYMENT_PROTOCOL_ID`; if/when the SDK moves the constant out of the `AuthFetch` namespace (one consumer of BRC-29, not its owner) the alias absorbs the move.
-- `BSV::Wallet::BRC29.key_id(prefix, suffix)` — the only sanctioned `key_id` composer. Inline `"#{prefix} #{suffix}"` at call sites is banned. The helper validates each token against the base64url subset `[A-Za-z0-9+/=_-]`, rejects empty tokens, and caps each at 128 bytes. The validation is a cryptographic correctness primitive, not defensive padding: an NBSP or two-space typo would silently parse on the sender side and break key recovery on the receiver — the failure surfaces only as an unspendable output, no exception.
+- `BSV::Wallet::BRC29.key_id(prefix, suffix)` — the only sanctioned `key_id` composer. Inline `"#{prefix} #{suffix}"` at call sites is banned. The helper validates each token against the base64url subset `[A-Za-z0-9+/=_-]`, rejects empty tokens, and caps each at 128 bytes. The validation is a cryptographic correctness check, not defensive padding: an NBSP or two-space typo would silently parse on the sender side and break key recovery on the receiver — the failure surfaces only as an unspendable output, no exception.
 
 The same protocol identifier is reused for internal self-payments — change outputs, WBIKD slot derivation, sweep self-pays — because the wallet uses one BRC-42 protocol envelope for all P2PKH derivation rather than minting a parallel internal-only protocol. The `counterparty` parameter is what distinguishes the two regimes.
 
@@ -190,7 +196,7 @@ The same protocol identifier is reused for internal self-payments — change out
 | `Engine::TxBuilder#derive_signing_key` | Spending an inbound BRC-29 output | `sender_identity_key` (or `'self'` for internal-origin) |
 | `CLI::Commands::Send#call_identity_key` | Outbound BRC-29 payment (CLI) | `recipient` identity key |
 | `Engine::TxBuilder#build_change` | Change output back to wallet | `'self'` |
-| `Engine#create_wbikd_receive_address` | WBIKD slot derivation | `'self'` |
+| `Engine#generate_receive_address` | WBIKD receive-address derivation | `'self'` |
 | `Engine#list_receive_addresses` | WBIKD slot enumeration | `'self'` |
 | `Engine#find_or_create_wbikd_slot` | WBIKD slot creation | `'self'` |
 | `Engine#internalize_wbikd_utxo` | WBIKD UTXO recovery | `'self'` |
@@ -224,9 +230,9 @@ The BRC-29 spec compliance lives at the **derivation layer** (protocol identifie
 
 ## Threat model (CLI BRC-29 receive)
 
-**Sender identity is unauthenticated.** The CLI receive path shape-validates `sender_identity_key` — checks the compressed pubkey hex shape — but performs no cryptographic signature check. An on-path attacker who substitutes their own identity key in the envelope (rewriting the same `beef`) causes the receiver to derive the BRC-42 child key for the *attacker's* identity, not the genuine sender's. The receiver's import then targets an output whose locking-script pubkey hash matches a key the attacker can spend — funds delivered to the attacker on next broadcast. The wallet-internal envelope is therefore suitable for *trusted-channel* delivery only (a piped stdin/stdout under one operator's control, or a hand-copied JSON file). Wire-level use over an untrusted network needs BRC-31 transport authentication wrapping the envelope; that is a follow-up HLR (TBD).
+**Sender identity is unauthenticated.** The CLI receive path shape-validates `sender_identity_key` — checks the compressed pubkey hex shape — but performs no cryptographic signature check. An on-path attacker who substitutes their own identity key in the envelope (rewriting the same `beef`) causes the receiver to derive the BRC-42 child key for the *attacker's* identity, not the genuine sender's. The receiver's internalize then targets an output whose locking-script pubkey hash matches a key the attacker can spend — funds delivered to the attacker on next broadcast. The wallet-internal envelope is therefore suitable for *trusted-channel* delivery only (a piped stdin/stdout under one operator's control, or a hand-copied JSON file). Wire-level use over an untrusted network needs BRC-31 transport authentication wrapping the envelope; that is #498.
 
-**Derivation token entropy is sufficient at every BRC-29 send site.** `BSV::Wallet.random_derivation` produces eight cryptographically random bytes (64 bits) per token, base64-encoded to a 12-character string. Both BRC-29 send paths — the outbound CLI (`CLI::Commands::Send#call_identity_key`) and the engine-side porcelain (`Engine#send_payment`) — draw prefix and suffix independently from `random_derivation`, giving 128 bits of combined per-output entropy. That is ample for output unlinkability against a chain-watching observer. Internal self-payment sites use deterministic suffixes (`vout.to_s`, `(i+1).to_s` for change indexing, static `'1'` for WBIKD); their counterparty is `'self'`, so no third party can derive the locking-script pubkey hash from a public input regardless, and the entropy concern does not apply at those sites.
+**Derivation token entropy is sufficient at every BRC-29 send site.** `BSV::Wallet.random_derivation` produces eight cryptographically random bytes (64 bits) per token, base64-encoded to a 12-character string. Both BRC-29 send paths — the outbound CLI (`CLI::Commands::Send#call_identity_key`) and the Engine porcelain `Engine#send_payment` — draw prefix and suffix independently from `random_derivation`, giving 128 bits of combined per-output entropy. That is ample for output unlinkability against a chain-watching observer. Internal self-payment sites use deterministic suffixes (`vout.to_s`, `(i+1).to_s` for change indexing, static `'1'` for WBIKD); their counterparty is `'self'`, so no third party can derive the locking-script pubkey hash from a public input regardless, and the entropy concern does not apply at those sites.
 
 **`paymentRemittance` is engine-internal, not wire shape.** The receiver's `internalize_action` call shape — `protocol: 'wallet payment'` plus the `payment_remittance: { derivation_prefix, derivation_suffix, sender_identity_key }` triple — matches the BRC-29 spec's `internalizeAction` example exactly ([BRC-29 §Recipient Validation](https://github.com/bitcoin-sv/BRCs/blob/master/payments/0029.md#recipient-validation)). It is the call shape between `CLI::Commands::Receive` and `Engine::BeefInternalizer`, not a wire shape — the wire envelope is the JSON above. The distinction matters: a future strict-spec wire envelope (per the bullet below) would still emit the same `payment_remittance` triple to the engine at the internalize boundary.
 
@@ -234,10 +240,10 @@ The BRC-29 spec compliance lives at the **derivation layer** (protocol identifie
 
 Tracked as follow-up HLRs filed post-merge of #460:
 
-- Strict BRC-29 wire envelope (camelCase, base64 BEEF, `paymentRemittance` triple per the spec) for a `bin/brc100` CLI carrier — Q1 of #460 deferred (follow-up issue TBD).
-- BRC-31 transport authentication of the wallet-internal envelope — closes the sender-identity-unauthenticated gap above (follow-up issue TBD).
-- Move SDK `PAYMENT_PROTOCOL_ID` out of `BSV::Auth::AuthFetch::*` — `AuthFetch` is one consumer of BRC-29, not its owner; a BRC-29 namespace would be the right home. `BSV::Wallet::BRC29::PROTOCOL_ID` is the wallet seam for that move (follow-up issue TBD).
-- Identity-key case canonicalisation on receive — downcase inbound hex before DB compare. Pre-existing latent issue, surfaced more by BRC-29 (follow-up issue TBD).
+- Strict BRC-29 wire envelope (camelCase, base64 BEEF, `paymentRemittance` triple per the spec) for a `bin/brc100` CLI carrier — Q1 of #460 deferred (#497).
+- BRC-31 transport authentication of the wallet-internal envelope — closes the sender-identity-unauthenticated gap above (#498).
+- Move SDK `PAYMENT_PROTOCOL_ID` out of `BSV::Auth::AuthFetch::*` — `AuthFetch` is one consumer of BRC-29, not its owner; a BRC-29 namespace would be the right home. `BSV::Wallet::BRC29::PROTOCOL_ID` is the wallet seam for that move (#499).
+- Identity-key case canonicalisation on receive — downcase inbound hex before DB compare. Pre-existing latent issue, surfaced more by BRC-29 (#500).
 
 ## References
 

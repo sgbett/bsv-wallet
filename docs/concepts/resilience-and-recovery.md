@@ -76,15 +76,15 @@ These are not redundant pedantry. They are the line that holds when the applicat
 
 ## The reaper: cleaning up abandoned work
 
-Not every action completes. A deferred action that is created but never signed keeps its inputs locked, which would slowly strand UTXOs. `Engine::Reaper` deletes actions whose age exceeds `BSV_WALLET_REAP_THRESHOLD_S` **unless they have a promotions row**. The criterion is deliberate: a promotions row means the action produced canonical value and must be kept; an unpromoted, unsigned, or unbroadcast action is exactly the abandoned work the reaper exists to clear, and deleting it releases its locked inputs back to the pool via cascade.
+Not every action completes. A deferred action that is created but never signed keeps its inputs locked, which would slowly strand UTXOs. `Engine::Reaper` deletes actions whose age exceeds `BSV_WALLET_REAP_THRESHOLD_S` **unless they have a promotions row or a broadcasts row**, and never deletes a signed internal action. The criterion is deliberate: a promotions row means the action produced canonical value and must be kept, and a broadcasts row means the broadcast loops own the action; an unpromoted action that never reached broadcast is exactly the abandoned work the reaper exists to clear, and deleting it releases its locked inputs back to the pool via cascade.
 
-In production this is the **reaper fibre**: the daemon's `Scheduler` runs a 60-second discovery loop that pushes stale-action IDs onto `inproc://reaper.pull`, and `Engine::Reaper#pull!` consumes them. Calling `store.reap_stale_actions(threshold:)` from a script still works the same way and is the path the test suite uses; the daemon fibre simply automates it on a cadence.
+In production this is the **reaper fibre**: the daemon's `Scheduler` runs a 60-second discovery loop that pushes stale-action IDs onto `inproc://reaper.pull`, and `Engine::Reaper#pull!` consumes them. The Store side is two calls, `stale_action_ids(threshold:, limit:)` to discover and `reap_action(action_id:)` to delete, which re-checks reapability under a row lock; a script can call them directly, and the daemon fibre simply drives them on a cadence.
 
 ## Recovery from the key alone
 
 The deepest form of resilience is that the wallet's state is, in principle, reconstructible from the **private key plus the chain**. Three mechanisms make this real:
 
-- **Rebuild from chain** — `import_wallet` and `import_utxo` discover and internalise the wallet's own UTXOs from the network, recording them as proven internal actions. A wallet that has lost its database but kept its WIF can repopulate.
+- **Rebuild from chain** — `import_wallet` and `import_utxo` discover and import the wallet's own UTXOs from the network, recording them as proven internal actions. A wallet that has lost its database but kept its WIF can repopulate.
 - **Recoverable receive addresses** — the WBIKD scheme derives legacy receive addresses from the identity key and public on-chain coordinates, so `list_receive_addresses` and `scan_receive_addresses` can re-derive the set of outstanding addresses and find payments to them without any stored secret. `internalize_wbikd_utxo` then ingests each discovered UTXO and recycles the slot. See [Keys & Cryptography](keys-and-cryptography.md).
 - **Reclaim to a bare key** — `sweep` consolidates everything to a *root* P2PKH address (`hash160(pubkey)`, not a derived one), so the funds land somewhere a plain private key can spend them with no derivation metadata at all. This is the ultimate exit: whatever state the wallet is in, the value can be swept back to the identity key and recovered.
 

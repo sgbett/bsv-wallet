@@ -18,9 +18,9 @@ With a BEEF envelope, a recipient can verify a payment entirely from the bundle 
 
 ## Outgoing: building Atomic BEEF
 
-When an action is built, `Engine::Hydrator#build_atomic_beef` walks the ancestor graph and assembles the raw transaction together with the proofs of its ancestry into a `BSV::Transaction::Beef` bundle. That bundle is what `build_action` returns as the `atomic_beef:` field (translated to `tx:` at the BRC-100 wrap layer) — ready to hand to the counterparty so they can verify and internalise it. The wallet stores the proofs it knows (`save_beef_proofs`) so it can reconstruct ancestry for future sends without re-fetching.
+When an action is built, `Engine::Hydrator#build_atomic_beef` walks the ancestor graph and assembles the raw transaction together with the proofs of its ancestry into a `BSV::Transaction::Beef` bundle. That bundle is what `build_action` returns as the `atomic_beef:` field (translated to `tx:` at the BRC-100 wrap layer) — ready to hand to the counterparty so they can verify and internalise it. The ancestry comes from proofs the wallet already holds, without re-fetching: those saved when a transaction came in (`save_beef_proofs`), fetched by `import_utxo`, or acquired after the wallet's own broadcasts (`Engine::TxProof`).
 
-Hydration is wtxid-cached. A shared `Engine::HydratedTxCache` sits between `Hydrator` (deep BEEF walks) and `Engine::Broadcast` (Extended Format parent reads at submit time), so a transaction warmed by one path is visible to the other. The cache is bounded and monotonically enriched, configured by `BSV_WALLET_TX_CACHE_SIZE`.
+Hydration is wtxid-cached. A shared `Engine::HydratedTxCache` sits between `Hydrator` (deep BEEF walks) and `Engine::Broadcast` (Extended Format parent reads at submit time), so a transaction warmed by one path is visible to the other. The cache is a bounded LRU, sized by `BSV_WALLET_TX_CACHE_SIZE`; entries are added and leave only by age-out.
 
 The two-step model — Hydrator owns the egress walk, BeefInternalizer owns the ingress — keeps the directions one-way and decoupled. What they share is the cache, not a back-edge.
 
@@ -52,11 +52,11 @@ The same trim mechanism, layered on top with per-counterparty accounting, is wha
 
 ## The chain tracker
 
-SPV needs block headers, and fetching them per verification would be slow and fragile. `Network::ChainTracker` is a **write-through cache**: it answers `valid_root_for_height?` and `current_height` from a local `blocks` table, fetching and persisting headers through `Network::Services` on a miss. It subclasses the SDK's `ChainTracker` so it drops straight into `Transaction#verify`.
+SPV needs block headers, and fetching them per verification would be slow and fragile. `Network::ChainTracker` is a **write-through cache**: it answers `valid_root_for_height?` from a local `blocks` table, fetching and persisting headers through `Network::Services` on a miss. It subclasses the SDK's `ChainTracker` so it drops straight into `Transaction::Tx#verify`. That is the default trust model, which believes the root a chain-query service reports; the opt-in `SpvHeaderChainTracker` answers from a locally PoW-validated header chain instead ([SPV header verification](../reference/spv-header-verification.md)).
 
 Critically, it **fails closed**: if a header lookup errors, the tracker returns `false` (root invalid) rather than raising or guessing. A verification that cannot obtain a header fails, which is the safe direction.
 
-For *egress* validation only — when the wallet is checking the BEEF it is about to hand to a peer — `TrustedSelfChainTracker` is used instead. It returns `true` for all header lookups because the wallet's own proofs were validated against real headers at import time; the chain has already been consulted. Using the trusted tracker here is what lets `Hydrator#validate_for_handoff!` enforce *structural* completeness (every input resolvable in the bundle, every proof anchored, the subject not demoted) without re-running header verification on data the wallet itself authored. It is never used for incoming peer data.
+For *egress* validation only — when the wallet is checking the BEEF it is about to hand to a peer — `TrustedSelfChainTracker` is used instead. It returns `true` for every header lookup: the check at hand-off is structural, over proofs the wallet already holds, so header validity isn't re-checked there. Using the trusted tracker here is what lets `Hydrator#validate_for_handoff!` enforce *structural* completeness (every input resolvable in the bundle, every proof anchored, the subject not demoted) without re-running header verification on data the wallet itself authored. It is never used for incoming peer data.
 
 ## Byte order: wire vs display
 
@@ -82,7 +82,7 @@ Why this matters in practice: the raw SHA-256d output is *not* "little-endian" i
 - **BRC-74** — BUMP (BSV Unified Merkle Path). The proof format carried inside BEEF.
 - **BRC-95** — Atomic BEEF. The single-subject form the wallet produces.
 
-Test vectors for these formats live in the BRC repositories themselves — `brc-12`, `brc-62`, `brc-74`, `brc-95` directories under [bsv-blockchain/BRCs](https://github.com/bsv-blockchain/BRCs). The wallet's parser/verifier passes those test suites; if you're writing an alternative implementation or a peer, the vectors are the conformance gate.
+The specs live under `transactions/` in [bsv-blockchain/BRCs](https://github.com/bsv-blockchain/BRCs); BRC-12, BRC-62 and BRC-74 carry worked examples rather than vector suites. The SDK parses and verifies these formats for the wallet, and its own specs run BEEF and BUMP vectors from the cross-SDK conformance corpus; the wallet's specs don't run a format-vector suite of their own.
 
 ## Related
 

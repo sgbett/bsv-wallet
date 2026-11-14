@@ -341,7 +341,7 @@ module BSV
         # awaiting outcome" until the poll loop / listener resolves it.
         # Bounded recovery, not a correctness issue (plan §4.3).
         def submit(action_id, action, started_at:)
-          # wtxid_raw_tx_parity (migration 003) guarantees wtxid is set
+          # wtxid_raw_tx_parity (001_create_schema.rb) guarantees wtxid is set
           # whenever raw_tx is — the #process guard above filtered out the
           # NULL raw_tx case. Validate defensively so a contract violation
           # surfaces here rather than deep inside Broadcaster.
@@ -434,9 +434,9 @@ module BSV
             }
           )
           @store.link_proof(action_id: action_id, tx_proof_id: proof_id) if proof_id
-          # Monotonic cache enrichment: the eager proof makes this wtxid a
+          # Cache enrichment: the eager proof makes this wtxid a
           # proven terminal for any future wire_ancestor walk. Equivalent to
-          # Hydrator#proof_arrived (both are monotonic puts on the shared
+          # Hydrator#proof_arrived (both are puts on the shared
           # cache); done direct here since Broadcast holds the cache. #296 Phase D.
           @hydrated_tx_cache.put(wtxid, raw_tx: action[:raw_tx], merkle_path: merkle_path)
           BSV.logger&.debug do
@@ -447,7 +447,7 @@ module BSV
         # 400 / terminal-body branch -- under HLR #182's atomic invariant,
         # the broadcasts row already exists by submit time. Use reject_action
         # to cascade-unwind any speculatively-promoted descendants and
-        # release locked UTXOs. If the cascade hits a no_send descendant
+        # release locked UTXOs. If the cascade hits an internal (intent +none+) descendant
         # the call raises -- bump retry_count, leave the row alive for the
         # next resolution-loop pass, and emit a failure event.
         def handle_submit_terminal(action_id, response)
@@ -495,7 +495,7 @@ module BSV
         # Store#reject_action, which cascades-forward through any child
         # action that consumed this action's outputs and unwinds the
         # speculative promotion in one transaction. CannotRejectInternalActionError
-        # is the no_send-descendant invariant guard -- bump retry_count and
+        # is the internal-descendant invariant guard -- bump retry_count and
         # leave the row alive for the next resolution-loop pass.
         def poll_status(action_id, action, status:, started_at:)
           unless action[:wtxid]

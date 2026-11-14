@@ -91,7 +91,7 @@ module BSV
           raise NotImplementedError
         end
 
-        # Phases 2–4 (internal/no_send) in one atomic transition: sign, save
+        # Phases 2–4 (internal, broadcast intent +none+) in one atomic transition: sign, save
         # proof, promote outputs, and make change spendable. Closes the
         # crash-windows a separate-call sequence leaves (#327 sign→promote,
         # #328 promote→change). Used by the synchronous internal completion
@@ -644,7 +644,7 @@ module BSV
         # Promote change outputs to spendable for an action.
         #
         # Creates spendable rows for change outputs that don't already
-        # have one. Called after broadcast acceptance or in the no_send path.
+        # have one. Called after broadcast acceptance or on the internal (intent +none+) path.
         #
         # @param action_id [Integer]
         def promote_change_to_spendable(action_id:)

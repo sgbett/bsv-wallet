@@ -149,7 +149,7 @@ module BSV
     #
     #   BSV::Wallet.configure do |c|
     #     c.limp_threshold = 100_000
-    #     c.hints_socket   = '/tmp/bsv-wallet-hints.sock'
+    #     c.hints_socket   = "ipc://#{Dir.home}/.bsv-wallet/hints.sock"
     #   end
     #
     # @yield [Config]

@@ -97,6 +97,8 @@ Intent is stated, never inferred (ADR-019, ADR-031). Broadcast and transmit take
 
 The option rows apply to core only: `BRC100` keeps BRC-100's own option names and translates them.
 
+CI enforces the rows a pattern can detect (`rake docs:retired_terms`, with the term list in `gem/bsv-wallet/tasks/docs_guard/retired_terms.yml`); a new row needs a pattern there, or a place on its manual list.
+
 | Retired | Use instead |
 |---|---|
 | substrate | the Hydrator, the HydratedTxCache or core's domain model, whichever is meant |
