@@ -59,7 +59,7 @@ Sequel.migration do
     # ARC tx_status vocabulary, per
     # https://github.com/bitcoin-sv/arc internal/metamorph/metamorph_api/metamorph_api.proto.
     # SEEN_MULTIPLE_NODES appears between SEEN_ON_NETWORK and DOUBLE_SPEND_ATTEMPTED
-    # (Arcade emits it, #011). IMMUTABLE appended for the wallet's TERMINAL_STATUSES
+    # (Arcade emits it, #011). IMMUTABLE appended for the wallet's ArcStatus::TERMINAL
     # (anticipates an ARC addition; #198/#220 design intent).
     arc_tx_statuses = %w[
       UNKNOWN QUEUED RECEIVED STORED

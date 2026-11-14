@@ -25,7 +25,7 @@ module BSV
     # to express the wallet's confidence in its own state, not as a
     # general validation shortcut.
     #
-    # @example At egress (Action#validate_for_handoff!)
+    # @example At egress (Engine::Hydrator#validate_for_handoff!)
     #   subject_tx.verify(chain_tracker: TrustedSelfChainTracker.new)
     #   # passes iff the BEEF is structurally complete; raises otherwise
     class TrustedSelfChainTracker < BSV::Transaction::ChainTracker

@@ -1353,14 +1353,13 @@ module BSV
         Action.attach_labels(engine: self, action_id: action_id, labels: labels)
       end
 
-      # Build an Atomic BEEF (BRC-95) envelope for a signed transaction.
-      #
-      # Push a BEEF cache hint to the daemon so broadcast skips both
-      # +find_action+ and the +resolve_inputs_for_signing+ JOIN. BEEF is
-      # the natural hint payload: it's a strict superset of EF for the
-      # subject tx, the producer has it built already (returned to the
-      # caller from +create_action+), and the same cached Transaction::Tx
-      # serves a future BEEF-based p2p hand-off path without rebuilding.
+      # Push the action's BEEF to the daemon as a cache hint, so its
+      # Broadcast finds the subject's parents in the HydratedTxCache and
+      # skips the +resolve_inputs_for_signing+ JOIN. BEEF is the natural
+      # payload: the producer has already built it for +build_action+'s
+      # return value, and it carries every parent the EF build needs.
+      # Broadcast stores it as per-transaction raw-tx and merkle-path
+      # bytes, trusted only as far as the hints socket is (#556).
       # Best-effort: when +BSV_WALLET_HINTS_SOCKET+ is unset, do
       # nothing. Push failures (daemon not listening, socket missing, OMQ
       # error) are swallowed — daemon's #252 reconstruction stays the
