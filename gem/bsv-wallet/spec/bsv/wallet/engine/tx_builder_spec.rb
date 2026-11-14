@@ -68,7 +68,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
         resolved_inputs: resolved,
         caller_outputs: [{ satoshis: 4_000, locking_script: op_true }],
         caller_inputs: nil,
-        lock_time: 0, version: 1, randomize: false, sign: true
+        lock_time: 0, version: 1, shuffle_outputs: false, sign: true
       )
 
       expect(result).to include(:wtxid, :raw_tx, :vout_mapping, :tx)
@@ -94,7 +94,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
         resolved_inputs: resolved,
         caller_outputs: [{ satoshis: 4_000, locking_script: op_true }],
         caller_inputs: nil,
-        lock_time: 0, version: 1, randomize: false, sign: false
+        lock_time: 0, version: 1, shuffle_outputs: false, sign: false
       )
 
       decoded = BSV::Transaction::Tx.from_binary(result[:raw_tx])
@@ -109,7 +109,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
         resolved_inputs: [],
         caller_outputs: [{ satoshis: 0, locking_script: "\x6a".b }],
         caller_inputs: nil,
-        lock_time: 0, version: 1, randomize: false, sign: true
+        lock_time: 0, version: 1, shuffle_outputs: false, sign: true
       )
       expect(result[:tx].inputs).to be_empty
       expect(result[:tx].outputs.length).to eq(1)
@@ -129,13 +129,13 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
         resolved_inputs: [resolved],
         caller_outputs: [{ satoshis: 4_000, locking_script: op_true }],
         caller_inputs: [{ vin: 0, unlocking_script: '' }],
-        lock_time: 0, version: 1, randomize: false, sign: true
+        lock_time: 0, version: 1, shuffle_outputs: false, sign: true
       )
 
       expect(result[:tx].inputs[0].unlocking_script).to be_a(BSV::Script::Script)
     end
 
-    it 'maps each original output index to its final vout position when randomize is true' do
+    it 'maps each original output index to its final vout position when shuffle_outputs is true' do
       resolved = [resolved_p2pkh_input(vin: 0, satoshis: 50_000)]
 
       # Distinct satoshi values tag each output so we can assert the mapping
@@ -145,7 +145,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
       outputs = 5.times.map { |i| { satoshis: 1_000 + i, locking_script: op_true } }
       result = builder.build(
         resolved_inputs: resolved, caller_outputs: outputs, caller_inputs: nil,
-        lock_time: 0, version: 1, randomize: true, sign: true
+        lock_time: 0, version: 1, shuffle_outputs: true, sign: true
       )
 
       expect(result[:vout_mapping].keys.sort).to eq([0, 1, 2, 3, 4])
@@ -165,7 +165,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
         resolved_inputs: resolved,
         caller_outputs: [{ satoshis: 10_000, locking_script: op_true }],
         caller_inputs: nil,
-        lock_time: 0, version: 1, randomize: false, change_count: 1
+        lock_time: 0, version: 1, shuffle_outputs: false, change_count: 1
       )
 
       expect(result).to include(:wtxid, :raw_tx, :tx, :vout_mapping, :change_outputs)
@@ -188,7 +188,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
         resolved_inputs: resolved,
         caller_outputs: [{ satoshis: 100, locking_script: op_true }],
         caller_inputs: nil,
-        lock_time: 0, version: 1, randomize: false, change_count: 1
+        lock_time: 0, version: 1, shuffle_outputs: false, change_count: 1
       )
 
       expect(result).to have_key(:shortfall)
@@ -202,7 +202,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
           resolved_inputs: [resolved_p2pkh_input(vin: 0, satoshis: 100_000)],
           caller_outputs: [{ satoshis: 10_000, locking_script: op_true }],
           caller_inputs: nil,
-          lock_time: 0, version: 1, randomize: false, change_count: 0
+          lock_time: 0, version: 1, shuffle_outputs: false, change_count: 0
         )
       end.to raise_error(ArgumentError, /change_count must be >= 1/)
     end
@@ -214,7 +214,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
       expect do
         deriverless.build_change(
           resolved_inputs: [], caller_outputs: [{ satoshis: 1_000, locking_script: op_true }],
-          caller_inputs: nil, lock_time: 0, version: 1, randomize: false, change_count: 1
+          caller_inputs: nil, lock_time: 0, version: 1, shuffle_outputs: false, change_count: 1
         )
       end.to raise_error(BSV::Wallet::Error, /no key deriver configured/)
     end
@@ -225,7 +225,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
         resolved_inputs: resolved,
         caller_outputs: [{ satoshis: 10_000, locking_script: op_true }],
         caller_inputs: nil,
-        lock_time: 0, version: 1, randomize: false, change_count: 1
+        lock_time: 0, version: 1, shuffle_outputs: false, change_count: 1
       )
       expect(result[:tx]).to be_a(BSV::Transaction::Tx)
       expect(result[:tx].total_input_satoshis).to eq(100_000)
@@ -238,7 +238,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
       it 'stamps :basket on change_output_specs when change_basket is supplied' do
         result = builder.build_change(
           resolved_inputs: resolved, caller_outputs: caller_outputs,
-          caller_inputs: nil, lock_time: 0, version: 1, randomize: false,
+          caller_inputs: nil, lock_time: 0, version: 1, shuffle_outputs: false,
           change_count: 1, change_basket: 'importedfunds'
         )
         expect(result[:change_outputs]).not_to be_empty
@@ -250,7 +250,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
       it 'omits :basket from change_output_specs when change_basket is nil (default)' do
         result = builder.build_change(
           resolved_inputs: resolved, caller_outputs: caller_outputs,
-          caller_inputs: nil, lock_time: 0, version: 1, randomize: false,
+          caller_inputs: nil, lock_time: 0, version: 1, shuffle_outputs: false,
           change_count: 1
         )
         expect(result[:change_outputs]).not_to be_empty
@@ -270,7 +270,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
         resolved_inputs: resolved,
         caller_outputs: [{ satoshis: 4_000, locking_script: op_true }],
         caller_inputs: nil,
-        lock_time: 0, version: 1, randomize: false, sign: false
+        lock_time: 0, version: 1, shuffle_outputs: false, sign: false
       )[:raw_tx]
       tx = BSV::Transaction::Tx.from_binary(unsigned)
 
@@ -353,7 +353,7 @@ RSpec.describe BSV::Wallet::Engine::TxBuilder do
         resolved_inputs: resolved,
         caller_outputs: [{ satoshis: 10_000, locking_script: op_true }],
         caller_inputs: nil,
-        lock_time: 0, version: 1, randomize: false, change_count: 1
+        lock_time: 0, version: 1, shuffle_outputs: false, change_count: 1
       )
 
       expect(result).to include(:wtxid, :raw_tx, :tx, :vout_mapping, :change_outputs)

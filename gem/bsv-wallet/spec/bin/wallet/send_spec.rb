@@ -129,7 +129,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
       )
     end
 
-    it 'calls engine.build_action with a P2PKH output, no derivation hints, randomize_outputs: false' do
+    it 'calls engine.build_action with a P2PKH output, no derivation hints, shuffle_outputs: false' do
       command.call([base58_address, '1000'])
 
       expect(engine).to have_received(:build_action).with(
@@ -146,7 +146,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
           )
         ),
         broadcast_intent: :inline,
-        randomize_outputs: false,
+        shuffle_outputs: false,
         # HLR #489 — +nil+ means "inherit wallet default" (100 sats/kb).
         fee_rate: nil
       )

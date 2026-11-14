@@ -1355,7 +1355,7 @@ RSpec.describe BSV::Wallet::Engine do
     let(:intent_methods) do
       %i[build_action sign_action import_utxo import_wallet send_payment consolidate_step sweep]
     end
-    let(:retired_kwargs) { %i[no_send accept_delayed_broadcast sign_and_process] }
+    let(:retired_kwargs) { %i[no_send accept_delayed_broadcast sign_and_process randomize_outputs] }
 
     it 'takes broadcast_intent: as a required keyword, explicitly, in place of the retired flags' do
       aggregate_failures do
@@ -2906,6 +2906,38 @@ RSpec.describe BSV::Wallet::Engine do
         # Verify wtxid
         expected_wtxid = parse_beef_tx(sign_result[:tx]).wtxid
         expect(sign_result[:txid]).to eq(expected_wtxid)
+      end
+
+      # The outputs are shuffled when the unsigned transaction is staged,
+      # and signing commits to their positions, so sign_action must keep
+      # the staged order.
+      it 'signs shuffled outputs in the positions the signable transaction staged' do
+        fund_wallet(satoshis: 1000)
+        output_id = engine_with_keys.spendable_outputs(basket: nil)[:outputs].first[:id]
+        output_script = p2pkh_locking_script_for(derive_key).to_binary
+
+        create_result = engine_with_keys.brc100.create_action(
+          description: 'deferred shuffled outputs',
+          sign_and_process: false,
+          inputs: [{ output_id: output_id }],
+          outputs: [300, 200, 100, 50].map do |sats|
+            { satoshis: sats, locking_script: output_script, output_description: 'output', spendable: false }
+          end
+        )
+        staged = parse_beef_tx(create_result[:signable_transaction][:tx])
+
+        sign_result = engine_with_keys.brc100.sign_action(
+          spends: {}, reference: create_result[:signable_transaction][:reference]
+        )
+        signed = parse_beef_tx(sign_result[:tx])
+
+        expect(signed.outputs.map(&:satoshis)).to eq(staged.outputs.map(&:satoshis))
+        expect(signed.outputs.map(&:satoshis)).to contain_exactly(300, 200, 100, 50)
+        signed.inputs.each_with_index do |input, vin|
+          input.source_satoshis = 1000
+          input.source_locking_script = p2pkh_locking_script_for(derive_key)
+          expect(signed.verify_input(vin)).to be(true), "input #{vin} does not verify"
+        end
       end
     end
 

@@ -606,6 +606,20 @@ RSpec.describe BSV::Wallet::BRC100 do
       end
     end
 
+    describe 'randomizeOutputs → shuffle_outputs' do
+      it 'asks for shuffle_outputs: true by default' do
+        brc100.create_action(description: 'shuffle default', outputs: outputs)
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(shuffle_outputs: true))
+      end
+
+      it 'asks for shuffle_outputs: false when randomize_outputs is false' do
+        brc100.create_action(description: 'shuffle off', outputs: outputs, randomize_outputs: false)
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(shuffle_outputs: false))
+      end
+    end
+
     describe 'signAndProcess and input shape → defer_signing' do
       def create_with(**kwargs)
         brc100.create_action(description: 'defer table', outputs: outputs, **kwargs)

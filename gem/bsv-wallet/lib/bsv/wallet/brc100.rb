@@ -123,7 +123,7 @@ module BSV
             defer_signing: !sign_and_process || awaiting_unlocking_scripts?(inputs),
             broadcast_intent: map_broadcast_intent(no_send, accept_delayed_broadcast),
             change_count: change_count,
-            randomize_outputs: randomize_outputs
+            shuffle_outputs: randomize_outputs
           )
         rescue BSV::Wallet::InvalidParameterError => e
           raise unless e.parameter == 'defer_signing'

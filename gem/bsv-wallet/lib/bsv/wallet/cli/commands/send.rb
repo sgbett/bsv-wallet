@@ -200,7 +200,7 @@ module BSV
                   output_description: 'payment' }
               ],
               broadcast_intent: broadcast_intent,
-              randomize_outputs: false,
+              shuffle_outputs: false,
               fee_rate: fee_rate
             )
 
@@ -250,7 +250,7 @@ module BSV
                   output_description: 'BRC-29 payment' }
               ],
               broadcast_intent: broadcast_intent,
-              randomize_outputs: false,
+              shuffle_outputs: false,
               fee_rate: fee_rate
             )
 

@@ -291,7 +291,7 @@ module BSV
                 spendable_intent: 'none', output_description: "fund #{name} root" }
             ],
             broadcast_intent: :inline,
-            randomize_outputs: false
+            shuffle_outputs: false
           )
 
           dtxid = result[:wtxid].reverse.unpack1('H*')

@@ -218,6 +218,8 @@ module BSV
       #   unsigned and returns a signable handle for +#sign_action+; only
       #   with caller-supplied +inputs+. The input set's shape is never
       #   read for this — the caller states it.
+      # @param shuffle_outputs [Boolean] shuffle the output order for
+      #   privacy; callers that rely on an output's vout pass +false+.
       # @return [Hash] sync: +{ wtxid:, atomic_beef: }+;
       #   internal (+:none+): +{ wtxid:, atomic_beef:, change_outpoints: }+;
       #   deferred: +{ signable: { atomic_beef:, reference: } }+.
@@ -226,7 +228,7 @@ module BSV
       def build_action(description:, broadcast_intent:, input_beef: nil, inputs: nil, outputs: nil,
                        lock_time: nil, version: nil, labels: nil,
                        defer_signing: false, change_count: nil,
-                       randomize_outputs: true, change_basket: nil,
+                       shuffle_outputs: true, change_basket: nil,
                        fee_rate: nil)
         validate_broadcast_intent!(broadcast_intent)
 
@@ -302,7 +304,7 @@ module BSV
         if defer_signing
           return action.build_deferred!(
             inputs: inputs, outputs: outputs, lock_time: lock_time,
-            version: version, randomize: randomize_outputs, intent: broadcast_intent
+            version: version, shuffle_outputs: shuffle_outputs, intent: broadcast_intent
           )
         end
 
@@ -314,7 +316,7 @@ module BSV
             # caller-supplied; lock them once, no funding loop.
             action.build_with_caller_inputs!(
               inputs: inputs, outputs: outputs, lock_time: lock_time,
-              version: version, randomize: randomize_outputs
+              version: version, shuffle_outputs: shuffle_outputs
             )
           else
             # FundingStrategy owns input acquisition (initial + top-up)
@@ -326,7 +328,7 @@ module BSV
               funded = action.build_via_funding!(
                 outputs: outputs, caller_inputs: caller_supplied_inputs ? inputs : nil,
                 lock_time: lock_time, version: version,
-                randomize: randomize_outputs, change_count: pre_lock_change_count,
+                shuffle_outputs: shuffle_outputs, change_count: pre_lock_change_count,
                 change_basket: change_basket
               )
               # Exact post-loop headroom check: actual fee is now known.
@@ -831,7 +833,7 @@ module BSV
             inputs: [{ output_id: imported_output_id }],
             outputs: [],
             broadcast_intent: broadcast_intent,
-            randomize_outputs: false,
+            shuffle_outputs: false,
             change_count: 1,
             change_basket: basket
           )
@@ -947,7 +949,7 @@ module BSV
         build_result = @tx_builder.build(
           resolved_inputs: resolved, caller_outputs: [],
           caller_inputs: [{ output_id: slot[:id] }],
-          lock_time: nil, version: nil, randomize: false, sign: true
+          lock_time: nil, version: nil, shuffle_outputs: false, sign: true
         )
         wtxid = build_result[:wtxid]
         raw_tx = build_result[:raw_tx]
@@ -1093,7 +1095,7 @@ module BSV
         # carry +spendable_intent: 'spendable'+ at their own construction
         # site; they are not declared here.
         #
-        # randomize_outputs: false guarantees the payment output stays at
+        # shuffle_outputs: false guarantees the payment output stays at
         # index 0. Change outputs from +TxBuilder#build_change+ are appended
         # after caller outputs.
         #
@@ -1105,7 +1107,7 @@ module BSV
           outputs: [{ satoshis: satoshis, locking_script: locking_script,
                       spendable_intent: 'none' }],
           broadcast_intent: broadcast_intent,
-          randomize_outputs: false, fee_rate: fee_rate
+          shuffle_outputs: false, fee_rate: fee_rate
         )
 
         {
@@ -1116,7 +1118,7 @@ module BSV
           atomic_beef: result[:atomic_beef],
           sender_identity_key: @key_deriver.identity_key,
           outputs: [{
-            vout: 0, # relies on randomize_outputs: false — see above
+            vout: 0, # relies on shuffle_outputs: false — see above
             satoshis: satoshis,
             derivation_prefix: derivation_prefix,
             derivation_suffix: derivation_suffix
@@ -1240,7 +1242,7 @@ module BSV
             outputs: [{ satoshis: total - fee, locking_script: locking_script,
                         spendable_intent: intent }],
             broadcast_intent: broadcast_intent,
-            randomize_outputs: false,
+            shuffle_outputs: false,
             change_count: 1
           )
         ensure
@@ -1490,7 +1492,7 @@ module BSV
             { satoshis: 0, locking_script: op_return_script,
               spendable_intent: 'none' }
           ],
-          randomize_outputs: false
+          shuffle_outputs: false
         )
 
         dtxid = create_result[:wtxid].to_dtxid
