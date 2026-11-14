@@ -2,8 +2,11 @@
 
 require 'bsv-wallet'
 require 'bsv/wallet/engine/broadcast'
+require 'fileutils'
 require 'logger'
 require 'net/http'
+require 'stringio'
+require 'tmpdir'
 require_relative '../../../support/console_helpers'
 
 RSpec.describe BSV::Wallet::Engine::Broadcast do
@@ -1397,91 +1400,233 @@ RSpec.describe BSV::Wallet::Engine::Broadcast do
       end
     end
 
-    describe '#hints_pull! (#296 Phase D)' do
+    describe '#hints_pull! (#296 Phase D, #556)' do
       let(:hints_socket) { 'inproc://hints-test' }
-      # A real BEEF carrying one OP_TRUE transaction; the receiver decodes
-      # it and primes the cache keyed by each tx's wtxid (bytes value).
+      let(:envelope) { BSV::Wallet::Engine::HintEnvelope }
+      let(:cache) { broadcast.hydrated_tx_cache }
       let(:op_true) { BSV::Script::Script.from_binary("\x51".b) }
-      let(:hint_tx) do
+      let(:hint_tx) { tx_spending }
+      let(:hint_message) { hint_for(hint_tx) }
+      let(:dir) { Dir.mktmpdir('hints') }
+      let(:socket_file) { File.join(dir, 'hints.sock') }
+
+      after { FileUtils.rm_rf(dir) }
+
+      # Warning: +ensure task.stop+ on the top-level task replaces a failure
+      # in flight with Async::Stop, and Async logs a StandardError rather
+      # than raising it, so either way a failing example would pass. Stop
+      # only the children, and re-raise what the block raised.
+      def in_reactor
+        failure = nil
+        Async do |task|
+          yield task
+        rescue StandardError => e
+          failure = e
+        ensure
+          task.children&.each(&:stop)
+        end
+        raise failure if failure
+      end
+
+      def tx_spending(*parents, satoshis: 500)
         t = BSV::Transaction::Tx.new(version: 1, lock_time: 0)
-        t.add_output(BSV::Transaction::TransactionOutput.new(satoshis: 500, locking_script: op_true))
+        parents.each do |parent|
+          input = BSV::Transaction::TransactionInput.new(prev_wtxid: parent.wtxid, prev_tx_out_index: 0)
+          input.source_transaction = parent
+          t.add_input(input)
+        end
+        t.add_output(BSV::Transaction::TransactionOutput.new(satoshis: satoshis, locking_script: op_true))
         t
       end
-      let(:hint_beef_bytes) do
-        beef = BSV::Transaction::Beef.new
-        beef.merge_transaction(hint_tx)
-        beef.to_atomic_binary(hint_tx.wtxid)
+
+      # A parent proven by a single-leaf BUMP, whose root is its own wtxid.
+      def proven_tx(satoshis:, height:)
+        t = tx_spending(satoshis: satoshis)
+        leaf = BSV::Transaction::MerklePath::PathElement.new(offset: 0, hash: t.wtxid, txid: true)
+        t.merkle_path = BSV::Transaction::MerklePath.new(block_height: height, path: [[leaf]])
+        t
       end
-      let(:hint_payload) { { action_id: 7, beef: hint_beef_bytes } }
+
+      def atomic_beef_for(subject)
+        beef = BSV::Transaction::Beef.new
+        beef.merge_transaction(subject)
+        beef.to_atomic_binary(subject.wtxid)
+      end
+
+      def hint_for(subject, action_id: 7)
+        envelope.encode(action_id: action_id, beef: atomic_beef_for(subject))
+      end
+
+      # The pull fiber handles messages in order, so once the hint pushed
+      # last is cached, every message pushed before it has been handled.
+      def wait_until_cached(wtxid)
+        deadline = Time.now + 1.0
+        sleep 0.01 until cache.get(wtxid) || Time.now > deadline
+      end
 
       it 'is a no-op when socket_path: nil (no fiber bound, cache stays empty)' do
-        Async do |task|
+        in_reactor do |task|
           broadcast.hints_pull!(task: task, socket_path: nil)
           sleep 0.05
-          expect(broadcast.hydrated_tx_cache).to be_empty
-        ensure
-          task.stop
+          expect(cache).to be_empty
         end
       end
 
-      it 'pulls a hint, parses BEEF, primes the cache keyed by wtxid' do
-        Async do |task|
+      it 'pulls a hint envelope, parses BEEF, primes the cache keyed by wtxid' do
+        in_reactor do |task|
           broadcast.hints_pull!(task: task, socket_path: hints_socket)
 
           push = OMQ::PUSH.connect(hints_socket)
-          push << Marshal.dump(hint_payload)
+          push << hint_message
+          wait_until_cached(hint_tx.wtxid)
 
-          deadline = Time.now + 1.0
-          sleep 0.01 until broadcast.hydrated_tx_cache.get(hint_tx.wtxid) || Time.now > deadline
-
-          cached = broadcast.hydrated_tx_cache.get(hint_tx.wtxid)
-          expect(cached[:raw_tx]).to eq(hint_tx.to_binary)
-        ensure
-          task.stop
+          expect(cache.get(hint_tx.wtxid)[:raw_tx]).to eq(hint_tx.to_binary)
         end
       end
 
-      it 'survives a malformed message and keeps the fiber alive' do
+      it 'never deserialises a Marshal payload' do
+        probe = Class.new do
+          class << self
+            attr_accessor :loaded
+          end
+
+          def marshal_dump = []
+          def marshal_load(_) = self.class.loaded = true
+        end
+        stub_const('HintsMarshalProbe', probe)
+
+        in_reactor do |task|
+          broadcast.hints_pull!(task: task, socket_path: hints_socket)
+
+          push = OMQ::PUSH.connect(hints_socket)
+          push << Marshal.dump(HintsMarshalProbe.new)
+          push << hint_message
+          wait_until_cached(hint_tx.wtxid)
+
+          expect(HintsMarshalProbe.loaded).to be_nil
+          expect(cache.size).to eq(1)
+        end
+      end
+
+      it 'drops malformed messages with a log line and keeps the fiber alive' do
+        log_output = StringIO.new
+        original_logger = BSV.logger
+        BSV.logger = Logger.new(log_output, level: Logger::INFO)
+
+        in_reactor do |task|
+          broadcast.hints_pull!(task: task, socket_path: hints_socket)
+
+          push = OMQ::PUSH.connect(hints_socket)
+          push << "\x01short".b
+          push << "\x09#{'x' * 20}".b
+          push << [hint_message, hint_message]
+          push << Marshal.dump(action_id: 7, beef: atomic_beef_for(hint_tx))
+          push << hint_message
+          wait_until_cached(hint_tx.wtxid)
+
+          expect(cache.size).to eq(1)
+          expect(log_output.string.scan('dropped a malformed hint').size).to eq(4)
+        end
+      ensure
+        BSV.logger = original_logger
+      end
+
+      it 'drops a hint whose BEEF exceeds the cap' do
+        oversized = tx_spending(proven_tx(satoshis: 1_000, height: 100), satoshis: 900)
+        stub_const("#{envelope}::MAX_BEEF_BYTES", atomic_beef_for(hint_tx).bytesize)
+        oversized_message = [envelope::VERSION, 8].pack('CQ>') + atomic_beef_for(oversized)
+
+        in_reactor do |task|
+          broadcast.hints_pull!(task: task, socket_path: hints_socket)
+
+          push = OMQ::PUSH.connect(hints_socket)
+          push << oversized_message
+          push << hint_message
+          wait_until_cached(hint_tx.wtxid)
+
+          expect(cache.get(oversized.wtxid)).to be_nil
+          expect(cache.size).to eq(1)
+        end
+      end
+
+      it 'caches raw_tx only: a hint neither adds a merkle path nor replaces a stored one' do
+        seeded = proven_tx(satoshis: 1_000, height: 100)
+        unseeded = proven_tx(satoshis: 2_000, height: 101)
+        subject_tx = tx_spending(seeded, unseeded, satoshis: 2_900)
+        stored_path = 'stored-merkle-path'.b
+        cache.put(seeded.wtxid, raw_tx: seeded.to_binary, merkle_path: stored_path)
+
+        in_reactor do |task|
+          broadcast.hints_pull!(task: task, socket_path: hints_socket)
+
+          push = OMQ::PUSH.connect(hints_socket)
+          push << hint_for(subject_tx)
+          wait_until_cached(subject_tx.wtxid)
+
+          expect(cache.get(seeded.wtxid)[:merkle_path]).to eq(stored_path)
+          expect(cache.get(unseeded.wtxid)).to eq(raw_tx: unseeded.to_binary, merkle_path: nil)
+          expect(cache.get(subject_tx.wtxid)).to eq(raw_tx: subject_tx.to_binary, merkle_path: nil)
+        end
+      end
+
+      def crash_for(socket_path)
         suppress_console_errors do
-          Async do |task|
-            broadcast.hints_pull!(task: task, socket_path: hints_socket)
-
-            push = OMQ::PUSH.connect(hints_socket)
-            push << "not valid marshal\x00\xff".b
-            push << Marshal.dump(hint_payload)
-
-            deadline = Time.now + 1.0
-            sleep 0.01 until broadcast.hydrated_tx_cache.get(hint_tx.wtxid) || Time.now > deadline
-
-            expect(broadcast.hydrated_tx_cache.get(hint_tx.wtxid)).not_to be_nil
-          ensure
-            task.stop
+          in_reactor do |task|
+            broadcast.hints_pull!(task: task, socket_path: socket_path)
+            sleep 0.05
           end
         end
+        emitted_events.find { |e| e[:name] == 'fiber.crashed' && e[:task] == 'hints_worker' }
       end
 
-      it 'drops Marshalled hints with the wrong shape (defends against socket-side cache poisoning)' do
-        Async do |task|
+      it 'refuses a tcp:// endpoint' do
+        expect(crash_for('tcp://127.0.0.1:0')&.fetch(:error)).to include('tcp://')
+      end
+
+      it 'refuses a Linux abstract ipc://@ endpoint' do
+        expect(crash_for('ipc://@bsv-wallet-hints-test')&.fetch(:error)).to include('abstract')
+      end
+
+      it 'refuses an ipc:// path in a world-writable directory' do
+        File.chmod(0o777, dir)
+
+        expect(crash_for("ipc://#{socket_file}")&.fetch(:error)).to include('writable')
+        expect(File.exist?(socket_file)).to be(false)
+      end
+
+      it 'refuses an ipc:// path held by a regular file, leaving the file in place' do
+        File.write(socket_file, 'wallet data')
+
+        expect(crash_for("ipc://#{socket_file}")&.fetch(:error)).to include("not this user's socket")
+        expect(File.read(socket_file)).to eq('wallet data')
+      end
+
+      it 'bounds the receive queue, so queued hints cannot pile up unchecked' do
+        allow(OMQ::PULL).to receive(:new).and_call_original
+
+        in_reactor do |task|
           broadcast.hints_pull!(task: task, socket_path: hints_socket)
-          push = OMQ::PUSH.connect(hints_socket)
+          sleep 0.01
+        end
 
-          # Three flavours of wrong-shape: non-Hash, Hash with string
-          # action_id, Hash with non-String beef. None should reach
-          # Beef.from_binary, so none land in the cache.
-          push << Marshal.dump([1, 2, 3])
-          push << Marshal.dump(action_id: 'sneaky', beef: 'whatever')
-          push << Marshal.dump(action_id: 99, beef: :not_a_string)
-          # Then a valid hint so we have a synchronisation point.
-          push << Marshal.dump(hint_payload)
+        expect(OMQ::PULL).to have_received(:new).with(recv_hwm: described_class::HINTS_RECV_HWM)
+        expect(described_class::HINTS_RECV_HWM).to be <= 16
+      end
 
+      it 'binds an owner-only ipc:// socket in an owner-only directory and receives hints over it' do
+        in_reactor do |task|
+          broadcast.hints_pull!(task: task, socket_path: "ipc://#{socket_file}")
           deadline = Time.now + 1.0
-          sleep 0.01 until broadcast.hydrated_tx_cache.get(hint_tx.wtxid) || Time.now > deadline
+          sleep 0.01 until File.socket?(socket_file) || Time.now > deadline
 
-          expect(broadcast.hydrated_tx_cache.get(hint_tx.wtxid)).not_to be_nil
-          # The cache must contain only the valid entry.
-          expect(broadcast.hydrated_tx_cache.size).to eq(1)
-        ensure
-          task.stop
+          expect(File.socket?(socket_file)).to be(true)
+          expect(File.stat(socket_file).mode & 0o777).to eq(0o600)
+
+          push = OMQ::PUSH.connect("ipc://#{socket_file}")
+          push << hint_message
+          wait_until_cached(hint_tx.wtxid)
+
+          expect(cache.get(hint_tx.wtxid)[:raw_tx]).to eq(hint_tx.to_binary)
         end
       end
     end

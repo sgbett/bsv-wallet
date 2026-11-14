@@ -51,10 +51,15 @@ module BSV
       # dropping it and rebuilding from the DB gives the same behaviour.
       # +Engine#import_utxo+ is the exception for now: it puts its entry
       # inside the transaction that saves the proof, so a rollback leaves
-      # an entry with no row (#558). Hint-fed entries mirror no row: their
-      # paths are unverified, replace any stored path for the same wtxid,
-      # and are trusted only as far as the hints socket is (#556). See
+      # an entry with no row (#558). Hint-fed entries carry +raw_tx+ only,
+      # keyed by the hash of those bytes, so a hint can add a transaction
+      # but cannot alter one, and never adds or replaces a path (#556). See
       # +docs/reference/principle-of-state.md+.
+      #
+      # Warning: a hint entry for a proven transaction has no path until a
+      # proof put fills one, so +wire_ancestor+ treats it as unproven and
+      # walks on past it rather than reading +tx_proofs+. Nothing in
+      # +walletd+ walks ancestry today.
       #
       # Implementation: Ruby's +Hash+ preserves insertion order (MRI 1.9+),
       # so +#delete+-then-+#[]=+ moves an entry to the MRU end; LRU eviction

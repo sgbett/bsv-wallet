@@ -18,6 +18,10 @@ module BSV
       class Broadcast
         include OmqSupport
 
+        # At up to 32 MiB a hint, OMQ's default queue of 1000 messages could
+        # hold 32 GiB. A short queue makes a fast sender wait instead.
+        HINTS_RECV_HWM = 16
+
         # @param store        [BSV::Wallet::Store]
         # @param broadcaster  [BSV::Network::Broadcaster]
         # @param applicator   [Store::EventApplicator, nil] consumes statuses
@@ -109,39 +113,29 @@ module BSV
         end
 
         # BEEF hint receiver -- pulls cross-process producer hints (CLI tools,
-        # API, UI) into the in-process EF cache. Each hint carries the
-        # action's Atomic BEEF; receiver parses, extracts the subject
-        # Transaction::Tx (whose inputs have +source_transaction+ wired by
-        # +Beef.from_binary+), and primes the cache so a subsequent
-        # broadcast emits EF via +Transaction::Tx#to_ef_hex+ without the JOIN.
+        # API, UI) into the shared +HydratedTxCache+. Each hint carries the
+        # action's Atomic BEEF; caching its transactions' bytes lets the
+        # broadcast find every input's parent there and build EF without
+        # the JOIN.
         #
         # Optional: when +socket_path+ is nil, no fiber is started and the
         # cache fills only via intra-process producers.
         #
-        # Trust boundary: +Marshal.load+ runs on bytes from anyone with
-        # write permission to the socket inode. On ipc:// that means file-
-        # system perms on the socket path; operators sharing the path with
-        # untrusted users are responsible for the consequences. #269.
+        # Each message is a +HintEnvelope+: data only, so a sender can hand
+        # this fiber bytes to parse but no object to instantiate (#556).
+        # +HintsEndpoint+ refuses an endpoint other users could reach; a
+        # refusal crashes this fiber like any bind failure.
         def hints_pull!(task:, socket_path:)
           return self unless socket_path
 
           task.async do
-            pull = bind_or_die('hints_worker') { OMQ::PULL.bind(socket_path) }
+            pull = bind_or_die('hints_worker') { bind_hints_socket(socket_path) }
             while (msg = pull.receive)
               begin
-                hint = Marshal.load(msg.first) # rubocop:disable Security/MarshalLoad
-                # Shape guard: anyone with write access to the socket
-                # inode (the documented trust boundary, see issue #280)
-                # could push arbitrary Marshalled data; without this check
-                # a malformed envelope would feed garbage into
-                # Beef.from_binary. Drop it early. (The cache now keys on
-                # wtxid derived from the BEEF, not on +action_id+, but the
-                # envelope still carries +action_id+ so the guard stays.)
-                next unless hint.is_a?(Hash) &&
-                            hint[:action_id].is_a?(Integer) &&
-                            hint[:beef].is_a?(String)
-
+                hint = HintEnvelope.decode(msg)
                 cache_beef_transactions(BSV::Transaction::Beef.from_binary(hint[:beef]))
+              rescue HintEnvelope::MalformedError => e
+                BSV.logger&.warn { "[Engine::Broadcast] hints_pull dropped a malformed hint: #{e.message}" }
               rescue StandardError => e
                 BSV.logger&.error { "[Engine::Broadcast] hints_pull error: #{e.message}" }
               end
@@ -258,11 +252,25 @@ module BSV
           tx
         end
 
-        # Prime the shared cache from a hint's BEEF: every non-TXID-only
-        # transaction lands keyed by its own wtxid, carrying its merkle_path
-        # when the BEEF carries one. wtxid-keyed (not action_id) so the
-        # entries serve both the EF broadcast path here and any deep
-        # wire_ancestor walk through the same cache. #296 Phase D.
+        # The frame cap has OMQ drop a peer that sends an oversized frame
+        # before reading it in, rather than leaving the check to decode.
+        def bind_hints_socket(endpoint)
+          pull = OMQ::PULL.new(recv_hwm: HINTS_RECV_HWM)
+          pull.max_message_size = HintEnvelope.max_bytes
+          HintsEndpoint.bind(pull, endpoint)
+          pull
+        rescue StandardError
+          pull&.close
+          raise
+        end
+
+        # Prime the shared cache from a hint's BEEF: every full transaction
+        # lands keyed by the wtxid of its own bytes (#296 Phase D).
+        #
+        # raw_tx only (#556): keyed by its own hash, raw_tx authenticates
+        # itself, whereas a hint's BUMP is unverified and would become a
+        # proven terminal for any BEEF walk through this cache. The EF build
+        # reads raw_tx alone, and +put+ without a path keeps a stored one.
         def cache_beef_transactions(beef)
           beef.transactions.each do |beef_tx|
             next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
@@ -270,15 +278,7 @@ module BSV
             t = beef_tx.transaction
             next unless t
 
-            # Merkle can be wired directly onto the transaction OR referenced
-            # indirectly via the entry's BUMP index — funnel through
-            # +BeefInternalizer.merkle_path_for+ so the cache and the ingress
-            # proof store always agree on which entries are merkle-bearing.
-            # Without this, a BUMP-indexed proof would land as
-            # +merkle_path: nil+ in the cache and force +wire_ancestor+ past
-            # what is in fact a proven terminal.
-            mp = BeefInternalizer.merkle_path_for(beef, beef_tx)
-            @hydrated_tx_cache.put(t.wtxid, raw_tx: t.to_binary, merkle_path: mp&.to_binary)
+            @hydrated_tx_cache.put(t.wtxid, raw_tx: t.to_binary)
           end
         end
 

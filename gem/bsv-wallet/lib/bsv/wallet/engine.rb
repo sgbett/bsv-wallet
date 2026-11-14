@@ -42,6 +42,8 @@ module BSV
       autoload :BeefInternalizer,      'bsv/wallet/engine/beef_internalizer'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
+      autoload :HintEnvelope,          'bsv/wallet/engine/hint_envelope'
+      autoload :HintsEndpoint,         'bsv/wallet/engine/hints_endpoint'
       autoload :Hydrator,              'bsv/wallet/engine/hydrator'
       autoload :Reaper,                'bsv/wallet/engine/reaper'
       autoload :Transmission,          'bsv/wallet/engine/transmission'
@@ -1358,8 +1360,8 @@ module BSV
       # skips the +resolve_inputs_for_signing+ JOIN. BEEF is the natural
       # payload: the producer has already built it for +build_action+'s
       # return value, and it carries every parent the EF build needs.
-      # Broadcast stores it as per-transaction raw-tx and merkle-path
-      # bytes, trusted only as far as the hints socket is (#556).
+      # It travels as a +HintEnvelope+, and Broadcast caches each of its
+      # transactions' raw-tx bytes, never its merkle paths (#556).
       # Best-effort: when +BSV_WALLET_HINTS_SOCKET+ is unset, do
       # nothing. Push failures (daemon not listening, socket missing, OMQ
       # error) are swallowed — daemon's #252 reconstruction stays the
@@ -1378,7 +1380,8 @@ module BSV
         socket_path = BSV::Wallet.config.hints_socket
         return unless socket_path
 
-        payload = Marshal.dump(action_id: action_id, beef: atomic_beef)
+        HintsEndpoint.validate!(socket_path)
+        payload = HintEnvelope.encode(action_id: action_id, beef: atomic_beef)
 
         @hints_socket_lock ||= Mutex.new
         @hints_socket_lock.synchronize do

@@ -83,12 +83,19 @@ Two conveniences apply to backend selection:
 | `BSV_WALLET_DAEMON_SEQUEL_CONNECTIONS` | `daemon_pool_size` | `16` | `walletd`'s Sequel connection pool size |
 | `BSV_WALLET_TX_CACHE_SIZE` | `tx_cache_size` | `20000` | Capacity of the `HydratedTxCache`, in entries (`0` disables it) |
 | `BSV_WALLET_REAP_THRESHOLD_S` | `reap_threshold` | `3600` | Age in seconds after which `walletd` reaps an abandoned action |
-| `BSV_WALLET_HINTS_SOCKET` | `hints_socket` | unset (off) | OMQ endpoint, such as an `ipc://` socket path, that `walletd` binds to receive Atomic BEEF hints from other processes' Engines |
+| `BSV_WALLET_HINTS_SOCKET` | `hints_socket` | unset (off) | `ipc://` socket path that `walletd` binds to receive Atomic BEEF hints from other processes' Engines |
 
 {: .warning }
 > **The hints socket is a trust boundary**
 >
-> The hints socket is unauthenticated, and `walletd` deserialises every message it receives on it, so only trusted local processes may be able to reach it. Use an `ipc://` socket in a directory that only the wallet's user can access, never a shared directory or a network endpoint (#556).
+> The hints socket is unauthenticated: whoever can connect to it can fill `walletd`'s transaction cache. Its messages are data only (an action ID and a BEEF), but only the wallet's own processes should be able to reach it, so `walletd` enforces where it lives (#556):
+>
+> - it must be an `ipc://` filesystem path; a `tcp://` endpoint or a Linux abstract socket (`ipc://@name`) is refused
+> - the socket's directory must belong to the wallet's user and be writable by nobody else, so a shared directory such as `/tmp` is refused
+> - the path must be free or hold a stale socket of the user's own, since binding deletes whatever is there; a file or symlink there is refused
+> - the socket file is created owner-only (mode `0600`)
+>
+> `~` and relative paths are not expanded. A refused endpoint leaves `walletd` running without hints and emits a `fiber.crashed` event that names the reason. The example config's `~/.bsv-wallet/hints.sock` (built with `Dir.home`), with `~/.bsv-wallet` at mode `0700`, meets all of these.
 
 ## Executables
 
