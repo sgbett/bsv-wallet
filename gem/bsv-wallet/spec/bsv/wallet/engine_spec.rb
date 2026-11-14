@@ -103,7 +103,7 @@ RSpec.describe BSV::Wallet::Engine do
       end
     end
 
-    it 'connects + pushes a Marshalled hint when hints_socket is set' do
+    it 'connects + pushes a hint envelope when hints_socket is set' do
       BSV::Wallet.configure { |c| c.hints_socket = 'inproc://test-hints-publish' }
       sent = []
       fake_socket = double('PUSH')
@@ -121,10 +121,26 @@ RSpec.describe BSV::Wallet::Engine do
 
       expect(OMQ::PUSH).to have_received(:connect).with('inproc://test-hints-publish')
       expect(sent.size).to eq(1)
-      hint = Marshal.load(sent.first) # rubocop:disable Security/MarshalLoad
-      expect(hint).to include(:action_id, :beef)
+      hint = BSV::Wallet::Engine::HintEnvelope.decode([sent.first])
+      expect(hint[:action_id]).to be_an(Integer).and be_positive
       expect(hint[:beef]).to be_a(String)
       expect(hint[:beef].bytesize).to be > 0
+    end
+
+    it 'does not connect to a tcp:// hints socket' do
+      BSV::Wallet.configure { |c| c.hints_socket = 'tcp://127.0.0.1:5555' }
+      allow(OMQ::PUSH).to receive(:connect)
+
+      engine.brc100.create_action(
+        description: 'hint refused',
+        inputs: [],
+        outputs: [
+          { satoshis: 0, locking_script: OP_TRUE,
+            derivation_prefix: SecureRandom.uuid, derivation_suffix: '1', sender_identity_key: 'self' }
+        ]
+      )
+
+      expect(OMQ::PUSH).not_to have_received(:connect)
     end
 
     it 'swallows OMQ::PUSH.connect errors (best-effort, never blocks create_action)' do
