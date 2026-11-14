@@ -974,7 +974,7 @@ module BSV
       def list_receive_addresses
         require_key_deriver!
 
-        result = brc100.list_actions(labels: ['wbikd'], include_inputs: true, limit: 10_000)
+        result = list_actions(labels: ['wbikd'], include_inputs: true, limit: 10_000)
         result[:actions].filter_map do |action|
           next unless action[:status] == :internal
 
@@ -1582,7 +1582,7 @@ module BSV
         end
 
         # 6. Abort the locking action — CASCADE releases slot back to p wbikd basket
-        brc100.abort_action(reference: action_reference)
+        abort_action(reference: action_reference)
       end
 
       # Import-path network reads, with retry on retryable responses
