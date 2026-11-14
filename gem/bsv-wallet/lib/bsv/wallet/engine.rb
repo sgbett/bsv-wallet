@@ -214,6 +214,10 @@ module BSV
       #   +:inline+ submits to ARC from this process before returning;
       #   +:delayed+ leaves a +broadcasts+ row for walletd to submit;
       #   +:none+ never broadcasts — the action completes internally.
+      # @param defer_signing [Boolean] +true+ stages the transaction
+      #   unsigned and returns a signable handle for +#sign_action+; only
+      #   with caller-supplied +inputs+. The input set's shape is never
+      #   read for this — the caller states it.
       # @return [Hash] sync: +{ wtxid:, atomic_beef: }+;
       #   internal (+:none+): +{ wtxid:, atomic_beef:, change_outpoints: }+;
       #   deferred: +{ signable: { atomic_beef:, reference: } }+.
@@ -221,7 +225,7 @@ module BSV
       #   of +BROADCAST_INTENTS+, before anything is written.
       def build_action(description:, broadcast_intent:, input_beef: nil, inputs: nil, outputs: nil,
                        lock_time: nil, version: nil, labels: nil,
-                       sign_and_process: true, change_count: nil,
+                       defer_signing: false, change_count: nil,
                        randomize_outputs: true, change_basket: nil,
                        fee_rate: nil)
         validate_broadcast_intent!(broadcast_intent)
@@ -236,24 +240,22 @@ module BSV
         # Caller-supplied inputs: explicit array (possibly empty) — the
         # wallet does not extend this set. inputs: nil means "select for me".
         caller_supplied_inputs = !inputs.nil?
-        deferred = !sign_and_process ||
-                   inputs&.any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
 
         # Wallet-selected inputs (inputs: nil) cannot be deferred — the
         # funding loop signs immediately so the change template can be
         # evaluated against the actual fee. Deferred signing only makes
         # sense with caller-supplied inputs the caller intends to script
         # themselves.
-        if !caller_supplied_inputs && !sign_and_process
+        if !caller_supplied_inputs && defer_signing
           raise BSV::Wallet::InvalidParameterError.new(
-            'sign_and_process', 'true when inputs is nil (wallet-selected inputs sign immediately)'
+            'defer_signing', 'false when inputs is nil (wallet-selected inputs sign immediately)'
           )
         end
 
         # Internal-path deferred signing is not implemented in the base
         # wallet — the internal-action Phase 4 runs synchronously during
         # create_action, which deferred signing cannot reach (#192).
-        if broadcast_intent == :none && deferred
+        if broadcast_intent == :none && defer_signing
           raise BSV::Wallet::UnsupportedActionError,
                 "broadcast intent 'none' combined with deferred signing is " \
                 'not implemented in the base wallet; tracked in #192.'
@@ -261,10 +263,10 @@ module BSV
 
         # key_deriver is required only when the wallet must derive BRC-42
         # change keys (TxBuilder#build_change). Deferred signing defers
-        # to signAction; explicit zero-input transactions skip change
+        # to +#sign_action+; explicit zero-input transactions skip change
         # generation. Both paths can run without a key deriver here.
         skip_change = caller_supplied_inputs && inputs.empty?
-        require_key_deriver! unless deferred || skip_change
+        require_key_deriver! unless defer_signing || skip_change
 
         @policy.guard_balance!(balance: @utxo_pool.balance, bypass: @bypass_limp_mode)
 
@@ -281,7 +283,7 @@ module BSV
         # Use cases: consolidation (target a single output), explicit-cap
         # callers.
         pre_lock_change_count = change_count || @utxo_pool.change_output_count
-        unless deferred
+        unless defer_signing
           @policy.guard_balance!(balance: pre_lock_balance, spending: output_total,
                                  bypass: @bypass_limp_mode)
         end
@@ -297,7 +299,7 @@ module BSV
           input_beef: input_beef, labels: labels
         )
 
-        if deferred
+        if defer_signing
           return action.build_deferred!(
             inputs: inputs, outputs: outputs, lock_time: lock_time,
             version: version, randomize: randomize_outputs, intent: broadcast_intent

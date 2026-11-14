@@ -1052,7 +1052,7 @@ RSpec.describe BSV::Wallet::Engine do
     it 'returns { signable: { atomic_beef:, reference: } } on the deferred path' do
       result = engine.build_action(
         description: 'deferred primitive', broadcast_intent: :delayed,
-        inputs: [], sign_and_process: false,
+        inputs: [], defer_signing: true,
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
             spendable_intent: 'spendable',
@@ -1160,16 +1160,16 @@ RSpec.describe BSV::Wallet::Engine do
         prior_model = engine_with_keys.instance_variable_get(:@fee_model)
         prior_builder = engine_with_keys.instance_variable_get(:@tx_builder)
 
-        # +sign_and_process: false+ with +inputs: nil+ trips a named
+        # +defer_signing: true+ with +inputs: nil+ trips a named
         # parameter-combination guard inside +#build_action+ AFTER
         # +swap_fee_model!+ has already mutated state. The method-level
         # +ensure+ must restore both +@fee_model+ and +@tx_builder+.
         expect do
           engine_with_keys.build_action(
             description: 'raise after swap', broadcast_intent: :delayed,
-            sign_and_process: false, fee_rate: 0
+            defer_signing: true, fee_rate: 0
           )
-        end.to raise_error(BSV::Wallet::InvalidParameterError, /sign_and_process/)
+        end.to raise_error(BSV::Wallet::InvalidParameterError, /defer_signing/)
 
         expect(engine_with_keys.instance_variable_get(:@fee_model)).to equal(prior_model)
         expect(engine_with_keys.instance_variable_get(:@tx_builder)).to equal(prior_builder)
@@ -1199,7 +1199,7 @@ RSpec.describe BSV::Wallet::Engine do
       # BRC-42-derived output (wallet-owned) → +'spendable'+.
       result = engine.build_action(
         description: 'parked for sign primitive', broadcast_intent: :delayed,
-        inputs: [], sign_and_process: false,
+        inputs: [], defer_signing: true,
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
             spendable_intent: 'spendable',
@@ -1241,7 +1241,7 @@ RSpec.describe BSV::Wallet::Engine do
       # directly. OP_TRUE is a synthetic outbound stand-in.
       result = engine.build_action(
         description: 'parked for abort primitive', broadcast_intent: :delayed,
-        inputs: [], sign_and_process: false,
+        inputs: [], defer_signing: true,
         outputs: [
           { satoshis: 500, locking_script: OP_TRUE,
             output_description: 'output', spendable_intent: 'none' }
@@ -1355,7 +1355,7 @@ RSpec.describe BSV::Wallet::Engine do
     let(:intent_methods) do
       %i[build_action sign_action import_utxo import_wallet send_payment consolidate_step sweep]
     end
-    let(:retired_kwargs) { %i[no_send accept_delayed_broadcast] }
+    let(:retired_kwargs) { %i[no_send accept_delayed_broadcast sign_and_process] }
 
     it 'takes broadcast_intent: as a required keyword, explicitly, in place of the retired flags' do
       aggregate_failures do
@@ -1409,7 +1409,7 @@ RSpec.describe BSV::Wallet::Engine do
     it 'sign_action rejects an unknown intent before signing, leaving the action staged' do
       reference = engine.build_action(
         description: 'staged for bad intent', broadcast_intent: :delayed,
-        inputs: [], sign_and_process: false,
+        inputs: [], defer_signing: true,
         outputs: [{ satoshis: 0, locking_script: OP_TRUE, spendable_intent: 'none' }]
       )[:signable][:reference]
       staged = store.find_action(reference: reference)
@@ -2906,6 +2906,71 @@ RSpec.describe BSV::Wallet::Engine do
         # Verify wtxid
         expected_wtxid = parse_beef_tx(sign_result[:tx]).wtxid
         expect(sign_result[:txid]).to eq(expected_wtxid)
+      end
+    end
+
+    # BRC-100's convention: an input declaring +unlocking_script_length+
+    # without +unlocking_script+ is one the caller will sign. BRC100
+    # reads that shape; the Engine acts only on +defer_signing:+.
+    context 'with an input awaiting its unlocking script' do
+      let(:awaiting_input) do
+        fund_wallet(satoshis: 1000)
+        output_id = engine_with_keys.spendable_outputs(basket: nil)[:outputs].first[:id]
+        { output_id: output_id, unlocking_script_length: 107 }
+      end
+      let(:payment_script) { p2pkh_locking_script_for(derive_key).to_binary }
+
+      it 'defers signing through create_action even with sign_and_process left true' do
+        result = engine_with_keys.brc100.create_action(
+          description: 'awaiting input defers',
+          inputs: [awaiting_input],
+          outputs: [{ satoshis: 900, locking_script: payment_script,
+                      output_description: 'output', spendable: false }]
+        )
+
+        expect(result[:signable_transaction]).to include(:tx, :reference)
+      end
+
+      it 'refuses no_send: true through create_action without writing an action' do
+        input = awaiting_input
+        actions_before = store.db[:actions].count
+
+        expect do
+          engine_with_keys.brc100.create_action(
+            description: 'awaiting input no_send', no_send: true,
+            inputs: [input],
+            outputs: [{ satoshis: 900, locking_script: payment_script,
+                        output_description: 'output', spendable: false }]
+          )
+        end.to raise_error(BSV::Wallet::UnsupportedActionError, /broadcast intent 'none'/)
+        expect(store.db[:actions].count).to eq(actions_before)
+      end
+
+      it 'refuses no_send: true with sign_and_process: false through create_action' do
+        input = awaiting_input.except(:unlocking_script_length)
+
+        expect do
+          engine_with_keys.brc100.create_action(
+            description: 'deferred no_send', no_send: true, sign_and_process: false,
+            inputs: [input],
+            outputs: [{ satoshis: 900, locking_script: payment_script,
+                        output_description: 'output', spendable: false }]
+          )
+        end.to raise_error(BSV::Wallet::UnsupportedActionError, /broadcast intent 'none'/)
+      end
+
+      it 'is signed by the wallet when build_action is not asked to defer' do
+        result = engine_with_keys.build_action(
+          description: 'shape not read by core', broadcast_intent: :none,
+          inputs: [awaiting_input],
+          outputs: [{ satoshis: 900, locking_script: payment_script, spendable_intent: 'none' }]
+        )
+
+        expect(result).to include(:wtxid, :atomic_beef)
+        parsed = parse_beef_tx(result[:atomic_beef])
+        parsed.inputs[0].source_satoshis = 1000
+        parsed.inputs[0].source_locking_script = p2pkh_locking_script_for(derive_key)
+        expect(parsed.verify_input(0)).to be true
       end
     end
 

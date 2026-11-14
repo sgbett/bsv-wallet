@@ -605,6 +605,54 @@ RSpec.describe BSV::Wallet::BRC100 do
           .with(reference: reference, spends: {}, broadcast_intent: :delayed)
       end
     end
+
+    describe 'signAndProcess and input shape → defer_signing' do
+      def create_with(**kwargs)
+        brc100.create_action(description: 'defer table', outputs: outputs, **kwargs)
+      end
+
+      it 'asks for defer_signing: false by default' do
+        create_with
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(defer_signing: false))
+      end
+
+      it 'asks for defer_signing: true when sign_and_process is false' do
+        create_with(sign_and_process: false, inputs: [{ output_id: 1 }])
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(defer_signing: true))
+      end
+
+      it 'asks for defer_signing: true for an input with unlocking_script_length but no unlocking_script' do
+        create_with(inputs: [{ output_id: 1, unlocking_script_length: 107 }])
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(defer_signing: true))
+      end
+
+      it 'asks for defer_signing: false for an input carrying both length and script (already signed)' do
+        create_with(inputs: [{ output_id: 1, unlocking_script_length: 2, unlocking_script: "\x51\x51".b }])
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(defer_signing: false))
+      end
+
+      it "renames the Engine's defer_signing refusal to the sign_and_process the caller passed" do
+        allow(fake_engine).to receive(:build_action).and_raise(
+          BSV::Wallet::InvalidParameterError.new('defer_signing', 'false when inputs is nil')
+        )
+
+        expect { create_with(sign_and_process: false) }
+          .to raise_error(BSV::Wallet::InvalidParameterError, /sign_and_process parameter must be true/) { |e|
+            expect(e.parameter).to eq('sign_and_process')
+          }
+      end
+
+      it 'passes any other InvalidParameterError through unchanged' do
+        error = BSV::Wallet::InvalidParameterError.new('fee_rate', 'a non-negative integer')
+        allow(fake_engine).to receive(:build_action).and_raise(error)
+
+        expect { create_with }.to raise_error(BSV::Wallet::InvalidParameterError) { |e| expect(e).to be(error) }
+      end
+    end
   end
 
   describe 'rule-parity gate — DB CHECK ↔ validator (HLR #428, sub-issue #441)', :store do
