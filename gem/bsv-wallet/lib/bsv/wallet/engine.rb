@@ -55,6 +55,10 @@ module BSV
 
       UUID_RE = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
+      # The +broadcast_intent+ ENUM's values (001_create_schema.rb), as the
+      # Symbols the Engine methods that build or sign an action take.
+      BROADCAST_INTENTS = %i[inline delayed none].freeze
+
       LIMP_THRESHOLD     = 50_000  # default: 50K sats
       LIMP_THRESHOLD_MIN = 10_000  # hard floor: cannot configure below this
 
@@ -206,15 +210,22 @@ module BSV
       # BEEF assembly + SPV honesty validation, and broadcast dispatch.
       # Returns wallet vocab; BRC100 wraps to BRC-100 vocab.
       #
+      # @param broadcast_intent [Symbol] one of +BROADCAST_INTENTS+:
+      #   +:inline+ submits to ARC from this process before returning;
+      #   +:delayed+ leaves a +broadcasts+ row for walletd to submit;
+      #   +:none+ never broadcasts — the action completes internally.
       # @return [Hash] sync: +{ wtxid:, atomic_beef: }+;
-      #   internal (no_send): +{ wtxid:, atomic_beef:, change_outpoints: }+;
+      #   internal (+:none+): +{ wtxid:, atomic_beef:, change_outpoints: }+;
       #   deferred: +{ signable: { atomic_beef:, reference: } }+.
-      def build_action(description:, input_beef: nil, inputs: nil, outputs: nil,
+      # @raise [InvalidParameterError] when +broadcast_intent+ is not one
+      #   of +BROADCAST_INTENTS+, before anything is written.
+      def build_action(description:, broadcast_intent:, input_beef: nil, inputs: nil, outputs: nil,
                        lock_time: nil, version: nil, labels: nil,
-                       sign_and_process: true, accept_delayed_broadcast: true,
-                       no_send: false, change_count: nil,
+                       sign_and_process: true, change_count: nil,
                        randomize_outputs: true, change_basket: nil,
                        fee_rate: nil)
+        validate_broadcast_intent!(broadcast_intent)
+
         # +fee_rate:+ override (HLR #489 — test-only knob for off-chain
         # balance assertions). When non-nil, +@fee_model+ and +@tx_builder+
         # are swapped for the duration of this call, mirroring the
@@ -242,9 +253,9 @@ module BSV
         # Internal-path deferred signing is not implemented in the base
         # wallet — the internal-action Phase 4 runs synchronously during
         # create_action, which deferred signing cannot reach (#192).
-        if no_send && deferred
+        if broadcast_intent == :none && deferred
           raise BSV::Wallet::UnsupportedActionError,
-                'createAction(no_send: true) combined with deferred signing is ' \
+                "broadcast intent 'none' combined with deferred signing is " \
                 'not implemented in the base wallet; tracked in #192.'
         end
 
@@ -255,7 +266,6 @@ module BSV
         skip_change = caller_supplied_inputs && inputs.empty?
         require_key_deriver! unless deferred || skip_change
 
-        intent = map_broadcast_intent(no_send, accept_delayed_broadcast)
         @policy.guard_balance!(balance: @utxo_pool.balance, bypass: @bypass_limp_mode)
 
         # Output total drives the initial selection target and the cheap
@@ -283,14 +293,14 @@ module BSV
         # flow's per-phase audit lives in
         # +docs/reference/action-lifecycle.md+.
         action = Engine::Action.create(
-          engine: self, description: description, intent: intent,
+          engine: self, description: description, intent: broadcast_intent,
           input_beef: input_beef, labels: labels
         )
 
         if deferred
           return action.build_deferred!(
             inputs: inputs, outputs: outputs, lock_time: lock_time,
-            version: version, randomize: randomize_outputs, intent: intent
+            version: version, randomize: randomize_outputs, intent: broadcast_intent
           )
         end
 
@@ -330,7 +340,7 @@ module BSV
             end
           end
 
-        if no_send
+        if broadcast_intent == :none
           # Internal path: sign + proof + Phase-4 promotion happen as one
           # atomic transition (#327 / #328).
           action.complete_internal!(built: built, outputs: outputs)
@@ -345,7 +355,7 @@ module BSV
 
         # Read-only, post-commit: the BEEF we hand back + its SPV honesty
         # check. Under strict create_action (#296 Phase B), returning from
-        # build_action implies a valid BEEF in hand. For no_send this
+        # build_action implies a valid BEEF in hand. For +:none+ this
         # runs AFTER internal completion commits, so a raise here leaves
         # an already-promoted action (its outputs are the wallet's own,
         # genuinely spendable). Near-unreachable for a self-built BEEF;
@@ -353,7 +363,7 @@ module BSV
         atomic_beef = @hydrator.build_atomic_beef(built[:raw_tx], action.id)
         @hydrator.validate_for_handoff!(atomic_beef, built[:wtxid])
 
-        if no_send
+        if broadcast_intent == :none
           return { wtxid: built[:wtxid], atomic_beef: atomic_beef,
                    change_outpoints: action.query_change_outpoints }
         end
@@ -362,7 +372,7 @@ module BSV
         # if the intent demands it. The broadcast worker handles the
         # 202 / 400 / 503 dispatch + atomic Phase-4 promotion bookkeeping
         # internally (#271).
-        dispatch_broadcast(action.id, atomic_beef, intent: intent)
+        dispatch_broadcast(action.id, atomic_beef, intent: broadcast_intent)
 
         { wtxid: built[:wtxid], atomic_beef: atomic_beef }
       ensure
@@ -371,35 +381,37 @@ module BSV
 
       # Complete the deferred-signing flow: locate the parked action,
       # apply caller spends, build + validate BEEF, dispatch broadcast
-      # per the intent mapped from the caller's +no_send+ /
-      # +accept_delayed_broadcast+ params (NOT the action row's stored
-      # +broadcast_intent+ — that drives the no_send-override guard
+      # per the caller's +broadcast_intent+ (NOT the action row's stored
+      # +broadcast_intent+ — that drives the +:none+-override guard
       # below, not the dispatch).
       #
+      # @param broadcast_intent [Symbol] one of +BROADCAST_INTENTS+ (see
+      #   +#build_action+).
       # @return [Hash] +{ wtxid:, atomic_beef: }+ — wallet vocab; BRC100 wraps.
-      def sign_action(reference:, spends:, accept_delayed_broadcast: true,
-                      no_send: false)
+      # @raise [InvalidParameterError] when +broadcast_intent+ is not one
+      #   of +BROADCAST_INTENTS+, before anything is signed.
+      def sign_action(reference:, spends:, broadcast_intent:)
+        validate_broadcast_intent!(broadcast_intent)
+
         action = Engine::Action.find(engine: self, reference: reference)
         raise BSV::Wallet::InvalidParameterError, 'reference (not found)' unless action
 
         # Runtime broadcast-override at sign time belongs to the
-        # chained-send subsystem (#192). The base wallet's signAction
+        # chained-send subsystem (#192). The base wallet's sign_action
         # only completes the deferred-construction lifecycle per the
-        # original broadcast intent set at createAction time.
-        if no_send && action.row[:broadcast_intent] != 'none'
+        # original broadcast intent set at build time.
+        if broadcast_intent == :none && action.row[:broadcast_intent] != 'none'
           raise BSV::Wallet::UnsupportedActionError,
-                'signAction(no_send: true) requires the action to have been ' \
-                "created with no_send: true (broadcast intent 'none'). " \
-                'Runtime override at sign time is not implemented in the base ' \
-                'wallet; tracked in #192.'
+                "sign_action with broadcast intent 'none' requires an action " \
+                "built with broadcast intent 'none'; overriding the intent at " \
+                'sign time is not implemented in the base wallet; tracked in #192.'
         end
 
         signed = action.apply_caller_spends!(spends: spends)
         atomic_beef = @hydrator.build_atomic_beef(signed[:raw_tx], action.id)
         @hydrator.validate_for_handoff!(atomic_beef, signed[:wtxid])
 
-        intent = map_broadcast_intent(no_send, accept_delayed_broadcast)
-        dispatch_broadcast(action.id, atomic_beef, intent: intent) unless no_send
+        dispatch_broadcast(action.id, atomic_beef, intent: broadcast_intent) unless broadcast_intent == :none
 
         { wtxid: signed[:wtxid], atomic_beef: atomic_beef }
       end
@@ -693,24 +705,16 @@ module BSV
       # remains spendable after completion.
       #
       # @param dtxid [String] 64-char hex transaction ID (display order)
+      # @param broadcast_intent [Symbol] for Phase 2's BRC-42 self-payment;
+      #   one of +BROADCAST_INTENTS+ (see +#build_action+). The rule is
+      #   binary: either every action in the run broadcasts (this one
+      #   included) or none of them do — broadcasting a descendant of a
+      #   +:none+ parent is rejected by the network for a non-existent
+      #   input. +:none+ suits only the rare "build locally, never
+      #   publish" case. Tests that want "build + queue, never broadcast"
+      #   pass +:delayed+ and don't run walletd — the queue stays full
+      #   but nothing reaches the network.
       # @param vout [Integer] output index (default: 0)
-      # @param no_send [Boolean] default false (BRC-100 createAction
-      #   default — intend to broadcast). Phase 2's BRC-42 self-payment
-      #   is queued for broadcast, so its output lives on the chain's
-      #   UTXO set, making downstream broadcasts referencing it consensus-
-      #   valid. The rule is binary: either every action in the run
-      #   broadcasts (including this one) or none of them do —
-      #   broadcasting a descendant of a +no_send: true+ parent gets
-      #   rejected by the network for a non-existent input.
-      #
-      #   Set true only for the "build locally without ever broadcasting"
-      #   case where the wallet intentionally never publishes the action
-      #   (rare; downstream broadcasts will fail consensus).
-      # @param accept_delayed_broadcast [Boolean] only consulted when
-      #   +no_send+ is false. Default true (queue for the daemon to
-      #   push). Tests that want "build + queue, never broadcast" leave
-      #   this true and don't run walletd — the queue stays full but
-      #   nothing reaches the network.
       # @param basket [String, nil] optional basket name for the Phase 2
       #   self-payment's change output. When present, the imported funds
       #   land in the named basket (the application has a stable handle
@@ -719,7 +723,10 @@ module BSV
       #   wallet's pool — the previous and still-canonical behaviour for
       #   root-key bootstrap. See HLR #436 and ADR-027.
       # @return [Hash] { imported: true, satoshis:, dtxid: }
-      def import_utxo(dtxid:, vout: 0, basket: nil, no_send: false, accept_delayed_broadcast: true)
+      # @raise [InvalidParameterError] when +broadcast_intent+ is not one
+      #   of +BROADCAST_INTENTS+, before any network call or write.
+      def import_utxo(dtxid:, broadcast_intent:, vout: 0, basket: nil)
+        validate_broadcast_intent!(broadcast_intent)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
@@ -821,8 +828,7 @@ module BSV
             description: 'import self-payment',
             inputs: [{ output_id: imported_output_id }],
             outputs: [],
-            no_send: no_send,
-            accept_delayed_broadcast: accept_delayed_broadcast,
+            broadcast_intent: broadcast_intent,
             randomize_outputs: false,
             change_count: 1,
             change_basket: basket
@@ -848,11 +854,8 @@ module BSV
       # network for UTXOs, and calls import_utxo for each. This is the
       # bootstrap path — how a wallet gets its initial funding.
       #
-      # @param no_send [Boolean] forwarded to +import_utxo+ for each
-      #   discovered UTXO. Default false (BRC-100 createAction default).
-      #   Set true only for the "build locally without broadcasting" case.
-      # @param accept_delayed_broadcast [Boolean] forwarded to
-      #   +import_utxo+. Only consulted when +no_send+ is false.
+      # @param broadcast_intent [Symbol] forwarded to +import_utxo+ for
+      #   each discovered UTXO; one of +BROADCAST_INTENTS+.
       # @param include_unconfirmed [Boolean] when true, scan WoC's
       #   +/unspent/all+ endpoint which includes mempool entries.
       #   Default false uses +/confirmed/unspent+ (safer — confirmed
@@ -864,8 +867,11 @@ module BSV
       #   basket (excluded from auto-funding by HLR #435's basket
       #   filter). Default +nil+ → unbasketed pool (pre-#462 behaviour).
       # @return [Hash] { imported: Integer, utxos: Array<Hash> }
-      def import_wallet(no_send: false, accept_delayed_broadcast: true,
-                        include_unconfirmed: false, basket: nil)
+      # @raise [InvalidParameterError] when +broadcast_intent+ is not one
+      #   of +BROADCAST_INTENTS+, before the scan — +import_utxo+'s own
+      #   check would otherwise be swallowed per UTXO below.
+      def import_wallet(broadcast_intent:, include_unconfirmed: false, basket: nil)
+        validate_broadcast_intent!(broadcast_intent)
         require_key_deriver!
         raise BSV::Wallet::Error, 'no network provider configured' unless @network_provider
 
@@ -896,9 +902,7 @@ module BSV
 
         imported = unique_utxos.filter_map do |utxo|
           import_utxo(dtxid: utxo['tx_hash'], vout: utxo['tx_pos'],
-                      basket: basket,
-                      no_send: no_send,
-                      accept_delayed_broadcast: accept_delayed_broadcast)
+                      basket: basket, broadcast_intent: broadcast_intent)
         rescue BSV::Wallet::Error => e
           BSV.logger&.warn { "[Engine] import_wallet: skipping #{utxo['tx_hash']}:#{utxo['tx_pos']} — #{e.message}" }
           nil
@@ -1052,16 +1056,14 @@ module BSV
       #
       # @param recipient [String] 66-char compressed public key hex (02/03 prefix)
       # @param satoshis [Integer] amount to send
-      # @param no_send [Boolean] default false (BRC-100 createAction
-      #   default — intend to broadcast). Set true for "build + sign
-      #   + return BEEF for peer-to-peer handoff without ever publishing."
-      # @param accept_delayed_broadcast [Boolean] only consulted when
-      #   +no_send+ is false. Default true (queue for the daemon to push).
+      # @param broadcast_intent [Symbol] one of +BROADCAST_INTENTS+ (see
+      #   +#build_action+). +:none+ builds, signs and returns the BEEF for
+      #   peer-to-peer handoff without ever publishing.
       # @param fee_rate [Integer, nil] sats/kb override for this call.
       #   Default +nil+ (inherit wallet default — 100 sats/kb). HLR #489.
       # @return [Hash] { wtxid:, atomic_beef:, sender_identity_key:, outputs: [{ vout:, satoshis:, derivation_prefix:, derivation_suffix: }] }
-      def send_payment(recipient:, satoshis:, no_send: false, accept_delayed_broadcast: true,
-                       fee_rate: nil)
+      def send_payment(recipient:, satoshis:, broadcast_intent:, fee_rate: nil)
+        validate_broadcast_intent!(broadcast_intent)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -1100,7 +1102,7 @@ module BSV
           description: "send #{satoshis} sats",
           outputs: [{ satoshis: satoshis, locking_script: locking_script,
                       spendable_intent: 'none' }],
-          no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
+          broadcast_intent: broadcast_intent,
           randomize_outputs: false, fee_rate: fee_rate
         )
 
@@ -1124,19 +1126,19 @@ module BSV
       #
       # Picks the +target_inputs+ smallest spendable outputs plus the 1
       # largest (as an anchor that guarantees fee coverage even when the
-      # smallest are below the per-input marginal fee), then dispatches a
-      # +no_send+ +create_action+ with +change_count: 1+ so the funding
-      # loop produces a single BRC-42 self-payment.
+      # smallest are below the per-input marginal fee), then calls
+      # +#build_action+ with +change_count: 1+ so the funding loop
+      # produces a single BRC-42 self-payment.
       #
+      # @param broadcast_intent [Symbol] one of +BROADCAST_INTENTS+ (see
+      #   +#build_action+).
       # @param target_inputs [Integer] minimum smallest outputs to consume per step
-      # @param no_send [Boolean] default false (BRC-100 createAction
-      #   default — intend to broadcast). Set true only for the "build
-      #   locally without broadcasting" case.
-      # @param accept_delayed_broadcast [Boolean] only consulted when
-      #   +no_send+ is false. Default true (queue for the daemon to push).
       # @return [Hash, nil] the +create_action+ result, or +nil+ if there are
       #   fewer than +target_inputs+ spendable outputs (the loop's natural exit).
-      def consolidate_step(target_inputs: 20, no_send: false, accept_delayed_broadcast: true)
+      # @raise [InvalidParameterError] when +broadcast_intent+ is not one
+      #   of +BROADCAST_INTENTS+, even when the pool is too small to step.
+      def consolidate_step(broadcast_intent:, target_inputs: 20)
+        validate_broadcast_intent!(broadcast_intent)
         require_key_deriver!
         smallest = @utxo_pool.smallest(limit: target_inputs)
         return nil if smallest.length < target_inputs
@@ -1156,7 +1158,7 @@ module BSV
           description: 'consolidation',
           inputs: input_specs,
           outputs: [],
-          no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
+          broadcast_intent: broadcast_intent,
           change_count: 1
         )
       end
@@ -1165,9 +1167,9 @@ module BSV
       #
       # Selects all spendable outputs, locks one caller output to the
       # recipient's *root* P2PKH (+hash160(recipient_pubkey)+ — not a
-      # BRC-42-derived address), and dispatches a +no_send+ +create_action+
-      # that consumes all inputs. The literal root P2PKH is recoverable from
-      # the WIF alone, which is the point of a sweep: return funds somewhere a
+      # BRC-42-derived address), and calls +#build_action+ to consume all
+      # inputs. The literal root P2PKH is recoverable from the WIF alone,
+      # which is the point of a sweep: return funds somewhere a
       # bare key can reclaim them (e.g. so the receiving wallet's DB can be
       # wiped and re-imported by scanning the root address). Any rounding
       # surplus against the actual fee is dropped (zero-survival on the single
@@ -1175,14 +1177,15 @@ module BSV
       # requires +change_count >= 1+).
       #
       # @param recipient [String] 66-char compressed pubkey hex (02/03)
-      # @param no_send [Boolean] default false (BRC-100 createAction
-      #   default — intend to broadcast). Set true for "build + sign
-      #   + return BEEF for peer-to-peer handoff without ever publishing."
-      # @param accept_delayed_broadcast [Boolean] only consulted when
-      #   +no_send+ is false. Default true (queue for the daemon to push).
+      # @param broadcast_intent [Symbol] one of +BROADCAST_INTENTS+ (see
+      #   +#build_action+). +:none+ builds, signs and returns the BEEF for
+      #   peer-to-peer handoff without ever publishing.
       # @return [Hash, nil] the +create_action+ result, or +nil+ when the
       #   wallet has no spendable outputs.
-      def sweep(recipient:, no_send: false, accept_delayed_broadcast: true)
+      # @raise [InvalidParameterError] when +broadcast_intent+ is not one
+      #   of +BROADCAST_INTENTS+, even when there is nothing to sweep.
+      def sweep(recipient:, broadcast_intent:)
+        validate_broadcast_intent!(broadcast_intent)
         require_key_deriver!
         validate_recipient_key!(recipient)
 
@@ -1234,7 +1237,7 @@ module BSV
             inputs: input_specs,
             outputs: [{ satoshis: total - fee, locking_script: locking_script,
                         spendable_intent: intent }],
-            no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast,
+            broadcast_intent: broadcast_intent,
             randomize_outputs: false,
             change_count: 1
           )
@@ -1253,8 +1256,8 @@ module BSV
       # (tx-size limit), so this first loops +consolidate_step+ to collapse
       # the wallet down to fewer than +target_inputs+ spendable outputs, then
       # emits one terminal +sweep+ to the root address. Every transaction is
-      # an inline on-chain broadcast (+no_send: false+,
-      # +accept_delayed_broadcast: false+) — no daemon required.
+      # an inline on-chain broadcast (+broadcast_intent: :inline+) — no
+      # daemon required.
       #
       # @param recipient [String, nil] 66-char compressed pubkey hex (02/03)
       #   of the root address to drain to. Defaults to the wallet's own
@@ -1272,14 +1275,12 @@ module BSV
 
         consolidation_steps = 0
         until consolidate_step(
-          target_inputs: target_inputs, no_send: false, accept_delayed_broadcast: false
+          target_inputs: target_inputs, broadcast_intent: :inline
         ).nil?
           consolidation_steps += 1
         end
 
-        sweep_result = sweep(
-          recipient: recipient, no_send: false, accept_delayed_broadcast: false
-        )
+        sweep_result = sweep(recipient: recipient, broadcast_intent: :inline)
 
         { consolidation_steps: consolidation_steps, sweep: sweep_result }
       end
@@ -1319,22 +1320,11 @@ module BSV
 
       private
 
-      # Pure mapper: caller-supplied (no_send, accept_delayed_broadcast)
-      # → +:none+ / +:delayed+ / +:inline+. (Renamed from +determine_broadcast+
-      # in #402 Stage 2 — reads as a mapper rather than a side-effectful
-      # "determine".)
-      def map_broadcast_intent(no_send, accept_delayed_broadcast)
-        if no_send then :none
-        elsif accept_delayed_broadcast then :delayed
-        else :inline
-        end
-      end
-
       # Post-build dispatch: best-effort BEEF cache hint + inline
       # broadcast trigger when the intent demands it. Packages the
       # +publish_beef_hint+ / +broadcast_worker.process+ pair called
       # from the tails of +Engine#build_action+ and +#sign_action+
-      # on the non-no_send path (pre-#402 commit 5 this pair was inlined
+      # unless the intent is +:none+ (pre-#402 commit 5 this pair was inlined
       # at the tail of +Action.create+). Inline +:none+ would be a caller
       # bug; only +:inline+ triggers a sync broadcast.
       #
@@ -1400,6 +1390,12 @@ module BSV
         return if key.is_a?(String) && key.match?(/\A(?:02|03)[0-9a-fA-F]{64}\z/)
 
         raise ArgumentError, "invalid recipient key: expected 66-char compressed public key hex, got #{key.inspect}"
+      end
+
+      def validate_broadcast_intent!(intent)
+        return if BROADCAST_INTENTS.include?(intent)
+
+        raise BSV::Wallet::InvalidParameterError.new('broadcast_intent', 'one of :inline, :delayed or :none')
       end
 
       def require_key_deriver!
@@ -1482,7 +1478,7 @@ module BSV
         # OP_RETURN marker is provably unspendable → +'none'+.
         create_result = build_action(
           description: 'wbikd slot creation',
-          accept_delayed_broadcast: false,
+          broadcast_intent: :inline,
           outputs: [
             { satoshis: slot_sats, locking_script: script,
               basket: 'p wbikd',

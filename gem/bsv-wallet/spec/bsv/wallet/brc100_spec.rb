@@ -554,6 +554,59 @@ RSpec.describe BSV::Wallet::BRC100 do
     end
   end
 
+  describe 'translation into Engine vocabulary' do
+    let(:fake_engine) { instance_double(BSV::Wallet::Engine) }
+    let(:brc100) { described_class.new(fake_engine) }
+    let(:outputs) { [{ satoshis: 1000, locking_script: 'aa'.b, output_description: 'unit' }] }
+    let(:reference) { SecureRandom.uuid }
+
+    before do
+      allow(fake_engine).to receive_messages(
+        build_action: { wtxid: 'wtxid', atomic_beef: 'beef' },
+        sign_action: { wtxid: 'wtxid', atomic_beef: 'beef' }
+      )
+    end
+
+    describe 'noSend and acceptDelayedBroadcast → broadcast_intent' do
+      {
+        [true, true] => :none,
+        [true, false] => :none,
+        [false, true] => :delayed,
+        [false, false] => :inline
+      }.each do |(no_send, accept_delayed_broadcast), intent|
+        flags = "no_send: #{no_send}, accept_delayed_broadcast: #{accept_delayed_broadcast}"
+
+        it "create_action(#{flags}) asks for #{intent.inspect}" do
+          brc100.create_action(description: 'intent table', outputs: outputs,
+                               no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast)
+
+          expect(fake_engine).to have_received(:build_action).with(hash_including(broadcast_intent: intent))
+        end
+
+        it "sign_action(#{flags}) asks for #{intent.inspect}" do
+          brc100.sign_action(spends: {}, reference: reference,
+                             no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast)
+
+          expect(fake_engine).to have_received(:sign_action)
+            .with(reference: reference, spends: {}, broadcast_intent: intent)
+        end
+      end
+
+      it 'create_action asks for :delayed by default' do
+        brc100.create_action(description: 'intent default', outputs: outputs)
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(broadcast_intent: :delayed))
+      end
+
+      it 'sign_action asks for :delayed by default' do
+        brc100.sign_action(spends: {}, reference: reference)
+
+        expect(fake_engine).to have_received(:sign_action)
+          .with(reference: reference, spends: {}, broadcast_intent: :delayed)
+      end
+    end
+  end
+
   describe 'rule-parity gate — DB CHECK ↔ validator (HLR #428, sub-issue #441)', :store do
     # Drift insurance, design-split-aware (resolved after the +'p wbikd'+
     # regression on the HLR #428 branch).

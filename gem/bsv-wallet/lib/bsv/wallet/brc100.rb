@@ -119,8 +119,8 @@ module BSV
           inputs: inputs, outputs: outputs,
           lock_time: lock_time, version: version, labels: labels,
           sign_and_process: sign_and_process,
-          accept_delayed_broadcast: accept_delayed_broadcast,
-          no_send: no_send, change_count: change_count,
+          broadcast_intent: map_broadcast_intent(no_send, accept_delayed_broadcast),
+          change_count: change_count,
           randomize_outputs: randomize_outputs
         )
 
@@ -144,7 +144,7 @@ module BSV
         validate_reference!(reference)
         result = @engine.sign_action(
           reference: reference, spends: spends,
-          accept_delayed_broadcast: accept_delayed_broadcast, no_send: no_send
+          broadcast_intent: map_broadcast_intent(no_send, accept_delayed_broadcast)
         )
         { txid: result[:wtxid], tx: return_txid_only ? nil : result[:atomic_beef] }
       end
@@ -439,6 +439,16 @@ module BSV
       end
 
       private
+
+      # BRC-100's +noSend+ / +acceptDelayedBroadcast+ pair → the Engine's
+      # +broadcast_intent+. +noSend+ wins: +acceptDelayedBroadcast+ only
+      # chooses between the two ways of broadcasting.
+      def map_broadcast_intent(no_send, accept_delayed_broadcast)
+        if no_send then :none
+        elsif accept_delayed_broadcast then :delayed
+        else :inline
+        end
+      end
 
       # ---- BRC-100 spec-shape validators ---------------------------------
       #

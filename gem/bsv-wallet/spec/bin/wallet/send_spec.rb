@@ -145,8 +145,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
             output_description: 'payment'
           )
         ),
-        accept_delayed_broadcast: false,
-        no_send: false,
+        broadcast_intent: :inline,
         randomize_outputs: false,
         # HLR #489 — +nil+ means "inherit wallet default" (100 sats/kb).
         fee_rate: nil
@@ -157,11 +156,22 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
       expect { command.call([base58_address, '1000']) }.not_to output(/\{/).to_stdout
     end
 
-    it 'maps --broadcast=async to accept_delayed_broadcast: true' do
-      command.call([base58_address, '1000', '--broadcast=async'])
+    it 'passes --broadcast=delayed through as broadcast intent :delayed' do
+      command.call([base58_address, '1000', '--broadcast=delayed'])
       expect(engine).to have_received(:build_action).with(
-        hash_including(accept_delayed_broadcast: true)
+        hash_including(broadcast_intent: :delayed)
       )
+    end
+
+    it 'rejects --broadcast=async as an invalid argument' do
+      expect { command.call([base58_address, '1000', '--broadcast=async']) }
+        .to raise_error(OptionParser::InvalidArgument)
+      expect(engine).not_to have_received(:build_action)
+    end
+
+    it 'reports the broadcast intent in the human summary' do
+      expect { command.call([base58_address, '1000', '--broadcast=delayed']) }
+        .to output(/broadcast: delayed \(queued\)/).to_stderr
     end
 
     it 'rejects --broadcast=none on base58 (dead-end action — no peer-handoff envelope, no broadcast verb)' do
@@ -296,10 +306,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Send do
       expect { command.call([identity_key, '5000']) }.to output(/"dtxid":"#{expected_dtxid}"/).to_stdout
     end
 
-    it 'maps --broadcast=none to no_send: true on the identity-key path' do
+    it 'passes --broadcast=none through as broadcast intent :none on the identity-key path' do
       command.call([identity_key, '5000', '--broadcast=none'])
       expect(engine).to have_received(:build_action).with(
-        hash_including(no_send: true, accept_delayed_broadcast: false)
+        hash_including(broadcast_intent: :none)
       )
     end
 

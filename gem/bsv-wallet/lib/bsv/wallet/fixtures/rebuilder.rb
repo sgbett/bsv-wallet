@@ -290,8 +290,7 @@ module BSV
               { satoshis: sats, locking_script: locking_script,
                 spendable_intent: 'none', output_description: "fund #{name} root" }
             ],
-            no_send: false,
-            accept_delayed_broadcast: false,
+            broadcast_intent: :inline,
             randomize_outputs: false
           )
 

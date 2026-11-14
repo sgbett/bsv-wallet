@@ -19,10 +19,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Import do
         .to raise_error(BSV::Wallet::CLI::UsageError, /no positional arguments/)
     end
 
-    it 'accepts no arguments (defaults: queued for daemon)' do
+    it 'accepts no arguments (defaults: broadcast intent :delayed)' do
       expect { command.call([]) }.not_to raise_error
       expect(engine).to have_received(:import_wallet).with(
-        basket: nil, no_send: false, accept_delayed_broadcast: true, include_unconfirmed: false
+        basket: nil, broadcast_intent: :delayed, include_unconfirmed: false
       )
     end
 
@@ -99,17 +99,17 @@ RSpec.describe BSV::Wallet::CLI::Commands::Import do
       )
     end
 
-    it 'maps --no-send to no_send: true' do
+    it 'maps --no-send to broadcast intent :none' do
       command.call(['--no-send'])
       expect(engine).to have_received(:import_wallet).with(
-        hash_including(no_send: true)
+        hash_including(broadcast_intent: :none)
       )
     end
 
-    it 'maps --inline to accept_delayed_broadcast: false (sync ARC)' do
+    it 'maps --inline to broadcast intent :inline' do
       command.call(['--inline'])
       expect(engine).to have_received(:import_wallet).with(
-        hash_including(accept_delayed_broadcast: false)
+        hash_including(broadcast_intent: :inline)
       )
     end
 
@@ -128,8 +128,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Import do
     it 'combines compatible flags' do
       command.call(['--basket=staging', '--inline', '--include-unconfirmed'])
       expect(engine).to have_received(:import_wallet).with(
-        basket: 'staging', no_send: false,
-        accept_delayed_broadcast: false, include_unconfirmed: true
+        basket: 'staging', broadcast_intent: :inline, include_unconfirmed: true
       )
     end
   end
@@ -156,6 +155,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Import do
     it 'shows the basket name when --basket is set' do
       expect { command.call(['--basket=named']) }
         .to output(/basket:\s+named/).to_stderr
+    end
+
+    it 'reports the broadcast intent' do
+      expect { command.call(['--inline']) }.to output(/broadcast:\s+inline \(sync\)/).to_stderr
     end
   end
 end

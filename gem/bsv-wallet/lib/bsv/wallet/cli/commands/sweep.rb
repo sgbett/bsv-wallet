@@ -19,7 +19,8 @@ module BSV
         # +--to+ takes the recipient's 66-char compressed pubkey hex
         # (02/03 prefix); the engine's +validate_recipient_key!+ is a
         # second line of defence after CLI-side +parse_pubkey_hex+.
-        # +--no-send+ keeps the swept action unsubmitted (built and
+        # The swept action is queued for +walletd+ to broadcast
+        # (+delayed+); +--no-send+ keeps it unsubmitted (built and
         # signed, but never broadcast). BEEF emission for peer-to-peer
         # handoff is not currently exposed — operators wanting the BEEF
         # bytes can pull them from the engine's return via direct API
@@ -59,13 +60,9 @@ module BSV
 
             parse_pubkey_hex(recipient)
 
-            no_send = @options[:no_send] || false
+            broadcast_intent = @options[:no_send] ? :none : :delayed
             engine = @ctx[:engine]
-            # Engine defaults +accept_delayed_broadcast: true+ (queue for
-            # daemon push) and ignores it when +no_send+ is true. Omit
-            # rather than pass +!no_send+ — passing the negation is
-            # misleading "logic" for what's actually engine default.
-            result = engine.sweep(recipient: recipient, no_send: no_send)
+            result = engine.sweep(recipient: recipient, broadcast_intent: broadcast_intent)
 
             if result.nil?
               emit_human 'sweep:    no spendable outputs (nothing to sweep)'
@@ -74,7 +71,7 @@ module BSV
 
             dtxid = result[:wtxid].reverse.unpack1('H*')
             emit_human "swept to: #{recipient[0..15]}..."
-            emit_human "no_send:  #{no_send ? 'yes' : 'no'}"
+            emit_human "broadcast: #{BROADCAST_LABELS.fetch(broadcast_intent)}"
             emit_human "dtxid:    #{dtxid}"
             0
           end
