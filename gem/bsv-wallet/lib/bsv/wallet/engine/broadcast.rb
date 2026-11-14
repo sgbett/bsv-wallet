@@ -119,6 +119,8 @@ module BSV
         #
         # Each message is a +HintEnvelope+: data only, so a sender can hand
         # this fiber bytes to parse but no object to instantiate (#556).
+        # +HintsEndpoint+ refuses an endpoint other users could reach; a
+        # refusal crashes this fiber like any bind failure.
         def hints_pull!(task:, socket_path:)
           return self unless socket_path
 
@@ -251,7 +253,7 @@ module BSV
         def bind_hints_socket(endpoint)
           pull = OMQ::PULL.new
           pull.max_message_size = HintEnvelope.max_bytes
-          pull.bind(endpoint)
+          HintsEndpoint.bind(pull, endpoint)
           pull
         rescue StandardError
           pull&.close
