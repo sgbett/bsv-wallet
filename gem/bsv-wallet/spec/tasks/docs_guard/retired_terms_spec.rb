@@ -154,5 +154,17 @@ RSpec.describe DocsGuard::RetiredTerms do
 
       expect(guard.problems.grep(/glossary row/)).to be_empty
     end
+
+    it 'catches "randomize" for output order in prose, not the BRC-100 option name or the spelling list' do
+      entry = YAML.safe_load_file(config).fetch('terms').find { |t| t['row']&.include?('randomize') }
+      pattern = described_class.build_term(entry).pattern
+
+      retired = ['Randomize the outputs before signing.', 'Outputs are randomised.', 'a randomized output order',
+                 'randomize_outputs: true']
+      allowed = ['randomizeOutputs', '`internalize`, `randomize`, `behavior`', 'a random output']
+
+      expect(retired.grep_v(pattern)).to be_empty
+      expect(allowed.grep(pattern)).to be_empty
+    end
   end
 end

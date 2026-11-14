@@ -94,8 +94,8 @@ terms:
     use_instead: '`defer_signing:`'
     exempt: [gem/bsv-wallet/lib/bsv/wallet/brc100.rb, docs/reference/brc100-conformance.md]
 
-  - retired: randomize_outputs
+  - retired: randomize_outputs, "randomize" for output order
     row: '`randomize_outputs:`; "randomize" for output order'
-    pattern: '\brandomize_outputs\b'
-    use_instead: '`shuffle_outputs:`'
+    pattern: '\brandomize_outputs\b|\brandomi[sz](?:e|es|ed|ing)\b(?:\W+\w+){0,3}?\W+outputs?\b|\boutputs?\b(?:\W+\w+){0,3}?\W+randomi[sz](?:e|es|ed|ing)\b'
+    use_instead: '`shuffle_outputs:`; shuffle'
     exempt: [gem/bsv-wallet/lib/bsv/wallet/brc100.rb, docs/reference/brc100-conformance.md]
