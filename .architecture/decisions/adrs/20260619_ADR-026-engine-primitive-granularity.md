@@ -92,3 +92,12 @@ This ADR does not specify primitive implementations — only the granularity rul
 ## Terminology note (2026-11-13)
 
 "Primitive" throughout means Engine primitive. Of decision 1's examples, `import_beef` was renamed `internalize_beef` in #549: in the glossary (`docs/reference/glossary.md`), internalizing records someone else's transaction, and import is the user-triggered bootstrap of root-key funds. The "defer" in `broadcast_or_defer` is what the glossary calls a delayed broadcast; "deferred" now means signing only. The "shared Hydrator substrate" under Transmission and Broadcast is, in the code as built, the HydratedTxCache: Transmission calls the Hydrator, while Broadcast only reads the cache. In #548 the Engine primitives stopped taking BRC-100's options — `no_send:` and `accept_delayed_broadcast:` became a required `broadcast_intent:`, and `sign_and_process:` became `defer_signing:` — so decision 6's no_send+deferred and sign_and_process+inputs checks, and the `build_action(no_send: true)` under Consequences, now read in terms of `broadcast_intent: :none` and `defer_signing:`. The decision text is unchanged.
+
+## Amendment note (2026-11-14)
+
+Two of decision 1's example primitives weren't built as Engine primitives:
+
+* **`transmit` is `Engine::Transmission#transmit`.** Engine has no `transmit` method; callers (`bin/transmit` today) reach it through Engine's public `transmission` reader, past the surface decision 3 draws. ADR-030 planned an Engine wrapper for it (`transmit_action`), which waits on #464: that issue proposes separating the BEEF transport from the BRC-29 envelope in `Engine::Transmission`.
+* **`broadcast_or_defer` became the private `Engine#dispatch_broadcast`.** `build_action` and `sign_action` call it to push the BEEF hint to walletd and, for broadcast intent `inline`, run the broadcast. It is the internal entry the classification paragraph above already lists, not a public primitive.
+
+The granularity rule and the boundary discipline stand.

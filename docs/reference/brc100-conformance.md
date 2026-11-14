@@ -98,12 +98,15 @@ This is ADR-026's "Engine speaks wallet vocab, BRC-100 wraps" principle applied 
 | `basket` (per output) | Diverged | See "Basket semantics" below. |
 | `customInstructions` (per output) | Implemented (core) | Column on `outputs`. |
 | `outputDescription` (per output) | Implemented (core) | Column on `outputs`. |
-| `knownTxids` | Implemented (core) | Ancestry import optimisation; the parameter name `txids` is BRC-100 spec vocabulary at the boundary, values are wire-order wtxids internally. |
+| `knownTxids` | Deferred | BRC-100 puts it on `createAction` and `signAction` options, for chained `noSend`/`sendWith` batches; it arrives with #192. Neither `BSV::Wallet::BRC100#create_action` nor `BSV::Wallet::BRC100#sign_action` takes a `known_txids:` keyword, so passing one raises `ArgumentError`. |
+| `trustSelf` | Deferred | Also a `createAction` and `signAction` option: `'known'` lets input transactions omit proof data for txids the wallet knows or `knownTxids` lists. `BSV::Wallet::BRC100#create_action` accepts `trust_self:` and doesn't forward it; `BSV::Wallet::BRC100#sign_action` doesn't take it. Tracked with `knownTxids` by #192. |
 | `noSend` / `sendWith` | Deferred | Engine decomposition precondition complete (ADR-024); restoration tracked by #192. The lifecycle exists structurally; the `sendWith` batching on top is the missing piece. |
 | `acceptDelayedBroadcast` | Implemented (core) | Maps to declarative broadcast intent (ADR-019). |
 | `randomizeOutputs` | Implemented (core) | Boundary shuffle before signing. |
 | `include` (`'locking scripts'` / `'entire transactions'`) | Implemented (core) | Result shape control for `listOutputs`. |
 | `includeCustomInstructions` / `includeTags` / `includeLabels` | Implemented (core) | Result shape control flags. |
+
+**Beyond the spec: `internalizeAction` takes `trust_self:` and `known_txids:`.** BRC-100 defines neither on `internalizeAction`; the wallet's wrapper accepts both and forwards them to `Engine#internalize_beef` (`known_txids` keeps the spec's `txids` name, but its values are wire-order wtxids). With `trust_self: 'known'`, subject inputs the incoming BEEF leaves unwired (txid-only entries) are wired from the wallet's own proof store before verification, which then walks them like any other ancestor. After verification and proof saving, ancestors listed in `known_txids` or held in the wallet's proof store are reduced to txid-only entries in the parsed BEEF (`Engine::BeefInternalizer#replace_known_ancestors!`). Neither shortcuts verification: reuse of earlier verification comes from the persistent verification cache (`Engine::BeefInternalizer#pre_seed_trust_set`, #516), whatever these options say.
 
 ### Basket semantics — the divergence
 
@@ -179,12 +182,12 @@ The spec's authentication model presupposes a lock-screen / unlock UI. We replac
 
 | Parameter | Stance | Notes |
 |---|---|---|
-| `originator` | Boundary-only | Accepted on every BRC-100 method, dropped at the boundary. Forward direction: DBAP-style permission tokens in admin baskets when implemented (originator ADR). |
+| `originator` | Boundary-only | Accepted on every BRC-100 method, dropped at the boundary. Forward direction: DBAP-style permission tokens in admin baskets when implemented (ADR-029). |
 | `seekPermission` | Boundary-only | Accepted, no-op'd. We have no permission UI to seek from. Will become meaningful when BRC-116 lands. |
 | `OriginatorDomainNameString` validation | Boundary-only | Format validation at the conformance layer (FQDN shape) where present; no behavioural use. |
 | Hash-vocabulary return shapes (`{ txid:, tx: }` etc.) | Boundary-only | Conformance translates wallet vocab returns into BRC-100 hash shapes. ADR-026 codifies this. |
 | Spec-shape input validation | Partially implemented (HLR #428 — baskets); BRC-98 protocol IDs / labels / tags tracked | Basket-name validation landed under HLR #428: the four BRC-100 entry points (`createAction`, `internalizeAction`, `listOutputs`, `relinquishOutput`) normalise on ingress (trim + lowercase + frozen) and reject names that violate the 8 BRC-100 §"Rules for Basket Names" rules at the conformance layer, with a matching DB CHECK on `baskets.name`. Protocol IDs (BRC-98), labels, and tags follow the same family of rules and remain tracked. Engine continues to assume valid input (the conformance layer is responsible for spec-shape). |
-| `userId` (implied) | Amputated | No `users` table, no `user_id` column anywhere. Identity is the WIF (ADR-007). Forward direction: per-user databases (per-user-databases ADR). |
+| `userId` (implied) | Amputated | No `users` table, no `user_id` column anywhere. Identity is the WIF (ADR-007). Forward direction: per-user databases (ADR-028). |
 
 ## Reserved names
 
@@ -226,7 +229,7 @@ We adopt **300** as the binding limit, on the grounds that the TS type is what c
 
 | Concept | Stance | Notes |
 |---|---|---|
-| Per-originator basket access (DBAP) | Deferred | Direction recorded in the originator ADR: PushDrop tokens in an `admin basket-access` basket, mirroring wallet-toolbox. |
+| Per-originator basket access (DBAP) | Deferred | Direction recorded in ADR-029: PushDrop tokens in an `admin basket-access` basket, mirroring wallet-toolbox. |
 | Per-originator protocol access (DPACP) | Deferred | Same mechanism, `admin protocol-permission` basket. |
 | Per-originator certificate access (DCAP) | Deferred | Same mechanism, `admin certificate-access` basket. |
 | Per-originator spending authorisation (DSAP) | Deferred | Same mechanism, `admin spending-authorization` basket. |
@@ -252,7 +255,7 @@ When a deferred concept becomes load-bearing, move the entry to its new stance, 
 ## Related
 
 - [`core-vs-conformance.md`](core-vs-conformance.md) — the principle governing every classification here.
-- ADR (this branch) — core-vs-conformance as a decision record.
+- ADR-027 — core-vs-conformance as a decision record.
 - ADR-007 — single-tenant engine; one row in the "Amputated" column.
 - ADR-021 — BRC-100 interface design; the conformance layer's shape.
 - ADR-026 — Engine primitive surface; the boundary discipline at the primitive level.
@@ -268,3 +271,4 @@ When a deferred concept becomes load-bearing, move the entry to its new stance, 
 - *2026-06-25* — Refined the schema floor under the **invalid data vs caller-facing policy** framing. The shape CHECKs that lived in `004_basket_name_validation.rb` folded into `003_schema_constraints.rb` (pre-release migrations are design documentation, not operational archaeology) and the floor gained three more CHECKs that the original HLR #428 split missed: `name_not_default` (the literal `'default'` is invalid data — the wallet's effective default is unbasketed), `name_no_leading_space` and `name_no_trailing_space` (the validator normalises away on ingress via `strip`, but the schema must floor against non-BRC-100 writers). `'default'` moved from "Implemented (boundary only)" to "Implemented (boundary + DB)" in the reserved-names table. The `admin` and `p ` reservation prefixes stay caller-policy-only — they ARE valid wallet-internal data. Closes #443 (the future-Engine-surface decision is captured by this principle) and #444 (the don't-tighten-DB-reservations worry is concretely encoded — `default` is at the DB because it's invalid; `admin`/`p ` aren't because they're valid).
 - *2026-06-25* — Migration consolidation completed (PR #449): the 3-file split (001 CREATE TABLE, 002 action_id cascade retrofits, 003 CHECKs + NOT NULLs + triggers) collapsed to two files matching the natural structure-vs-behaviour seam — `001_create_schema.rb` (every CREATE TABLE with all inline constraints) and `002_triggers.rb` (the two BEFORE-row guards). The basket-name CHECKs the prior two change-log entries refer to now live in 001's baskets block, not a separate constraints migration. No behaviour change; pointer-only consolidation for design-documentation cleanliness.
 - *2026-11-13* — `internalizeAction`'s Engine primitive renamed from `import_beef` to `internalize_beef` (#549): core adopts BRC-100's verb for recording someone else's transaction, and "import" now means the user's bootstrap of root-key funds. The naming rule above is reworded to cover a divergence that keeps the spec's verb and names what the method takes, and the list of direct Engine consumers now names the real ones. Corrected the `inputBEEF` note, which credited `Engine::BeefImporter` (now `Engine::BeefInternalizer`) with ancestry import: `inputBEEF` is stored with the action (`actions.input_beef`).
+- *2026-11-14* — `knownTxids` moved from "Implemented (core)" to "Deferred" (#192): the row credited it with an ancestry-import optimisation, but `createAction` and `signAction` don't accept it. Added a `trustSelf` row (accepted on `createAction`, not forwarded) and a note on the beyond-spec `trust_self:` / `known_txids:` that `internalizeAction` takes.

@@ -14,6 +14,8 @@ The two answers carry different obligations.
 
 > **Core wallet** is the operations that make a single-key holder a Bitcoin participant: build, sign, broadcast, observe, account. **BRC-100 conformance** is the interface contract that lets external applications drive the wallet to do those things. The wallet implements both, but they sit on opposite sides of an internal boundary: the conformance layer adapts BRC-100 vocabulary onto core operations, the core never reaches outward into conformance vocabulary.
 
+The code fell short of the last clause when this note was added (November 2026): some Engine signatures still took BRC-100 option names, and two Engine methods called back into `BSV::Wallet::BRC100`. #548 tracks bringing the code in line; the principle stands.
+
 The wallet has been built — instinctively at first, then deliberately — by keeping these two responsibilities separable. Several BRC-100 concepts that look load-bearing in the spec turn out to be conformance concerns the core can live without. We have deferred or amputated them, and the core stays faster and simpler for it.
 
 ## Why the boundary matters
@@ -67,14 +69,14 @@ These are part of being a Bitcoin wallet. They live in the schema and the Engine
 - **Transactions, inputs, outputs, broadcasts, proofs.** Core's domain model.
 - **Action lifecycle.** Build → sign → broadcast → resolve. The 4-phase atomicity defended by the schema (`principle-of-state.md`).
 - **UTXO selection, fees, change.** Funding mechanics (ADR-013).
-- **Key derivation.** BRC-42/43 key derivation lives in the SDK, called by Engine collaborators. Identity-shaped pubkeys (hex) vs derived pubkeys (binary) per ADR-008.
+- **Key derivation.** BRC-42 child-key derivation is an SDK primitive; `BSV::Wallet::KeyDeriver` composes the BRC-43 invoice number and resolves the counterparty around it. Identity-shaped pubkeys (hex) vs derived pubkeys (binary) per ADR-008.
 - **BEEF construction, ancestry, SPV validation.** The wallet's relationship to the chain (ADR-015 pivot).
 
 ### Concepts accepted at the conformance boundary
 
 These BRC-100 concepts arrive at the interface, are translated into wallet operations, and are not propagated inward:
 
-- **`originator`** — accepted on every BRC-100 method, dropped at the boundary. See [`brc100-conformance.md`](brc100-conformance.md) and the originator ADR.
+- **`originator`** — accepted on every BRC-100 method, dropped at the boundary. See [`brc100-conformance.md`](brc100-conformance.md) and ADR-029.
 - **`seekPermission`** — accepted, no-op'd. We have no permission UI to seek from.
 - **BRC-100 hash-vocabulary return shapes** — translated to/from the Engine's primitive return values at the wrap layer (`{ txid:, tx: }` ↔ `{ wtxid:, atomic_beef: }` etc.).
 - **Spec-shape input validation** — BRC-100 shape rules (description length, basket name conformance, hex format) enforced at the conformance boundary, not in the Engine.
@@ -106,7 +108,7 @@ When a new BRC-100 concern arrives — a new method, a new parameter, a new retu
 
 2. **Does this presuppose multi-tenancy, permission UI, or app sandboxing?**
    - Yes → amputate or stub at the conformance layer. The mechanism it presupposes is absent in our model; reproducing it is dead weight.
-   - No → translate at the conformance layer onto an existing or new core primitive.
+   - No → translate at the conformance layer onto an existing or new Engine primitive.
 
 3. **If we ever did support this concern, where would it live?**
    - In the core: it's a Bitcoin concern, build it now if needed.
@@ -140,7 +142,7 @@ A "yes" to 1–3 or a "no" to 4 is the principle leaking. Sometimes the leak is 
 By keeping the conformance layer paper-thin and the core BRC-100-naive:
 
 - **Adding originator support** is additive: a permissions overlay above the core, an enforcement check at the conformance layer. Zero changes to Engine signatures, zero changes to Store columns.
-- **Adding multi-user support** is additive: a central `users` database and per-user wallet databases (see the per-user-databases ADR), with the per-user database unchanged from its current shape. The wallet code that runs against a single database now is the same wallet code that runs against a per-user database in multi-user mode.
+- **Adding multi-user support** is additive: a central `users` database and per-user wallet databases (see ADR-028), with the per-user database unchanged from its current shape. The wallet code that runs against a single database now is the same wallet code that runs against a per-user database in multi-user mode.
 - **Adding BRC-116 permission machinery** is additive: an overlay, not a refactor.
 - **Adding a new BRC-100 method** is additive: a wrap on the conformance class, translation onto Engine primitives or a new Engine primitive if no existing one fits.
 
@@ -148,10 +150,10 @@ None of these require disturbing the schema or the Engine's primitive surface. T
 
 ## CLI surface allocation
 
-The same axis governs how CLI surfaces are split. Two CLI binaries are planned:
+The same axis governs how CLI surfaces are split between two binaries, one shipped and one planned:
 
-- **`bin/brc100`** (HLR #431) is the conformance layer surfaced as a transport: positional dispatch over the 28 BRC-100 methods, JSON-in/JSON-out, `WERR_*` codes. It exposes `Interface::BRC100` only — no commands are invented, the surface is the spec.
-- **`bin/wallet`** (HLR #433) is the core layer surfaced as a transport: native wallet-vocab commands (`balance`, `send`, `receive`, `build`, `sign`, `broadcast`, `transmit`, `sweep`, `consolidate`, etc.) invoking Engine methods directly. snake_case verbs, structured exit codes, flat JSON, shell-pipeable.
+- **`bin/brc100`** (HLR #431, planned) is the conformance layer surfaced as a transport: positional dispatch over the 28 BRC-100 methods, JSON-in/JSON-out, `WERR_*` codes. It exposes `Interface::BRC100` only — no commands are invented, the surface is the spec.
+- **`bin/wallet`** (HLR #433) is the core layer surfaced as a transport: native wallet-vocab commands invoking Engine methods directly. snake_case verbs, structured exit codes, flat JSON, shell-pipeable. It ships `balance`, `list`, `send`, `receive`, `import`, `reject`, `sweep` and `consolidate`. ADR-030 defers the plumbing commands (`build`, `sign`, `broadcast`) until the Engine can hold the intermediate state between them, and `transmit` waits on #464; until then, transmit has its own binary, `bin/transmit`.
 
 The allocation rule: a method either is or isn't part of `Interface::BRC100`. If it is, it surfaces via `bin/brc100`. If it isn't, it surfaces via `bin/wallet`. The default expectation is no overlap. The unusual case — a BRC-100 method we choose to wrap in `bin/wallet` with non-spec semantics, or a wallet-vocab convenience over `bin/brc100` — requires an explicit decision recorded in an ADR. The reason this case needs ADR-grade documentation is that it punctures the otherwise clean split, and the rationale needs to survive any future "which CLI owns X" question.
 
@@ -162,7 +164,7 @@ This is the same core/conformance boundary viewed at the CLI transport layer rat
 - [`principle-of-state.md`](principle-of-state.md) — *what* the wallet maintains (schema is canon).
 - [`state-boundaries.md`](state-boundaries.md) — *where* statefulness lives (SDK vs wallet).
 - [`brc100-conformance.md`](brc100-conformance.md) — living register: per BRC-100 concept, our stance (implemented / accepted-at-boundary / deferred / diverged).
-- ADR (this branch) — the core-vs-conformance principle as a decision record.
+- ADR-027 — the core-vs-conformance principle as a decision record.
 - ADR-007 — single-tenant engine, no user table; first concrete application of this principle (retrospective).
 - ADR-018 — stateless SDK / stateful wallet; companion structural boundary.
 - ADR-021 — BRC-100 interface as a plain Ruby module; the conformance layer's shape.
