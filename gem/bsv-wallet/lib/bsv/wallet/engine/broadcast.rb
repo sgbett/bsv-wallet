@@ -109,11 +109,10 @@ module BSV
         end
 
         # BEEF hint receiver -- pulls cross-process producer hints (CLI tools,
-        # API, UI) into the in-process EF cache. Each hint carries the
-        # action's Atomic BEEF; receiver parses, extracts the subject
-        # Transaction::Tx (whose inputs have +source_transaction+ wired by
-        # +Beef.from_binary+), and primes the cache so a subsequent
-        # broadcast emits EF via +Transaction::Tx#to_ef_hex+ without the JOIN.
+        # API, UI) into the shared +HydratedTxCache+. Each hint carries the
+        # action's Atomic BEEF; caching its transactions' bytes lets the
+        # broadcast find every input's parent there and build EF without
+        # the JOIN.
         #
         # Optional: when +socket_path+ is nil, no fiber is started and the
         # cache fills only via intra-process producers.
@@ -259,11 +258,13 @@ module BSV
           raise
         end
 
-        # Prime the shared cache from a hint's BEEF: every non-TXID-only
-        # transaction lands keyed by its own wtxid, carrying its merkle_path
-        # when the BEEF carries one. wtxid-keyed (not action_id) so the
-        # entries serve both the EF broadcast path here and any deep
-        # wire_ancestor walk through the same cache. #296 Phase D.
+        # Prime the shared cache from a hint's BEEF: every full transaction
+        # lands keyed by the wtxid of its own bytes (#296 Phase D).
+        #
+        # raw_tx only (#556): keyed by its own hash, raw_tx authenticates
+        # itself, whereas a hint's BUMP is unverified and would become a
+        # proven terminal for any BEEF walk through this cache. The EF build
+        # reads raw_tx alone, and +put+ without a path keeps a stored one.
         def cache_beef_transactions(beef)
           beef.transactions.each do |beef_tx|
             next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
@@ -271,15 +272,7 @@ module BSV
             t = beef_tx.transaction
             next unless t
 
-            # Merkle can be wired directly onto the transaction OR referenced
-            # indirectly via the entry's BUMP index — funnel through
-            # +BeefInternalizer.merkle_path_for+ so the cache and the ingress
-            # proof store always agree on which entries are merkle-bearing.
-            # Without this, a BUMP-indexed proof would land as
-            # +merkle_path: nil+ in the cache and force +wire_ancestor+ past
-            # what is in fact a proven terminal.
-            mp = BeefInternalizer.merkle_path_for(beef, beef_tx)
-            @hydrated_tx_cache.put(t.wtxid, raw_tx: t.to_binary, merkle_path: mp&.to_binary)
+            @hydrated_tx_cache.put(t.wtxid, raw_tx: t.to_binary)
           end
         end
 

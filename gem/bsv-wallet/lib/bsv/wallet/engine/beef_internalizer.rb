@@ -195,9 +195,8 @@ module BSV
         # onto the transaction or referenced indirectly via its BUMP index.
         # Public class method so every BEEF traversal that needs "which
         # entries are merkle-bearing" funnels through one definition —
-        # save_beef_proofs (what to persist), assert_proofs_complete! (what
-        # should have persisted), and Broadcast#cache_beef_transactions
-        # (what to cache as terminal) all share the answer.
+        # save_beef_proofs (what to persist) and assert_proofs_complete!
+        # (what should have persisted) share the answer.
         def self.merkle_path_for(beef, beef_tx)
           return beef_tx.transaction.merkle_path if beef_tx.transaction.merkle_path
           return nil unless beef_tx.respond_to?(:bump_index) && beef_tx.bump_index

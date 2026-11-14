@@ -1359,8 +1359,8 @@ module BSV
       # skips the +resolve_inputs_for_signing+ JOIN. BEEF is the natural
       # payload: the producer has already built it for +build_action+'s
       # return value, and it carries every parent the EF build needs.
-      # Broadcast stores it as per-transaction raw-tx and merkle-path
-      # bytes, trusted only as far as the hints socket is (#556).
+      # It travels as a +HintEnvelope+, and Broadcast caches each of its
+      # transactions' raw-tx bytes, never its merkle paths (#556).
       # Best-effort: when +BSV_WALLET_HINTS_SOCKET+ is unset, do
       # nothing. Push failures (daemon not listening, socket missing, OMQ
       # error) are swallowed — daemon's #252 reconstruction stays the
