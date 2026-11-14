@@ -62,19 +62,20 @@ from there.
 
 ```ruby
 engine = ctx[:engine]
-engine.import_wallet   # scans the root address, imports each UTXO
+engine.import_wallet(broadcast_intent: :delayed)   # scans the root address, imports each UTXO
 ```
 
-`import_wallet` defaults to `no_send: false` — the import self-payment is
-queued for `walletd` to broadcast. Pass `no_send: true` if you want to
-build locally without publishing (rare; tests only).
+The broadcast intent is required; there is no default. `:delayed` queues
+the import self-payment for `walletd` to broadcast, `:inline` submits it
+now, and `:none` builds and signs it without publishing (rare; tests only).
 
 ## 5. Send a payment
 
 ```ruby
 result = engine.send_payment(
-  recipient: '02a1b2…',   # 66-char compressed pubkey hex
-  satoshis:  5_000
+  recipient:        '02a1b2…',   # 66-char compressed pubkey hex
+  satoshis:         5_000,
+  broadcast_intent: :delayed
 )
 
 # result => {
@@ -85,10 +86,10 @@ result = engine.send_payment(
 # }
 ```
 
-`no_send` defaults to `false` (broadcast — the BRC-100 `createAction`
-default). Pass `no_send: true` to build the BEEF envelope without
-publishing — the shape callers reach for when handing the action off to a
-counterparty peer-to-peer.
+The broadcast intent is required; there is no default. `:delayed` queues
+the payment for `walletd`, `:inline` submits it now, and `:none` builds and
+signs it without publishing — the BEEF envelope callers reach for when
+handing the action off to a counterparty peer-to-peer.
 
 The `txid:` key is the subject `wtxid` (wire-order binary, 32 bytes), the
 BRC-100 spec boundary name. Convert to a display-order hex string with
@@ -129,7 +130,7 @@ internalises the outputs.
 > - **Limp mode** blocks all outbound spend below 50,000 sats. Set
 >   `LIMP_THRESHOLD` (or `c.limp_threshold` in `~/.bsv-wallet/config.rb`)
 >   to lift the floor.
-> - **`no_send` defaults to `false`** (broadcast). Pass `no_send: true`
+> - **The broadcast intent has no default.** Pass `broadcast_intent: :none`
 >   to build a BEEF envelope without publishing — the shape `bin/create`
 >   uses for the peer pipe.
 > - **One wallet per process** — never boot two in the same process.

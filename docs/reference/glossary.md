@@ -18,7 +18,7 @@ The wallet's vocabulary, by context. Within a context a word means one thing. Wh
 ## Rules
 
 - **Use the native term** for a concept that already has one: BRC-100's for BRC-100 concepts, the SDK's for SDK concepts.
-- **Core adopts BRC-100's nouns, never its options.** Where BRC-100 names a domain concept (action, output, basket, label, tag, internalize), core uses its word. Its call-shape options (`noSend`, `sendWith`, `acceptDelayedBroadcast`, `signAndProcess`) stay in the conformance layer, and core states the same intent in its own terms (`broadcast_intent`). #548 tracks the Engine signatures that still take BRC-100 option names.
+- **Core adopts BRC-100's nouns, never its options.** Where BRC-100 names a domain concept (action, output, basket, label, tag, internalize), core uses its word. Its call-shape options (`noSend`, `sendWith`, `acceptDelayedBroadcast`, `signAndProcess`, `randomizeOutputs`) stay in the conformance layer, and core states the same intent in its own terms (`broadcast_intent`, `defer_signing`, `shuffle_outputs`).
 - **Qualify the layer-relative words.** "Primitive" and "porcelain" describe the same relationship at several layers, so always name the layer: SDK primitive, Engine primitive, Postgres primitive (ADR-009); CLI porcelain, Engine porcelain.
 - **ADRs keep their wording.** Where an ADR uses a term in a sense this glossary retires, a dated terminology note at the end of the ADR maps it. The decision text stays as written.
 
@@ -29,6 +29,7 @@ The wallet's vocabulary, by context. Within a context a word means one thing. Wh
 - **transaction** — a Bitcoin transaction. Bare "transaction" always means this; the other kind is always a *database transaction*. The Ruby class is `Transaction::Tx` (see CLAUDE.md).
 - **action** — the wallet's record of a transaction and its metadata: in BRC-100's words, "a Bitcoin transaction augmented with descriptive metadata". A row in `actions`.
 - **unpromoted** — an action with no `promotions` row, and the rows written for it (its outputs and their caller metadata). Promotion writes that row and puts the action's outputs with `spendable_intent = 'spendable'` in the UTXO set (`spendable` rows); an output with intent `none`, such as a payment to someone else, never joins it. When it happens depends on the path, and some actions are never promoted (a parked internal action, for one); see [action lifecycle](action-lifecycle.md). The row replaced the `outputs.promoted` flag of ADR-011 (post-broadcast promotion); see ADR-023.
+- **shuffle** — reordering a transaction's outputs at random before signing, so their position doesn't give away which output is change. `build_action(shuffle_outputs: true)`, the default; BRC-100's `randomizeOutputs` is the same option, translated by `BRC100`. Callers that need an output at a known vout pass `false`: `send_payment` and `sweep` keep the payment at vout 0.
 
 ### Engine primitives and porcelain
 
@@ -56,7 +57,7 @@ Intent is stated, never inferred (ADR-019, ADR-031). Broadcast and transmit take
 
 `delayed` changes *when*; `none` changes *who*. Never use one for the other. `broadcast_intent` is a schema enum; `transmit` doesn't take an intent argument yet (#464), so for transmit the words describe the two modes that exist.
 
-- **deferred** — signing only: `build_action(sign_and_process: false)` leaves the signing to a later `sign_action`. Postponing a feature or a decision ("ADR-030 defers the plumbing commands") is ordinary English and fine; a broadcast or a transmit is never "deferred".
+- **deferred** — signing only: `build_action(defer_signing: true)` leaves the signing to a later `sign_action`. Postponing a feature or a decision ("ADR-030 defers the plumbing commands") is ordinary English and fine; a broadcast or a transmit is never "deferred".
 - **staged** — the state of an action awaiting deferred signing (`Store#stage_action`; "staged, awaiting `signAction`" in [action lifecycle](action-lifecycle.md)).
 
 ### Coming in
@@ -90,15 +91,20 @@ Intent is stated, never inferred (ADR-019, ADR-031). Broadcast and transmit take
 - **porcelain** — `bin/wallet`'s user-facing commands: `balance`, `list`, `send`, `receive`, `import`, `reject`, `sweep`, `consolidate`.
 - **plumbing** — commands that would expose single Engine primitives: `build`, `sign`, `broadcast`. Not shipped; ADR-030 defers them until the Engine can hold the intermediate state.
 - **send** — the user's intent to pay a recipient, fulfilled by a broadcast and/or a transmit. The command may infer part of the intent from context: given an identity key, it emits the BEEF envelope on stdout (transmit `none`); a base58 address has no peer to transmit to. It settles an explicit intent before calling the Engine and reports each part. "Sent" is never a status on its own.
-- **`--broadcast=inline|async|none`** — the broadcast intent, where `async` means `delayed`. #548 renames it.
+- **`--broadcast=inline|delayed|none`** — `send`'s broadcast intent, passed straight through to the Engine as `broadcast_intent`; default `inline`.
 
 ## Retired terms
+
+The option rows apply to core only: `BRC100` keeps BRC-100's own option names and translates them.
 
 | Retired | Use instead |
 |---|---|
 | substrate | the Hydrator, the HydratedTxCache or core's domain model, whichever is meant |
 | caller-delivered, deferred-by-caller | transmit intent `none` |
-| deferred broadcast; `async` as a broadcast mode | broadcast intent `delayed` |
+| deferred broadcast; `async` as a broadcast mode, including `--broadcast=async` | broadcast intent `delayed` |
+| `no_send:` / `accept_delayed_broadcast:` on an Engine method | `broadcast_intent:` |
+| `sign_and_process:` on an Engine method | `defer_signing:` |
+| `randomize_outputs:`; "randomize" for output order | `shuffle_outputs:`; shuffle |
 | BRC-100 primitive | BRC-100 method |
 | staged, for outputs or caller metadata written before promotion | unpromoted |
 | import, for an incoming transaction | internalize |

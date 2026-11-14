@@ -190,7 +190,7 @@ module BSV
         #
         # @return [Hash] +{ signable: { atomic_beef:, reference: } }+ —
         #   wallet vocab; BRC100 wraps to +{ signable_transaction: { tx:, reference: } }+.
-        def build_deferred!(inputs:, outputs:, lock_time:, version:, randomize:, intent:)
+        def build_deferred!(inputs:, outputs:, lock_time:, version:, shuffle_outputs:, intent:)
           self.class.lock_caller_inputs!(engine: @engine, action_id: @id, inputs: inputs)
           # Resolve inline — the deferred path doesn't go through
           # FundingStrategy, so it owns its single resolve.
@@ -198,7 +198,7 @@ module BSV
           build_result = @engine.tx_builder.build(
             resolved_inputs: resolved, caller_outputs: outputs || [],
             caller_inputs: inputs, lock_time: lock_time, version: version,
-            randomize: randomize, sign: false
+            shuffle_outputs: shuffle_outputs, sign: false
           )
           wtxid = build_result[:wtxid]
           raw_tx = build_result[:raw_tx]
@@ -217,13 +217,13 @@ module BSV
         # Used by the OP_RETURN-only and explicit-caller-inputs cases.
         #
         # @return [Hash] +{ wtxid:, raw_tx:, vout_mapping:, change_outputs: [] }+
-        def build_with_caller_inputs!(inputs:, outputs:, lock_time:, version:, randomize:)
+        def build_with_caller_inputs!(inputs:, outputs:, lock_time:, version:, shuffle_outputs:)
           self.class.lock_caller_inputs!(engine: @engine, action_id: @id, inputs: inputs)
           resolved = @engine.store.resolve_inputs_for_signing(action_id: @id)
           build_result = @engine.tx_builder.build(
             resolved_inputs: resolved, caller_outputs: outputs || [],
             caller_inputs: inputs, lock_time: lock_time, version: version,
-            randomize: randomize, sign: true
+            shuffle_outputs: shuffle_outputs, sign: true
           )
           { wtxid: build_result[:wtxid], raw_tx: build_result[:raw_tx],
             vout_mapping: build_result[:vout_mapping], change_outputs: [] }
@@ -239,7 +239,7 @@ module BSV
         # the headroom recheck after the fact has somewhere to roll back to.
         #
         # @return [Hash] +{ wtxid:, raw_tx:, vout_mapping:, change_outputs:, total_input_satoshis: }+
-        def build_via_funding!(outputs:, caller_inputs:, lock_time:, version:, randomize:,
+        def build_via_funding!(outputs:, caller_inputs:, lock_time:, version:, shuffle_outputs:,
                                change_count:, change_basket: nil)
           funding = @engine.funding_strategy.acquire(
             action_id: @id,
@@ -251,7 +251,7 @@ module BSV
                 resolved_inputs: resolved, caller_outputs: outputs || [],
                 caller_inputs: caller_inputs,
                 lock_time: lock_time, version: version,
-                randomize: randomize, change_count: change_count,
+                shuffle_outputs: shuffle_outputs, change_count: change_count,
                 change_basket: change_basket
               )
             }

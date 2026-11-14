@@ -251,13 +251,13 @@ RSpec.describe BSV::Wallet::Engine::Action do
   # and the constant is used — trust-decision behaviour is Sub 5's
   # coverage.
   describe 'HLR #521 egress self_built writes' do
-    it 'send-path (no_send: false) populates cache as self_built' do
+    it 'send-path (broadcast intent :delayed) populates cache as self_built' do
       fund_wallet(satoshis: 1_000_000, count: 1, prefix: 'sendSelfBuilt',
                   suffix: 'root')
       recipient = BSV::Primitives::PrivateKey.generate.public_key.to_hex
 
       result = engine_with_keys.send_payment(
-        recipient: recipient, satoshis: 5_000
+        recipient: recipient, satoshis: 5_000, broadcast_intent: :delayed
       )
 
       state = store.verification_state(wtxid: result[:wtxid])
@@ -301,7 +301,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       end
 
       expect do
-        engine_with_keys.send_payment(recipient: recipient, satoshis: 5_000)
+        engine_with_keys.send_payment(recipient: recipient, satoshis: 5_000, broadcast_intent: :delayed)
       end.to raise_error(/mark boom/)
 
       # sign_action stamped wtxid on the action row and save_proof
@@ -329,7 +329,7 @@ RSpec.describe BSV::Wallet::Engine::Action do
       reference = create_result[:signable_transaction][:reference]
 
       expect { engine.brc100.sign_action(spends: {}, reference: reference, no_send: true) }
-        .to raise_error(BSV::Wallet::UnsupportedActionError, /signAction\(no_send: true\)/)
+        .to raise_error(BSV::Wallet::UnsupportedActionError, /sign_action with broadcast intent 'none'/)
     end
   end
 

@@ -147,6 +147,7 @@ RSpec.describe BSV::Wallet::Fixtures::Rebuilder do
       expect(contexts[:sdk][:engine]).to have_received(:build_action) do |args|
         expect(args[:outputs].first[:satoshis]).to eq(1_000_000)
         expect(args[:outputs].first[:spendable_intent]).to eq('none')
+        expect(args[:broadcast_intent]).to eq(:inline)
       end
     end
 

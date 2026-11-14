@@ -79,8 +79,9 @@ module BSV
       #   3. Phase 3 / 4 follow the broadcast intent (send path versus
       #      internal path); see docs/concepts/action-lifecycle.md.
       #
-      # Deferred signing (sign_and_process: false, caller-supplied inputs
-      # only) skips the funding loop entirely and returns a signable handle.
+      # Deferred signing (sign_and_process: false, or an input awaiting
+      # its unlocking script; caller-supplied inputs only) skips the
+      # funding loop entirely and returns a signable handle.
       #
       # @return [Hash] either { txid:, tx: } (signed),
       #   { signable_transaction: { tx:, reference: } } (deferred), or
@@ -114,15 +115,25 @@ module BSV
         # per ADR-026 decisions 5/7 — BRC-100 vocabulary that doesn't
         # propagate into Engine. +return_txid_only+ is applied at wrap
         # time below.
-        result = @engine.build_action(
-          description: description, input_beef: input_beef,
-          inputs: inputs, outputs: outputs,
-          lock_time: lock_time, version: version, labels: labels,
-          sign_and_process: sign_and_process,
-          accept_delayed_broadcast: accept_delayed_broadcast,
-          no_send: no_send, change_count: change_count,
-          randomize_outputs: randomize_outputs
-        )
+        result = begin
+          @engine.build_action(
+            description: description, input_beef: input_beef,
+            inputs: inputs, outputs: outputs,
+            lock_time: lock_time, version: version, labels: labels,
+            defer_signing: !sign_and_process || awaiting_unlocking_scripts?(inputs),
+            broadcast_intent: map_broadcast_intent(no_send, accept_delayed_broadcast),
+            change_count: change_count,
+            shuffle_outputs: randomize_outputs
+          )
+        rescue BSV::Wallet::InvalidParameterError => e
+          raise unless e.parameter == 'defer_signing'
+
+          # The caller passed sign_and_process, not defer_signing; name
+          # the parameter they can change.
+          raise BSV::Wallet::InvalidParameterError.new(
+            'sign_and_process', 'true when inputs is nil (wallet-selected inputs sign immediately)'
+          )
+        end
 
         # Wallet vocab → BRC-100 vocab. Engine returns one of three shapes
         # (sync / no_send / deferred); each maps to a distinct BRC-100
@@ -144,7 +155,7 @@ module BSV
         validate_reference!(reference)
         result = @engine.sign_action(
           reference: reference, spends: spends,
-          accept_delayed_broadcast: accept_delayed_broadcast, no_send: no_send
+          broadcast_intent: map_broadcast_intent(no_send, accept_delayed_broadcast)
         )
         { txid: result[:wtxid], tx: return_txid_only ? nil : result[:atomic_beef] }
       end
@@ -439,6 +450,25 @@ module BSV
       end
 
       private
+
+      # BRC-100's +noSend+ / +acceptDelayedBroadcast+ pair → the Engine's
+      # +broadcast_intent+. +noSend+ wins: +acceptDelayedBroadcast+ only
+      # chooses between the two ways of broadcasting.
+      def map_broadcast_intent(no_send, accept_delayed_broadcast)
+        if no_send then :none
+        elsif accept_delayed_broadcast then :delayed
+        else :inline
+        end
+      end
+
+      # BRC-100's convention: an input that declares
+      # +unlocking_script_length+ but carries no +unlocking_script+ is one
+      # the caller will sign later, so the action defers signing even when
+      # +sign_and_process+ is true. An input carrying both is already
+      # signed.
+      def awaiting_unlocking_scripts?(inputs)
+        Array(inputs).any? { |i| i[:unlocking_script_length] && !i[:unlocking_script] }
+      end
 
       # ---- BRC-100 spec-shape validators ---------------------------------
       #

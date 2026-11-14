@@ -50,7 +50,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       recipient_key = BSV::Primitives::PrivateKey.generate
       recipient_identity = recipient_key.public_key.to_hex
 
-      result = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000)
+      result = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000, broadcast_intent: :delayed)
 
       # HLR #467 / ADR-026 / ADR-027: +send_payment+ is wallet-vocab
       # porcelain — calls +#build_action+ directly, returns wallet vocab
@@ -71,14 +71,37 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       expect(out[:derivation_suffix]).to be_a(String).and(satisfy { |s| !s.empty? })
     end
 
+    # The returned metadata reports vout 0 for the payment, which holds
+    # only while send_payment builds with shuffle_outputs: false.
+    it 'keeps the payment output at vout 0' do
+      fund_wallet_for_auto
+      allow(engine_with_keys).to receive(:build_action).and_call_original
+      recipient = BSV::Primitives::PrivateKey.generate.public_key.to_hex
+
+      result = engine_with_keys.send_payment(recipient: recipient, satoshis: 5_000, broadcast_intent: :delayed)
+
+      expect(engine_with_keys).to have_received(:build_action).with(hash_including(shuffle_outputs: false))
+      reported = result[:outputs].first
+      derived_pub = key_deriver.derive_public_key(
+        protocol_id: BSV::Wallet::BRC29::PROTOCOL_ID,
+        key_id: BSV::Wallet::BRC29.key_id(reported[:derivation_prefix], reported[:derivation_suffix]),
+        counterparty: recipient, for_self: true
+      )
+      payment = parse_beef_tx(result[:atomic_beef]).outputs[reported[:vout]]
+      expect(reported[:vout]).to eq(0)
+      expect(payment.satoshis).to eq(5_000)
+      expect(payment.locking_script.to_binary)
+        .to eq(BSV::Script::Script.p2pkh_lock(BSV::Primitives::Digest.hash160(derived_pub)).to_binary)
+    end
+
     it 'produces distinct derivation suffixes across consecutive calls' do
       fund_wallet_for_auto(count: 2)
 
       recipient_key = BSV::Primitives::PrivateKey.generate
       recipient_identity = recipient_key.public_key.to_hex
 
-      first = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000)
-      second = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000)
+      first = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000, broadcast_intent: :delayed)
+      second = engine_with_keys.send_payment(recipient: recipient_identity, satoshis: 5_000, broadcast_intent: :delayed)
 
       expect(first[:outputs].first[:derivation_suffix])
         .not_to eq(second[:outputs].first[:derivation_suffix])
@@ -88,7 +111,9 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       fund_wallet_for_auto
 
       recipient_key = BSV::Primitives::PrivateKey.generate
-      result = engine_with_keys.send_payment(recipient: recipient_key.public_key.to_hex, satoshis: 5_000)
+      result = engine_with_keys.send_payment(
+        recipient: recipient_key.public_key.to_hex, satoshis: 5_000, broadcast_intent: :delayed
+      )
 
       parsed = parse_beef_tx(result[:atomic_beef])
       expect(parsed.inputs.length).to eq(1)
@@ -104,7 +129,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
       recipient_key = BSV::Primitives::PrivateKey.generate
       result = engine_with_keys.send_payment(
-        recipient: recipient_key.public_key.to_hex, satoshis: 5_000, no_send: true
+        recipient: recipient_key.public_key.to_hex, satoshis: 5_000, broadcast_intent: :none
       )
 
       action = store.find_action(wtxid: result[:wtxid])
@@ -125,7 +150,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
       engine_with_keys.send_payment(
         recipient: BSV::Primitives::PrivateKey.generate.public_key.to_hex,
-        satoshis: 5_000, fee_rate: 50
+        satoshis: 5_000, broadcast_intent: :delayed, fee_rate: 50
       )
 
       expect(engine_with_keys).to have_received(:build_action)

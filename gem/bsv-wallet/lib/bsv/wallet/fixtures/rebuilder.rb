@@ -290,9 +290,8 @@ module BSV
               { satoshis: sats, locking_script: locking_script,
                 spendable_intent: 'none', output_description: "fund #{name} root" }
             ],
-            no_send: false,
-            accept_delayed_broadcast: false,
-            randomize_outputs: false
+            broadcast_intent: :inline,
+            shuffle_outputs: false
           )
 
           dtxid = result[:wtxid].reverse.unpack1('H*')
