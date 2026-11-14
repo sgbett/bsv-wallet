@@ -54,10 +54,10 @@ BSV::Wallet.configure do |c|
 
   # Optional cross-process EF hint socket: an OMQ endpoint walletd
   # binds and producers (CLI, API) PUSH hints to, eliminating the
-  # broadcast-time DB JOIN. It is unauthenticated, so use an +ipc://+
-  # socket in a directory only the wallet's user can access (such as
-  # +~/.bsv-wallet+ at mode 0700), never a shared directory or a network
-  # endpoint (#556). Default +nil+ (feature off); reads
+  # broadcast-time DB JOIN. It is unauthenticated, so walletd accepts
+  # only an +ipc://+ socket in a directory no other user can write to
+  # (such as +~/.bsv-wallet+ at mode 0700), never a shared directory or
+  # a network endpoint (#556). Default +nil+ (feature off); reads
   # +BSV_WALLET_HINTS_SOCKET+.
   # c.hints_socket = "ipc://#{Dir.home}/.bsv-wallet/hints.sock"
 end

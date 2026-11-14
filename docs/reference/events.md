@@ -61,7 +61,7 @@ Ten canonical events across three layers.
 
 `error` is the first line of the exception message (newlines stripped). Emitted by:
 
-- **OMQ bind failures** — `bind_or_die` (the `OmqSupport` module) in `Engine::Broadcast#pull!`, `#reply!`, `#statuses_pull!` and `#hints_pull!`, `Engine::TxProof#pull!` and `Engine::Reaper#pull!`. Fires when a socket can't bind, for example because its endpoint is already bound.
+- **OMQ bind failures** — `bind_or_die` (the `OmqSupport` module) in `Engine::Broadcast#pull!`, `#reply!`, `#statuses_pull!` and `#hints_pull!`, `Engine::TxProof#pull!` and `Engine::Reaper#pull!`. Fires when a socket can't bind, for example because its endpoint is already bound, or because `Engine::HintsEndpoint` refuses the hints socket's endpoint.
 - **Scheduler discovery loops** — on unhandled exceptions during discovery or enqueue. The loop carries on to its next cycle.
 - **TxProof PULL handler** — on unhandled exceptions during message processing.
 

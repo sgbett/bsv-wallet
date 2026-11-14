@@ -65,7 +65,8 @@ module BSV
       # default sized for multi-hop cascade working sets (#296 Phase D).
       attr_accessor :tx_cache_size
 
-      # Optional cross-process EF hint socket path. +nil+ = feature off.
+      # Optional cross-process EF hint socket, an +ipc://+ path
+      # (see +Engine::HintsEndpoint+). +nil+ = feature off.
       attr_accessor :hints_socket
 
       # Reaper staleness threshold (seconds). An action with locked inputs

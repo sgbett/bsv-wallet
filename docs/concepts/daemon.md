@@ -89,12 +89,14 @@ Alongside the fire-and-forget PULL queue, `Engine::Broadcast` also binds a **REP
 
 `Engine::TxProof#process` fetches a transaction's status through `Broadcaster#get_tx_status` and, once it carries both a `merkle_path` and a `block_height`, normalises the proof to BRC-74 binary form via `Engine::MerklePathNormaliser`, saves it, and links it to the action. Linking the proof is what flips the action to `:completed`, and the shared `Engine::HydratedTxCache` is updated so later BEEF walks see the new proof immediately.
 
-`Engine::Broadcast#hints_pull!` is opt-in. When `BSV_WALLET_HINTS_SOCKET` is set, `walletd` binds that OMQ endpoint (typically an `ipc://` Unix socket), and an Engine in another process (a `bin/wallet` command, an API) pushes the Atomic BEEF of each action it dispatches for broadcast. `walletd` caches every full transaction in the hint under its wtxid in `HydratedTxCache`, so the broadcast worker finds the parents there at submit time and skips the `resolve_inputs_for_signing` JOIN. Hints are best-effort: a missed one costs only the JOIN.
+`Engine::Broadcast#hints_pull!` is opt-in. When `BSV_WALLET_HINTS_SOCKET` is set, `walletd` binds that `ipc://` Unix socket, and an Engine in another process (a `bin/wallet` command, an API) pushes the Atomic BEEF of each action it dispatches for broadcast. `walletd` caches the raw-transaction bytes of every full transaction in the hint under its wtxid in `HydratedTxCache`, so the broadcast worker finds the parents there at submit time and skips the `resolve_inputs_for_signing` JOIN. It never caches a hint's merkle paths, which it has not verified. Hints are best-effort: a missed one costs only the JOIN.
+
+Each hint is an `Engine::HintEnvelope`: one frame holding a version byte, the action ID as an unsigned 64-bit integer and the BEEF, capped at 32 MiB. It is data only, so `walletd` parses it and never deserialises an object from it, and drops a malformed or oversized message with a warning.
 
 {: .warning }
-> **Only trusted local processes may reach the hints socket**
+> **Only the wallet's own processes may reach the hints socket**
 >
-> The hints socket is unauthenticated, and `walletd` deserialises every message it receives on it. Bind it as an `ipc://` socket in a directory that only the wallet's user can access, never a shared directory or a network endpoint (#556).
+> The hints socket is unauthenticated. `Engine::HintsEndpoint` refuses a `tcp://` endpoint, a Linux abstract socket (`ipc://@name`) and a socket whose directory another user owns or can write to, and creates the socket file owner-only (#556). A refusal crashes only the hints fibre, with a `fiber.crashed` event that names the reason; the rest of `walletd` runs on without hints.
 
 ## Sizing knobs
 
