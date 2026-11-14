@@ -20,11 +20,17 @@ Measure each PR against the project's own stated truth, in this order:
    - [`action-lifecycle.md`](../docs/reference/action-lifecycle.md) — the action state machine: every multi-step flow's atomic transitions and their crash-recovery owners.
    - [`schema.md`](../docs/reference/schema.md) — the table-by-table reference: columns, constraints, FKs, lifecycle SQL, and the load-bearing design questions. Per-decision rationale lives in the ADR raft (`.architecture/decisions/adrs/`).
    - [`raw-tx.md`](../docs/reference/raw-tx.md), [`transactions.md`](../docs/reference/transactions.md) — wire format and transaction handling. (Deferred chained-send/batching is analysed in [`.architecture/reviews/20260619_noSend-sendWith-design-notes.md`](../.architecture/reviews/20260619_noSend-sendWith-design-notes.md) — not part of the base wallet's behaviour.)
-3. **Conventions live in [`CLAUDE.md`](../CLAUDE.md)** — language (American identifiers / author's-voice prose), the `wtxid`/`dtxid` binary-vs-display byte-order discipline, `Transaction::Tx`-in-prose, and the identity-hex / derived-binary public-key rule. Flag violations against CLAUDE.md; don't restate its rules here.
+3. **Vocabulary lives in [`docs/reference/glossary.md`](../docs/reference/glossary.md).** A word means one thing per context (SDK, core, BRC-100 conformance, CLI); check new names and prose against it.
+4. **Conventions live in [`CLAUDE.md`](../CLAUDE.md)** — language (American identifiers / author's-voice prose), the `wtxid`/`dtxid` binary-vs-display byte-order discipline, `Transaction::Tx`-in-prose, and the identity-hex / derived-binary public-key rule. Flag violations against CLAUDE.md; don't restate its rules here.
 
 ## Flag inconsistencies — don't presume the code is right
 
 When code contradicts a principle or a reference doc, that contradiction **is the finding**. Flag it and pose the load-bearing question: **is the code wrong, or is the principle/doc wrong?** Neither is assumed correct — surface it so a human resolves it deliberately rather than silently bending one to the other. The same applies when code disagrees with a `docs/reference/` doc, or when two docs disagree.
+
+## Flag drift in docs and comments
+
+- **Retired vocabulary.** Flag any term the glossary's [Retired terms](../docs/reference/glossary.md#retired-terms) table retires, in docs, code comments or CLAUDE.md. CI (`rake docs:retired_terms`) catches the terms a pattern can detect; the context-dependent ones (staged for unpromoted outputs, import for an incoming transaction, primitive or porcelain without a layer) need you.
+- **References to things that no longer exist.** Flag a command, flag, class, method, file or migration that a doc or comment names but the code no longer has. CI (`rake docs:references`) checks the inline-code `Class#method` references in `docs/`; you're the check for bare method names, CLI flags and code comments.
 
 ## Self-check this file
 
@@ -40,6 +46,7 @@ When a PR changes `gem/bsv-wallet/lib/`, `docs/reference/`, `.architecture/`, or
 - **No `status` column / no `outputs.promoted` flag** — status is derived from structure by design (`principle-of-state.md`, `state-representations.md`); promotion is a `promotions` row.
 - **Logical models in the `Engine` namespace** (`Engine::Broadcast`, `Engine::TxProof`) — behaviour-bearing models that intentionally aren't Store-level. Not a misplacement.
 - **`Gemfile.lock` not committed** — standard for a gem.
+- **Retired terms in ADR decision text, dated change-log entries, or the glossary's own Retired terms table** — ADRs keep their point-in-time wording (with a dated terminology note), and a dated entry records what was true then.
 - **`Set` used without `require 'set'`** — `Set` is an autoloaded core constant on Ruby ≥3.2 (the gem floors at 3.3). Established convention, not a missing dependency. (Same for other stdlib Ruby ≥3.2 autoloads.)
 
 ## Review output style
