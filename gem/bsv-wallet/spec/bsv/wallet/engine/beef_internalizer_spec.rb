@@ -3,12 +3,12 @@
 require_relative 'shared_context'
 
 # Isolation specs for the fourth Engine decomposition extraction
-# (HLR #357). BeefImporter is store-reading by design — these specs
+# (HLR #357). BeefInternalizer is store-reading by design — these specs
 # drive the real Store (same pattern as funding_strategy_spec and
 # hydrator_spec) rather than faking +save_proof+ / +link_proof+ /
 # +proof_exists?+, which would obscure the BEEF/proof wiring this
 # class exists to do.
-RSpec.describe BSV::Wallet::Engine::BeefImporter do
+RSpec.describe BSV::Wallet::Engine::BeefInternalizer do
   include_context 'engine setup'
 
   # Mock chain tracker that accepts all merkle roots — mirrors
@@ -31,7 +31,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
 
   # Subject must come after include_context so this declaration wins —
   # mirrors hydrator_spec / funding_strategy_spec.
-  subject(:beef_importer) do # rubocop:disable RSpec/LeadingSubject
+  subject(:beef_internalizer) do # rubocop:disable RSpec/LeadingSubject
     described_class.new(store: store, chain_tracker: chain_tracker, hydrator: hydrator)
   end
 
@@ -57,7 +57,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
   #     derivation triple to +basket_insertion+ / +wallet_payment+ (the
   #     +spendable_recoverable+ CHECK accepts non-root + controls).
   #   * +:root_p2pkh+ — the suite-pinned root P2PKH literal
-  #     (+TEST_ROOT_LOCKING_SCRIPT+). Use for tests that import without
+  #     (+TEST_ROOT_LOCKING_SCRIPT+). Use for tests that internalize without
   #     a derivation triple (basket_insertion with no remittance), so
   #     the no-controls + 'spendable' permutation lands on a structurally
   #     valid root output (HLR #467).
@@ -98,7 +98,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
   describe '#parse_beef' do
     it 'returns [beef, subject_tx] for a valid Atomic BEEF' do
       built = build_verifiable_beef
-      beef, subject_tx = beef_importer.send(:parse_beef, built[:beef_binary])
+      beef, subject_tx = beef_internalizer.send(:parse_beef, built[:beef_binary])
 
       expect(beef).to be_a(BSV::Transaction::Beef)
       expect(subject_tx).to be_a(BSV::Transaction::Tx)
@@ -108,12 +108,12 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
     it 'raises InvalidBeefError for empty BEEF' do
       # Atomic BEEF prefix + V2 version + zero tx count
       empty = [0x01010101, 0x0200BEEF, 0].pack('NNC')
-      expect { beef_importer.send(:parse_beef, empty) }
+      expect { beef_internalizer.send(:parse_beef, empty) }
         .to raise_error(BSV::Wallet::InvalidBeefError)
     end
 
     it 'raises InvalidBeefError for malformed binary (ArgumentError wrap)' do
-      expect { beef_importer.send(:parse_beef, "\x00".b) }
+      expect { beef_internalizer.send(:parse_beef, "\x00".b) }
         .to raise_error(BSV::Wallet::InvalidBeefError)
     end
   end
@@ -123,14 +123,14 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
   describe '#verify_incoming_transaction!' do
     it 'delegates to Transaction::Tx#verify with the injected chain_tracker' do
       built = build_verifiable_beef
-      expect { beef_importer.send(:verify_incoming_transaction!, built[:subject_tx]) }
+      expect { beef_internalizer.send(:verify_incoming_transaction!, built[:subject_tx]) }
         .not_to raise_error
     end
 
     it 'raises InvalidBeefError when chain_tracker is nil' do
-      importer = described_class.new(store: store, chain_tracker: nil, hydrator: hydrator)
+      internalizer = described_class.new(store: store, chain_tracker: nil, hydrator: hydrator)
       built = build_verifiable_beef
-      expect { importer.send(:verify_incoming_transaction!, built[:subject_tx]) }
+      expect { internalizer.send(:verify_incoming_transaction!, built[:subject_tx]) }
         .to raise_error(BSV::Wallet::InvalidBeefError, /chain_tracker required/)
     end
 
@@ -139,7 +139,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       allow(subject_tx).to receive(:verify).and_raise(
         BSV::Transaction::VerificationError.new(:invalid_merkle_proof, 'bad proof')
       )
-      expect { beef_importer.send(:verify_incoming_transaction!, subject_tx) }
+      expect { beef_internalizer.send(:verify_incoming_transaction!, subject_tx) }
         .to raise_error(BSV::Wallet::InvalidBeefError,
                         /SPV verification failed.*bad proof.*invalid_merkle_proof/)
     end
@@ -149,7 +149,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       allow(subject_tx).to receive(:verify).and_raise(
         BSV::Transaction::VerificationError.new(:script_failure, 'script failed')
       )
-      expect { beef_importer.send(:verify_incoming_transaction!, subject_tx) }
+      expect { beef_internalizer.send(:verify_incoming_transaction!, subject_tx) }
         .to raise_error(BSV::Wallet::InvalidBeefError,
                         /SPV verification failed.*script failed.*script_failure/)
     end
@@ -159,7 +159,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       allow(subject_tx).to receive(:verify).and_raise(
         BSV::Transaction::VerificationError.new(:output_overflow, 'outputs exceed inputs')
       )
-      expect { beef_importer.send(:verify_incoming_transaction!, subject_tx) }
+      expect { beef_internalizer.send(:verify_incoming_transaction!, subject_tx) }
         .to raise_error(BSV::Wallet::InvalidBeefError,
                         /SPV verification failed.*outputs exceed inputs.*output_overflow/)
     end
@@ -169,7 +169,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       allow(subject_tx).to receive(:verify).and_raise(
         BSV::Transaction::VerificationError.new(:missing_source, 'no source data')
       )
-      expect { beef_importer.send(:verify_incoming_transaction!, subject_tx) }
+      expect { beef_internalizer.send(:verify_incoming_transaction!, subject_tx) }
         .to raise_error(BSV::Wallet::InvalidBeefError,
                         /SPV verification failed.*no source data.*missing_source/)
     end
@@ -201,7 +201,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
                            ))
       expect(subject_tx.inputs.first.source_transaction).to be_nil
 
-      beef_importer.send(:hydrate_known_sources!, subject_tx)
+      beef_internalizer.send(:hydrate_known_sources!, subject_tx)
 
       wired = subject_tx.inputs.first.source_transaction
       expect(wired).to be_a(BSV::Transaction::Tx)
@@ -214,7 +214,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       expect(original_source).not_to be_nil
 
       allow(hydrator).to receive(:wire_ancestor).and_call_original
-      beef_importer.send(:hydrate_known_sources!, built[:subject_tx])
+      beef_internalizer.send(:hydrate_known_sources!, built[:subject_tx])
       expect(hydrator).not_to have_received(:wire_ancestor)
       expect(built[:subject_tx].inputs.first.source_transaction).to equal(original_source)
     end
@@ -236,7 +236,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         raw_tx: built[:subject_tx].to_binary
       )
 
-      beef_importer.send(:save_beef_proofs, beef, built[:subject_tx].wtxid, action_result[:id])
+      beef_internalizer.send(:save_beef_proofs, beef, built[:subject_tx].wtxid, action_result[:id])
 
       # Ancestor proof was persisted
       expect(store.find_proof(wtxid: built[:ancestor].wtxid)).not_to be_nil
@@ -257,7 +257,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       )
 
       allow(store).to receive(:link_proof).and_call_original
-      beef_importer.send(:save_beef_proofs, beef, built[:subject_tx].wtxid, action_result[:id])
+      beef_internalizer.send(:save_beef_proofs, beef, built[:subject_tx].wtxid, action_result[:id])
       expect(store).not_to have_received(:link_proof)
     end
 
@@ -293,7 +293,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       store.sign_action(action_id: action_result[:id], wtxid: subject_tx.wtxid, raw_tx: subject_tx.to_binary)
 
       allow(store).to receive(:link_proof).and_call_original
-      beef_importer.send(:save_beef_proofs, beef, subject_tx.wtxid, action_result[:id])
+      beef_internalizer.send(:save_beef_proofs, beef, subject_tx.wtxid, action_result[:id])
       expect(store).to have_received(:link_proof)
         .with(hash_including(action_id: action_result[:id], tx_proof_id: kind_of(Integer)))
     end
@@ -302,7 +302,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
   # --- #assert_proofs_complete! ---------------------------------------
 
   describe '#assert_proofs_complete! (#296 Phase C ingress invariant)' do
-    # Persist the BEEF's proofs the way #import does, then exercise the
+    # Persist the BEEF's proofs the way #internalize does, then exercise the
     # post-condition directly. Setup mirrors #save_beef_proofs's specs.
     def persist_beef_proofs(built)
       beef = BSV::Transaction::Beef.from_binary(built[:beef_binary])
@@ -315,7 +315,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         raw_tx: built[:subject_tx].to_binary
       )
       store.save_proof(wtxid: built[:subject_tx].wtxid, proof: { raw_tx: built[:subject_tx].to_binary })
-      beef_importer.send(:save_beef_proofs, beef, built[:subject_tx].wtxid, action_result[:id])
+      beef_internalizer.send(:save_beef_proofs, beef, built[:subject_tx].wtxid, action_result[:id])
       beef
     end
 
@@ -323,7 +323,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       built = build_verifiable_beef
       beef = persist_beef_proofs(built)
 
-      expect { beef_importer.send(:assert_proofs_complete!, beef) }.not_to raise_error
+      expect { beef_internalizer.send(:assert_proofs_complete!, beef) }.not_to raise_error
     end
 
     it 'raises InvalidBeefError when an entry was not persisted' do
@@ -335,7 +335,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         wtxid == built[:ancestor].wtxid ? nil : orig.call(wtxid: wtxid)
       end
 
-      expect { beef_importer.send(:assert_proofs_complete!, beef) }
+      expect { beef_internalizer.send(:assert_proofs_complete!, beef) }
         .to raise_error(BSV::Wallet::InvalidBeefError, /not persisted/)
     end
 
@@ -348,7 +348,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         res && wtxid == built[:ancestor].wtxid ? res.merge(merkle_path: nil) : res
       end
 
-      expect { beef_importer.send(:assert_proofs_complete!, beef) }
+      expect { beef_internalizer.send(:assert_proofs_complete!, beef) }
         .to raise_error(BSV::Wallet::InvalidBeefError, /carried a merkle_path/)
     end
   end
@@ -356,28 +356,28 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
   # --- #replace_known_ancestors! --------------------------------------
 
   describe '#replace_known_ancestors!' do
-    it 'trims an ancestor to TXID-only when its wtxid is in known_wtxids' do
+    it 'replaces an ancestor with a TXID-only entry when its wtxid is in known_wtxids' do
       built = build_verifiable_beef
       beef = BSV::Transaction::Beef.from_binary(built[:beef_binary])
 
-      beef_importer.send(:replace_known_ancestors!, beef, built[:subject_tx].wtxid, [built[:ancestor].wtxid])
+      beef_internalizer.send(:replace_known_ancestors!, beef, built[:subject_tx].wtxid, [built[:ancestor].wtxid])
 
       ancestor_entry = beef.transactions.find { |e| e.wtxid == built[:ancestor].wtxid }
       expect(ancestor_entry).to be_a(BSV::Transaction::Beef::TxidOnlyEntry)
     end
 
-    it 'never trims the subject transaction' do
+    it 'never replaces the subject transaction' do
       built = build_verifiable_beef
       beef = BSV::Transaction::Beef.from_binary(built[:beef_binary])
 
       # Even when the subject's wtxid is in known_wtxids, leave it alone
-      beef_importer.send(:replace_known_ancestors!, beef, built[:subject_tx].wtxid, [built[:subject_tx].wtxid])
+      beef_internalizer.send(:replace_known_ancestors!, beef, built[:subject_tx].wtxid, [built[:subject_tx].wtxid])
 
       subject_entry = beef.transactions.find { |e| e.wtxid == built[:subject_tx].wtxid }
       expect(subject_entry).not_to be_a(BSV::Transaction::Beef::TxidOnlyEntry)
     end
 
-    it 'trims an ancestor when its proof already exists in the store' do
+    it 'replaces an ancestor when its proof already exists in the store' do
       built = build_verifiable_beef
       beef = BSV::Transaction::Beef.from_binary(built[:beef_binary])
       mp = build_merkle_path(built[:ancestor])
@@ -386,7 +386,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         proof: { raw_tx: built[:ancestor].to_binary, height: 800_000, merkle_path: mp.to_binary }
       )
 
-      beef_importer.send(:replace_known_ancestors!, beef, built[:subject_tx].wtxid, nil)
+      beef_internalizer.send(:replace_known_ancestors!, beef, built[:subject_tx].wtxid, nil)
 
       ancestor_entry = beef.transactions.find { |e| e.wtxid == built[:ancestor].wtxid }
       expect(ancestor_entry).to be_a(BSV::Transaction::Beef::TxidOnlyEntry)
@@ -404,7 +404,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
           sender_identity_key: 'sender_hex'
         }
       }
-      spec = beef_importer.send(:resolve_internalize_output, out)
+      spec = beef_internalizer.send(:resolve_internalize_output, out)
 
       expect(spec).to include(
         satoshis: 500, vout: 1,
@@ -422,7 +422,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
           sender_identity_key: 'sender_hex'
         }
       }
-      spec = beef_importer.send(:resolve_internalize_output, out)
+      spec = beef_internalizer.send(:resolve_internalize_output, out)
 
       expect(spec).to include(
         basket: 'gift', custom_instructions: 'ci', tags: ['a'],
@@ -444,22 +444,22 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         satoshis: 700, output_index: 0, protocol: :basket_insertion,
         insertion_remittance: { basket: 'gift' }
       }
-      spec = beef_importer.send(:resolve_internalize_output, out)
+      spec = beef_internalizer.send(:resolve_internalize_output, out)
 
       expect(spec[:spendable_intent]).to eq('spendable')
       expect(spec).not_to include(:output_type)
     end
   end
 
-  # --- #import end-to-end ---------------------------------------------
+  # --- #internalize end-to-end ----------------------------------------
 
-  describe '#import' do
+  describe '#internalize' do
     it 'returns { accepted: true } and persists the incoming action + spendable output' do
       built = build_verifiable_beef(satoshis: 500)
 
-      result = beef_importer.import(
+      result = beef_internalizer.internalize(
         tx: built[:beef_binary],
-        description: 'beef_importer smoke',
+        description: 'beef_internalizer smoke',
         labels: ['incoming'],
         outputs: [{
           output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -485,7 +485,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
     it 'raises InvalidParameterError when an output names a non-existent vout' do
       built = build_verifiable_beef
       expect do
-        beef_importer.import(
+        beef_internalizer.internalize(
           tx: built[:beef_binary],
           description: 'vout out of range',
           outputs: [{ output_index: 99, protocol: :basket_insertion, satoshis: 500 }]
@@ -496,14 +496,14 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
     it 'raises InvalidParameterError for non-Array outputs (#362 shape guard)' do
       built = build_verifiable_beef
       expect do
-        beef_importer.import(tx: built[:beef_binary], description: 'bad outputs', outputs: nil)
+        beef_internalizer.internalize(tx: built[:beef_binary], description: 'bad outputs', outputs: nil)
       end.to raise_error(BSV::Wallet::InvalidParameterError, /outputs/)
     end
 
     it 'persists nothing when output resolution fails — no dangling internal action (#362)' do
       built = build_verifiable_beef(satoshis: 500)
       expect do
-        beef_importer.import(
+        beef_internalizer.internalize(
           tx: built[:beef_binary], description: 'dangling guard',
           outputs: [{ output_index: 99, protocol: :basket_insertion, satoshis: 500 }]
         )
@@ -520,8 +520,8 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
     # 0.26+); the wallet does not re-implement the walk. Non-atomic BEEF
     # sibling entries the SDK never visits stay uncached by construction.
     describe 'verification cache write (HLR #516 Sub 2)' do
-      def import_ok(built)
-        beef_importer.import(
+      def internalize_ok(built)
+        beef_internalizer.internalize(
           tx: built[:beef_binary], description: 'sub-2 cache write',
           outputs: [{
             output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -539,7 +539,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
 
       it 'marks subject + walked ancestors as spv on success' do
         built = build_verifiable_beef(satoshis: 500)
-        import_ok(built)
+        internalize_ok(built)
 
         expect(verified_via(built[:subject_tx].wtxid)).to eq('spv')
         expect(verified_via(built[:ancestor].wtxid)).to eq('spv')
@@ -547,7 +547,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
 
       it 'writes the wtxids at the current VERIFIER_VERSION' do
         built = build_verifiable_beef(satoshis: 500)
-        import_ok(built)
+        internalize_ok(built)
 
         state = store.verification_state(wtxid: built[:subject_tx].wtxid)
         expect(state[:verifier_version]).to eq(BSV::Wallet::VERIFIER_VERSION)
@@ -558,7 +558,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         built = build_verifiable_beef(satoshis: 500)
         allow(store).to receive(:mark_verified_batch).and_call_original
 
-        import_ok(built)
+        internalize_ok(built)
 
         # Sub 2's contract: subject + all walked ancestors marked in one
         # set-based UPDATE — one +via: 'spv'+ call regardless of ancestor
@@ -575,7 +575,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         built = build_verifiable_beef(satoshis: 500)
         allow(store).to receive(:promote_action).and_raise(StandardError, 'promote boom')
 
-        expect { import_ok(built) }.to raise_error(/promote boom/)
+        expect { internalize_ok(built) }.to raise_error(/promote boom/)
 
         # Cache writes joined the same db.transaction — the failure rolls
         # them back alongside the proof + action rows. No partial trust.
@@ -590,7 +590,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         # wraps into +InvalidBeefError+. Write path never reached.
         allow(chain_tracker).to receive(:valid_root_for_height?).and_return(false)
 
-        expect { import_ok(built) }.to raise_error(BSV::Wallet::InvalidBeefError)
+        expect { internalize_ok(built) }.to raise_error(BSV::Wallet::InvalidBeefError)
 
         expect(store.verification_state(wtxid: built[:subject_tx].wtxid)).to be_nil
         expect(store.verification_state(wtxid: built[:ancestor].wtxid)).to be_nil
@@ -647,7 +647,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         beef.merge_transaction(parent)
         beef.merge_transaction(subject_tx)
 
-        beef_importer.import(
+        beef_internalizer.internalize(
           tx: beef.to_atomic_binary(subject_tx.wtxid),
           description: 'multi-hop chain mark',
           outputs: [{
@@ -717,10 +717,10 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
 
         # Non-atomic BRC-62 binary (no atomic wrapper). +parse_beef+ picks
         # +beef.transactions.last+ as the subject when +subject_wtxid+ is
-        # absent — see +BeefImporter#parse_beef+.
+        # absent — see +BeefInternalizer#parse_beef+.
         beef_binary = beef.to_binary
 
-        beef_importer.import(
+        beef_internalizer.internalize(
           tx: beef_binary,
           description: 'non-atomic sibling guard',
           outputs: [{
@@ -749,8 +749,8 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
     # ancestor subtrees already verified in a prior session (and whose
     # anchors are still live under the current chain view).
     describe 'read-path trust set (HLR #516 Sub 5)' do
-      def import_ok(built)
-        beef_importer.import(
+      def internalize_ok(built)
+        beef_internalizer.internalize(
           tx: built[:beef_binary], description: 'sub-5 read-path',
           outputs: [{
             output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -786,7 +786,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         original_verified_at = store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_at]
 
         allow(store).to receive(:mark_verified_batch).and_call_original
-        import_ok(built)
+        internalize_ok(built)
 
         # The spv batch call excludes the pre-seeded ancestor — its
         # wtxid isn't in +newly_walked+.
@@ -809,7 +809,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         persist_and_mark(built[:ancestor],
                          via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_BROADCAST_ACK)
 
-        import_ok(built)
+        internalize_ok(built)
 
         expect(store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_via])
           .to eq('spv')
@@ -818,7 +818,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       it 'marks newly walked ancestors as spv (unchanged Sub 2 write path)' do
         built = build_verifiable_beef(satoshis: 500)
         # No pre-seed for the ancestor — the SDK walks it and marks it.
-        import_ok(built)
+        internalize_ok(built)
 
         expect(store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_via]).to eq('spv')
       end
@@ -832,11 +832,11 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         persist_and_mark(built[:ancestor],
                          via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SELF_BUILT)
 
-        # Import upgrades the self_built mark to spv (SDK walked the ancestor
+        # Internalizing upgrades the self_built mark to spv (SDK walked the ancestor
         # this time; monotonic ladder allows self_built → spv). The
         # observable is: the ancestor WAS in +newly_walked+ (not the
         # pre-seed), otherwise the write would have been suppressed.
-        import_ok(built)
+        internalize_ok(built)
 
         expect(store.verification_state(wtxid: built[:ancestor].wtxid)[:verified_via]).to eq('spv')
       end
@@ -871,7 +871,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
                          via: BSV::Wallet::Store::Models::TxProof::VERIFIED_VIA_SPV)
 
         trusted_self_tracker = BSV::Wallet::TrustedSelfChainTracker.new(store)
-        guarded_importer = described_class.new(
+        guarded_internalizer = described_class.new(
           store: store, chain_tracker: trusted_self_tracker, hydrator: hydrator
         )
         # If the guard were absent, +AnchorLivenessCache.new+ would be
@@ -879,7 +879,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         # heights nil ⇒ no invalidation ⇒ full existing trust set).
         allow(BSV::Wallet::Engine::AnchorLivenessCache).to receive(:new).and_call_original
 
-        guarded_importer.import(
+        guarded_internalizer.internalize(
           tx: built[:beef_binary], description: 'trusted self guard',
           outputs: [{
             output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -913,12 +913,12 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
           def valid_root_for_height?(_root, _height) = true
           def current_height = 900_000
         end.new
-        guarded_importer = described_class.new(
+        guarded_internalizer = described_class.new(
           store: store, chain_tracker: minimal_tracker, hydrator: hydrator
         )
         allow(BSV::Wallet::Engine::AnchorLivenessCache).to receive(:new).and_call_original
 
-        guarded_importer.import(
+        guarded_internalizer.internalize(
           tx: built[:beef_binary], description: 'minimal tracker guard',
           outputs: [{
             output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -942,8 +942,8 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
     # +self_built+ call is dispatched, and the FINAL committed row
     # carries +'spv'+ (SPV wins).
     describe 'HLR #521 self_built annotation ordering' do
-      def import_ok(built)
-        beef_importer.import(
+      def internalize_ok(built)
+        beef_internalizer.internalize(
           tx: built[:beef_binary], description: 'sub-3 self_built',
           outputs: [{
             output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -959,7 +959,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         built = build_verifiable_beef(satoshis: 500)
         allow(store).to receive(:mark_verified).and_call_original
 
-        import_ok(built)
+        internalize_ok(built)
 
         expect(store).to have_received(:mark_verified).with(
           wtxid: built[:subject_tx].wtxid,
@@ -969,7 +969,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
 
       it 'commits verified_via = spv (SPV mark upgrades self_built in the same transaction)' do
         built = build_verifiable_beef(satoshis: 500)
-        import_ok(built)
+        internalize_ok(built)
 
         # self_built was stamped mid-transaction, then upgraded to spv by
         # Sub 2's mark_verified_batch. The committed row reflects spv.
@@ -981,7 +981,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
         built = build_verifiable_beef(satoshis: 500)
         allow(store).to receive(:promote_action).and_raise(StandardError, 'promote boom')
 
-        expect { import_ok(built) }.to raise_error(/promote boom/)
+        expect { internalize_ok(built) }.to raise_error(/promote boom/)
 
         # The self_built write joined the same db.transaction — a
         # downstream failure rolls it back alongside proof + action rows.
@@ -991,7 +991,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
 
     # #533 code-review — +CompetingBlockHeaderError+ from
     # +find_or_create_block+ is translated to +InvalidBeefError+ at
-    # the ingress boundary so +Interface::BeefImporter#import+'s
+    # the ingress boundary so +Interface::BeefInternalizer#internalize+'s
     # documented error contract stays honest. Every ingress failure
     # surfaces as +InvalidBeefError+; consumers don't need to know
     # about the new error type.
@@ -1002,7 +1002,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       )
 
       expect do
-        beef_importer.import(
+        beef_internalizer.internalize(
           tx: built[:beef_binary], description: 'competing header',
           outputs: [{
             output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -1019,13 +1019,13 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
     # rolled back. Next BEEF walk would then wire_ancestor to a ghost
     # anchor. Assertion: on rollback, the Hydrator saw zero
     # proof_arrived calls for the subject wtxid.
-    it 'does not poison the Hydrator cache on mid-ingress rollback' do
+    it 'does not poison the HydratedTxCache on mid-ingress rollback' do
       built = build_verifiable_beef(satoshis: 500)
       allow(store).to receive(:promote_action).and_raise(StandardError, 'promote boom')
       allow(hydrator).to receive(:proof_arrived).and_call_original
 
       expect do
-        beef_importer.import(
+        beef_internalizer.internalize(
           tx: built[:beef_binary], description: 'hydrator rollback',
           outputs: [{
             output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -1042,7 +1042,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       allow(store).to receive(:promote_action).and_raise(StandardError, 'promote boom')
 
       expect do
-        beef_importer.import(
+        beef_internalizer.internalize(
           tx: built[:beef_binary], description: 'rollback',
           outputs: [{
             output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -1060,7 +1060,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
     it 'raises InvalidParameterError when declared satoshis mismatch the transaction output' do
       built = build_verifiable_beef(satoshis: 500)
       expect do
-        beef_importer.import(
+        beef_internalizer.internalize(
           tx: built[:beef_binary],
           description: 'satoshis mismatch',
           outputs: [{
@@ -1082,7 +1082,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       end
 
       expect do
-        beef_importer.import(
+        beef_internalizer.internalize(
           tx: built[:beef_binary], description: 'proof-closure rollback',
           outputs: [{
             output_index: 0, protocol: :basket_insertion, satoshis: 500,
@@ -1095,10 +1095,10 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       expect(store.find_proof(wtxid: built[:subject_tx].wtxid)).to be_nil
     end
 
-    it 'persists ancestor proofs before trimming known ancestors (the ordering hinge)' do
-      # The hinge: +replace_known_ancestors!+ only trims an ancestor when
+    it 'persists ancestor proofs before replacing known ancestors (the ordering hinge)' do
+      # The hinge: +replace_known_ancestors!+ only replaces an ancestor when
       # +proof_exists?(wtxid: ancestor)+ is true (or the wtxid is in
-      # +known_txids+). With no explicit +known_txids+, the trim
+      # +known_txids+). With no explicit +known_txids+, the replacement
       # observing +proof_exists? == true+ for the ancestor is *only*
       # possible if +save_beef_proofs+ has already persisted the proof.
       # We assert this by spying +proof_exists?+ on the store and
@@ -1106,20 +1106,20 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       # +proof_exists?+ call (which only +replace_known_ancestors!+
       # makes).
       # The basket_insertion below carries no derivation triple, so the
-      # importer's 'root'-shim sets spendable_intent='spendable' and the
+      # internalizer's 'root'-shim sets spendable_intent='spendable' and the
       # subject's locking_script must be the wallet's root P2PKH (HLR #467).
       built = build_verifiable_beef(output_script: :root_p2pkh)
       ancestor_wtxid = built[:ancestor].wtxid
 
-      proof_existed_at_trim_check = nil
+      proof_existed_at_replace_check = nil
       allow(store).to receive(:proof_exists?).and_wrap_original do |orig, **kwargs|
-        # Snapshot the persisted state at the moment of the trim's
+        # Snapshot the persisted state at the moment of the replacement's
         # existence check on the ancestor.
-        proof_existed_at_trim_check = orig.call(wtxid: ancestor_wtxid) if kwargs[:wtxid] == ancestor_wtxid
+        proof_existed_at_replace_check = orig.call(wtxid: ancestor_wtxid) if kwargs[:wtxid] == ancestor_wtxid
         orig.call(**kwargs)
       end
 
-      beef_importer.import(
+      beef_internalizer.internalize(
         tx: built[:beef_binary],
         description: 'ordering check',
         trust_self: 'known',
@@ -1130,7 +1130,7 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       )
 
       expect(store).to have_received(:proof_exists?).with(wtxid: ancestor_wtxid)
-      expect(proof_existed_at_trim_check).to be(true)
+      expect(proof_existed_at_replace_check).to be(true)
     end
   end
 
@@ -1171,17 +1171,17 @@ RSpec.describe BSV::Wallet::Engine::BeefImporter do
       beef_data = beef.to_atomic_binary(subject_tx.wtxid)
 
       # Step 1: parse BEEF — wires source_transaction pointers
-      parsed_beef, parsed_subject = beef_importer.send(:parse_beef, beef_data)
+      parsed_beef, parsed_subject = beef_internalizer.send(:parse_beef, beef_data)
       expect(parsed_subject.inputs[0].source_transaction).not_to be_nil
       expect(parsed_subject.inputs[0].source_transaction.merkle_path).not_to be_nil
 
       # Step 2: pre-populate ProofStore so the ancestor is "known",
-      # then trim
+      # then replace it
       store.save_proof(
         wtxid: ancestor.wtxid,
         proof: { raw_tx: ancestor.to_binary, merkle_path: ancestor.merkle_path.to_binary, height: 800_000 }
       )
-      beef_importer.send(:replace_known_ancestors!, parsed_beef, parsed_subject.wtxid, nil)
+      beef_internalizer.send(:replace_known_ancestors!, parsed_beef, parsed_subject.wtxid, nil)
 
       replaced = parsed_beef.transactions.find { |bt| bt.wtxid == ancestor.wtxid }
       expect(replaced).to be_a(BSV::Transaction::Beef::TxidOnlyEntry)

@@ -22,11 +22,11 @@ When an action is built, `Engine::Hydrator#build_atomic_beef` walks the ancestor
 
 Hydration is wtxid-cached. A shared `Engine::HydratedTxCache` sits between `Hydrator` (deep BEEF walks) and `Engine::Broadcast` (Extended Format parent reads at submit time), so a transaction warmed by one path is visible to the other. The cache is bounded and monotonically enriched, configured by `BSV_WALLET_TX_CACHE_SIZE`.
 
-The two-step model — Hydrator owns the egress walk, BeefImporter owns the ingress — keeps the directions one-way and decoupled. The shared substrate is the cache, not a back-edge.
+The two-step model — Hydrator owns the egress walk, BeefInternalizer owns the ingress — keeps the directions one-way and decoupled. What they share is the cache, not a back-edge.
 
 ## Incoming: parse, then verify, then trust
 
-Receiving is `internalize_action(tx:, outputs:, …)`, routed through `Engine::BeefImporter`. The order of operations is the important part:
+Receiving is `internalize_action(tx:, outputs:, …)`, routed through `Engine::BeefInternalizer`. The order of operations is the important part:
 
 1. **Parse.** `parse_beef` decodes the envelope into a `Beef` bundle and locates the *subject* transaction. A bundle with no transactions, or one whose subject is missing, is rejected as `InvalidBeefError` before any trust is extended.
 2. **Verify.** `verify_incoming_transaction!` calls the SDK's `subject_tx.verify(chain_tracker:)`, which performs full SPV: it checks every merkle proof against the block headers the chain tracker supplies and confirms the script evaluation. Any `VerificationError` is wrapped as `InvalidBeefError` with the SDK's error code — the payment does not enter the wallet.
@@ -44,7 +44,7 @@ The internalised action is `broadcast_intent: 'none'` — an [internal action](a
 When two parties transact repeatedly, the sender's BEEF will keep including ancestors the recipient *already has proofs for*. Re-shipping and re-verifying them is wasted work. Each direction has its own optimisation:
 
 - **Sending** — trimming the outgoing BEEF per peer, so that ancestors the recipient is known to hold travel as **TXID-only entries** (a reference rather than the full transaction and proof), would shrink the envelope to just the novel part of the graph. `Engine::Transmission` sends full ancestors for now: trimming needs the receiver's agreement (#552).
-- **Receiving** — under `trustSelf: 'known'`, `BeefImporter#hydrate_known_sources!` fills TXID-only entries back in from the wallet's own stored transactions before verification, so SPV still runs over a complete graph. Stored proofs alone don't skip verification: what does, whatever `trustSelf` says, is `pre_seed_trust_set`, which starts the walk from ancestors the verification cache already marks as verified, after its anchor-liveness checks (#516).
+- **Receiving** — under `trustSelf: 'known'`, `BeefInternalizer#hydrate_known_sources!` fills TXID-only entries back in from the wallet's own stored transactions before verification, so SPV still runs over a complete graph. Stored proofs alone don't skip verification: what does, whatever `trustSelf` says, is `pre_seed_trust_set`, which starts the walk from ancestors the verification cache already marks as verified, after its anchor-liveness checks (#516).
 
 The trust is bounded and explicit: only ancestors the wallet itself already holds are elided, and they are rehydrated from local truth, not taken on faith from the sender.
 

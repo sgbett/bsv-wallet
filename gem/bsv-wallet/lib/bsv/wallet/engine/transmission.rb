@@ -6,13 +6,13 @@ module BSV
   module Wallet
     class Engine
       # Wallet-to-peer BEEF delivery domain — sibling to +Engine::Broadcast+
-      # and +Engine::TxProof+ over the shared +Engine::Hydrator+ substrate.
-      # Tracked by HLR #385; design recorded in ADR-025 and
-      # +docs/reference/transactions.md+.
+      # and +Engine::TxProof+; it assembles the peer's BEEF through
+      # +Engine::Hydrator+. Tracked by HLR #385; design recorded in
+      # ADR-025 and +docs/reference/transactions.md+.
       #
       # Background-worker sibling shape: no +Interface::Transmission+
       # module (only shape-extracted services consumed cross-sibling, e.g.
-      # +Hydrator+ and +BeefImporter+, carry interface modules). This
+      # +Hydrator+ and +BeefInternalizer+, carry interface modules). This
       # matches +Broadcast+ and +TxProof+.
       #
       # Domain distinction: broadcast ships Extended Format to the miner
@@ -24,11 +24,12 @@ module BSV
       # state is the deciding difference and lives here, never in
       # +Broadcast+.
       #
-      # Synchronicity is an invocation mode, not a property of +#transmit+.
-      # v1 ships sync (an inline caller awaits a self-contained
-      # +#transmit+), and the same operation must be drivable async by the
-      # daemon later — single code path, mirroring +Broadcast+'s
-      # +broadcast_intent+ inline/delayed split (ADR-024 / #183
+      # Transmit intent is an invocation mode, not a property of
+      # +#transmit+. v1 ships +inline+ (the caller awaits a self-contained
+      # +#transmit+) and +none+ (no +endpoint:+; the caller delivers the
+      # returned BEEF). A daemon-driven +delayed+ transmit is not built
+      # (#385 Phase 2); it would run over the same code path, as
+      # +broadcast_intent+ +inline+ and +delayed+ do (ADR-024 / #183
       # inline-equals-delayed robustness).
       class Transmission
         # BRC-43 canonical counterparty hex: compressed pubkey (02|03
@@ -41,11 +42,11 @@ module BSV
         BRC43_COMPRESSED_LOWERCASE = /\A0[23][0-9a-f]{64}\z/
 
         # Explicit DI — no engine back-reference. Mirrors sibling shape
-        # (+Broadcast+, +TxProof+, +Hydrator+, +BeefImporter+).
+        # (+Broadcast+, +TxProof+, +Hydrator+, +BeefInternalizer+).
         #
         # @param store     [BSV::Wallet::Store]
-        # @param hydrator  [BSV::Wallet::Engine::Hydrator] shared-substrate
-        #   owner of +#build_atomic_beef+ (the BEEF the peer receives).
+        # @param hydrator  [BSV::Wallet::Engine::Hydrator] assembles the
+        #   BEEF the peer receives (+#build_atomic_beef+).
         # @param delivery  [#deliver, nil] Phase-2 transport seam, wired
         #   in #390 (caller-supplied-endpoint synchronous HTTP delivery
         #   via +Network::PeerDelivery+). Nil-tolerant in unit-spec
@@ -112,10 +113,8 @@ module BSV
         # two-phase boundary stays intact: +transmission_txids+ are
         # only ever written on confirmed delivery, so a future BEEF
         # can never over-trim against a stale knowledge claim. When
-        # +endpoint:+ is nil (deferred-by-caller path), the row is
-        # recorded and the caller decides how/when to deliver — same
-        # shape as +Engine::Broadcast+ which separates +submit+ from
-        # the delayed broadcast worker.
+        # +endpoint:+ is nil (transmit intent +none+), the row is
+        # recorded and the caller decides how and when to deliver.
         #
         # @param counterparty [String] BRC-43 identity pubkey hex
         #   (66-char compressed, +02+/+03+ prefix, **lowercase**).
@@ -206,10 +205,10 @@ module BSV
 
         # Build the Phase-1 wire envelope and hand it to +@delivery+.
         # Returns the +PeerDelivery::Result+, or nil when no endpoint
-        # was supplied (deferred caller-driven delivery) or no delivery
+        # was supplied (transmit intent +none+) or no delivery
         # transport was wired (unit-spec contexts). The envelope shape
-        # is the BRC-29-aligned superset of the +bin/create+ →
-        # +bin/receive+ stdin/stdout JSON: +beef+ (binary; the
+        # follows the +bin/wallet send+ → +bin/wallet receive+
+        # stdout/stdin JSON, without its +dtxid+: +beef+ (binary; the
         # +PeerDelivery+ hex-encodes for wire), +outputs+, and
         # +sender_identity_key+, plus an explicit +protocol_version: 1+
         # so Phase-2 additions (signed ACK, certificates, etc.) can be

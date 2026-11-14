@@ -33,7 +33,7 @@ The wallet's vocabulary, by context. Within a context a word means one thing. Wh
 ### Engine primitives and porcelain
 
 - **Engine primitive** — a public Engine method at per-domain-operation granularity, in wallet vocabulary (ADR-026): `build_action`, `sign_action`, `abort_action`. Not a lifecycle step.
-- **Engine porcelain** — a public Engine method composed over Engine primitives for convenience, such as `send_payment` over `build_action`. Sorting every public Engine method into one or the other is #549.
+- **Engine porcelain** — a public Engine method composed over Engine primitives for convenience, such as `send_payment` over `build_action`. [Architecture](../concepts/architecture.md#what-the-engine-actually-exposes) sorts every public Engine method into one or the other.
 
 ### Sending out
 
@@ -62,13 +62,13 @@ Intent is stated, never inferred (ADR-019, ADR-031). Broadcast and transmit take
 ### Coming in
 
 - **import** — a user-triggered, one-off bootstrap. `import_utxo` and `import_wallet` find funds held by the root key on chain and move them into the wallet with a self-payment (ADR-014).
-- **internalize** — recording someone else's transaction as an incoming action and taking ownership of the named outputs: BRC-100's noun. `internalize_wbikd_utxo`, and `import_beef` until #549 renames it `internalize_beef`.
+- **internalize** — recording someone else's transaction as an incoming action and taking ownership of the named outputs: BRC-100's noun. `internalize_beef` and `internalize_wbikd_utxo`.
 - **receive** — the user-level process: obtain a transaction, then internalize it. The ways in today are an envelope on stdin (`bin/wallet receive`) and a scan of receive addresses (`scan_receive_addresses`); a transmit listener in `walletd` is #544.
 
 ### Components
 
-- **Hydrator** — the Engine component that wires a transaction's ancestry from stored proofs and assembles the Atomic BEEF the wallet hands out: the return value of `build_action` and `sign_action`, and a transmit's payload. Transmission and BeefImporter call it; TxProof only tells it when a proof arrives. Broadcast doesn't use it: it builds its own EF.
-- **HydratedTxCache** — the in-memory, wtxid-keyed cache of raw-transaction and merkle-path bytes (not `Transaction::Tx` objects) that the Hydrator's ancestry walk and Broadcast's EF build both read and fill, so a parent loaded by one is a hit for the other (#296).
+- **Hydrator** — the Engine component that wires a transaction's ancestry from stored proofs and assembles the Atomic BEEF the wallet hands out: the return value of `build_action` and `sign_action`, and a transmit's payload. Transmission and BeefInternalizer call it; TxProof only tells it when a proof arrives. Broadcast doesn't use it: it builds its own EF.
+- **HydratedTxCache** — the in-memory, wtxid-keyed cache of raw-transaction and merkle-path bytes (not `Transaction::Tx` objects) shared by the Hydrator and Broadcast. The Hydrator's ancestry walk reads and fills it; Broadcast's EF build reads it, and Broadcast fills it from hints and eager proofs, so a parent loaded by one is a hit for the other (#296).
 - **core** — Engine plus Store: build, sign, broadcast, observe, account. See [core vs conformance](core-vs-conformance.md) (ADR-027).
 
 ## Conformance (BRC-100)
@@ -90,7 +90,7 @@ Intent is stated, never inferred (ADR-019, ADR-031). Broadcast and transmit take
 - **porcelain** — `bin/wallet`'s user-facing commands: `balance`, `list`, `send`, `receive`, `import`, `reject`, `sweep`, `consolidate`.
 - **plumbing** — commands that would expose single Engine primitives: `build`, `sign`, `broadcast`. Not shipped; ADR-030 defers them until the Engine can hold the intermediate state.
 - **send** — the user's intent to pay a recipient, fulfilled by a broadcast and/or a transmit. The command may infer part of the intent from context: given an identity key, it emits the BEEF envelope on stdout (transmit `none`); a base58 address has no peer to transmit to. It settles an explicit intent before calling the Engine and reports each part. "Sent" is never a status on its own.
-- **`--broadcast=inline|async|none`** — the broadcast intent, where `async` means `delayed`. #549 renames it.
+- **`--broadcast=inline|async|none`** — the broadcast intent, where `async` means `delayed`. #548 renames it.
 
 ## Retired terms
 

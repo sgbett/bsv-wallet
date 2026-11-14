@@ -75,11 +75,12 @@ for the canonical distinction.
 
 In **v1, transmission runs inline / synchronous from the engine call.** When
 you invoke `engine.transmission.transmit(endpoint:, ...)`, the caller awaits
-the HTTP POST + ACK validation; the deferred caller-driven path
-(`endpoint: nil`) returns the BEEF immediately and leaves you to deliver it.
-A daemon-driven async path is Phase 2 — same code shape, different
-invocation mode, mirroring the broadcast inline/delayed split. The `walletd`
-daemon does **not** drive transmission today.
+the HTTP POST + ACK validation (transmit intent `inline`); with
+`endpoint: nil` (transmit intent `none`) it returns the BEEF immediately and
+leaves you to deliver it. A daemon-driven `delayed` transmit is #385 Phase 2
+— same code shape, different invocation mode, mirroring broadcast intent
+`inline` and `delayed`. The `walletd` daemon does **not** drive transmission
+today.
 
 ## Speculative promotion
 

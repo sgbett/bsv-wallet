@@ -20,7 +20,7 @@ However, many BSV participants — exchanges, legacy wallets, and automated syst
 
 This specification addresses three problems:
 
-1. **Address generation** — deriving unique P2PKH addresses from the wallet's identity key using only BRC-100 primitives
+1. **Address generation** — deriving unique P2PKH addresses from the wallet's identity key using only BRC-100 methods
 2. **Address tracking** — maintaining a list of outstanding addresses without introducing new storage structures
 3. **Address recovery** — enabling fund recovery from the identity key alone when the wallet's local state is lost
 

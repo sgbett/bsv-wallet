@@ -10,7 +10,7 @@ module BSV
       # objects) sidestep the mutation hazard of sharing a wired
       # +source_transaction+ graph across concurrent reactor fibers.
       #
-      # The cache is the shared substrate both egress paths read through:
+      # Both egress paths read through one shared instance:
       #
       #   - +Hydrator#wire_ancestor+ (deep, BEEF): a hit whose
       #     +merkle_path+ is present is a proven terminal — return without

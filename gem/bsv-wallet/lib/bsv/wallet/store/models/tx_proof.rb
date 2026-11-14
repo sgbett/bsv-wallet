@@ -15,7 +15,7 @@ module BSV
             VERIFIED_VIA_SPV,
             VERIFIED_VIA_BROADCAST_ACK
           ].freeze
-          # Short-circuit trust set for BeefImporter Sub 5. Only +'spv'+
+          # Short-circuit trust set for BeefInternalizer Sub 5. Only +'spv'+
           # rows are trusted for the SDK's +verified:+ pre-seed today.
           #
           # An +'spv'+ row can be either ANCHORED (carries a merkle proof

@@ -15,7 +15,7 @@ This page is the narrative shape of the system. For canonical principle statemen
 ```
                  ┌─────────────────────────────────────────────┐
    Layer 3       │                  Engine                      │
-  orchestration  │   wallet-vocab primitives + composed         │
+  orchestration  │   Engine primitives + composed               │
                  │   collaborators (no SQL · no I/O · no threads)│
                  └───────────────┬─────────────────────────────-┘
                                  │ depends on (via Interface::*)
@@ -25,10 +25,10 @@ This page is the narrative shape of the system. For canonical principle statemen
   │   Store   │ │  UTXOPool  │  │ FundingStrategy│ │ TxBuilder│ │ Hydrator │
   │persistence│ │  selection │  │  input loop    │ │  build   │ │ BEEF egr │
   └───────────┘ └────────────┘  └────────────────┘ └──────────┘ └──────────┘
-  ┌────────────┐
-  │BeefImporter│
-  │  ingress   │
-  └────────────┘
+  ┌──────────────────┐
+  │ BeefInternalizer │
+  │     ingress      │
+  └──────────────────┘
    Layer 2a — six contracted collaborators behind Interface::* modules
 
   ┌────────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
@@ -44,16 +44,16 @@ This page is the narrative shape of the system. For canonical principle statemen
                  └─────────────────────────────────────────────┘
 ```
 
-**Layer 3 — `Engine`.** The wallet-vocab primitive surface. It exposes BRC-100's spec-aligned primitive methods (`build_action`, `sign_action`, `encrypt`, `get_public_key`, …) plus a handful of porcelain operations (`send_payment`, `sweep`, `import_wallet`, …). It is the only place the wallet's policy lives, and it contains no SQL strings, no HTTP calls, and no thread or fibre management. BRC-100 spec compliance lives one layer up, in `BSV::Wallet::BRC100`, a class composed over an Engine instance.
+**Layer 3 — `Engine`.** It exposes Engine primitives, one per domain operation in the wallet's own vocabulary (`build_action`, `sign_action`, `encrypt`, `get_public_key`, …), plus Engine porcelain composed over them (`send_payment`, `sweep`, `import_wallet`, …); [What the Engine actually exposes](#what-the-engine-actually-exposes) sorts them. It is the only place the wallet's policy lives, and it contains no SQL strings, no HTTP calls, and no thread or fibre management. BRC-100 spec compliance lives one layer up, in `BSV::Wallet::BRC100`, a class composed over an Engine instance.
 
-**Layer 2a — six contracted collaborators.** Engine receives these at construction time, each behind an abstract `Interface::*` contract module. They are the *stable seams* of the system — points where an alternative implementation is a first-class possibility, not a fork.
+**Layer 2a — six contracted collaborators.** Each sits behind an abstract `Interface::*` contract module. Engine receives `Store` and `UTXOPool` through its constructor and builds the other four itself. They are the *stable seams* of the system — points where an alternative implementation is a first-class possibility, not a fork.
 
 - **`Store`** — persistence. Owns the schema, the action / output / broadcast / promotion / transmission lifecycle, and the cascade logic. Contract in `Interface::Store`; concrete subclasses `Store::SQLite` and `Store::Postgres`. See [Persistence](persistence.md).
 - **`UTXOPool`** — UTXO selection and pool health. Contract in `Interface::UTXOPool`; default concrete implementation delegates to `Store#find_spendable`.
 - **`FundingStrategy`** — input acquisition and the build fixpoint. Contract in `Interface::FundingStrategy`.
 - **`TxBuilder`** — store-free transaction construction, fee balancing, and signing. Contract in `Interface::TxBuilder`.
 - **`Hydrator`** — proof-store hydration, egress BEEF assembly, and the egress SPV-honesty check. Contract in `Interface::Hydrator`. See [Transactions & BEEF](transactions-and-beef.md).
-- **`BeefImporter`** — incoming BEEF parsing, SPV verification, proof persistence, and output promotion. Contract in `Interface::BeefImporter`. See [Transactions & BEEF](transactions-and-beef.md).
+- **`BeefInternalizer`** — incoming BEEF parsing, SPV verification, proof persistence, and output promotion. Contract in `Interface::BeefInternalizer`. See [Transactions & BEEF](transactions-and-beef.md).
 
 **Layer 2b — four concrete collaborators.** These have a single implementation and no `Interface::*` module. Per-counterparty state or sole provider routing means they aren't replaceable in the same way.
 
@@ -66,7 +66,7 @@ This page is the narrative shape of the system. For canonical principle statemen
 
 ## Dependency injection, and why
 
-Engine receives every Layer 2 collaborator through its constructor:
+Engine receives its building blocks through its constructor:
 
 ```ruby
 engine = BSV::Wallet::Engine.new(
@@ -83,7 +83,7 @@ engine = BSV::Wallet::Engine.new(
 )
 ```
 
-Engine then constructs the rest of the collaborators in its own initialiser from those building blocks: `TxBuilder`, `Hydrator`, `BeefImporter`, `FundingStrategy`, `Transmission`, the inline `Broadcast` worker, the shared `HydratedTxCache`, the `Policy` guard.
+Engine then constructs the rest of the collaborators in its own initialiser from those building blocks: `TxBuilder`, `Hydrator`, `BeefInternalizer`, `FundingStrategy`, `Transmission`, the inline `Broadcast` worker, the shared `HydratedTxCache`, the `Policy` guard.
 
 Two consequences matter:
 
@@ -126,7 +126,7 @@ Both gates take a cross-table rule a single-row CHECK cannot reach and reformula
 
 ## The BRC100 wrap layer
 
-`BSV::Wallet::BRC100` is a class that holds an Engine reference and translates the BRC-100 specification's vocabulary into wallet primitives:
+`BSV::Wallet::BRC100` is a class that holds an Engine reference and translates the BRC-100 specification's vocabulary into calls on Engine primitives:
 
 ```ruby
 engine.brc100.create_action(description: 'pay bob', outputs: [...])
@@ -136,18 +136,19 @@ engine.brc100.create_action(description: 'pay bob', outputs: [...])
 The split is deliberate (ADR-026):
 
 - The wrap layer owns spec-shape validation, BRC-100 vocab (`txid:` ↔ `wtxid:`, `tx:` ↔ `atomic_beef:`, `signableTransaction:` ↔ `signable:`), and the `originator:` parameter — which never propagates into Engine.
-- The primitives carry their own *operation* invariants (`require_key_deriver!`, parameter-combination semantics) so any caller that isn't going through `BRC100` — the daemon, the batch APIs, an internal porcelain method — cannot bypass them.
+- The Engine primitives carry their own *operation* invariants (`require_key_deriver!`, parameter-combination semantics) so a caller that doesn't go through `BRC100`, such as `bin/wallet` or an Engine porcelain method, cannot bypass them.
 
 `Engine#brc100` memoises a single wrap instance. Engine has no `BRC100` in its ancestry; the wrap layer is composition, not inheritance.
 
 ## What the Engine actually exposes
 
-The public surface is the BRC-100 interface (via `brc100`) plus a layer of **porcelain** — higher-level convenience operations composed from the primitives:
+Besides `brc100` and its attribute readers (`limp_threshold`, `store`, `transmission`, …), every public Engine method is one of two kinds, sorted by composition. An **Engine primitive** is one domain operation in the wallet's own vocabulary (ADR-026), and none calls another public Engine method. **Engine porcelain** is composed over Engine primitives for convenience. Transmit is neither: callers use `engine.transmission.transmit` (#464 proposes an Engine-level `transmit`).
 
-- **BRC-100 primitives** (via `engine.brc100.*` or directly via `engine.build_action`, `engine.encrypt`, etc.): `create_action`, `sign_action`, `abort_action`, `internalize_action`, `list_actions`, `list_outputs`, `relinquish_output`, the cryptographic methods (`encrypt`, `decrypt`, `create_hmac`, `create_signature`, `get_public_key`, …), the certificate methods (`acquire_certificate`, `prove_certificate`, `discover_by_identity_key`, …), and the chain queries (`get_height`, `get_header_for_height`, …).
-- **Porcelain**: `send_payment`, `import_utxo`, `import_wallet`, `generate_receive_address`, `scan_receive_addresses`, `list_receive_addresses`, `consolidate_step`, `sweep`, `sweep_to_root`. These are not part of BRC-100; they are the ergonomic operations the wallet adds on top, and they are what the `bin/` tools mostly call.
+- **Engine primitives behind the BRC-100 methods.** Each BRC-100 method maps onto one of these through `engine.brc100.*`, with BRC-100's name in brackets where it differs: `build_action` (`createAction`), `sign_action`, `abort_action`, `internalize_beef` (`internalizeAction`), `list_actions`, `spendable_outputs` (`listOutputs`) and `relinquish_output`; the public key methods (`get_public_key`, `reveal_counterparty_key_linkage`, `reveal_specific_key_linkage`); the cryptography methods (`encrypt`, `decrypt`, `create_hmac`, `verify_hmac`, `create_signature`, `verify_signature`); the identity and certificate methods (`acquire_certificate`, `list_certificates`, `prove_certificate`, `relinquish_certificate`, `discover_by_identity_key`, `discover_by_attributes`); and the authentication and blockchain methods (`authenticated?`, `wait_for_authentication`, `get_height`, `get_header_for_height`, `get_network`, `get_version`).
+- **Engine primitives outside BRC-100**: `reject_action`, `estimate_sweep_fee`, `limp_mode?`, `headroom`.
+- **Engine porcelain**: `send_payment`, `consolidate_step` and `import_utxo` over `build_action`; `sweep` over `estimate_sweep_fee` and `build_action`; `sweep_to_root` over `consolidate_step` and `sweep`; `import_wallet` over `import_utxo`; `generate_receive_address` over `build_action`, when it needs a new slot; `list_receive_addresses` over `list_actions`; `scan_receive_addresses` over `list_receive_addresses`, then `abort_action` to release each slot it fills. `list_receive_addresses` and `scan_receive_addresses` still reach `list_actions` and `abort_action`, respectively, through the BRC-100 wrapper (#548).
 
-The split matters when reading the code: the primitives map to the standard via the wrap layer, while the porcelain encodes this wallet's opinions about how to use it well.
+The split matters when reading the code: the Engine primitives are what the BRC-100 methods map onto through the wrap layer, while the Engine porcelain encodes this wallet's opinions about how to use them well.
 
 ## Related
 

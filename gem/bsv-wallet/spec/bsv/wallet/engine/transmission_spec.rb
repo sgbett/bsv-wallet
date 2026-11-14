@@ -39,7 +39,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
   # --- Helpers ---------------------------------------------------------
 
   # Build a tiny verifiable BEEF (proven ancestor + subject spending it).
-  # Mirrors +beef_importer_spec.rb#build_verifiable_beef+ — kept local to
+  # Mirrors +beef_internalizer_spec.rb#build_verifiable_beef+ — kept local to
   # avoid coupling specs.
   def build_test_beef(satoshis: 500, ancestor_satoshis: 600)
     op_true = "\x51".b
@@ -104,7 +104,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
 
     it 'is a background-worker sibling — no Interface::Transmission module exists' do
       # Mirrors Broadcast and TxProof shape: only shape-extracted services
-      # consumed cross-sibling (Hydrator, BeefImporter) carry Interface
+      # consumed cross-sibling (Hydrator, BeefInternalizer) carry Interface
       # modules. AC refinement (HLR #385 specialist synthesis).
       expect(defined?(BSV::Wallet::Interface::Transmission)).to be_nil
     end
@@ -201,7 +201,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
     context 'when the peer internalises it without opting into trust_self' do
       let(:receiver_store) { STORE_INSTANCE }
       let(:receiver) do
-        BSV::Wallet::Engine::BeefImporter.new(
+        BSV::Wallet::Engine::BeefInternalizer.new(
           store: receiver_store,
           chain_tracker: double('ChainTracker', valid_root_for_height?: true),
           hydrator: BSV::Wallet::Engine::Hydrator.new(store: receiver_store)
@@ -225,7 +225,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
         result = transmission.transmit(counterparty: counterparty, action_id: action_id,
                                        outputs: outputs, sender_identity_key: sender_identity_key)
 
-        internalized = receiver.import(
+        internalized = receiver.internalize(
           tx: result[:beef],
           description: 'transmitted to a peer that holds the ancestor',
           outputs: [{
@@ -628,7 +628,7 @@ RSpec.describe BSV::Wallet::Engine::Transmission do
       expect(call_order).to eq(%i[record deliver ack])
     end
 
-    it 'with endpoint nil (caller-driven delivery) does not invoke @delivery' do
+    it 'with endpoint nil (transmit intent none) does not invoke @delivery' do
       # Stub the spy before asserting +not_to have_received+ so the
       # double has the method to inspect even if it goes uncalled.
       allow(delivery).to receive(:deliver)

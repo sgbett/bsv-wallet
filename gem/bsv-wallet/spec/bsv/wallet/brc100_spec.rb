@@ -188,7 +188,7 @@ RSpec.describe BSV::Wallet::BRC100 do
     end
 
     it '#internalize_action accepts seek_permission: without raising' do
-      allow(fake_engine).to receive(:import_beef).and_return(accepted: true)
+      allow(fake_engine).to receive(:internalize_beef).and_return(accepted: true)
       expect do
         brc100.internalize_action(tx: 'beef'.b, outputs: [],
                                   description: 'internalize smoke',
@@ -478,7 +478,7 @@ RSpec.describe BSV::Wallet::BRC100 do
 
       it 'normalises insertion_remittance[:basket] on the basket-insertion branch' do
         cap = capture
-        allow(fake_engine).to receive(:import_beef) do |**kw|
+        allow(fake_engine).to receive(:internalize_beef) do |**kw|
           cap[:outputs] = kw[:outputs]
           { accepted: true }
         end
@@ -492,7 +492,7 @@ RSpec.describe BSV::Wallet::BRC100 do
       end
 
       it 'rejects a reserved basket on the basket-insertion branch' do
-        allow(fake_engine).to receive(:import_beef).and_return(accepted: true)
+        allow(fake_engine).to receive(:internalize_beef).and_return(accepted: true)
         outputs = [{
           output_index: 0, protocol: 'basket insertion',
           insertion_remittance: { basket: 'admin foo' }
@@ -507,7 +507,7 @@ RSpec.describe BSV::Wallet::BRC100 do
         # bogus +:basket+ key incidentally present in
         # +payment_remittance+ would still slip through (and is not the
         # validator's job to police).
-        allow(fake_engine).to receive(:import_beef).and_return(accepted: true)
+        allow(fake_engine).to receive(:internalize_beef).and_return(accepted: true)
         outputs = [{
           output_index: 0, protocol: 'wallet payment',
           payment_remittance: { sender_identity_key: 'aa' }

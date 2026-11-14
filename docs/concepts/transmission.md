@@ -8,11 +8,11 @@ nav_order: 4
 
 Broadcast and transmission look superficially similar — both ship a transaction somewhere — but they are different operations with different recipients, different wire shapes, and different state. **Broadcast** ships Extended Format to the miner network for consensus validation; **transmission** ships Atomic BEEF to a *named peer* for SPV verification. The recipient's *job* fixes the wire shape, and the per-peer accounting that makes trimming possible is the deciding difference. It lives in its own domain.
 
-This page is the operational narrative. The canonical wire envelope, ACK contract, SSRF list, error taxonomy and per-table responsibilities are in [Transactions (reference)](../reference/transactions.md) under "Two domains over one substrate". This page defers to that for normative claims.
+This page is the operational narrative. The canonical wire envelope, ACK contract, SSRF list, error taxonomy and per-table responsibilities are in [Transactions (reference)](../reference/transactions.md) from "Two domains, one cache" onwards. This page defers to that for normative claims.
 
 ## Where it sits
 
-`Engine::Transmission` is a sibling to `Engine::Broadcast` and `Engine::TxProof`, all built over the shared `Engine::Hydrator` substrate. The Engine accessor is `engine.transmission`; transmission is a wallet-vocab operation — peer delivery is not part of the BRC-100 standard surface.
+`Engine::Transmission` is a sibling to `Engine::Broadcast` and `Engine::TxProof`. It assembles the peer's BEEF through `Engine::Hydrator`, its only route to the `Engine::HydratedTxCache` it shares with Broadcast. The Engine accessor is `engine.transmission`; transmission is a wallet-vocab operation — peer delivery is not part of the BRC-100 standard surface.
 
 Background-worker shape, like its siblings: no `Interface::Transmission` contract module. Transmissions are not a cross-replaceable service the way `Store` or `Hydrator` are; the deciding axis is per-counterparty state, owned in one place.
 

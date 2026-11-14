@@ -68,14 +68,14 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
     end
 
     before do
-      allow(engine).to receive(:import_beef).and_return({})
+      allow(engine).to receive(:internalize_beef).and_return({})
     end
 
     it 'detects JSON envelope when input starts with {' do
       file = File.join(tmpdir, 'envelope.json')
       File.write(file, envelope)
       command.call(["--file=#{file}"])
-      expect(engine).to have_received(:import_beef).with(
+      expect(engine).to have_received(:internalize_beef).with(
         hash_including(
           outputs: array_including(
             hash_including(protocol: 'wallet payment')
@@ -85,7 +85,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
     end
 
     it 'detects raw BEEF when input does not start with {' do
-      # No engine.import_beef call unless there's a match — for this
+      # No engine.internalize_beef call unless there's a match — for this
       # test we stub the BEEF parser too and assert detection branched
       # correctly via the no-matches message.
       file = File.join(tmpdir, 'raw.beef')
@@ -122,16 +122,16 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
     end
 
     before do
-      allow(engine).to receive(:import_beef).and_return({})
+      allow(engine).to receive(:internalize_beef).and_return({})
     end
 
-    it 'forwards per-output derivation hints to engine.import_beef' do
+    it 'forwards per-output derivation hints to engine.internalize_beef' do
       command.call(["--file=#{file}"])
       # Strict BRC-29 (HLR #460): the +paymentRemittance+ triple stays in
       # +payment_remittance+ (snake_case ingress); basket rides at the
       # top level — the spec's +wallet payment+ carries no basket on the
       # wire.
-      expect(engine).to have_received(:import_beef).with(
+      expect(engine).to have_received(:internalize_beef).with(
         hash_including(
           tx: [beef_hex].pack('H*'),
           description: 'cli-receive',
@@ -160,7 +160,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
     it '--basket fills envelope outputs only where envelope omits a basket' do
       command.call(["--file=#{file}", '--basket=fallback'])
-      expect(engine).to have_received(:import_beef).with(
+      expect(engine).to have_received(:internalize_beef).with(
         hash_including(
           outputs: [
             hash_including(basket: 'received'),  # envelope wins
@@ -172,7 +172,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
     it '--force-basket overrides envelope-supplied baskets' do
       command.call(["--file=#{file}", '--basket=override', '--force-basket'])
-      expect(engine).to have_received(:import_beef).with(
+      expect(engine).to have_received(:internalize_beef).with(
         hash_including(
           outputs: array_including(
             hash_including(basket: 'override'),
@@ -373,10 +373,10 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
     end
 
     # satoshis is informational (engine reads BEEF), but the human
-    # summary sums it AFTER engine.import_beef has committed. Without
-    # up-front validation, a non-integer satoshis TypeErrors post-import,
+    # summary sums it AFTER engine.internalize_beef has committed. Without
+    # up-front validation, a non-integer satoshis TypeErrors after internalizing,
     # leaving the wallet in a "succeeded but crashed" state.
-    it 'raises UsageError when an envelope output is missing satoshis (fails before engine.import_beef)' do
+    it 'raises UsageError when an envelope output is missing satoshis (fails before engine.internalize_beef)' do
       bad = JSON.generate(beef: beef_hex,
                           sender_identity_key: sender_key,
                           outputs: [{ vout: 0,
@@ -385,7 +385,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       File.write(path, bad)
       expect { command.call(["--file=#{path}"]) }
         .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "satoshis"/)
-      expect(engine).not_to have_received(:import_beef)
+      expect(engine).not_to have_received(:internalize_beef)
     end
 
     it 'raises UsageError when satoshis is a string' do
@@ -397,7 +397,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       File.write(path, bad)
       expect { command.call(["--file=#{path}"]) }
         .to raise_error(BSV::Wallet::CLI::UsageError, /missing or invalid "satoshis"/)
-      expect(engine).not_to have_received(:import_beef)
+      expect(engine).not_to have_received(:internalize_beef)
     end
 
     it 'raises UsageError when satoshis is negative' do
@@ -425,14 +425,14 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
     end
 
     before do
-      allow(engine).to receive(:import_beef).and_return({})
+      allow(engine).to receive(:internalize_beef).and_return({})
       # HLR #467: the CLI consumes +KeyDeriver#identity_pubkey_hash+ —
       # the canonical 20-byte wallet root hash, set to +matching_pubkey+'s
       # hash160 so the scanner recognises matching outputs.
       allow(key_deriver).to receive(:identity_pubkey_hash).and_return("\x55" * 20)
     end
 
-    it 'imports outputs whose P2PKH lock matches the wallet root pubkey hash' do
+    it 'internalizes outputs whose P2PKH lock matches the wallet root pubkey hash' do
       output = instance_double(BSV::Transaction::TransactionOutput,
                                locking_script: instance_double(BSV::Script::Script, to_binary: p2pkh_lock),
                                satoshis: 1234)
@@ -441,7 +441,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
       command.call(["--file=#{beef_file}"])
 
-      expect(engine).to have_received(:import_beef).with(
+      expect(engine).to have_received(:internalize_beef).with(
         hash_including(
           outputs: [
             hash_including(
@@ -463,7 +463,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
 
       command.call(["--file=#{beef_file}", '--basket=incoming'])
 
-      expect(engine).to have_received(:import_beef).with(
+      expect(engine).to have_received(:internalize_beef).with(
         hash_including(
           outputs: array_including(
             hash_including(insertion_remittance: hash_including(basket: 'incoming'))
@@ -496,7 +496,7 @@ RSpec.describe BSV::Wallet::CLI::Commands::Receive do
       allow(command).to receive(:parse_beef_subject).and_return(subject_tx)
 
       expect { command.call(["--file=#{beef_file}"]) }.to output(/no outputs matching/).to_stderr
-      expect(engine).not_to have_received(:import_beef)
+      expect(engine).not_to have_received(:internalize_beef)
     end
   end
 

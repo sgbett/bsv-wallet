@@ -6,18 +6,19 @@ using BSV::Wallet::Txid
 
 module BSV
   module Wallet
-    # Layer 3 — wallet-vocab primitive surface beneath BRC-100.
+    # Layer 3 — orchestration beneath BRC-100.
     #
-    # Receives Layer 2a components at construction time and exposes 28
-    # spec-aligned primitive methods (e.g. +#build_action+, +#sign_action+,
-    # +#encrypt+, +#get_public_key+ — per ADR-026 / #397 classification)
-    # plus two internals (+Engine::Policy#guard_balance!+,
-    # +Engine#dispatch_broadcast+). BRC-100 spec compliance lives one
-    # layer up, in +BSV::Wallet::BRC100+ (a class composed over an engine
-    # instance — reached via +Engine#brc100+ since #405 Stage 3 of #396
-    # retired the mixin). Engine contains no SQL, no ARC calls, no
-    # thread management — pure orchestration over the primitives'
-    # collaborators.
+    # Exposes Engine primitives and Engine porcelain composed over them
+    # (+#send_payment+, +#sweep+, ...). The Engine primitives are the 28
+    # the BRC-100 methods map onto (e.g. +#build_action+, +#sign_action+,
+    # +#encrypt+, +#get_public_key+; per ADR-026 / #397 classification)
+    # plus a few of its own, such as +#reject_action+. Receives +Store+ and
+    # +UTXOPool+ and constructs the other Layer 2a collaborators itself.
+    # BRC-100 spec compliance lives one layer up, in +BSV::Wallet::BRC100+
+    # (a class composed over an engine instance — reached via
+    # +Engine#brc100+ since #405 Stage 3 of #396 retired the mixin).
+    # Engine contains no SQL, no ARC calls, no thread management — pure
+    # orchestration over its collaborators.
     #
     # @example Via the CLI's auto-discovery (recommended for typical use)
     #   require 'bsv/wallet/cli'    # not autoloaded — CLI is opt-in
@@ -38,7 +39,7 @@ module BSV
     class Engine
       autoload :Action,                'bsv/wallet/engine/action'
       autoload :AnchorLivenessCache,   'bsv/wallet/engine/anchor_liveness_cache'
-      autoload :BeefImporter,          'bsv/wallet/engine/beef_importer'
+      autoload :BeefInternalizer,      'bsv/wallet/engine/beef_internalizer'
       autoload :Broadcast,             'bsv/wallet/engine/broadcast'
       autoload :FundingStrategy,       'bsv/wallet/engine/funding_strategy'
       autoload :Hydrator,              'bsv/wallet/engine/hydrator'
@@ -62,7 +63,7 @@ module BSV
       RETRYABLE_IMPORT_BACKOFF_BASE_S = 1.0
 
       attr_reader :limp_threshold, :services, :broadcaster, :broadcast_worker,
-                  :funding_strategy, :tx_builder, :hydrator, :beef_importer,
+                  :funding_strategy, :tx_builder, :hydrator, :beef_internalizer,
                   :transmission
 
       # Engine collaborator surface exposed for Engine::Action use.
@@ -104,7 +105,7 @@ module BSV
         # loop uses. Eliminates the parallel +inline_broadcast+ codepath
         # that pre-#271 duplicated submit's 202 / 400 / 503 dispatch and
         # the post-submit accept / reject / promote bookkeeping.
-        # Shared hydration cache (#296 Phase D): one wtxid-keyed substrate
+        # Shared HydratedTxCache (#296 Phase D): one wtxid-keyed cache
         # serving the broadcast EF path and the Hydrator's deep BEEF walk.
         # Injected into both so a create_action that warms it (or an eager
         # proof on broadcast) is visible to a later wire_ancestor.
@@ -125,23 +126,24 @@ module BSV
         # (build_atomic_beef) + egress SPV honesty contract
         # (validate_for_handoff!). See ADR-024 / #343.
         @hydrator = Hydrator.new(store: @store, cache: @hydrated_tx_cache)
-        # BeefImporter — ingress counterpart to Hydrator. Owns the whole
+        # BeefInternalizer — ingress counterpart to Hydrator. Owns the whole
         # incoming-BEEF flow (parse, SPV verify, persist ancestor
         # proofs, promote outputs). Consumes Hydrator#wire_ancestor for
         # trustSelf hydration; one-way (ingress → Hydrator). See
         # ADR-024 / #357.
-        @beef_importer = BeefImporter.new(
+        @beef_internalizer = BeefInternalizer.new(
           store: @store, chain_tracker: @chain_tracker, hydrator: @hydrator
         )
-        # Transmission — wallet-to-peer BEEF delivery domain, sibling to
-        # Broadcast/TxProof over the shared Hydrator substrate. The
+        # Transmission — wallet-to-peer BEEF delivery domain. It
+        # assembles the peer's BEEF through the Hydrator, its only route
+        # to the HydratedTxCache it shares with Broadcast. The
         # +delivery:+ slot is wired with +Network::PeerDelivery+ here
         # (#390): SSRF gate via +EndpointPolicy+, ACK validation with
         # wtxid binding, bounded HTTP timeouts. The HTTP transport is
-        # only invoked when a caller passes +endpoint:+ to
-        # +#transmit+ — the deferred caller-driven path (return BEEF,
-        # let the operator shuttle it) still works. See ADR-025 / HLR
-        # #385 / docs/reference/transactions.md.
+        # only invoked when a caller passes +endpoint:+ to +#transmit+
+        # (transmit intent +inline+); with +endpoint: nil+ (transmit
+        # intent +none+) the BEEF is returned for the caller to deliver.
+        # See ADR-025 / HLR #385 / docs/reference/transactions.md.
         @transmission = Transmission.new(
           store: @store, hydrator: @hydrator, delivery: Network::PeerDelivery.new
         )
@@ -161,7 +163,7 @@ module BSV
       # BRC-100 wrap layer. Memoised — returns the same +BSV::Wallet::BRC100+
       # instance for the lifetime of this engine. The wrapper holds an
       # +@engine+ reference back to +self+; all 28 BRC-100 method calls
-      # route through it and dispatch to Engine's primitive surface.
+      # route through it and dispatch to Engine primitives.
       # Callers in this codebase use this accessor; external callers may
       # also construct +BSV::Wallet::BRC100.new(engine)+ directly.
       def brc100
@@ -179,9 +181,9 @@ module BSV
         { rejected: true, action_id: action_id }
       end
 
-      # ---- BRC-100 primitive surface (write-side) ------------------------
+      # ---- Engine primitives behind the BRC-100 methods (write-side) ------
       #
-      # Four thick primitives the +BSV::Wallet::BRC100+ wrap layer
+      # Four thick Engine primitives the +BSV::Wallet::BRC100+ wrap layer
       # calls through its memoised +@engine+ reference (e.g.
       # +@engine.build_action+, +@engine.sign_action+). Return shapes
       # are wallet vocab
@@ -409,15 +411,15 @@ module BSV
         action.abort!
       end
 
-      def import_beef(tx:, outputs:, description:, labels: nil,
-                      trust_self: nil, known_txids: nil)
-        @beef_importer.import(
+      def internalize_beef(tx:, outputs:, description:, labels: nil,
+                           trust_self: nil, known_txids: nil)
+        @beef_internalizer.internalize(
           tx: tx, outputs: outputs, description: description,
           labels: labels, trust_self: trust_self, known_txids: known_txids
         )
       end
 
-      # ---- BRC-100 primitive surface (read-side, #402 Stage 2 PR 2) -------
+      # ---- Engine primitives behind the BRC-100 methods (read-side, #402 Stage 2 PR 2) ----
       #
       # 24 thin wrappers — the indivisible domain operations BRC100 maps
       # one-to-one to BRC-100 spec methods. Engine returns raw values
@@ -786,10 +788,11 @@ module BSV
             proof: { raw_tx: raw_tx, merkle_path: merkle_path_binary, height: block_height }
           )
           @store.link_proof(action_id: import_action[:id], tx_proof_id: proof_id)
-          # Inform the shared Hydrator cache so any subsequent wire_ancestor
-          # walk through +wtxid+ terminates here without re-fetching. Mirrors
-          # the BeefImporter / Broadcast / TxProof discipline — every
-          # save_proof + merkle site notifies the substrate. #296 Phase D.
+          # Inform the shared HydratedTxCache, through the Hydrator, so any
+          # subsequent wire_ancestor walk through +wtxid+ terminates here
+          # without re-fetching. Mirrors the BeefInternalizer / Broadcast /
+          # TxProof discipline — every save_proof + merkle site updates the
+          # cache. #296 Phase D.
           @hydrator&.proof_arrived(wtxid: wtxid, raw_tx: raw_tx, merkle_path: merkle_path_binary)
           output_ids = @store.promote_action(
             action_id: import_action[:id],
@@ -837,7 +840,7 @@ module BSV
         { imported: true, satoshis: satoshis, dtxid: dtxid }
       end
 
-      # --- Porcelain ---
+      # --- Engine porcelain ---
 
       # Scan the root key's address for unspent outputs and import each one.
       #
@@ -1341,9 +1344,9 @@ module BSV
       # wtxid derived from the BEEF (see +Engine::Broadcast#hints_pull!+),
       # and a deferred-sign produces a different wtxid from the staged
       # unsigned one, so the sign-path entry never collides with any
-      # earlier create-time entry. The deferred-broadcast path now
-      # benefits from the same +find_action+ + JOIN skip as the inline
-      # create path.
+      # earlier create-time entry. The broadcast after deferred signing
+      # now benefits from the same +find_action+ + JOIN skip as the
+      # inline create path.
       def dispatch_broadcast(action_id, atomic_beef, intent:)
         publish_beef_hint(action_id, atomic_beef) if atomic_beef
         @broadcast_worker.process(action_id) if intent == :inline
@@ -1697,9 +1700,10 @@ module BSV
 
         proof_id = @store.save_proof(wtxid: wtxid, proof: proof)
         @store.link_proof(action_id: action_id, tx_proof_id: proof_id)
-        # Inform the shared Hydrator cache so any subsequent wire_ancestor
-        # walk through +wtxid+ terminates here (when merkle present) or at
-        # least short-circuits the store lookup for raw_tx. #296 Phase D.
+        # Inform the shared HydratedTxCache, through the Hydrator, so any
+        # subsequent wire_ancestor walk through +wtxid+ terminates here
+        # (when merkle present) or at least short-circuits the store lookup
+        # for raw_tx. #296 Phase D.
         @hydrator&.proof_arrived(wtxid: wtxid, raw_tx: raw_tx, merkle_path: merkle_path)
       end
 

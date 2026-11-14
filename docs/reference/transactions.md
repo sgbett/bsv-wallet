@@ -44,13 +44,15 @@ BEEF is a strict superset of EF for the subject transaction. This is why the bro
 
 Trimming is the one place the "peer knows X, send less" instinct is correct.
 
-## Two domains over one substrate
+## Two domains, one cache
 
-Broadcast and transmit are separate stateful *processes* (wallet side, per the stateless→SDK / stateful→wallet axis in `state-boundaries.md`) sitting on a shared *operational* substrate:
+Broadcast and transmit are separate stateful *processes* (wallet side, per the stateless→SDK / stateful→wallet axis in `state-boundaries.md`) that, within an Engine, share one in-memory cache, the `Engine::HydratedTxCache`. Broadcast reads it directly for its EF build and fills it from eager broadcast-response proofs (walletd's Broadcast, over its own cache, also fills it from producers' hints); Transmission reaches it only through the Hydrator, which assembles the peer's BEEF:
 
 ```
-            Engine::Hydrator   ← shared: wtxid-keyed bytes cache → wired Transaction::Tx
-             /            \
+       Engine::HydratedTxCache   ← shared: wtxid-keyed raw-tx + merkle-path bytes
+          /                \
+         /              Engine::Hydrator   ← wires Transaction::Tx ancestry, assembles Atomic BEEF
+        /                       |
   Engine::Broadcast    Engine::Transmission
    #submit  → EF→miner   #transmit → BEEF→peer
    resolve: SSE/blocks   resolve: peer HTTP ACK (wtxid-bound)
@@ -59,7 +61,7 @@ Broadcast and transmit are separate stateful *processes* (wallet side, per the s
 
 The per-recipient-memory row is the deciding difference: broadcast is stateless about *who* (a tx is global), transmission is stateful about *who* (what each peer has acknowledged is inherently per-counterparty). That state cannot be bolted onto `Engine::Broadcast` without smuggling a foreign model in — hence a sibling domain, not a flag.
 
-`Engine::Transmission` is thinner than it first looks: it is transport + per-peer accounting + delivery-outcome, *on top of* the shared Hydrator. It is not a fork of Broadcast.
+`Engine::Transmission` is thinner than it first looks: it is transport + per-peer accounting + delivery-outcome, *on top of* the Hydrator's BEEF assembly. It is not a fork of Broadcast.
 
 A note on the verb: `transmit`, not `send` — `send` is poisoned by Ruby's `Object#send`. `submit` stays as the inner HTTP verb of the broadcast subsystem. `Broadcast` and `Transmission` are the domain nouns; `submit` and `transmit` are their actions.
 
@@ -69,18 +71,18 @@ They are independent edges off the same action, not a pipeline. BEEF/SPV exists 
 
 ## Relationship to BRC-100
 
-BRC-100 specifies the *interface* (`createAction` returns the BEEF, `internalizeAction` consumes it) and is **deliberately silent on transport**. The spec's model is "the wallet hands you the tx object; how it reaches the peer is your concern." So the return-BEEF-and-let-the-caller-deliver path (the `bin/create | bin/receive` pipe) **is** the BRC-100-compliant baseline, and it remains available alongside the `bin/transmit` porcelain. `Engine::Transmission` is an **original, beyond-spec extension** — there is no reference implementation; the peer acceptance/rejection taxonomy and delivery semantics are the wallet's to design. Conceptual lineage: peer-to-peer / IP-to-IP direct payments (the whitepaper's "direct" channel).
+BRC-100 specifies the *interface* (`createAction` returns the BEEF, `internalizeAction` consumes it) and is **deliberately silent on transport**. The spec's model is "the wallet hands you the tx object; how it reaches the peer is your concern." So transmit intent `none` — return the BEEF and let the caller deliver it, as the `bin/wallet send <identity key> <sats> | bin/wallet receive` pipe does — **is** the BRC-100-compliant baseline, and it remains available alongside the `bin/transmit` porcelain. `Engine::Transmission` is an **original, beyond-spec extension** — there is no reference implementation; the peer acceptance/rejection taxonomy and delivery semantics are the wallet's to design. Conceptual lineage: peer-to-peer / IP-to-IP direct payments (the whitepaper's "direct" channel).
 
-A design constraint that follows: **delivery synchronicity is an invocation mode, not a property of `transmit`.** v1 delivers synchronously because an inline caller awaits a self-contained `transmit`; the same operation must be drivable asynchronously by the daemon later. This mirrors `broadcast_intent` (inline/delayed over one code path) — see `Engine::Broadcast`.
+A design constraint that follows: **transmit intent is an invocation mode, not a property of `transmit`.** In v1 the wallet delivers `inline` (the caller awaits a self-contained `transmit`) or, with intent `none`, leaves delivery to the caller; the same operation must be drivable `delayed` by the daemon later (#385 Phase 2). This mirrors `broadcast_intent` (`inline` and `delayed` over one code path) — see `Engine::Broadcast`.
 
 ## Current state (2026-06)
 
 Both edges are now first-class processes; the historical asymmetry — broadcast fully built, transmit a CLI pipe — was the subject of HLR #385 (PR #408) and is closed:
 
 - **Broadcast (→ network).** `Engine::Broadcast`, OMQ PULL sockets, SSE resolution, callback handlers, crash-recovery — the daemon is built around it. Both the inline and daemon paths ship EF (#252 closed the daemon-side raw-hex gap).
-- **Transmit (→ peer).** `Engine::Transmission#transmit` sits as a sibling to `Engine::Broadcast` and `Engine::TxProof` over the shared `Engine::Hydrator` substrate. The `transmissions` and `transmission_txids` tables hold per-peer knowledge at grain (action × counterparty); status is **derived** from the presence of `acked_at` (no status column — principle-of-state). It sends full ancestors; per-peer trimming waits for the receiver's agreement (#552). Delivery is synchronous HTTP POST of a JSON envelope to a caller-supplied endpoint (`Network::PeerDelivery`), guarded by `Network::EndpointPolicy` (SSRF gate); the ACK is wtxid-bound so a captive portal cannot impersonate delivery. The CLI surface is `bin/transmit` (mirroring `bin/create` and `bin/receive`).
+- **Transmit (→ peer).** `Engine::Transmission#transmit` sits as a sibling to `Engine::Broadcast` and `Engine::TxProof`, assembling the peer's BEEF through `Engine::Hydrator`. The `transmissions` and `transmission_txids` tables hold per-peer knowledge at grain (action × counterparty); status is **derived** from the presence of `acked_at` (no status column — principle-of-state). It sends full ancestors; per-peer trimming waits for the receiver's agreement (#552). Delivery is synchronous HTTP POST of a JSON envelope to a caller-supplied endpoint (`Network::PeerDelivery`), guarded by `Network::EndpointPolicy` (SSRF gate); the ACK is wtxid-bound so a captive portal cannot impersonate delivery. The CLI surface is `bin/transmit`.
 
-What v1 deliberately omits, and what stays for Phase 2: an identity-key → endpoint directory (peers must be reached by URL today), a daemon-driven async delivery path (`#transmit` is shaped to be drivable both ways over one code path — same invariant as `broadcast_intent`), a peer-signed ACK protocol (the `transmissions.ack_signature bytea NULL` column is reserved now so Phase 2 lands without a schema migration), retry/backoff, and knowledge-revocation when a peer prunes.
+What v1 deliberately omits, and what stays for Phase 2: an identity-key → endpoint directory (peers must be reached by URL today), a daemon-driven `delayed` transmit (`#transmit` is shaped to be drivable both ways over one code path — same invariant as `broadcast_intent`), a peer-signed ACK protocol (the `transmissions.ack_signature bytea NULL` column is reserved now so Phase 2 lands without a schema migration), retry/backoff, and knowledge-revocation when a peer prunes.
 
 ### Per-table responsibilities
 
@@ -89,7 +91,7 @@ What v1 deliberately omits, and what stays for Phase 2: an identity-key → endp
 
 ## The egress completeness check is a transmit precondition
 
-`Engine::Hydrator#validate_for_handoff!` (the structural-only verify with `TrustedSelfChainTracker`) answers exactly one question: *is this BEEF fit to hand to a peer?* It is therefore a **Transmission precondition**, and is now called from `Engine::Transmission#transmit` over the wire bytes it is about to ship, before the row is written. The substrate method stays on `Hydrator` (it works on bytes and a subject wtxid; it has no per-peer state), but the call site that matters at runtime is Transmission's.
+`Engine::Hydrator#validate_for_handoff!` (the structural-only verify with `TrustedSelfChainTracker`) answers exactly one question: *is this BEEF fit to hand to a peer?* It is therefore a **Transmission precondition**, and is now called from `Engine::Transmission#transmit` over the wire bytes it is about to ship, before the row is written. The method stays on `Hydrator` (it works on bytes and a subject wtxid; it has no per-peer state), but the call site that matters at runtime is Transmission's.
 
 The check takes an `allow_txid_only:` kwarg, and every call site keeps the default `allow_txid_only: false`: the BEEF the wallet hands back to its own caller (`Engine#build_action`, `#sign_action`) and the BEEF it transmits are both full bundles, so any `TxidOnlyEntry` is a defect. The flag is for per-peer trimming a receiver has agreed to (#552), where TXID-only entries are legitimate; the verifier stays one method.
 
@@ -99,7 +101,7 @@ Note also that the check fails the **delivery**, not the wallet's state: the DB 
 
 ## Wire envelope (v1)
 
-The peer-to-peer transport is an HTTP POST of a JSON envelope. The shape is the BRC-29-aligned superset of the existing `bin/create` → `bin/receive` stdin/stdout pipe — v1 is "the existing pipe, but over HTTP" — with an explicit version tag so Phase 2 can negotiate additions.
+The peer-to-peer transport is an HTTP POST of a JSON envelope. The shape follows the envelope the `bin/wallet send` → `bin/wallet receive` stdout/stdin pipe carries (see *Wallet-internal envelope shape* below) — v1 is "the existing pipe, but over HTTP" — without its `dtxid` and with an explicit version tag so Phase 2 can negotiate additions.
 
 ```
 POST <endpoint>
@@ -118,7 +120,7 @@ Content-Type: application/json
 - **`sender_identity_key`** — BRC-43 compressed pubkey hex (the identity pubkey carve-out from CLAUDE.md applies: hex everywhere this value appears, no binary representation). The peer needs it to complete BRC-42 derivation on each output.
 - **`protocol_version: 1`** — forward-compat. Phase 2 will add `certificates`, `ack_signature` and similar fields; bumping this field is the negotiation point.
 
-The wallet ships the envelope through `Network::PeerDelivery` (the v1 transport seam — `Engine::Transmission` takes a `delivery:` kwarg, so the Phase 2 daemon-async deliverer drops in by constructor argument without touching the engine). The transport defaults to no cross-host redirects, a 5-second connect timeout, a 30-second read timeout, and TLS verification on.
+The wallet ships the envelope through `Network::PeerDelivery` (the v1 transport seam — `Engine::Transmission` takes a `delivery:` kwarg, so the Phase 2 deliverer for a `delayed` transmit drops in by constructor argument without touching the engine). The transport defaults to no cross-host redirects, a 5-second connect timeout, a 30-second read timeout, and TLS verification on.
 
 ## ACK contract (v1)
 
@@ -165,11 +167,11 @@ The wallet writes the parent `transmissions` row at one point and the `transmiss
 
 Failure between record and ACK — transport error, timeout, mismatched wtxid, anything that isn't `:delivered` — leaves the peer **not** recorded as knowing the wtxids we tried to ship. Once per-peer trimming lands (#552), the next transmission to the same peer cannot over-trim against a knowledge claim that was never confirmed; the peer SPV-verifies cleanly, because every entry it needs is still on the wire. This is the cure for over-trim-on-failed-delivery, and it is the reason the two writes live in two methods rather than one transaction.
 
-`Engine::Transmission#transmit` orchestrates both phases: `record_transmission` runs after the egress-validation gate passes; `mark_transmission_acked` runs iff the `PeerDelivery::Result#delivered?` predicate is true. When the endpoint kwarg is nil (the deferred-by-caller path — the caller takes the returned BEEF and arranges its own delivery), only the first phase fires and the caller is responsible for invoking `mark_transmission_acked` on confirmed delivery.
+`Engine::Transmission#transmit` orchestrates both phases: `record_transmission` runs after the egress-validation gate passes; `mark_transmission_acked` runs iff the `PeerDelivery::Result#delivered?` predicate is true. When the endpoint kwarg is nil (transmit intent `none` — the caller takes the returned BEEF and arranges its own delivery), only the first phase fires and the caller is responsible for invoking `mark_transmission_acked` on confirmed delivery.
 
 ## CLI surface
 
-`bin/transmit` is the porcelain. It mirrors the verb symmetry of `bin/create` (build the action + BEEF) and `bin/receive` (consume the BEEF into a wallet) — a `bin/create | bin/transmit | bin/receive` pipe, with `bin/transmit` carrying `--to <identity_key>` and `--endpoint <url>`. See `bin/transmit --help` for the current flag set.
+`bin/transmit` is the porcelain. It reads the envelope `bin/wallet send <identity key> <sats>` writes to stdout, finds the action by its `dtxid` and transmits it — a `bin/wallet send … | bin/transmit --to <identity_key> --endpoint <url>` pipe. See `bin/transmit --help` for the current flag set.
 
 ## BRC-29 derivation convention
 
@@ -226,7 +228,7 @@ The BRC-29 spec compliance lives at the **derivation layer** (protocol identifie
 
 **Derivation token entropy is sufficient at every BRC-29 send site.** `BSV::Wallet.random_derivation` produces eight cryptographically random bytes (64 bits) per token, base64-encoded to a 12-character string. Both BRC-29 send paths — the outbound CLI (`CLI::Commands::Send#call_identity_key`) and the engine-side porcelain (`Engine#send_payment`) — draw prefix and suffix independently from `random_derivation`, giving 128 bits of combined per-output entropy. That is ample for output unlinkability against a chain-watching observer. Internal self-payment sites use deterministic suffixes (`vout.to_s`, `(i+1).to_s` for change indexing, static `'1'` for WBIKD); their counterparty is `'self'`, so no third party can derive the locking-script pubkey hash from a public input regardless, and the entropy concern does not apply at those sites.
 
-**`paymentRemittance` is engine-internal, not wire shape.** The receiver's `internalize_action` call shape — `protocol: 'wallet payment'` plus the `payment_remittance: { derivation_prefix, derivation_suffix, sender_identity_key }` triple — matches the BRC-29 spec's `internalizeAction` example exactly ([BRC-29 §Recipient Validation](https://github.com/bitcoin-sv/BRCs/blob/master/payments/0029.md#recipient-validation)). It is the call shape between `CLI::Commands::Receive` and `Engine::BeefImporter`, not a wire shape — the wire envelope is the JSON above. The distinction matters: a future strict-spec wire envelope (per the bullet below) would still emit the same `payment_remittance` triple to the engine at the internalize boundary.
+**`paymentRemittance` is engine-internal, not wire shape.** The receiver's `internalize_action` call shape — `protocol: 'wallet payment'` plus the `payment_remittance: { derivation_prefix, derivation_suffix, sender_identity_key }` triple — matches the BRC-29 spec's `internalizeAction` example exactly ([BRC-29 §Recipient Validation](https://github.com/bitcoin-sv/BRCs/blob/master/payments/0029.md#recipient-validation)). It is the call shape between `CLI::Commands::Receive` and `Engine::BeefInternalizer`, not a wire shape — the wire envelope is the JSON above. The distinction matters: a future strict-spec wire envelope (per the bullet below) would still emit the same `payment_remittance` triple to the engine at the internalize boundary.
 
 ## Future work
 
@@ -247,5 +249,5 @@ Tracked as follow-up HLRs filed post-merge of #460:
 - `.architecture/decisions/adrs/20260619_ADR-025-transmission-distinct-domain.md` — the decision record establishing Transmission as a sibling domain to Broadcast (not a method or mode flag on it).
 - HLR #385 / PR #408 — the Transmission domain implementation (`transmissions` + `transmission_txids` schema, `Engine::Transmission`, BeefParty trim, egress validation, `Network::PeerDelivery` + `Network::EndpointPolicy`, `bin/transmit`).
 - #551 — transmit sends full ancestors. It had trimmed through `Transaction::BeefParty` (BSV Ruby SDK), whose `trimmed_beef_for_party` dropped known ancestors rather than leaving TXID-only entries, and no receiver resolves TXID-only entries by default anyway. #552 brings trimming back once the receiver agrees to it.
-- #296 — BEEF chain integrity + hydration: extracts the shared `Engine::Hydrator` substrate both domains read.
-- #192 — noSend/sendWith subsystem (Broadcast-domain extension). The only mechanic shared with Transmission is `knownTxids` trimming (deferred for Transmission until #552), which lives on the shared substrate, not in either process. The two domains stay separate; a future Transmission composes alongside #192's batch broadcast rather than absorbing it.
+- #296 — BEEF chain integrity + hydration: the egress check `validate_for_handoff!` (Phase B, now on `Engine::Hydrator`, which #343 extracted) and the wtxid-keyed `Engine::HydratedTxCache` the Hydrator shares with `Engine::Broadcast` (Phase D).
+- #192 — noSend/sendWith subsystem (Broadcast-domain extension). The only mechanic shared with Transmission is `knownTxids` trimming (deferred for Transmission until #552), which is the SDK's `Transaction::BeefParty`, not either process's. The two domains stay separate; a future Transmission composes alongside #192's batch broadcast rather than absorbing it.

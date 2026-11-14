@@ -11,9 +11,9 @@ module BSV
       # bundle, runs full SPV verification of the subject transaction,
       # persists the subject as an incoming +broadcast_intent 'none'+
       # action row, saves every ancestor's merkle proof, optionally
-      # trims known ancestors back to TXID-only, and promotes the
+      # replaces known ancestors with TXID-only entries, and promotes the
       # caller-named outputs into the canonical UTXO set. See
-      # +Interface::BeefImporter+ for the full contract.
+      # +Interface::BeefInternalizer+ for the full contract.
       #
       # Store-reading by design (the +store:+ handle is read and
       # written), with two further dependencies attached: a
@@ -25,13 +25,13 @@ module BSV
       # No +key_deriver+ — ingress derives nothing. Output derivation
       # params are caller-supplied via the +outputs+ array and flow
       # through +resolve_internalize_output+ as-is.
-      class BeefImporter
-        include BSV::Wallet::Interface::BeefImporter
+      class BeefInternalizer
+        include BSV::Wallet::Interface::BeefInternalizer
 
-        # Construct a BeefImporter. Explicit DI: no engine
+        # Construct a BeefInternalizer. Explicit DI: no engine
         # back-reference. The +chain_tracker+ may be +nil+ at
         # construction time (some engine configurations omit it) —
-        # +#import+ raises +InvalidBeefError+ at the SPV step in that
+        # +#internalize+ raises +InvalidBeefError+ at the SPV step in that
         # case, mirroring the previous +Action.internalize+ guard.
         def initialize(store:, chain_tracker:, hydrator:)
           @store = store
@@ -39,9 +39,9 @@ module BSV
           @hydrator = hydrator
         end
 
-        # See +Interface::BeefImporter#import+.
-        def import(tx:, outputs:, description:, labels: nil,
-                   trust_self: nil, known_txids: nil)
+        # See +Interface::BeefInternalizer#internalize+.
+        def internalize(tx:, outputs:, description:, labels: nil,
+                        trust_self: nil, known_txids: nil)
           # Parse tx: as Atomic BEEF (BRC-95)
           beef, subject_tx = parse_beef(tx)
 
@@ -79,7 +79,7 @@ module BSV
           # +CompetingBlockHeaderError+ (raised by +find_or_create_block+ when
           # an ancestor's BUMP disagrees with the persisted +blocks+ row) is
           # translated to +InvalidBeefError+ at this boundary so the
-          # +Interface::BeefImporter#import+ contract stays honest — every
+          # +Interface::BeefInternalizer#internalize+ contract stays honest — every
           # ingress failure surfaces as +InvalidBeefError+; consumers don't
           # need to know a new error type exists. The re-org signal is not
           # lost: the message carries the +competing_header+ tag, and
@@ -95,7 +95,7 @@ module BSV
               action_id: action_result[:id], wtxid: subject_tx.wtxid, raw_tx: subject_tx.to_binary
             )
             @store.save_proof(wtxid: subject_tx.wtxid, proof: { raw_tx: subject_tx.to_binary })
-            BSV.logger&.debug { "[Engine::BeefImporter] import: subject=#{subject_tx.dtxid}" }
+            BSV.logger&.debug { "[Engine::BeefInternalizer] internalize: subject=#{subject_tx.dtxid}" }
 
             # HLR #521 — trust claim: ingress-path lifecycle annotation. The
             # subject tx was externally built (BEEF came from a caller), so
@@ -129,7 +129,7 @@ module BSV
             # save_beef_proofs was supposed to land actually landed, BEFORE
             # replace_known_ancestors! mutates the BEEF to TXID-only. A miss
             # rolls the whole ingress back (principle of state — never a
-            # half-imported action whose ancestry can't be reproduced).
+            # half-internalized action whose ancestry can't be reproduced).
             assert_proofs_complete!(beef)
 
             # HLR #516 Sub 2 — populate the verification cache. Trust claim:
@@ -254,7 +254,7 @@ module BSV
         end
 
         # Attach labels to the action via Store primitives. Two-call
-        # mirror of +Action.attach_labels+ inlined here so BeefImporter
+        # mirror of +Action.attach_labels+ inlined here so BeefInternalizer
         # has zero engine coupling; the porcelain class method on
         # +Action+ is unchanged.
         def attach_labels(action_id, labels)
@@ -337,14 +337,14 @@ module BSV
         # caller to flush AFTER the outer +db.transaction+ commits.
         #
         # Why accumulate rather than call +proof_arrived+ inline: the
-        # Hydrator is an in-memory cache with no rollback hook. If a
-        # later step in the outer transaction (or a subsequent ancestor
-        # in this loop) raises, the +db.transaction+ rolls back every
-        # +tx_proofs+ row — but any +proof_arrived+ side-effects
-        # already applied to the Hydrator survive, poisoning the cache
+        # HydratedTxCache behind the Hydrator is in memory, with no
+        # rollback hook. If a later step in the outer transaction (or a
+        # subsequent ancestor in this loop) raises, the +db.transaction+
+        # rolls back every +tx_proofs+ row — but any +proof_arrived+
+        # side-effects already applied to the cache survive, poisoning it
         # with terminals that don't exist in the DB. Returning the
-        # enrichments lets +#import+ flush them post-commit, so
-        # rollback leaves the Hydrator untouched. #533 code-review.
+        # enrichments lets +#internalize+ flush them post-commit, so
+        # rollback leaves the cache untouched. #533 code-review.
         def save_beef_proofs(beef, subject_wtxid, action_id)
           BSV::Primitives::Hex.validate_wtxid!(subject_wtxid, name: 'save_beef_proofs subject_wtxid')
           subject_proof_id = nil
@@ -373,10 +373,10 @@ module BSV
             subject_proof_id = proof_id if wtxid == subject_wtxid && merkle_path
             # Accumulate for post-commit flush — see method docstring.
             # Without post-commit flushing, a mid-transaction raise would
-            # leave the Hydrator with ghost anchors the DB doesn't back.
+            # leave the cache with ghost anchors the DB doesn't back.
             # The former #296 Phase D monotonic enrichment invariant still
-            # holds: every save_proof site still informs the substrate; the
-            # substrate call just happens AFTER commit.
+            # holds: every proof saved here still reaches the shared
+            # HydratedTxCache through the Hydrator, just AFTER commit.
             #
             # Only enqueue when a Hydrator is attached, and reuse the
             # bytes already computed for +proof+ — a large BEEF's
@@ -397,7 +397,7 @@ module BSV
 
         # Post-commit flush of the Hydrator enrichments accumulated
         # during +save_beef_proofs+. Runs OUTSIDE the outer
-        # +db.transaction+ so a rollback leaves the Hydrator cache
+        # +db.transaction+ so a rollback leaves the HydratedTxCache
         # untouched. #533 code-review.
         def flush_hydrator_enrichments(enrichments)
           return unless @hydrator
@@ -413,7 +413,7 @@ module BSV
             @hydrator.proof_arrived(**enrichment)
           rescue StandardError => e
             BSV.logger&.warn do
-              '[Engine::BeefImporter] hydrator enrichment failed post-commit ' \
+              '[Engine::BeefInternalizer] hydrator enrichment failed post-commit ' \
                 "wtxid=#{enrichment[:wtxid].to_dtxid} error=#{e.message}"
             end
           end
@@ -473,12 +473,12 @@ module BSV
 
             next unless known_set.include?(wtxid) || @store.proof_exists?(wtxid: wtxid)
 
-            BSV.logger&.debug { "[Engine::BeefImporter] replace_known_ancestors!: replacing dtxid=#{wtxid.to_dtxid}" }
+            BSV.logger&.debug { "[Engine::BeefInternalizer] replace_known_ancestors!: replacing dtxid=#{wtxid.to_dtxid}" }
             beef.make_txid_only(wtxid)
             replaced_count += 1
           end
 
-          BSV.logger&.debug { "[Engine::BeefImporter] replace_known_ancestors!: replaced_count=#{replaced_count}" }
+          BSV.logger&.debug { "[Engine::BeefInternalizer] replace_known_ancestors!: replaced_count=#{replaced_count}" }
           replaced_count.positive?
         end
 

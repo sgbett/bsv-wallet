@@ -260,9 +260,9 @@ module BSV
 
         # Prime the shared cache from a hint's BEEF: every non-TXID-only
         # transaction lands keyed by its own wtxid, carrying its merkle_path
-        # when the BEEF proved it. wtxid-keyed (not action_id) so the entries
-        # serve both the EF broadcast path here and any deep wire_ancestor
-        # walk through the same substrate. #296 Phase D.
+        # when the BEEF carries one. wtxid-keyed (not action_id) so the
+        # entries serve both the EF broadcast path here and any deep
+        # wire_ancestor walk through the same cache. #296 Phase D.
         def cache_beef_transactions(beef)
           beef.transactions.each do |beef_tx|
             next if beef_tx.is_a?(BSV::Transaction::Beef::TxidOnlyEntry)
@@ -272,12 +272,12 @@ module BSV
 
             # Merkle can be wired directly onto the transaction OR referenced
             # indirectly via the entry's BUMP index — funnel through
-            # +BeefImporter.merkle_path_for+ so the cache and the ingress
+            # +BeefInternalizer.merkle_path_for+ so the cache and the ingress
             # proof store always agree on which entries are merkle-bearing.
             # Without this, a BUMP-indexed proof would land as
             # +merkle_path: nil+ in the cache and force +wire_ancestor+ past
             # what is in fact a proven terminal.
-            mp = BeefImporter.merkle_path_for(beef, beef_tx)
+            mp = BeefInternalizer.merkle_path_for(beef, beef_tx)
             @hydrated_tx_cache.put(t.wtxid, raw_tx: t.to_binary, merkle_path: mp&.to_binary)
           end
         end

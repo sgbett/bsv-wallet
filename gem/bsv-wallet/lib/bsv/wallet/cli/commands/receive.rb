@@ -11,13 +11,13 @@ module BSV
         #
         # Auto-detects input format from +--file=<path>+ or stdin:
         #
-        #   raw BEEF                       # scan tx outputs for P2PKH to root key; import matches
-        #   BRC-29 envelope (JSON)         # consume per-output derivation hints; import via wallet-payment protocol
+        #   raw BEEF                       # scan tx outputs for P2PKH to root key; internalize matches
+        #   BRC-29 envelope (JSON)         # consume per-output derivation hints; internalize via wallet-payment protocol
         #
         # Raw BEEF path: the wallet doesn't know in advance which outputs
         # belong to it. Parses the subject tx, walks each output, checks if
         # its P2PKH lock targets the wallet's root key's address. Matches
-        # are imported via +engine.import_beef+ with the +basket insertion+
+        # are internalized via +engine.internalize_beef+ with the +basket insertion+
         # protocol and no derivation hints — the locking script matches the
         # wallet's per-instance root P2PKH literal (enforced declaratively
         # by +outputs.spendable_recoverable+; HLR #467). Phase 2 scans the
@@ -25,7 +25,7 @@ module BSV
         # follow-up.
         #
         # Envelope path: the sender shipped explicit derivation hints. Each
-        # listed output gets imported via +engine.import_beef+ with the
+        # listed output gets internalized via +engine.internalize_beef+ with the
         # strict BRC-29 +wallet payment+ protocol carrying the
         # +derivation_prefix+ / +derivation_suffix+ / +sender_identity_key+
         # in the +payment_remittance+ object. The spec's
@@ -115,14 +115,14 @@ module BSV
           end
 
           # Envelope path: parse derivation hints from the JSON, build
-          # +engine.import_beef+ output specs with appropriate remittance.
+          # +engine.internalize_beef+ output specs with appropriate remittance.
           #
           # All four BRC-29 fields (+sender_identity_key+, +beef+, per-output
           # +derivation_prefix+ / +derivation_suffix+) are required and
           # validated at the CLI boundary. Engine-side defaults silently
           # cover for missing fields (counterparty becomes +'self'+,
           # vout becomes 0) — but those defaults derive the WRONG key,
-          # importing outputs the wallet can never spend. Catch it here
+          # internalizing outputs the wallet can never spend. Catch it here
           # rather than discovering it on attempted spend.
           def call_envelope(engine, envelope, description)
             beef_hex = envelope[:beef]
@@ -166,7 +166,7 @@ module BSV
               }
             end
 
-            engine.import_beef(
+            engine.internalize_beef(
               tx: beef_bytes, outputs: output_specs,
               description: description, labels: ['cli-receive']
             )
@@ -179,9 +179,9 @@ module BSV
           end
 
           # Raw BEEF path: parse, scan outputs for P2PKH locks to wallet's
-          # root address, import matches as basket insertion with no
+          # root address, internalize matches as basket insertion with no
           # derivation hints — the engine sets +spendable_intent: 'spendable'+
-          # at the import boundary, and the per-wallet +spendable_recoverable+
+          # at the internalize boundary, and the per-wallet +spendable_recoverable+
           # CHECK validates the locking script matches the wallet's root
           # P2PKH literal (HLR #467). Accepts either binary BEEF or its
           # hex-string encoding (the latter is shell-pipe-friendly; binary
@@ -211,7 +211,7 @@ module BSV
               }
             end
 
-            engine.import_beef(
+            engine.internalize_beef(
               tx: beef_bytes, outputs: output_specs,
               description: description, labels: ['cli-receive']
             )
@@ -268,7 +268,7 @@ module BSV
           # Validate one envelope output's BRC-29 fields. All three
           # (+vout+, +derivation_prefix+, +derivation_suffix+) are
           # required: silent engine-side defaults would derive the
-          # wrong key, producing an unspendable import.
+          # wrong key, producing an unspendable internalized output.
           def validate_envelope_output!(out, idx)
             unless out.is_a?(Hash)
               raise UsageError,
@@ -286,8 +286,8 @@ module BSV
 
             # satoshis is informational (engine reads the BEEF's actual
             # value), but the human-readable summary sums it AFTER
-            # engine.import_beef has already committed. Validating
-            # here means an invalid satoshis can't TypeError post-import
+            # engine.internalize_beef has already committed. Validating
+            # here means an invalid satoshis can't TypeError after internalizing
             # and leak the "succeeded but crashed" state.
             sats = out[:satoshis]
             unless sats.is_a?(Integer) && sats >= 0
@@ -300,7 +300,7 @@ module BSV
             # ingress, so validate the BRC-29 derivation tokens against
             # the same contract the send-side helper enforces. Without
             # this, a malformed envelope passes here, propagates into
-            # +outputs+ via +import_beef+, and only blows up when the
+            # +outputs+ via +internalize_beef+, and only blows up when the
             # wallet later tries to spend the output (deep in
             # +Engine::TxBuilder#derive_signing_key+) — stranding the
             # UTXO. Translate the helper's exception into a clean

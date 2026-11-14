@@ -93,7 +93,7 @@ The Engine and its collaborators **orchestrate** atomic transitions; they do not
 
 When you find yourself writing application code that checks "is this state valid?", ask whether the schema *could* enforce the same invariant. If yes, lift it to the schema. The application check then becomes a boundary guard that produces a friendlier error message — but the schema is the actual gate.
 
-Collaborators are stateless or hold transient state only. Their durable state goes through the Store. `Engine::FundingStrategy`, `Engine::TxBuilder`, `Engine::Hydrator`, `Engine::BeefImporter`, `Engine::Policy`, `BSV::Wallet::BRC100` — none should hold persistent state. They orchestrate operations on database-canonical state.
+Collaborators are stateless or hold transient state only. Their durable state goes through the Store. `Engine::FundingStrategy`, `Engine::TxBuilder`, `Engine::Hydrator`, `Engine::BeefInternalizer`, `Engine::Policy`, `BSV::Wallet::BRC100` — none should hold persistent state. They orchestrate operations on database-canonical state.
 
 ## Performance projections sit *over* canonical state
 
@@ -101,7 +101,7 @@ Caches and derived indexes are allowed when they make the wallet faster. They ar
 
 > Delete the cache. Rebuild from the database. The wallet behaves identically.
 
-`Engine::HydratedTxCache` (#269) is a performance projection — it caches hydrated `Transaction` objects so the broadcast hot path doesn't re-do the JOINs and BEEF reconstruction. The cache lies in the same direction as truth (it can only be empty or correct), never against it. The monotonic-cache evolution planned in #296 Phase D tightens this further: the cache is keyed by wtxid, holds immutable bytes, and can only progress toward database truth via `proof_arrived` enrichment. Cold restart → empty cache → wallet rebuilds it from DB on first access.
+`Engine::HydratedTxCache` (#269, rekeyed by wtxid in #296 Phase D) is a performance projection — a wtxid-keyed cache of raw-transaction and merkle-path bytes, so the broadcast EF build skips the `resolve_inputs_for_signing` JOIN and the Hydrator's ancestry walk skips proof-store reads. The cache lies in the same direction as truth (it can only be empty or correct), never against it: entries are immutable bytes, and they only progress toward database truth — a merkle path is filled in when a proof arrives (through the Hydrator's `proof_arrived`, an eager broadcast-response proof, or a producer's hint over `BSV_WALLET_HINTS_SOCKET`; see [Daemon](../concepts/daemon.md)) and never cleared. Cold restart → empty cache → the wallet refills it from the database on first access.
 
 The same pattern applies to any future projection (block header cache, spendable set count, fee model state). Build *over* the schema; never *beside* it.
 

@@ -50,7 +50,7 @@ The complement is on the recording side: `record_broadcast_result` **writes the 
 
 Every place the wallet consults the outside world to decide whether to trust something, it defaults to *distrust* on error:
 
-- **SPV** (in `Engine::BeefImporter`) raises rather than admitting an unverified payment, and raises outright if no chain tracker is configured.
+- **SPV** (in `Engine::BeefInternalizer`) raises rather than admitting an unverified payment, and raises outright if no chain tracker is configured.
 - **The chain tracker** returns `false` from `valid_root_for_height?` when a header lookup fails, rather than raising or guessing — an unprovable block is treated as invalid.
 - **Egress validation** — `Engine::Transmission#transmit` runs `Hydrator#validate_for_handoff!` strictly over the BEEF it is about to ship, before the row is recorded. The wallet refuses to ship a BEEF it cannot itself verify against its own stored proofs, raising `EgressBeefInvalidError` *before* the wire bytes ever leave the process. See [Transactions (reference) — Egress validation](../reference/transactions.md).
 
