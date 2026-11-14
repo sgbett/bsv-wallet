@@ -120,7 +120,7 @@ The stack now contains TRUE (0x01) therefore the TX is valid.
 | 186 | 1 | `ac` | . OP_CHECKSIG |
 | 187 | 4 | `d3740e00` | locktime (947,411) |
 
-**191 bytes total.** Used in test suite as `DUMMY_RAW_TX` — parseable by `Transaction.from_binary` and satisfies the `tx_proofs.raw_tx >= 20` constraint.
+**191 bytes total.** Used in test suite as `DUMMY_RAW_TX` — parseable by `Transaction::Tx.from_binary` and satisfies the `tx_proofs.raw_tx >= 20` constraint.
 
 ## DER signature size distribution
 

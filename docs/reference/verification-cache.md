@@ -49,7 +49,7 @@ Three columns on `tx_proofs`, all NULL-default, coherent (all-or-none):
 | `verified_via` | `verification_source` (enum) | How the trust was established — see below |
 | `verifier_version` | `INTEGER ≥ 1` | Semantic version of the verifier that wrote it |
 
-A `verification_state_coherent` CHECK enforces that the three move together. `verifier_version >= 1` is the monotonicity floor. A covering index `(wtxid) INCLUDE (verified_via, verifier_version) WHERE verified_at IS NOT NULL` supports the batched read path; a partial index `(block_id) WHERE verified_at IS NOT NULL` supports the reorg reaper.
+A `verification_state_coherent` CHECK enforces that the three move together. `verifier_version >= 1` is the monotonicity floor. Two indexes support the cache: `idx_tx_proofs_verified_covering`, on `(wtxid) INCLUDE (verified_via, verifier_version) WHERE verified_at IS NOT NULL` (Postgres only), for the batched read path; and `idx_tx_proofs_verified_by_block`, a partial index on `(block_id) WHERE verified_at IS NOT NULL AND block_id IS NOT NULL`, added for the active re-org reaper, which isn't built yet (see [Re-org](#1-re-org)).
 
 ## `verified_via` — three trust levels
 
@@ -57,13 +57,13 @@ A `verification_state_coherent` CHECK enforces that the three move together. `ve
 |---|---|---|
 | `'self_built'` | Wallet constructed this tx; trust comes from the builder, not from `Tx#verify` | **No** |
 | `'spv'` | Passed `Tx#verify(chain_tracker:)` end-to-end — the strongest local trust | Yes |
-| `'broadcast_ack'` | ARC accepted the tx for relay/mining; not yet a network-wide fact (may be dropped, replaced, or fail to mine) | **No** (see below) |
+| `'broadcast_ack'` | ARC accepted the tx for relay/mining; not yet a network-wide fact (may be dropped, replaced, or fail to mine). Reserved: nothing writes it yet (#516 Sub 8) | **No** (see below) |
 
 **`self_built` is excluded from the short-circuit trust set on purpose.** The wallet's sign path signs but does not run `Tx#verify_input` on what it just signed. `self_built` asserts construction provenance, not signature validity. A signer bug (or drift between the sign and verify sighash preimages) would cache a false verification claim if `self_built` were trusted. Conservative default; the async upgrade path (`self_built` → `spv` via a background worker) is tracked as HLR #517.
 
 **`broadcast_ack` is currently excluded from the short-circuit trust set** — HLR #516 synthesis originally included it, but the Sub 6 anchor-liveness pass joins `blocks` on `block_id`, and a `broadcast_ack` row (ARC accepted, not yet mined) carries `block_id = NULL` until proof acquisition upgrades it. Trusting an unanchored row without a liveness mechanism would leave orphaned or RBF'd broadcast_ack ancestors as permanent trust sources — a phantom-balance vector. Re-admitting `broadcast_ack` to the trust set is deferred until it ships with a liveness design (proof-acquisition escalation, TTL, or equivalent). Decision recorded on PR #537 (Sub 5 read-path, closes HLR #522) — see the white-hat I1 discussion in the review thread.
 
-Lifecycle: `self_built` → (broadcast) → `broadcast_ack` → (proof arrives, verify re-runs) → `spv`. Downstream consumers can distinguish "wallet made this" from "network confirmed this" from "verify walked this".
+The intended lifecycle is `self_built` → (broadcast) → `broadcast_ack` → (proof arrives, verify re-runs) → `spv`, so downstream consumers can distinguish "wallet made this" from "network confirmed this" from "verify walked this". What's built today is narrower: the sign paths write `self_built`, and an incoming BEEF's verify walk writes `spv` for every wtxid it walked. A proof arriving for the wallet's own transaction doesn't re-run verification, so a `self_built` row becomes `spv` only if the same wtxid is later walked in an incoming BEEF, until the #517 worker exists.
 
 ## Invalidation — two events
 
@@ -71,14 +71,13 @@ Verification is permanent for the lifetime of the tx it concerns. Two events inv
 
 ### 1. Re-org
 
-A tx anchored (via `merkle_path`) to a block that re-orgs out has stale `verified_at`. The wallet uses two invalidation paths:
+A tx anchored (via `merkle_path`) to a block that re-orgs out has stale `verified_at`. One invalidation path is built:
 
-- **Lazy anchor check** (correctness baseline). On cache hit for a merkle-anchored tx, verify anchor liveness against `chain_tracker`. Mismatch → clear the row's verification fields, treat as miss, re-verify. Free for unproven txs (no anchor).
-- **Active reaper** (walletd only). `chain_tracker` emits reorg events; the reaper batch-updates affected rows. Removes the per-hit lazy overhead for daemon workloads.
+- **Lazy anchor check** (the correctness baseline). Before each incoming BEEF's verify walk, `BeefInternalizer` asks `Engine::AnchorLivenessCache#filter_trusted` for the trust set. It reads the block heights of the BEEF's already-verified, anchored wtxids, asks the chain tracker for the current root at each height (one batched `known_roots_for_heights` call; the trusted-service tracker refetches each root rather than reading its `blocks` cache), clears every row whose anchor no longer matches along with its structural descendants, and only then reads the trust set. Cleared rows are walked again by `Tx#verify`. Free for unproven txs (no anchor). It runs only where the chain tracker supports `known_roots_for_heights` and isn't `TrustedSelfChainTracker`; otherwise the trust set is empty and every walk is a full one.
 
-Both required: lazy is the fail-safe (works for CLI subprocess use); active is the daemon optimisation. They cooperate.
+The second path in ADR-033's design, an **active reaper** in `walletd` consuming re-org events from the chain tracker, isn't built: #516 Sub 7 was deferred. Until it is, a row anchored in a re-org'd block keeps its mark until an incoming BEEF next references it, which is the only time the mark is read, and the lazy check runs first.
 
-**Transitive invalidation is mandatory.** If ancestor Y (with a merkle_path) re-orgs out, descendants whose `'spv'` state depended on Y's proof are also stale — an unproven descendant Z whose script verification succeeded *because* the chain of trust anchored on Y is broken when Y re-orgs. Both paths must clear the descent graph, not just the directly-anchored row.
+**Transitive invalidation is mandatory.** If ancestor Y (with a merkle_path) re-orgs out, descendants whose `'spv'` state depended on Y's proof are also stale — an unproven descendant Z whose script verification succeeded *because* the chain of trust anchored on Y is broken when Y re-orgs. The anchor check clears the descent graph, not just the directly-anchored row, and a future reaper must too.
 
 #### The anchor-liveness invariant (HLR #516 Sub 6.1)
 
@@ -87,7 +86,7 @@ The anchor key is `(block_height, computed_root)` in **wire-order binary bytes**
 - **Computed root, not stored bytes.** The persisted `tx_proofs.merkle_path` is folded through the SDK's `MerklePath#compute_root` before comparison. BUMP-encoding variability closes at that computed root — offset-0 leaf duplicates, unbalanced-tree padding, and hash-side ordering all produce the same 32-byte root even when the on-wire BUMPs differ. Two BUMPs for the same wtxid with matching `(height, computed_root)` invalidate equivalently; two BUMPs for the same wtxid at the same height whose computed roots disagree both clear on the mismatched-hash branch.
 - **Wire-order binary throughout.** Both sides of the comparison are the raw 32-byte SHA256d output. Hex conversion happens only at the debug-log boundary (`computed_root`/`current_root` in the `[Store#invalidate_stale_anchors!]` line), never in the predicate. This matches the `wtxid`/`blocks.merkle_root` convention documented in the top-level `CLAUDE.md`.
 
-**`chain_tracker` unreachable ≠ mismatch.** A network error, an unknown height, or an empty tracker returns `nil` from `known_roots_for_heights` — the map entry is preserved for that height but marked "unknown". `Store#invalidate_stale_anchors!` treats `nil` values as a no-op and does not clear the row. This is a correctness invariant, not a nicety: a transient outage must not decay the trust set into an unrecoverable state.
+**`chain_tracker` unreachable ≠ mismatch.** A network error, an unknown height, or an empty tracker returns `nil` from `known_roots_for_heights` — the map entry is preserved for that height but marked "unknown". `Store#invalidate_stale_anchors!` treats a `nil` root as unknown and keeps every row at that height it can compute a root for; it still clears a verified row whose `merkle_path` is missing or unparseable, since that row can't be anchor-checked under any tracker state. Keeping parseable rows is a correctness invariant, not a nicety: a transient outage must not decay the trust set into an unrecoverable state.
 
 **`Store#find_or_create_block` is append-or-reject.** A `save_proof` call whose supplied `(height, merkle_root)` disagrees with an existing `blocks` row at the same height raises `CompetingBlockHeaderError` rather than silently attaching to the stale row. Re-org handling is delegated to the anchor-liveness path — every invalidation goes through `invalidate_stale_anchors!`, never through a silent block-row swap.
 
@@ -95,12 +94,12 @@ The anchor key is `(block_height, computed_root)` in **wire-order binary bytes**
 
 Once `invalidate_stale_anchors!` returns the set of action_ids whose anchor rows have just been cleared, every structural descendant of those actions must be coarse-cleared too. A descendant Z whose `'spv'` state came from an SPV walk running through the re-org'd ancestor's proof is stale even though its own row was never anchored.
 
-The canonical implementation lives at `Store#descendant_action_ids_of(action_ids:, max_depth: 100)`. It is a recursive CTE (Sequel `Dataset#with_recursive`) walking the edge `inputs.output_id → outputs.id → outputs.action_id` transitively.
+The canonical implementation lives at `Store#descendant_action_ids_of(action_ids:, max_depth: 100)`. It is a recursive CTE (Sequel `Dataset#with_recursive`) walking from parent to child, `outputs.action_id` (parent) → `outputs.id` = `inputs.output_id` → `inputs.action_id` (child), transitively.
 
 - **Coarse-clear rule.** Every structural descendant is walked *regardless* of whether that row's SPV walk went through the invalidated anchor. Inferring the answer requires replaying `Tx#verify`, which defeats the cache. The asymmetry favours coarse: wasted re-verify on next reference is safe; missed clear is a silent double-spend acceptance window. The cryptography reviewer vetoed any "walked-only" heuristic on this basis.
-- **`verified_via IS NOT NULL` UPDATE gate.** The descent WALK is unbounded on the read side (structural descendants can be poisoned by an adversary grafting synthetic rows). The UPDATE — done by the shared primitive `Store#invalidate_verification(action_ids:)` — is bounded to rows carrying a trust mark. Rows without `verified_via` have no cache state to clear and would trip the coherent CHECK. This is the security specialist's DoS defence stitched onto the cryptography reviewer's coarse-clear rule.
+- **`verified_via IS NOT NULL` UPDATE gate.** The descent WALK is unbounded on the read side (structural descendants can be poisoned by an adversary grafting synthetic rows). The UPDATE — done by the shared Store method `Store#invalidate_verification(action_ids:)` — is bounded to rows carrying a trust mark. Rows without `verified_via` have no cache state to clear and would trip the coherent CHECK. This is the security specialist's DoS defence stitched onto the cryptography reviewer's coarse-clear rule.
 - **Depth cap `D = 100`.** Natural coinbase-maturity ceiling — anything beyond 100 hops is definitionally past every re-org's reach. Also the cycle guard: contrived cyclic input graphs terminate at the cap, and `Set.new(...)` collapses duplicate rows on return.
-- **Atomic combined invalidation.** `Engine::AnchorLivenessCache#filter_trusted` runs the anchor UPDATE and the descent UPDATE inside one `db.transaction`. Sequel nests transactions via savepoints (the spec DB wrapper uses `auto_savepoint: true`); the invariant we rely on is that nested `db.transaction` blocks do NOT introduce extra commit boundaries, so the caller (Sub 5 read path, forthcoming) can wrap the whole `filter_trusted` invocation in its own transaction and a failure mid-invalidation rolls back both.
+- **Atomic combined invalidation.** `Engine::AnchorLivenessCache#filter_trusted` runs the anchor UPDATE, the descent UPDATE and the trust-set read inside one `db.transaction`, so a failure mid-invalidation rolls back both UPDATEs and the returned set reflects exactly what this walk committed. Nested `db.transaction` blocks join the outer transaction (or become savepoints, as under the spec suite's `auto_savepoint: true`) rather than committing on their own, so a caller could wrap `filter_trusted` in a transaction of its own. The Sub 5 read path, `BeefInternalizer#internalize`, calls it before opening its ingress transaction, so the invalidation commits on its own.
 
 The Option (C) alternative — a persistent descent-metadata table — is deferred (see ADR-033). The recursive CTE is the load-bearing implementation; Option (C) becomes worth pursuing only if measurements indicate the walk is a hot-path cost driver.
 
@@ -108,7 +107,7 @@ The Option (C) alternative — a persistent descent-metadata table — is deferr
 
 `BSV::Wallet::VERIFIER_VERSION` is a compile-time constant. It bumps when verification semantics change. A row with `verifier_version < current` is treated as a cache miss and re-verified. Existing rows are silently upgraded on first reference; no migration script needed.
 
-**Downgrade protection.** A rolled-back binary would honour higher-version rows under weaker logic. Prevention: on boot, `MAX(tx_proofs.verifier_version)` is compared against `BSV::Wallet::VERIFIER_VERSION`; if the code is older, boot refuses. The MAX aggregate uses the covering index the read path also uses.
+**Downgrade protection.** A rolled-back binary would honour higher-version rows under weaker logic. Prevention: on boot, `MAX(tx_proofs.verifier_version)` is compared against `BSV::Wallet::VERIFIER_VERSION`; if the code is older, boot refuses (`Store#verify_verifier_version!`, called by `CLI.boot` and `bin/walletd`). The query filters on `verified_at IS NOT NULL` to match the covering index's partial predicate, but `verifier_version` is only an INCLUDE column there, so the index can't seek to the maximum: on Postgres the MAX is at best an index-only scan over every verified row, once per boot.
 
 ## Bumping `verifier_version` — checklist
 
@@ -177,9 +176,15 @@ Debug log to grep:
 
 The `computed_root` and `current_root` fields are hex-encoded at the log boundary; the underlying comparison is wire-order 32-byte binary. `computed_root` is derived from the persisted `merkle_path` via `MerklePath#compute_root` (BUMP-encoding variability closes there); `current_root` is what `chain_tracker.known_roots_for_heights` reports for the same height. If the two roots differ, this is expected re-org behaviour — the next verify walk will re-anchor if the tracker has moved on.
 
+A verified row whose `merkle_path` is missing or can't be parsed is cleared on the same pass, whatever the tracker says, and logged at `warn` instead:
+
+```
+[Store#invalidate_stale_anchors!] wtxid=<dtxid> cause=missing_merkle_path|unparseable_merkle_path height=<H>
+```
+
 ### 2. Transitive descent (Sub 6.2)
 
-The wtxid's own row was never anchor-mismatched, but a *structural ancestor* of it was. The descent walk (recursive CTE at `Store#descendant_action_ids_of(action_ids:, max_depth: 100)`) unified the ancestor's `action_id` with every downstream `action_id` reachable via `inputs.output_id → outputs.action_id`; the shared clearing primitive `Store#invalidate_verification(action_ids:)` cleared the descendant row's verification columns, gated on `verified_via IS NOT NULL`.
+The wtxid's own row was never anchor-mismatched, but a *structural ancestor* of it was. The descent walk (recursive CTE at `Store#descendant_action_ids_of(action_ids:, max_depth: 100)`) unified the ancestor's `action_id` with every downstream `action_id` reachable via `outputs.id` = `inputs.output_id` → `inputs.action_id`; the shared clearing method `Store#invalidate_verification(action_ids:)` cleared the descendant row's verification columns, gated on `verified_via IS NOT NULL`.
 
 Debug log to grep:
 

@@ -40,14 +40,7 @@ lock inputs   ->   fund        ->   broadcast   ->   promote outputs
 
 ## Funding: fees and change
 
-Fees default to **100 sat/KB** (`SatoshisPerKilobyte`, configurable via
-`BSV_WALLET_FEE_RATE_SATS_PER_KB`). The funding loop is careful for one
-specific reason: the SDK's `Transaction#fee` silently drops all change when
-funds are insufficient, which would mask a shortfall. So the wallet computes
-the fee against the *templated* transaction itself and compares it to
-`total_input_satoshis - sum(caller_outputs)`. Only when the surplus exceeds
-the required fee does it distribute change — randomly across change outputs
-for privacy — and any change output whose share rounds to zero is dropped.
+Fees default to **100 sat/KB** (`SatoshisPerKilobyte`, configurable via `BSV_WALLET_FEE_RATE_SATS_PER_KB`). The funding loop is careful for one specific reason: the SDK's `Transaction::Tx#fee` silently drops all change when funds are insufficient, which would mask a shortfall. So the wallet computes the fee against the *templated* transaction itself and compares it to `total_input_satoshis - sum(caller_outputs)`. Only when the surplus exceeds the required fee does it distribute change — randomly across change outputs for privacy — and any change output whose share rounds to zero is dropped.
 
 The build order matters: template -> fee check -> distribute change ->
 shuffle -> sign. Templates precede the fee because size estimation needs
@@ -110,14 +103,9 @@ crash leaves a *recoverable* intermediate state:
 - Output promotion happens in the **same transaction** as recording the
   broadcast result, closing the gap where a process could die between
   recording status and promoting.
-- A reaper reclaims abandoned signed actions — but only those with no
-  promoted output. Anything that reached the canonical UTXO set is
-  protected.
+- A reaper in `walletd` reclaims abandoned actions that never got as far as a broadcast: unsigned ones older than the reap threshold, with no `promotions` row and no `broadcasts` row. It deletes the action and releases its locked inputs. A signed action queued for broadcast, or anything that reached the canonical UTXO set, is never reaped.
 
 ## SPV is asymmetric
 
-- **Incoming** transactions get full SPV verification:
-  `Transaction#verify(chain_tracker:)` checks scripts, merkle proofs, and
-  fee adequacy. A chain tracker is required.
-- **Outgoing** BEEF is built from the wallet's own proof store with no
-  verification — verification is for incoming, untrusted data only.
+- **Incoming** transactions get full SPV verification: `Transaction::Tx#verify(chain_tracker:)` checks scripts, merkle proofs, and that no transaction's outputs exceed its inputs. A chain tracker is required.
+- **Outgoing** BEEF is built from the wallet's own proof store and checked only for structural completeness before hand-off (`Hydrator#validate_for_handoff!`, every input resolving to a proven ancestor). Header validity isn't re-checked: full verification is for incoming, untrusted data.
