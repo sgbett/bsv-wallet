@@ -45,7 +45,7 @@ Each is one `@db.transaction` — all-or-nothing.
 
 ## Send paths — `createAction`
 
-### Deferred / signable (`sign_and_process: false`)
+### Deferred / signable (`defer_signing: true`)
 
 `create_action` → `lock_inputs` → `stage_action` → `save_proof` → return signable handle. Promotion happens later via `signAction`.
 

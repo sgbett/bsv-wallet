@@ -24,9 +24,9 @@ Signing produces the `wtxid` and the raw transaction bytes; until that happens t
 
 ## The three broadcast intents
 
-Every action carries a `broadcast_intent`, chosen by `map_broadcast_intent` from two flags passed in by `BRC100#create_action`:
+Every action carries a `broadcast_intent`, stated by the caller: the Engine primitives take a required `broadcast_intent:` (`:inline`, `:delayed` or `:none`) with no default. `BRC100#create_action` derives it from BRC-100's `noSend` and `acceptDelayedBroadcast` flags with `map_broadcast_intent`:
 
-<!-- generated from gem/bsv-wallet/lib/bsv/wallet/engine.rb#map_broadcast_intent -->
+<!-- generated from gem/bsv-wallet/lib/bsv/wallet/brc100.rb#map_broadcast_intent -->
 ```ruby
 def map_broadcast_intent(no_send, accept_delayed_broadcast)
   if no_send then :none
@@ -38,9 +38,9 @@ end
 
 | Intent | Triggered by | What happens | Phase 4 timing |
 |--------|--------------|--------------|----------------|
-| **`:none`** (internal) | `no_send: true` | The transaction is never sent to ARC. It produces canonical wallet state directly. Always `:none`: incoming BEEF (`internalize_action`), WBIKD pre-fund locks. Opt-in `:none` (when the caller passes `no_send: true`): `send_payment`, `import_utxo`, `import_wallet` — typically for peer-to-peer handoff instead of broadcast. | **Synchronous**, inside `build_action`. |
-| **`:delayed`** | `no_send: false`, `accept_delayed_broadcast: true` (the default send path) | The action is queued. The daemon discovers it (`broadcast_at IS NULL`), broadcasts it via `Network::Broadcaster`, and later resolves its status. | Deferred, on broadcast acceptance. |
-| **`:inline`** | `no_send: false`, `accept_delayed_broadcast: false` | The transaction is broadcast synchronously within the call (the same `Engine::Broadcast` worker, reached via the REP socket), then promoted. | Synchronous, after the broadcast returns. |
+| **`:none`** (internal) | `broadcast_intent: :none` (BRC-100: `noSend: true`) | The transaction is never sent to ARC. It produces canonical wallet state directly. Always `:none`: incoming BEEF (`internalize_action`), WBIKD pre-fund locks. Opt-in `:none` (when the caller states it): `send_payment`, `import_utxo`, `import_wallet` — typically for peer-to-peer handoff instead of broadcast. | **Synchronous**, inside `build_action`. |
+| **`:delayed`** | `broadcast_intent: :delayed` (BRC-100: `acceptDelayedBroadcast: true`, its default) | The action is queued. The daemon discovers it (`broadcast_at IS NULL`), broadcasts it via `Network::Broadcaster`, and later resolves its status. | Deferred, on broadcast acceptance. |
+| **`:inline`** | `broadcast_intent: :inline` (BRC-100: `acceptDelayedBroadcast: false`) | The transaction is broadcast synchronously within the call (the same `Engine::Broadcast` worker, reached via the REP socket), then promoted. | Synchronous, after the broadcast returns. |
 
 The distinction between **internal** (`:none`) and **broadcast** (`:delayed` / `:inline`) actions runs deep. Internal actions are wallet truth by design — there is no network to disagree with them — and the database physically forbids rejecting or deleting them once promoted. Broadcast actions are *provisional* until the network confirms them, which is where speculative promotion comes in.
 
@@ -78,7 +78,7 @@ This is the throughput-versus-safety trade made explicit: the wallet is eager to
 
 `build_action` can return a *signable transaction* handle instead of a finished one, by separating creation from signing. The caller later completes it with `sign_action(spends:, reference:)`. This supports flows where signing authority is held elsewhere, or where inputs must be reviewed before committing.
 
-Combining deferred signing with `no_send: true` is explicitly **not** implemented in the base wallet. The `noSend × sendWith` chained-send combination — building a chain of transactions locally and flushing the batch atomically — is deferred to **#192** (see [`.architecture/reviews/20260619_noSend-sendWith-design-notes.md`](../../.architecture/reviews/20260619_noSend-sendWith-design-notes.md) for the design notes). It requires a `batches` entity in the schema with constraints that enforce "a batch cannot partially succeed"; bringing it back without that structural backing would reintroduce the drift the strict 4-phase design was built to prevent.
+Combining deferred signing with `broadcast_intent: :none` (BRC-100's `noSend`) is explicitly **not** implemented in the base wallet. The `noSend × sendWith` chained-send combination — building a chain of transactions locally and flushing the batch atomically — is deferred to **#192** (see [`.architecture/reviews/20260619_noSend-sendWith-design-notes.md`](../../.architecture/reviews/20260619_noSend-sendWith-design-notes.md) for the design notes). It requires a `batches` entity in the schema with constraints that enforce "a batch cannot partially succeed"; bringing it back without that structural backing would reintroduce the drift the strict 4-phase design was built to prevent.
 
 ## Receive alternatives
 

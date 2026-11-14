@@ -67,7 +67,7 @@ Change is paid to **BRC-42 self-derived** P2PKH addresses (`protocol_id: [2, pre
 
 ## Consolidation
 
-Over time a spending wallet accumulates dust — many small outputs that are expensive to spend. `consolidate_step(target_inputs: 20)` folds the dustier tail back together: it consumes the `target_inputs` smallest spendable outputs plus the single largest as an anchor, and produces one BRC-42 self-derived output. It is a `no_send` (internal) action, so it commits synchronously without a broadcast. The `bin/consolidate` tool loops it until the wallet holds fewer than `target_inputs` spendable outputs.
+Over time a spending wallet accumulates dust — many small outputs that are expensive to spend. `consolidate_step(target_inputs: 20, broadcast_intent: …)` folds the dustier tail back together: it consumes the `target_inputs` smallest spendable outputs plus the single largest as an anchor, and produces one BRC-42 self-derived output. The CLI queues it for `walletd` to broadcast (`:delayed`), or with `--no-send` commits it synchronously as an internal `:none` action. The `bin/consolidate` tool loops it until the wallet holds fewer than `target_inputs` spendable outputs.
 
 This is the inverse of change sizing: sizing fans a wallet *out* toward a healthy count; consolidation pulls a *fragmented* wallet back in.
 

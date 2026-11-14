@@ -11,18 +11,20 @@ detail and the lower-level BRC-100 methods are in the
 [API reference](../reference/api/index.md).
 
 {: .warning }
-> **`no_send` defaults to `false`**
+> **Broadcast intent is required**
 >
-> Every method here broadcasts by default (matching BRC-100). Pass
-> `no_send: true` to build and sign without publishing, returning a BEEF
-> envelope for peer-to-peer handoff. See [Safety Rules](safety-rules.md).
+> `send_payment`, `import_wallet`, `consolidate_step` and `sweep` take
+> `broadcast_intent:` with no default. Pass `:delayed` or `:inline` to
+> broadcast, or `:none` to build and sign without publishing, returning a
+> BEEF envelope for peer-to-peer handoff. See [Safety Rules](safety-rules.md).
 
 ## Send a payment
 
 ```ruby
 engine.send_payment(
-  recipient: '02a1b2...',   # 66-char compressed pubkey hex (02/03 prefix)
-  satoshis:  5_000
+  recipient:        '02a1b2...',   # 66-char compressed pubkey hex (02/03 prefix)
+  satoshis:         5_000,
+  broadcast_intent: :delayed
 )
 # => {
 #      txid:                "<32-byte binary wtxid>",
@@ -44,8 +46,8 @@ result[:txid].to_dtxid`.
 `send_payment` generates BRC-42 derivation parameters, derives a P2PKH locking
 script for the recipient, and delegates to `build_action`, whose funding loop
 handles UTXO selection, fees, and change (see
-[Broadcast Lifecycle](broadcast-lifecycle.md)). With `no_send: true` the
-returned BEEF is for peer-to-peer handoff — see
+[Broadcast Lifecycle](broadcast-lifecycle.md)). With
+`broadcast_intent: :none` the returned BEEF is for peer-to-peer handoff — see
 [Deliver to a peer](#deliver-to-a-peer) below.
 
 ## Bootstrap: getting the wallet funded
@@ -61,7 +63,7 @@ A new wallet owns nothing on chain. Funding is a two-step bootstrap:
 2. Scan that address and ingest its UTXOs:
 
    ```ruby
-   engine.import_wallet
+   engine.import_wallet(broadcast_intent: :delayed)
    # => { imported: <count>, utxos: [...] }
    ```
 
@@ -91,11 +93,11 @@ A single transaction cannot consume an unbounded number of inputs, so reducing
 a fragmented UTXO set is iterative:
 
 ```ruby
-engine.consolidate_step(target_inputs: 20)
+engine.consolidate_step(target_inputs: 20, broadcast_intent: :delayed)
 # picks the smallest N outputs plus the largest as a fee anchor,
 # self-pays with a single change output
 
-engine.sweep(recipient: '02a1b2...')        # one consolidation pass to a recipient
+engine.sweep(recipient: '02a1b2...', broadcast_intent: :delayed) # one consolidation pass to a recipient
 engine.sweep_to_root(target_inputs: 20)     # loop consolidate_step, then sweep to root (recipient defaults to self — the wallet's own identity)
 engine.estimate_sweep_fee(input_count:, recipient_script:) # fee preview
 ```
@@ -116,7 +118,7 @@ point to the rejection cascade described in
 Broadcasting ships a transaction to the miner network for consensus.
 *Transmit* is the complementary path: it ships a signed action's Atomic BEEF
 to a **named peer** for SPV — the BEEF-handoff destination for a
-`no_send: true` action.
+`broadcast_intent: :none` action.
 
 ```ruby
 engine.transmission.transmit(
