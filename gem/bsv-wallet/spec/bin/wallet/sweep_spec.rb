@@ -56,18 +56,23 @@ RSpec.describe BSV::Wallet::CLI::Commands::Sweep do
       allow(engine).to receive(:sweep).and_return(wtxid: fake_wtxid)
     end
 
-    it 'calls engine.sweep with the validated recipient (engine default broadcast)' do
+    it 'calls engine.sweep with the validated recipient and broadcast intent :delayed by default' do
       command.call(["--to=#{valid_pubkey}"])
       expect(engine).to have_received(:sweep).with(
-        recipient: valid_pubkey, no_send: false
+        recipient: valid_pubkey, broadcast_intent: :delayed
       )
     end
 
-    it '--no-send maps to no_send: true' do
+    it '--no-send maps to broadcast intent :none' do
       command.call(["--to=#{valid_pubkey}", '--no-send'])
       expect(engine).to have_received(:sweep).with(
-        recipient: valid_pubkey, no_send: true
+        recipient: valid_pubkey, broadcast_intent: :none
       )
+    end
+
+    it 'reports the broadcast intent in the human summary' do
+      expect { command.call(["--to=#{valid_pubkey}", '--no-send']) }
+        .to output(/broadcast: none \(no broadcast\)/).to_stderr
     end
 
     it 'reports the dtxid (wire wtxid reversed to display order)' do

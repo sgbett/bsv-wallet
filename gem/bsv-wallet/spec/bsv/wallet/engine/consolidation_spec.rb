@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Unit specs for Engine#consolidate_step and Engine#sweep — the no_send
+# Unit specs for Engine#consolidate_step and Engine#sweep — the
 # consolidation primitives that #130 wires into a dry-run + #126 wires
 # into the on-chain sweep-back.
 
@@ -47,7 +47,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         # HLR #467 / ADR-026 / ADR-027: +consolidate_step+ is wallet-vocab
         # porcelain — calls +#build_action+ directly, returns wallet vocab
         # (+:wtxid+ / +:atomic_beef+).
-        result = engine_with_keys.consolidate_step(target_inputs: 20)
+        result = engine_with_keys.consolidate_step(target_inputs: 20, broadcast_intent: :delayed)
         expect(result).not_to be_nil
         expect(result[:wtxid]).to be_a(String)
 
@@ -55,7 +55,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         input_rows = BSV::Wallet::Store::Models::Input.where(action_id: action[:id]).all
         expect(input_rows.length).to eq(21)
 
-        # One own-change output (BRC-42 self-derived) — internalized via no_send.
+        # One own-change output (BRC-42 self-derived).
         change_rows = BSV::Wallet::Store::Models::Output.where(action_id: action[:id]).all
         expect(change_rows.length).to eq(1)
         expect(change_rows.first.derivation_prefix).not_to be_nil
@@ -66,13 +66,13 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       before { fund_with_outputs(satoshis: 5_000, count: 5) }
 
       it 'returns nil (signals loop termination)' do
-        expect(engine_with_keys.consolidate_step(target_inputs: 20)).to be_nil
+        expect(engine_with_keys.consolidate_step(target_inputs: 20, broadcast_intent: :delayed)).to be_nil
       end
     end
 
     context 'without a key_deriver' do
       it 'raises (BRC-42 derivation requires the wallet to be authenticated)' do
-        expect { engine.consolidate_step(target_inputs: 20) }
+        expect { engine.consolidate_step(target_inputs: 20, broadcast_intent: :delayed) }
           .to raise_error(BSV::Wallet::Error, /key deriver/)
       end
     end
@@ -88,7 +88,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
         # HLR #467 / ADR-026 / ADR-027: +sweep+ is wallet-vocab porcelain —
         # calls +#build_action+ directly, returns wallet vocab (+:wtxid+ /
         # +:atomic_beef+).
-        result = engine_with_keys.sweep(recipient: recipient)
+        result = engine_with_keys.sweep(recipient: recipient, broadcast_intent: :delayed)
         expect(result).not_to be_nil
         expect(result[:wtxid]).to be_a(String)
 
@@ -129,7 +129,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       it 'is "spendable" when the recipient is the wallet itself (self-sweep)' do
         allow(engine_with_keys).to receive(:build_action).and_return(wtxid: 'fake', atomic_beef: 'fake')
 
-        engine_with_keys.sweep(recipient: key_deriver.identity_key)
+        engine_with_keys.sweep(recipient: key_deriver.identity_key, broadcast_intent: :delayed)
 
         expect(engine_with_keys).to have_received(:build_action).with(
           hash_including(outputs: array_including(hash_including(spendable_intent: 'spendable')))
@@ -139,7 +139,7 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       it 'is "none" when the recipient is a third party' do
         allow(engine_with_keys).to receive(:build_action).and_return(wtxid: 'fake', atomic_beef: 'fake')
 
-        engine_with_keys.sweep(recipient: recipient) # freshly-generated, not self
+        engine_with_keys.sweep(recipient: recipient, broadcast_intent: :delayed) # freshly-generated, not self
 
         expect(engine_with_keys).to have_received(:build_action).with(
           hash_including(outputs: array_including(hash_including(spendable_intent: 'none')))
@@ -149,20 +149,20 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
 
     context 'when the wallet has no spendable outputs' do
       it 'returns nil' do
-        expect(engine_with_keys.sweep(recipient: recipient)).to be_nil
+        expect(engine_with_keys.sweep(recipient: recipient, broadcast_intent: :delayed)).to be_nil
       end
     end
 
     context 'without a key_deriver' do
       it 'raises' do
-        expect { engine.sweep(recipient: recipient) }
+        expect { engine.sweep(recipient: recipient, broadcast_intent: :delayed) }
           .to raise_error(BSV::Wallet::Error, /key deriver/)
       end
     end
   end
 
   # Orchestration over consolidate_step + sweep. Both collaborators are
-  # exercised on-chain (no_send: false) here, so we stub them and assert the
+  # exercised on-chain (broadcast intent :inline) here, so we stub them and assert the
   # wiring rather than re-broadcasting in a unit spec.
   describe '#sweep_to_root' do
     it 'loops consolidate_step until nil, then sweeps to the root P2PKH' do
@@ -175,9 +175,9 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
       result = engine_with_keys.sweep_to_root
 
       expect(engine_with_keys).to have_received(:consolidate_step)
-        .with(target_inputs: 20, no_send: false, accept_delayed_broadcast: false).exactly(3).times
+        .with(target_inputs: 20, broadcast_intent: :inline).exactly(3).times
       expect(engine_with_keys).to have_received(:sweep)
-        .with(recipient: key_deriver.identity_key, no_send: false, accept_delayed_broadcast: false)
+        .with(recipient: key_deriver.identity_key, broadcast_intent: :inline)
       expect(result).to eq(consolidation_steps: 2, sweep: { wtxid: 'z' })
     end
 

@@ -17,7 +17,8 @@ module BSV
         #
         # Engine picks +N+ smallest + 1 largest (dedupe-aware) as inputs,
         # produces 1 change output. Minimum +N+ is 2 (need at least two
-        # outputs to consolidate); default 20.
+        # outputs to consolidate); default 20. The consolidating action is
+        # queued for +walletd+ to broadcast (+delayed+) unless +--no-send+.
         #
         # Returns +nil+ from engine when the pool has fewer than +N+
         # spendable outputs — reported here as "pool too small" without
@@ -57,12 +58,9 @@ module BSV
                     "consolidate --target-inputs must be >= #{MIN_TARGET_INPUTS} (got #{target_inputs})"
             end
 
-            no_send = @options[:no_send] || false
+            broadcast_intent = @options[:no_send] ? :none : :delayed
             engine = @ctx[:engine]
-            # See sweep.rb for the +accept_delayed_broadcast+ rationale —
-            # engine default is +true+ (queue), ignored when +no_send+
-            # is true; pass-through is cleaner than +!no_send+.
-            result = engine.consolidate_step(target_inputs: target_inputs, no_send: no_send)
+            result = engine.consolidate_step(target_inputs: target_inputs, broadcast_intent: broadcast_intent)
 
             if result.nil?
               emit_human "consolidate: pool too small (need #{target_inputs}+ spendable outputs)"
@@ -71,7 +69,7 @@ module BSV
 
             dtxid = result[:wtxid].reverse.unpack1('H*')
             emit_human "consolidate:  #{target_inputs} inputs → 1 output"
-            emit_human "no_send:      #{no_send ? 'yes' : 'no'}"
+            emit_human "broadcast:    #{BROADCAST_LABELS.fetch(broadcast_intent)}"
             emit_human "dtxid:        #{dtxid}"
             0
           end

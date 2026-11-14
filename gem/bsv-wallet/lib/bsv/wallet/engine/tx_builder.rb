@@ -31,8 +31,8 @@ module BSV
 
         # See +Interface::TxBuilder#build+.
         def build(resolved_inputs:, caller_outputs:, caller_inputs:,
-                  lock_time:, version:, randomize:, sign:)
-          tx_outputs, vout_mapping = build_outputs(caller_outputs, randomize)
+                  lock_time:, version:, shuffle_outputs:, sign:)
+          tx_outputs, vout_mapping = build_outputs(caller_outputs, shuffle_outputs)
           tx_inputs, signing_keys = build_inputs(resolved_inputs, caller_inputs)
 
           tx = BSV::Transaction::Tx.new(
@@ -74,7 +74,7 @@ module BSV
         # outputs)+. Only when the surplus exceeds the required fee do
         # we delegate to +tx.fee+ for change distribution.
         def build_change(resolved_inputs:, caller_outputs:, caller_inputs:,
-                         lock_time:, version:, randomize:, change_count:,
+                         lock_time:, version:, shuffle_outputs:, change_count:,
                          change_basket: nil)
           raise ArgumentError, "change_count must be >= 1, got #{change_count}" if change_count < 1
 
@@ -149,7 +149,7 @@ module BSV
           # doesn't depend on order, but SDK distributes change across
           # all change-flagged outputs so they must be present during
           # tx.fee.
-          tx.outputs.shuffle! if randomize && tx.outputs.length > 1
+          tx.outputs.shuffle! if shuffle_outputs && tx.outputs.length > 1
 
           # H. Compute final vout positions (post-shuffle)
           vout_mapping = {}
@@ -260,9 +260,9 @@ module BSV
 
         # Build +TransactionOutput+ objects from caller output specs.
         #
-        # When +randomize+ is true, the output order is shuffled and a
+        # When +shuffle_outputs+ is true, the output order is shuffled and a
         # mapping from original index to new vout position is returned.
-        def build_outputs(outputs, randomize)
+        def build_outputs(outputs, shuffle_outputs)
           return [[], {}] if outputs.nil? || outputs.empty?
 
           tx_outputs = outputs.map do |out|
@@ -275,7 +275,7 @@ module BSV
 
           indices = (0...tx_outputs.length).to_a
 
-          if randomize && tx_outputs.length > 1
+          if shuffle_outputs && tx_outputs.length > 1
             indices.shuffle!
             tx_outputs = indices.map { |i| tx_outputs[i] }
           end

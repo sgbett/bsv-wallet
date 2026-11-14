@@ -142,13 +142,14 @@ Operators wrapping the daemon in their own logging stack should preserve
 this discipline. A structured logger that captures the engine-side debug
 output un-redacted silently reverses the AC; scrub before emission.
 
-## `no_send` defaults to `false`
+## Broadcast intent is required
 
 Every porcelain method — `send_payment`, `sweep`, `consolidate_step`,
-`import_wallet` — defaults to `no_send: false`, matching the BRC-100
-`createAction` default: the intent is to broadcast. Pass
-**`no_send: true`** to build and sign without ever reaching the network,
-returning a BEEF envelope for peer-to-peer handoff instead (see
+`import_wallet` — takes a required `broadcast_intent:` with no default:
+the wallet never guesses whether to publish. State `:delayed` (queue for
+`walletd`) or `:inline` (submit now) to broadcast, or
+**`broadcast_intent: :none`** to build and sign without ever reaching the
+network, returning a BEEF envelope for peer-to-peer handoff instead (see
 [Sending Payments](sending-payments.md) for delivering that envelope with
 `transmit`).
 
@@ -160,23 +161,24 @@ would reject the child for spending an input that does not exist in the
 canonical UTXO set.
 
 The distinction that matters: "un-promoted" is not the same as
-"`no_send`". The wallet recognises several broadcast intents, with the
-`:none` intent reserved for internal actions (the WBIKD address-lock
-self-payment, for instance) that *do* get promoted — their outputs land
-in the wallet's `spendable` set and can be consumed by a broadcast child,
-because the child sees them as fully-funded local UTXOs that the network
-never had to know about.
+"`broadcast_intent: :none`". The wallet recognises several broadcast
+intents, with the `:none` intent reserved for internal actions (the
+WBIKD address-lock self-payment, for instance) that *do* get promoted —
+their outputs land in the wallet's `spendable` set and can be consumed
+by a broadcast child, because the child sees them as fully-funded local
+UTXOs that the network never had to know about.
 
-The wrong framing is "no descendant of a `no_send` parent". The right
+The wrong framing is "no descendant of a `:none` parent". The right
 framing is **"no descendant of an un-promoted parent"** — an action that
 does not yet have a `promotions` row (promotion-as-a-row, ADR-023). A
-`no_send: true` caller-facing action is one such case; an aborted or
-reaped action is another. Internal `:none` actions *are* promoted (a row
-is written on creation) and they can be spent by broadcast children.
+`broadcast_intent: :none` caller-facing action is one such case; an
+aborted or reaped action is another. Internal `:none` actions *are*
+promoted (a row is written on creation) and they can be spent by
+broadcast children.
 
 Keep the broadcast intent consistent across a dependent sequence when the
 intent crosses the network boundary; the internal-vs-broadcast boundary
-is on promotion, not on `no_send`.
+is on promotion, not on the `:none` intent.
 
 ## Limp mode
 

@@ -35,23 +35,23 @@ RSpec.describe BSV::Wallet::Engine do # rubocop:disable RSpec/SpecFilePathFormat
     end
 
     it 'threads :basket through to import_utxo' do
-      engine.import_wallet(basket: 'received')
+      engine.import_wallet(basket: 'received', broadcast_intent: :delayed)
       expect(engine).to have_received(:import_utxo).with(
         hash_including(basket: 'received')
       )
     end
 
     it 'defaults basket to nil (preserves unbasketed pool behaviour)' do
-      engine.import_wallet
+      engine.import_wallet(broadcast_intent: :delayed)
       expect(engine).to have_received(:import_utxo).with(
         hash_including(basket: nil)
       )
     end
 
-    it 'forwards no_send + accept_delayed_broadcast alongside basket' do
-      engine.import_wallet(basket: 'b', no_send: true, accept_delayed_broadcast: false)
+    it 'forwards broadcast_intent alongside basket' do
+      engine.import_wallet(basket: 'b', broadcast_intent: :inline)
       expect(engine).to have_received(:import_utxo).with(
-        hash_including(basket: 'b', no_send: true, accept_delayed_broadcast: false)
+        hash_including(basket: 'b', broadcast_intent: :inline)
       )
     end
   end

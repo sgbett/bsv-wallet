@@ -14,16 +14,18 @@ module BSV
         #   send <base58_address> <sats>    # P2PKH; no envelope output
         #   send <identity_key_hex> <sats>  # BRC-29 derivation; envelope on stdout
         #
-        # Broadcast modes (+--broadcast=MODE+):
+        # Broadcast intents (+--broadcast=INTENT+):
         #
-        #   inline (default) — sync ARC dispatch
-        #   async            — daemon-queued via OMQ hint
-        #   none             — no broadcast; action committed, BEEF emitted
-        #                      (identity-key path) for peer-to-peer handoff
+        #   inline (default) — this process submits to ARC now
+        #   delayed          — written as a +broadcasts+ row for +walletd+
+        #                      to submit (the OMQ hint, when configured,
+        #                      only primes the EF cache)
+        #   none             — not broadcast; the action is committed and,
+        #                      on the identity-key path, the BEEF envelope
+        #                      is emitted for the recipient
         #
-        # The +none+ mode uses the engine's +no_send: true+ path. The action
-        # is still fully persisted in one atomic step — stays consistent with
-        # ADR-030 (no cross-CLI intermediate state).
+        # Under +none+ the action is still fully persisted in one atomic
+        # step — consistent with ADR-030 (no cross-CLI intermediate state).
         #
         # Identity-key envelope carries the BEEF, the subject dtxid, the
         # sender identity key, and per-output BRC-29 derivation hints (the
@@ -46,11 +48,11 @@ module BSV
           def build_parser
             @options = {}
             OptionParser.new do |opts|
-              opts.banner = 'Usage: bin/wallet send <recipient> <sats> [--broadcast=inline|async|none] ' \
+              opts.banner = 'Usage: bin/wallet send <recipient> <sats> [--broadcast=inline|delayed|none] ' \
                             '[--description=<text>] [--fee-rate=<sats_per_kb> | --no-fee]'
 
-              opts.on('--broadcast=MODE', %w[inline async none],
-                      'Broadcast mode: inline (sync ARC), async (daemon-queued), or none (commit only). Default: inline') do |v|
+              opts.on('--broadcast=INTENT', BSV::Wallet::Engine::BROADCAST_INTENTS.map(&:to_s),
+                      'Broadcast intent: inline (submit now), delayed (queue for walletd) or none (commit only). Default: inline') do |v|
                 @options[:broadcast] = v.to_sym
               end
 
@@ -85,8 +87,7 @@ module BSV
             kind = detect_recipient_kind(recipient)
 
             engine = @ctx[:engine]
-            accept_delayed = @options[:broadcast] == :async
-            no_send = @options[:broadcast] == :none
+            broadcast_intent = @options.fetch(:broadcast, :inline)
             description = @options[:description] || 'cli-send'
 
             # +--broadcast=none+ on the base58 path is a dead-end: the base58
@@ -96,7 +97,7 @@ module BSV
             # plumbing layer is deferred per ADR-030 pending HLR #192).
             # Only the identity-key path has a peer-handoff route under
             # +--broadcast=none+.
-            if kind == :base58 && no_send
+            if kind == :base58 && broadcast_intent == :none
               raise UsageError,
                     'send --broadcast=none requires an identity-key recipient ' \
                     '(base58 has no peer-handoff envelope; staged actions cannot ' \
@@ -106,19 +107,12 @@ module BSV
 
             case kind
             when :base58
-              call_base58(engine, recipient, sats, description, accept_delayed, no_send, fee_rate)
+              call_base58(engine, recipient, sats, description, broadcast_intent, fee_rate)
             when :identity_key
-              call_identity_key(engine, recipient, sats, description, accept_delayed, no_send, fee_rate)
+              call_identity_key(engine, recipient, sats, description, broadcast_intent, fee_rate)
             end
             0
           end
-
-          BROADCAST_LABELS = {
-            async: 'async (queued)',
-            none: 'none (no broadcast)',
-            inline: 'inline (sync)'
-          }.freeze
-          private_constant :BROADCAST_LABELS
 
           private
 
@@ -187,7 +181,7 @@ module BSV
 
           # No envelope on stdout — the recipient controls the
           # address-resolved key already and finds the output by chain scan.
-          def call_base58(engine, address, sats, description, accept_delayed, no_send, fee_rate)
+          def call_base58(engine, address, sats, description, broadcast_intent, fee_rate)
             pubkey_hash = decode_base58_p2pkh!(address)
             locking_script = BSV::Script::Script.p2pkh_lock(pubkey_hash).to_binary
 
@@ -205,9 +199,8 @@ module BSV
                   spendable_intent: 'none',
                   output_description: 'payment' }
               ],
-              accept_delayed_broadcast: accept_delayed,
-              no_send: no_send,
-              randomize_outputs: false,
+              broadcast_intent: broadcast_intent,
+              shuffle_outputs: false,
               fee_rate: fee_rate
             )
 
@@ -215,11 +208,11 @@ module BSV
             emit_human 'kind:     base58'
             emit_human "to:       #{address}"
             emit_human "sats:     #{sats}"
-            emit_human "broadcast: #{BROADCAST_LABELS[broadcast_mode(accept_delayed, no_send)]}"
+            emit_human "broadcast: #{BROADCAST_LABELS.fetch(broadcast_intent)}"
             emit_human "dtxid:    #{dtxid}"
           end
 
-          def call_identity_key(engine, identity_key, sats, description, accept_delayed, no_send, fee_rate)
+          def call_identity_key(engine, identity_key, sats, description, broadcast_intent, fee_rate)
             key_deriver = @ctx[:key_deriver]
             sender_identity_key = @ctx[:identity_key]
 
@@ -256,9 +249,8 @@ module BSV
                   sender_identity_key: sender_identity_key,
                   output_description: 'BRC-29 payment' }
               ],
-              accept_delayed_broadcast: accept_delayed,
-              no_send: no_send,
-              randomize_outputs: false,
+              broadcast_intent: broadcast_intent,
+              shuffle_outputs: false,
               fee_rate: fee_rate
             )
 
@@ -282,16 +274,9 @@ module BSV
             emit_human 'kind:     identity-key (BRC-29)'
             emit_human "to:       #{identity_key[0..15]}..."
             emit_human "sats:     #{sats}"
-            emit_human "broadcast: #{BROADCAST_LABELS[broadcast_mode(accept_delayed, no_send)]}"
+            emit_human "broadcast: #{BROADCAST_LABELS.fetch(broadcast_intent)}"
             emit_human "dtxid:    #{dtxid}"
             emit_human 'envelope: emitted on stdout for recipient'
-          end
-
-          def broadcast_mode(accept_delayed, no_send)
-            return :none if no_send
-            return :async if accept_delayed
-
-            :inline
           end
 
           # HLR #489 — collapse +--fee-rate+ / +--no-fee+ to the single

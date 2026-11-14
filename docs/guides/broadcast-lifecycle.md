@@ -58,8 +58,8 @@ output positions.
 
 | Mode | What happens | When |
 |---|---|---|
-| **Inline** | Synchronous POST to ARC; the response gates promotion immediately | `accept_delayed_broadcast: false` |
-| **Delayed** | A `broadcasts` row is queued; the daemon pushes it later | default |
+| **Inline** | Synchronous POST to ARC; the response gates promotion immediately | `broadcast_intent: :inline` |
+| **Delayed** | A `broadcasts` row is queued; the daemon pushes it later | `broadcast_intent: :delayed` |
 
 A delayed broadcast lands nothing until `walletd` is running — see
 [Operating the Daemon](operating-the-daemon.md).

@@ -1019,6 +1019,7 @@ RSpec.describe BSV::Wallet::Engine do
       # the BRC-100 +spendable:+ Int8 flag). BRC-42-derived output → spendable.
       result = engine.build_action(
         description: 'sync primitive',
+        broadcast_intent: :delayed,
         inputs: [],
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
@@ -1033,12 +1034,12 @@ RSpec.describe BSV::Wallet::Engine do
       expect(result[:atomic_beef]).to be_a(String).and(satisfy { |b| b.bytesize >= 10 })
     end
 
-    it 'returns { wtxid:, atomic_beef:, change_outpoints: } on the no_send path' do
+    it 'returns { wtxid:, atomic_beef:, change_outpoints: } on the internal (:none) path' do
       fund_wallet(satoshis: 100_000, basket: nil, suffix: 'do_build_no_send')
       result = engine_with_keys.build_action(
         description: 'no_send primitive',
         outputs: [{ satoshis: 10_000, locking_script: OP_TRUE, spendable_intent: 'none' }],
-        no_send: true
+        broadcast_intent: :none
       )
 
       expect(result.keys).to contain_exactly(:wtxid, :atomic_beef, :change_outpoints)
@@ -1050,8 +1051,8 @@ RSpec.describe BSV::Wallet::Engine do
 
     it 'returns { signable: { atomic_beef:, reference: } } on the deferred path' do
       result = engine.build_action(
-        description: 'deferred primitive',
-        inputs: [], sign_and_process: false,
+        description: 'deferred primitive', broadcast_intent: :delayed,
+        inputs: [], defer_signing: true,
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
             spendable_intent: 'spendable',
@@ -1080,7 +1081,7 @@ RSpec.describe BSV::Wallet::Engine do
         engine_with_keys.build_action(
           description: 'change-into-basket',
           outputs: [{ satoshis: 10_000, locking_script: OP_TRUE, spendable_intent: 'none' }],
-          no_send: true,
+          broadcast_intent: :none,
           change_basket: 'importedfunds'
         )
 
@@ -1103,7 +1104,7 @@ RSpec.describe BSV::Wallet::Engine do
         engine_with_keys.build_action(
           description: 'change-unbasketed',
           outputs: [{ satoshis: 10_000, locking_script: OP_TRUE, spendable_intent: 'none' }],
-          no_send: true
+          broadcast_intent: :none
         )
 
         # No basket called 'importedfunds' should exist after a default
@@ -1132,7 +1133,7 @@ RSpec.describe BSV::Wallet::Engine do
         result = engine_with_keys.build_action(
           description: 'zero-fee build',
           outputs: [{ satoshis: 10_000, locking_script: OP_TRUE, spendable_intent: 'none' }],
-          no_send: true,
+          broadcast_intent: :none,
           fee_rate: 0
         )
 
@@ -1147,7 +1148,7 @@ RSpec.describe BSV::Wallet::Engine do
         engine_with_keys.build_action(
           description: 'restore probe',
           outputs: [{ satoshis: 10_000, locking_script: OP_TRUE, spendable_intent: 'none' }],
-          no_send: true,
+          broadcast_intent: :none,
           fee_rate: 0
         )
 
@@ -1159,16 +1160,16 @@ RSpec.describe BSV::Wallet::Engine do
         prior_model = engine_with_keys.instance_variable_get(:@fee_model)
         prior_builder = engine_with_keys.instance_variable_get(:@tx_builder)
 
-        # +sign_and_process: false+ with +inputs: nil+ trips a named
+        # +defer_signing: true+ with +inputs: nil+ trips a named
         # parameter-combination guard inside +#build_action+ AFTER
         # +swap_fee_model!+ has already mutated state. The method-level
         # +ensure+ must restore both +@fee_model+ and +@tx_builder+.
         expect do
           engine_with_keys.build_action(
-            description: 'raise after swap',
-            sign_and_process: false, fee_rate: 0
+            description: 'raise after swap', broadcast_intent: :delayed,
+            defer_signing: true, fee_rate: 0
           )
-        end.to raise_error(BSV::Wallet::InvalidParameterError, /sign_and_process/)
+        end.to raise_error(BSV::Wallet::InvalidParameterError, /defer_signing/)
 
         expect(engine_with_keys.instance_variable_get(:@fee_model)).to equal(prior_model)
         expect(engine_with_keys.instance_variable_get(:@tx_builder)).to equal(prior_builder)
@@ -1177,7 +1178,7 @@ RSpec.describe BSV::Wallet::Engine do
       it 'rejects a negative fee_rate' do
         expect do
           engine.build_action(
-            description: 'reject', inputs: [], outputs: [], fee_rate: -1
+            description: 'reject', broadcast_intent: :delayed, inputs: [], outputs: [], fee_rate: -1
           )
         end.to raise_error(BSV::Wallet::InvalidParameterError, /non-negative integer/)
       end
@@ -1185,7 +1186,7 @@ RSpec.describe BSV::Wallet::Engine do
       it 'rejects a non-integer fee_rate' do
         expect do
           engine.build_action(
-            description: 'reject', inputs: [], outputs: [], fee_rate: '0'
+            description: 'reject', broadcast_intent: :delayed, inputs: [], outputs: [], fee_rate: '0'
           )
         end.to raise_error(BSV::Wallet::InvalidParameterError, /non-negative integer/)
       end
@@ -1197,8 +1198,8 @@ RSpec.describe BSV::Wallet::Engine do
       # HLR #467 — engine-vocab call, intent stated explicitly.
       # BRC-42-derived output (wallet-owned) → +'spendable'+.
       result = engine.build_action(
-        description: 'parked for sign primitive',
-        inputs: [], sign_and_process: false,
+        description: 'parked for sign primitive', broadcast_intent: :delayed,
+        inputs: [], defer_signing: true,
         outputs: [
           { satoshis: 0, locking_script: OP_TRUE,
             spendable_intent: 'spendable',
@@ -1210,7 +1211,7 @@ RSpec.describe BSV::Wallet::Engine do
     end
 
     it 'returns { wtxid:, atomic_beef: } for a successful sign' do
-      result = engine.sign_action(reference: deferred_reference, spends: {})
+      result = engine.sign_action(reference: deferred_reference, spends: {}, broadcast_intent: :delayed)
 
       expect(result.keys).to contain_exactly(:wtxid, :atomic_beef)
       expect(result[:wtxid].bytesize).to eq(32)
@@ -1220,17 +1221,17 @@ RSpec.describe BSV::Wallet::Engine do
     it 'raises InvalidParameterError for an unknown reference' do
       expect do
         engine.sign_action(
-          reference: '00000000-0000-0000-0000-000000000000', spends: {}
+          reference: '00000000-0000-0000-0000-000000000000', spends: {}, broadcast_intent: :delayed
         )
       end.to raise_error(BSV::Wallet::InvalidParameterError)
     end
 
-    it 'rejects no_send: true when the action was not parked with broadcast_intent: none' do
+    it 'rejects broadcast_intent: :none when the action was not built with intent none' do
       expect do
         engine.sign_action(
-          reference: deferred_reference, spends: {}, no_send: true
+          reference: deferred_reference, spends: {}, broadcast_intent: :none
         )
-      end.to raise_error(BSV::Wallet::UnsupportedActionError, /signAction\(no_send: true\)/)
+      end.to raise_error(BSV::Wallet::UnsupportedActionError, /sign_action with broadcast intent 'none'/)
     end
   end
 
@@ -1239,8 +1240,8 @@ RSpec.describe BSV::Wallet::Engine do
       # HLR #467 — engine-vocab call (no BRC-100 wrapper), so state intent
       # directly. OP_TRUE is a synthetic outbound stand-in.
       result = engine.build_action(
-        description: 'parked for abort primitive',
-        inputs: [], sign_and_process: false,
+        description: 'parked for abort primitive', broadcast_intent: :delayed,
+        inputs: [], defer_signing: true,
         outputs: [
           { satoshis: 500, locking_script: OP_TRUE,
             output_description: 'output', spendable_intent: 'none' }
@@ -1346,6 +1347,117 @@ RSpec.describe BSV::Wallet::Engine do
         forwards = engine.method(name).parameters.any? { |kind, _| kind == :keyrest }
         expect(forwards).to be(false),
                             "expected #{name} to declare its keywords explicitly, found anonymous **kwargs"
+      end
+    end
+  end
+
+  describe 'broadcast intent surface' do
+    let(:intent_methods) do
+      %i[build_action sign_action import_utxo import_wallet send_payment consolidate_step sweep]
+    end
+    let(:retired_kwargs) { %i[no_send accept_delayed_broadcast sign_and_process randomize_outputs] }
+
+    it 'takes broadcast_intent: as a required keyword, explicitly, in place of the retired flags' do
+      aggregate_failures do
+        intent_methods.each do |name|
+          params = engine.method(name).parameters
+
+          expect(params).to include(%i[keyreq broadcast_intent]), "#{name}: #{params.inspect}"
+          expect(params.map(&:first)).not_to include(:keyrest), "#{name}: #{params.inspect}"
+          expect(params.map(&:last)).not_to include(*retired_kwargs), "#{name}: #{params.inspect}"
+        end
+      end
+    end
+
+    it 'names the broadcast_intent ENUM values' do
+      expect(described_class::BROADCAST_INTENTS).to eq(%i[inline delayed none])
+      expect(described_class::BROADCAST_INTENTS).to be_frozen
+    end
+  end
+
+  describe 'broadcast_intent validation' do
+    let(:recipient) { BSV::Primitives::PrivateKey.generate.public_key.to_hex }
+    let(:network_provider) { double(:network_provider) }
+    let(:networked_engine) do
+      described_class.new(
+        store: store, utxo_pool: utxo_pool, broadcaster: broadcaster,
+        key_deriver: key_deriver, network_provider: network_provider, network: :mainnet
+      )
+    end
+
+    before { allow(network_provider).to receive(:call) }
+
+    def expect_each_bad_intent_rejected_without_writes
+      [nil, 'none', :async].each do |intent|
+        actions_before = store.db[:actions].count
+
+        expect { yield intent }
+          .to raise_error(BSV::Wallet::InvalidParameterError, /broadcast_intent/), "intent #{intent.inspect}"
+        expect(store.db[:actions].count).to eq(actions_before), "intent #{intent.inspect}"
+      end
+    end
+
+    it 'build_action rejects an unknown intent before writing' do
+      expect_each_bad_intent_rejected_without_writes do |intent|
+        engine_with_keys.build_action(
+          description: 'bad intent', broadcast_intent: intent,
+          outputs: [{ satoshis: 1000, locking_script: OP_TRUE, spendable_intent: 'none' }]
+        )
+      end
+    end
+
+    it 'sign_action rejects an unknown intent before signing, leaving the action staged' do
+      reference = engine.build_action(
+        description: 'staged for bad intent', broadcast_intent: :delayed,
+        inputs: [], defer_signing: true,
+        outputs: [{ satoshis: 0, locking_script: OP_TRUE, spendable_intent: 'none' }]
+      )[:signable][:reference]
+      staged = store.find_action(reference: reference)
+      allow(store).to receive(:sign_action).and_call_original
+
+      expect_each_bad_intent_rejected_without_writes do |intent|
+        engine.sign_action(reference: reference, spends: {}, broadcast_intent: intent)
+      end
+
+      expect(store).not_to have_received(:sign_action)
+      expect(store.find_action(reference: reference)).to include(wtxid: staged[:wtxid], raw_tx: staged[:raw_tx])
+    end
+
+    it 'import_utxo rejects an unknown intent before any network call' do
+      expect_each_bad_intent_rejected_without_writes do |intent|
+        networked_engine.import_utxo(dtxid: 'a' * 64, broadcast_intent: intent)
+      end
+
+      expect(network_provider).not_to have_received(:call)
+    end
+
+    it 'import_wallet rejects an unknown intent before scanning' do
+      expect_each_bad_intent_rejected_without_writes do |intent|
+        networked_engine.import_wallet(broadcast_intent: intent)
+      end
+
+      expect(network_provider).not_to have_received(:call)
+    end
+
+    it 'send_payment rejects an unknown intent before writing' do
+      expect_each_bad_intent_rejected_without_writes do |intent|
+        engine_with_keys.send_payment(recipient: recipient, satoshis: 1000, broadcast_intent: intent)
+      end
+    end
+
+    it 'consolidate_step rejects an unknown intent even on an empty wallet', :skip_reserve do
+      expect(engine_with_keys.consolidate_step(broadcast_intent: :delayed)).to be_nil
+
+      expect_each_bad_intent_rejected_without_writes do |intent|
+        engine_with_keys.consolidate_step(broadcast_intent: intent)
+      end
+    end
+
+    it 'sweep rejects an unknown intent even on an empty wallet', :skip_reserve do
+      expect(engine_with_keys.sweep(recipient: recipient, broadcast_intent: :delayed)).to be_nil
+
+      expect_each_bad_intent_rejected_without_writes do |intent|
+        engine_with_keys.sweep(recipient: recipient, broadcast_intent: intent)
       end
     end
   end
@@ -2794,6 +2906,103 @@ RSpec.describe BSV::Wallet::Engine do
         # Verify wtxid
         expected_wtxid = parse_beef_tx(sign_result[:tx]).wtxid
         expect(sign_result[:txid]).to eq(expected_wtxid)
+      end
+
+      # The outputs are shuffled when the unsigned transaction is staged,
+      # and signing commits to their positions, so sign_action must keep
+      # the staged order.
+      it 'signs shuffled outputs in the positions the signable transaction staged' do
+        fund_wallet(satoshis: 1000)
+        output_id = engine_with_keys.spendable_outputs(basket: nil)[:outputs].first[:id]
+        output_script = p2pkh_locking_script_for(derive_key).to_binary
+
+        create_result = engine_with_keys.brc100.create_action(
+          description: 'deferred shuffled outputs',
+          sign_and_process: false,
+          inputs: [{ output_id: output_id }],
+          outputs: [300, 200, 100, 50].map do |sats|
+            { satoshis: sats, locking_script: output_script, output_description: 'output', spendable: false }
+          end
+        )
+        staged = parse_beef_tx(create_result[:signable_transaction][:tx])
+
+        sign_result = engine_with_keys.brc100.sign_action(
+          spends: {}, reference: create_result[:signable_transaction][:reference]
+        )
+        signed = parse_beef_tx(sign_result[:tx])
+
+        expect(signed.outputs.map(&:satoshis)).to eq(staged.outputs.map(&:satoshis))
+        expect(signed.outputs.map(&:satoshis)).to contain_exactly(300, 200, 100, 50)
+        signed.inputs.each_with_index do |input, vin|
+          input.source_satoshis = 1000
+          input.source_locking_script = p2pkh_locking_script_for(derive_key)
+          expect(signed.verify_input(vin)).to be(true), "input #{vin} does not verify"
+        end
+      end
+    end
+
+    # BRC-100's convention: an input declaring +unlocking_script_length+
+    # without +unlocking_script+ is one the caller will sign. BRC100
+    # reads that shape; the Engine acts only on +defer_signing:+.
+    context 'with an input awaiting its unlocking script' do
+      let(:awaiting_input) do
+        fund_wallet(satoshis: 1000)
+        output_id = engine_with_keys.spendable_outputs(basket: nil)[:outputs].first[:id]
+        { output_id: output_id, unlocking_script_length: 107 }
+      end
+      let(:payment_script) { p2pkh_locking_script_for(derive_key).to_binary }
+
+      it 'defers signing through create_action even with sign_and_process left true' do
+        result = engine_with_keys.brc100.create_action(
+          description: 'awaiting input defers',
+          inputs: [awaiting_input],
+          outputs: [{ satoshis: 900, locking_script: payment_script,
+                      output_description: 'output', spendable: false }]
+        )
+
+        expect(result[:signable_transaction]).to include(:tx, :reference)
+      end
+
+      it 'refuses no_send: true through create_action without writing an action' do
+        input = awaiting_input
+        actions_before = store.db[:actions].count
+
+        expect do
+          engine_with_keys.brc100.create_action(
+            description: 'awaiting input no_send', no_send: true,
+            inputs: [input],
+            outputs: [{ satoshis: 900, locking_script: payment_script,
+                        output_description: 'output', spendable: false }]
+          )
+        end.to raise_error(BSV::Wallet::UnsupportedActionError, /broadcast intent 'none'/)
+        expect(store.db[:actions].count).to eq(actions_before)
+      end
+
+      it 'refuses no_send: true with sign_and_process: false through create_action' do
+        input = awaiting_input.except(:unlocking_script_length)
+
+        expect do
+          engine_with_keys.brc100.create_action(
+            description: 'deferred no_send', no_send: true, sign_and_process: false,
+            inputs: [input],
+            outputs: [{ satoshis: 900, locking_script: payment_script,
+                        output_description: 'output', spendable: false }]
+          )
+        end.to raise_error(BSV::Wallet::UnsupportedActionError, /broadcast intent 'none'/)
+      end
+
+      it 'is signed by the wallet when build_action is not asked to defer' do
+        result = engine_with_keys.build_action(
+          description: 'shape not read by core', broadcast_intent: :none,
+          inputs: [awaiting_input],
+          outputs: [{ satoshis: 900, locking_script: payment_script, spendable_intent: 'none' }]
+        )
+
+        expect(result).to include(:wtxid, :atomic_beef)
+        parsed = parse_beef_tx(result[:atomic_beef])
+        parsed.inputs[0].source_satoshis = 1000
+        parsed.inputs[0].source_locking_script = p2pkh_locking_script_for(derive_key)
+        expect(parsed.verify_input(0)).to be true
       end
     end
 

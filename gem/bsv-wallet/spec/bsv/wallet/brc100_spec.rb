@@ -554,6 +554,121 @@ RSpec.describe BSV::Wallet::BRC100 do
     end
   end
 
+  describe 'translation into Engine vocabulary' do
+    let(:fake_engine) { instance_double(BSV::Wallet::Engine) }
+    let(:brc100) { described_class.new(fake_engine) }
+    let(:outputs) { [{ satoshis: 1000, locking_script: 'aa'.b, output_description: 'unit' }] }
+    let(:reference) { SecureRandom.uuid }
+
+    before do
+      allow(fake_engine).to receive_messages(
+        build_action: { wtxid: 'wtxid', atomic_beef: 'beef' },
+        sign_action: { wtxid: 'wtxid', atomic_beef: 'beef' }
+      )
+    end
+
+    describe 'noSend and acceptDelayedBroadcast → broadcast_intent' do
+      {
+        [true, true] => :none,
+        [true, false] => :none,
+        [false, true] => :delayed,
+        [false, false] => :inline
+      }.each do |(no_send, accept_delayed_broadcast), intent|
+        flags = "no_send: #{no_send}, accept_delayed_broadcast: #{accept_delayed_broadcast}"
+
+        it "create_action(#{flags}) asks for #{intent.inspect}" do
+          brc100.create_action(description: 'intent table', outputs: outputs,
+                               no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast)
+
+          expect(fake_engine).to have_received(:build_action).with(hash_including(broadcast_intent: intent))
+        end
+
+        it "sign_action(#{flags}) asks for #{intent.inspect}" do
+          brc100.sign_action(spends: {}, reference: reference,
+                             no_send: no_send, accept_delayed_broadcast: accept_delayed_broadcast)
+
+          expect(fake_engine).to have_received(:sign_action)
+            .with(reference: reference, spends: {}, broadcast_intent: intent)
+        end
+      end
+
+      it 'create_action asks for :delayed by default' do
+        brc100.create_action(description: 'intent default', outputs: outputs)
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(broadcast_intent: :delayed))
+      end
+
+      it 'sign_action asks for :delayed by default' do
+        brc100.sign_action(spends: {}, reference: reference)
+
+        expect(fake_engine).to have_received(:sign_action)
+          .with(reference: reference, spends: {}, broadcast_intent: :delayed)
+      end
+    end
+
+    describe 'randomizeOutputs → shuffle_outputs' do
+      it 'asks for shuffle_outputs: true by default' do
+        brc100.create_action(description: 'shuffle default', outputs: outputs)
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(shuffle_outputs: true))
+      end
+
+      it 'asks for shuffle_outputs: false when randomize_outputs is false' do
+        brc100.create_action(description: 'shuffle off', outputs: outputs, randomize_outputs: false)
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(shuffle_outputs: false))
+      end
+    end
+
+    describe 'signAndProcess and input shape → defer_signing' do
+      def create_with(**kwargs)
+        brc100.create_action(description: 'defer table', outputs: outputs, **kwargs)
+      end
+
+      it 'asks for defer_signing: false by default' do
+        create_with
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(defer_signing: false))
+      end
+
+      it 'asks for defer_signing: true when sign_and_process is false' do
+        create_with(sign_and_process: false, inputs: [{ output_id: 1 }])
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(defer_signing: true))
+      end
+
+      it 'asks for defer_signing: true for an input with unlocking_script_length but no unlocking_script' do
+        create_with(inputs: [{ output_id: 1, unlocking_script_length: 107 }])
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(defer_signing: true))
+      end
+
+      it 'asks for defer_signing: false for an input carrying both length and script (already signed)' do
+        create_with(inputs: [{ output_id: 1, unlocking_script_length: 2, unlocking_script: "\x51\x51".b }])
+
+        expect(fake_engine).to have_received(:build_action).with(hash_including(defer_signing: false))
+      end
+
+      it "renames the Engine's defer_signing refusal to the sign_and_process the caller passed" do
+        allow(fake_engine).to receive(:build_action).and_raise(
+          BSV::Wallet::InvalidParameterError.new('defer_signing', 'false when inputs is nil')
+        )
+
+        expect { create_with(sign_and_process: false) }
+          .to raise_error(BSV::Wallet::InvalidParameterError, /sign_and_process parameter must be true/) { |e|
+            expect(e.parameter).to eq('sign_and_process')
+          }
+      end
+
+      it 'passes any other InvalidParameterError through unchanged' do
+        error = BSV::Wallet::InvalidParameterError.new('fee_rate', 'a non-negative integer')
+        allow(fake_engine).to receive(:build_action).and_raise(error)
+
+        expect { create_with }.to raise_error(BSV::Wallet::InvalidParameterError) { |e| expect(e).to be(error) }
+      end
+    end
+  end
+
   describe 'rule-parity gate — DB CHECK ↔ validator (HLR #428, sub-issue #441)', :store do
     # Drift insurance, design-split-aware (resolved after the +'p wbikd'+
     # regression on the HLR #428 branch).

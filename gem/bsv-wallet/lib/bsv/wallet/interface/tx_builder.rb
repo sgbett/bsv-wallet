@@ -84,8 +84,8 @@ module BSV
         #   when the wallet selected inputs itself.
         # @param lock_time [Integer, nil] nLockTime.
         # @param version [Integer, nil] transaction version.
-        # @param randomize [Boolean] whether to shuffle output order
-        #   for privacy.
+        # @param shuffle_outputs [Boolean] whether to shuffle output
+        #   order for privacy.
         # @param sign [Boolean] whether to sign wallet-owned P2PKH
         #   inputs. +false+ leaves them with empty unlocking scripts
         #   (the deferred path serialises an unsigned tx for the caller
@@ -93,7 +93,7 @@ module BSV
         # @return [Hash] +{ wtxid:, raw_tx:, vout_mapping:, tx: }+.
         #   +tx+ is the live +Transaction::Tx+ (signed iff +sign:+).
         def build(resolved_inputs:, caller_outputs:, caller_inputs:,
-                  lock_time:, version:, randomize:, sign:)
+                  lock_time:, version:, shuffle_outputs:, sign:)
           raise NotImplementedError
         end
 
@@ -113,7 +113,7 @@ module BSV
         #   overrides. +nil+ when the wallet selected inputs itself.
         # @param lock_time [Integer, nil] nLockTime.
         # @param version [Integer, nil] transaction version.
-        # @param randomize [Boolean] whether to shuffle output order.
+        # @param shuffle_outputs [Boolean] whether to shuffle output order.
         # @param change_count [Integer] number of BRC-42 change
         #   outputs to derive. Must be >= 1.
         # @param change_basket [String, nil] optional basket name to
@@ -134,7 +134,7 @@ module BSV
         #     the required fee — +N+ is the positive deficit
         #     (+required_fee - surplus+) the caller needs to top up.
         def build_change(resolved_inputs:, caller_outputs:, caller_inputs:,
-                         lock_time:, version:, randomize:, change_count:,
+                         lock_time:, version:, shuffle_outputs:, change_count:,
                          change_basket: nil)
           raise NotImplementedError
         end

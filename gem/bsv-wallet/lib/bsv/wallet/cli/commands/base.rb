@@ -36,6 +36,14 @@ module BSV
         #   - never +abort+ or +exit+ inside +#call+ — bypasses the
         #     dispatcher's rescue and is untestable
         class Base
+          # One table so every command reports a broadcast intent in the
+          # same words.
+          BROADCAST_LABELS = {
+            inline: 'inline (sync)',
+            delayed: 'delayed (queued)',
+            none: 'none (no broadcast)'
+          }.freeze
+
           # +ctx+: result of +CLI.boot+ ({ engine:, utxo_pool:, ... }).
           # Subclasses access +ctx[:engine]+, +ctx[:utxo_pool]+, etc.
           # +global_options+: the +GlobalOptions+ value object (read for

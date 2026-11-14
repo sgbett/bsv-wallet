@@ -21,13 +21,13 @@ module BSV
         # confirmed). +--no-send+ keeps the internalising self-payment
         # built-and-signed but unsubmitted.
         #
-        # Broadcast mode: default is +:delayed+ (queue for daemon via OMQ,
-        # batching multi-UTXO scans to avoid an N+1 ARC round-trip per
-        # discovered UTXO). +--inline+ opts into synchronous per-UTXO
-        # broadcast (useful for small wallets wanting immediate
+        # Broadcast intent: default is +delayed+ (a +broadcasts+ row per
+        # self-payment for +walletd+ to submit, so a multi-UTXO scan
+        # avoids an N+1 ARC round-trip). +--inline+ opts into synchronous
+        # per-UTXO broadcast (useful for small wallets wanting immediate
         # confirmation, or e2e tests that need to see status before the
         # next step). +--inline+ and +--no-send+ are mutually exclusive
-        # — they select different broadcast strategies, not modifiers.
+        # — they select different broadcast intents, not modifiers.
         #
         # Phase 3 scans the root P2PKH address only. HD/WBIKD-derived
         # receive addresses (#28 / future) would extend the scan
@@ -90,29 +90,24 @@ module BSV
                     '(they select different broadcast strategies)'
             end
 
+            broadcast_intent =
+              if no_send then :none
+              elsif inline then :inline
+              else :delayed
+              end
+
             engine = @ctx[:engine]
             result = engine.import_wallet(
               basket: basket,
-              no_send: no_send,
-              # +!inline+ collapses cleanly: default (neither flag) →
-              # +true+ (daemon-queued); +--inline+ → +false+ (sync ARC).
-              # When +no_send: true+, the engine ignores this — but the
-              # mutual-exclusion guard above means we never reach that
-              # combination anyway.
-              accept_delayed_broadcast: !inline,
+              broadcast_intent: broadcast_intent,
               include_unconfirmed: @options[:include_unconfirmed] || false
             )
 
             count = result[:imported] || 0
-            broadcast_mode =
-              if no_send then 'no_send'
-              elsif inline then 'inline (sync ARC)'
-              else 'delayed (queued)'
-              end
 
             emit_human "imported:    #{count} UTXO#{'s' unless count == 1}"
             emit_human "basket:      #{basket || '(unbasketed pool)'}"
-            emit_human "broadcast:   #{broadcast_mode}"
+            emit_human "broadcast:   #{BROADCAST_LABELS.fetch(broadcast_intent)}"
             emit_human "include unconfirmed: #{@options[:include_unconfirmed] ? 'yes' : 'no'}"
             0
           end

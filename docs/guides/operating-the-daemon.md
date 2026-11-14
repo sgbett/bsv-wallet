@@ -36,10 +36,10 @@ Submission runs fastest because users wait on outputs becoming spendable.
 
 ## When you need it
 
-You need `walletd` running whenever you use **delayed broadcast** (the
-default) or rely on proof acquisition. With inline broadcast
-(`accept_delayed_broadcast: false`) the ARC call happens synchronously
-inside `create_action` and the daemon is not required for the send itself —
+You need `walletd` running whenever you use **delayed broadcast**
+(`broadcast_intent: :delayed`) or rely on proof acquisition. With inline
+broadcast (`broadcast_intent: :inline`) the ARC call happens synchronously
+inside `build_action` and the daemon is not required for the send itself —
 but proofs are still acquired in the background. See
 [Broadcast Lifecycle](broadcast-lifecycle.md).
 
