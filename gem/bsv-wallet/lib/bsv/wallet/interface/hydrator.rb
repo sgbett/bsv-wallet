@@ -44,7 +44,7 @@ module BSV
       # Engine and the daemon each construct one and inject it into both
       # the Hydrator and +Engine::Broadcast+. +wire_ancestor+ reads through
       # it (a cached merkle terminal stops the walk) and +proof_arrived+
-      # enriches it monotonically when a proof lands. Broadcast's shallow EF
+      # enriches it when a proof lands. Broadcast's shallow EF
       # path (+hydrated_transaction_for+) attaches per-input source data from
       # cached parent bytes, so one cache serves both egress shapes.
       # +InputSource+ remains a standalone shared module (TxBuilder +
@@ -52,9 +52,11 @@ module BSV
       module Hydrator
         # Recursive ProofStore→Tx wiring primitive.
         #
-        # Loads the transaction at +wtxid+ from the proof store; if its
-        # proof carries a +merkle_path+, attaches it and returns
-        # immediately (proven terminal — no recursion). Otherwise recurses
+        # Loads the transaction at +wtxid+ from the shared cache, or on a
+        # miss from the proof store (filling the cache). If the entry
+        # carries a +merkle_path+, attaches it and returns immediately
+        # (proven terminal — no recursion); the path is trusted as found,
+        # not re-checked against a block header. Otherwise recurses
         # into each input's +prev_wtxid+, wiring +source_transaction+ for
         # any ancestor proof present. The +visited+ set guards against
         # circular references (genuine Bitcoin transactions cannot form
@@ -107,9 +109,8 @@ module BSV
         # terminal when +merkle_path+ is present, or at minimum serving the
         # +raw_tx+ on cache hit.
         #
-        # Enrichment is monotonic — never invalidates. A +merkle_path+
-        # already present is never cleared; +nil+ in this call is a
-        # no-op for the merkle slot of an existing entry.
+        # Enrichment never invalidates. A +nil+ +merkle_path+ leaves an
+        # existing entry's path in place; a non-nil one replaces it.
         #
         # @param wtxid [String] 32-byte wire-order wtxid
         # @param raw_tx [String] transaction bytes (wire format)

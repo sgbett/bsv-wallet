@@ -341,7 +341,7 @@ module BSV
         # awaiting outcome" until the poll loop / listener resolves it.
         # Bounded recovery, not a correctness issue (plan §4.3).
         def submit(action_id, action, started_at:)
-          # wtxid_raw_tx_parity (migration 003) guarantees wtxid is set
+          # wtxid_raw_tx_parity (001_create_schema.rb) guarantees wtxid is set
           # whenever raw_tx is — the #process guard above filtered out the
           # NULL raw_tx case. Validate defensively so a contract violation
           # surfaces here rather than deep inside Broadcaster.

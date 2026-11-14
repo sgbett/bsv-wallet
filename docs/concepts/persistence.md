@@ -12,7 +12,7 @@ This page is the narrative shape of the data model. For the table-by-table refer
 
 ## Postgres-primary, SQLite-augmentation
 
-This is a **Postgres-based** wallet. The schema chooses Postgres-native features deliberately: `bytea` for everything hash-shaped, native `uuid` for `actions.reference`, ENUM types (`broadcast_intent`, ARC `tx_status`), CHECK constraints, RESTRICT FK semantics, BEFORE-INSERT and BEFORE-DELETE triggers. The rationale for the per-primitive choice is in [ADR-009](../../.architecture/decisions/adrs/20260505_ADR-009-postgres-native-primitives.md).
+This is a **Postgres-based** wallet. The schema chooses Postgres-native features deliberately: `bytea` for everything hash-shaped, native `uuid` for `actions.reference`, ENUM types (`broadcast_intent`, ARC `tx_status`), CHECK constraints, RESTRICT FK semantics, a BEFORE-DELETE trigger. The rationale for the per-primitive choice is in [ADR-009](../../.architecture/decisions/adrs/20260505_ADR-009-postgres-native-primitives.md).
 
 SQLite is **a convenience for fast logic-only specs that do not depend on DB invariants** — not the production target. The migrations are written once, with guards that emit Postgres-native DDL or a SQLite equivalent from the same source:
 
@@ -66,7 +66,7 @@ Twenty-one tables, but the lifecycle turns on a handful of them:
 - **`promotions`** — the structural authorisation that an action's outputs are canonical. A promotions row is what turns a freshly-broadcast action from `:sending` into `:unproven`; see below.
 - **`tx_proofs`** / **`blocks`** — merkle inclusion proofs and the chain tracker's local header view.
 - **`transmissions`** / **`transmission_txids`** — wallet-to-peer BEEF delivery state; the two-phase write on ACK is what makes per-peer trim knowable. See [Transmission](transmission.md).
-- **`sse_cursors`** — last-event-id for the Arcade SSE push pipeline, keyed on `callback_token`.
+- **`sse_cursors`** — last-event-id for the Arcade SSE push pipeline, keyed on the callback token (`token`).
 
 The remainder are organisational or metadata: `baskets` / `output_baskets` (grouping), `labels` / `action_labels` and `tags` / `output_tags` (classification), `output_details` (display metadata), `certificates` / `certificate_fields` (BRC-52), and `settings` (key-value configuration). The canonical table-by-table reference is in [Schema](../reference/schema.md).
 
@@ -96,21 +96,21 @@ The schema is where the wallet's most important rules are made unbreakable. Thes
 
 **Immutable outputs (with the named deviation).** `outputs.action_id` is `NOT NULL` with an `ON DELETE RESTRICT` foreign key. An output cannot be orphaned or silently deleted at the schema level; cleaning it up requires the dependent action to be removed first, which forces the failure-bounded delete path described above.
 
-**Outbound outputs are never spendable.** HLR #467 makes this declarative: `spendable` denormalises `spendable_intent` from its parent output, pins it to `'spendable'` via CHECK, and FKs the pair against `outputs(id, spendable_intent)`. Either guard alone catches the violation — the pool *cannot* be handed an output the wallet stated `spendable_intent: 'none'` for, with zero PL/pgSQL on the hot path (see [`reference/hot-path-design.md`](../reference/hot-path-design.md)).
+**Outbound outputs are never spendable.** HLR #467 makes this declarative: `spendable` denormalises `spendable_intent` from its parent output, pins it to `'spendable'` via CHECK, and FKs the pair against `outputs(id, spendable_intent)`. The two guards work together (the FK rejects a `spendable` row whose intent disagrees with its output's, the CHECK rejects one that copies `'none'`) — the pool *cannot* be handed an output the wallet stated `spendable_intent: 'none'` for, with zero PL/pgSQL on the hot path (see [`reference/hot-path-design.md`](../reference/hot-path-design.md)).
 
-**Received history is never deleted.** A `BEFORE DELETE` trigger (`prevent_internal_action_delete`) blocks deleting an internal action (`broadcast_intent = 'none'`) that has a `promotions` row. A `CHECK` can't express this — checks don't fire on `DELETE` — so a trigger is the only mechanism. The promotions-row test is what distinguishes a canonical internal action (deletion forbidden) from an ephemeral zero-output WBIKD lock (deletable).
+**Received history is never deleted.** A `BEFORE DELETE` trigger on `actions` (`check_internal_action_delete`, which runs the `prevent_internal_action_delete` function on Postgres) blocks deleting an internal action (`broadcast_intent = 'none'`) that has a `promotions` row. A `CHECK` can't express this — checks don't fire on `DELETE` — so a trigger is the only mechanism. The promotions-row test is what distinguishes a canonical internal action (deletion forbidden) from an ephemeral zero-output WBIKD lock (deletable).
 
 **Intent integrity.** `broadcasts` has a composite foreign key to `actions(id, broadcast_intent)` with `ON UPDATE RESTRICT`, plus a `CHECK (intent != 'none')`. A broadcast row's intent is locked to its parent action's intent, and an internal action can never acquire one. The composite-FK gate.
 
-**Promotion gating.** `promotions` has the composite foreign key `promotions_action_intent_fkey` to `actions(id, broadcast_intent)` plus `promotions_broadcast_status_fkey` to `broadcasts(action_id, authorising_status)`. The CHECKs `promo_path` and `auth_not_rejected` forbid a broadcast-intent action from carrying a promotion that does not trace to an accepted broadcast row. A `REJECTED` broadcast cannot be the authoriser. The composite-FK gate, again.
+**Promotion gating.** `promotions` has the composite foreign keys `promotions_action_intent_fkey`, `(action_id, intent)` to `actions(id, broadcast_intent)`, and `promotions_broadcast_status_fkey`, `(action_id, authorising_status)` to `broadcasts(action_id, tx_status)`. The CHECKs `promo_path` and `auth_not_rejected` forbid a broadcast-intent action from carrying a promotion that does not trace to a non-rejected broadcast row. A `REJECTED` or `DOUBLE_SPEND_ATTEMPTED` broadcast cannot be the authoriser. The composite-FK gate, again.
 
-**Transmission grain.** `transmissions` has `UNIQUE(action_id, counterparty)`, so a retransmission to the same peer updates in place. The BRC-43 canonical hex CHECK on `counterparty` (`\A0[23][0-9a-f]{64}\z`) matches the engine-side validation exactly, so a malformed pubkey fails the same way at both layers.
+**Transmission grain.** `transmissions` has `UNIQUE(action_id, counterparty)`, so a retransmission to the same peer updates in place. On Postgres the `counterparty_shape` CHECK (`^0[23][0-9a-f]{64}$`) matches the engine-side validation (`\A0[23][0-9a-f]{64}\z`) exactly, so a malformed pubkey fails the same way at both layers; SQLite checks only the length and the `02`/`03` prefix.
 
-**Value sanity.** Length and range checks abound (migration 003): hashes are exactly 32 bytes, satoshis and heights are non-negative, descriptions are 5–50 characters, a merkle path may not exist without block context, and so on.
+**Value sanity.** Length and range checks abound (`001_create_schema.rb`): hashes are exactly 32 bytes, satoshis and heights are non-negative, descriptions are 5–50 characters, a merkle path may not exist without block context, and so on.
 
 ## Byte order in storage
 
-As described in [Transactions & BEEF](transactions-and-beef.md), the canonical stored form is **wire order** (raw SHA-256d output): `wtxid`, `merkle_root`, and block hashes are stored as raw bytes in `bytea`/`blob` columns. Display-order (reversed hex — what the wallet calls `dtxid`) appears only at the edges. The `display_txid` model concern provides the reversal for presentation. Keeping one representation in storage means uniqueness, joins, and comparisons never have to worry about which way round a hash is.
+As described in [Transactions & BEEF](transactions-and-beef.md), the canonical stored form is **wire order** (raw SHA-256d output): `wtxid`, `merkle_root`, and block hashes are stored as raw bytes in `bytea`/`blob` columns. Display-order (reversed hex — what the wallet calls `dtxid`) appears only at the edges. The `BSV::Wallet::Txid` refinement's `String#to_dtxid` does the reversal for presentation. Keeping one representation in storage means uniqueness, joins, and comparisons never have to worry about which way round a hash is.
 
 ## Backend-specific handling
 
@@ -119,23 +119,22 @@ A few semantics genuinely differ between the two databases, and the concrete `St
 - **`Store::SQLite`** enables WAL journal mode (database-wide) and the `foreign_keys` PRAGMA on *every* pooled connection (it is per-connection, not global). Because SQLite's `INSERT … ON CONFLICT DO NOTHING` always returns the last rowid even when nothing was inserted, `try_lock_input` re-queries to confirm it actually won the lock.
 - **`Store::Postgres`** loads the `pg_enum`, `pg_array`, and `pg_json` extensions and requires the `pg` gem (with a helpful error if it is missing). Postgres returns `nil` from a `DO NOTHING` conflict, so a truthy result is an unambiguous "this insert won".
 
-The `UTXOPool#select` path's lock semantics depend on getting this right, which is why it lives in the backend subclass rather than the shared base.
+Input locking (`Store#lock_inputs`, which `UTXOPool#select`'s candidates go through) depends on getting this right, which is why the result check lives in the backend subclass rather than the shared base.
 
 ## Migrations and schema evolution
 
-The schema ships as **three ordered migrations**. The split is functional, not historical — pre-release the project adopted an "amend in place" policy (#353), so migrations express the canonical end-state structure rather than recording every step that got there:
+The schema ships as **two migrations**. The split is functional, not historical — pre-release the project adopted an "amend in place" policy (#353), so migrations express the canonical end-state structure rather than recording every step that got there:
 
 | # | Migration | What it establishes |
 |---|-----------|---------------------|
-| 001 | `create_schema` | Every table in its end-state shape, the ARC `tx_status` enum, the `broadcast_intent` and `spendable_intent` enums (the latter replacing the former `output_type` per HLR #467), and the intent / promotion / spendability gating CHECKs that are inseparable from the CREATE TABLE statements. Includes `sse_cursors`, `promotions`, `transmissions`, `transmission_txids` and the `broadcasts.provider` column inline rather than as later additions. |
-| 002 | `action_id_cascade` | Adds denormalised `action_id` FK columns on the leaf tables with `ON DELETE CASCADE`, so an aborted action's rows are reclaimed cleanly without an application-side delete sweep. |
-| 003 | `schema_constraints` | All length, range, and parity checks; the BRC-43 hex CHECK on `transmissions.counterparty`; the `prevent_internal_action_delete` trigger. The former `prevent_outbound_spendable` trigger was removed in HLR #467 in favour of a declarative composite-FK + CHECK on `spendable` (see [`hot-path-design.md`](../reference/hot-path-design.md)). |
+| 001 | `create_schema` | Every table in its end-state shape: the `broadcast_intent`, ARC `tx_status`, `spendable_intent` (replacing the former `output_type`, HLR #467) and `verification_source` enums on Postgres; every CHECK, NOT NULL, UNIQUE and FK inline with its CREATE TABLE, including the denormalised `action_id` CASCADE FKs on the leaf tables, the length, range and parity checks, the BRC-43 hex CHECK on `transmissions.counterparty`, and the intent / promotion / spendability gates; and the indexes. The former `prevent_outbound_spendable` trigger was removed in HLR #467 in favour of a declarative composite FK + CHECK on `spendable` (see [`hot-path-design.md`](../reference/hot-path-design.md)). |
+| 002 | `triggers` | The guards a CHECK can't express because they read another table: the `check_internal_action_delete` BEFORE DELETE trigger on `actions` (and, on Postgres, its `prevent_internal_action_delete` function). |
 
 `migrate!` runs them idempotently at boot, so a fresh database and an existing one converge on the same shape. Once the gem ships post-release, the policy flips: schema changes will land as additive, ordered migrations again.
 
 ## Settings and housekeeping
 
-`settings` is a small key-value table for wallet configuration that needs to persist. `reap_stale_actions(threshold:)` is the housekeeping operation that clears abandoned, unpromoted actions and releases their locked inputs; in production it is driven by the daemon's reaper fibre.
+`settings` is a small key-value table for wallet configuration that needs to persist. The reaper is the housekeeping operation that clears abandoned, unpromoted actions and releases their locked inputs: `Store#stale_action_ids` finds them and `Store#reap_action` tears each one down. In production the daemon's `reaper` discovery loop drives it through `Engine::Reaper`.
 
 ## Related
 

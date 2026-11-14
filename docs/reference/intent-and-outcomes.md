@@ -31,7 +31,7 @@ Inference is `was this output meant to be ours?` answered by *does it have a `de
 
 A wallet operation is not one DB write. `create_action` writes `actions`, then `inputs`, then `outputs`; on success or failure it later writes `promotions`, `broadcasts`, `spendable`. These are atomic transitions through valid states (`principle-of-state.md`) — each commit moves the database from one valid configuration to another. Between transitions the row set is partial *by design*.
 
-If `Engine#promote_action_outputs` infers "was this output meant to be spendable?" from the shape of an `outputs` row, the inference rule has to be true at *every* intermediate state where promotion might fire. The shape changes across phases — a missing `derivation_prefix` might mean "outbound payment" at one moment, "not yet populated" at another, "outbound with provenance stripped" at a third — and inference cannot tell those apart. Only the original decision-maker knows which it is, and that knowledge has to be persisted at the point the decision is made.
+If `Store#promote_action_outputs` infers "was this output meant to be spendable?" from the shape of an `outputs` row, the inference rule has to be true at *every* intermediate state where promotion might fire. The shape changes across phases — a missing `derivation_prefix` might mean "outbound payment" at one moment, "not yet populated" at another, "outbound with provenance stripped" at a third — and inference cannot tell those apart. Only the original decision-maker knows which it is, and that knowledge has to be persisted at the point the decision is made.
 
 State the intent. The schema then guards every transition against rows that contradict it.
 
@@ -39,7 +39,7 @@ State the intent. The schema then guards every transition against rows that cont
 
 There is a stronger reason than intermediate states. Outcomes get deleted.
 
-`spendable` rows are deleted when an output is spent (ADR-004). That is correct — spendability is set membership, and spending removes the row. But it means *any* property inferred from "is there a `spendable` row?" disappears the moment the output is spent. The historical truth — *we meant to be able to spend this* — is gone.
+An output stops being spendable when an `inputs` row claims it, and its `spendable` row is deleted when it is relinquished or its action is rejected (ADR-004). That is correct — spendability is set membership over current state. But it means *any* property inferred from "is this output spendable?" disappears the moment the output is spent or relinquished. The historical truth — *we meant to be able to spend this* — is gone.
 
 If the intent has been stated on `outputs` (the immutable log, ADR-011), the truth survives the spend. The output row is still there; the intent column on it is still there; the audit query "what did we mean this output to be?" is still answerable a year later. If the intent was only inferred from `spendable`'s existence, the question has no answer once the row has been swept away.
 
@@ -52,11 +52,11 @@ Two intent points are settled in the schema today; further sites will accrete he
 | Intent | Grain | Column | Values | Settled by |
 |---|---|---|---|---|
 | `broadcast_intent` | per-action | `actions.broadcast_intent` | `delayed`, `inline`, `none` | #221, ADR-019 |
-| `spendable_intent` | per-output | `outputs.spendable_intent` | `spendable`, `none` | HLR #467, this PR |
+| `spendable_intent` | per-output | `outputs.spendable_intent` | `spendable`, `none` | HLR #467, ADR-031 |
 
 Both follow the same shape:
 
-- **Stated by the decision-maker** at the point the row is first created. `broadcast_intent` is set by `Engine#create_action`; `spendable_intent` is set by every CLI command, every Engine internal method, every `TxBuilder` change-output construction.
+- **Stated by the decision-maker** at the point the row is first created. `broadcast_intent` is written with the action row by `Store#create_action`, from the intent its caller states (`Engine#build_action`, or `none` on the internal paths); `spendable_intent` is set by every CLI command, every Engine internal method, every `TxBuilder` change-output construction.
 - **Persisted as an ENUM column** on the table whose grain matches the intent's variability — per-action on `actions`, per-output on `outputs`.
 - **Denormalised onto downstream tables** that need to enforce a cross-table consequence declaratively. `broadcasts.intent` denormalises `actions.broadcast_intent`; `spendable.spendable_intent` denormalises `outputs.spendable_intent`. The composite FK keeps the denormalised copy honest (it cannot disagree with its source). See [`hot-path-design.md`](hot-path-design.md) for the pattern.
 

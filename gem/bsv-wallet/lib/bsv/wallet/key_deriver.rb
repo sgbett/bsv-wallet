@@ -44,8 +44,8 @@ module BSV
       end
 
       # Strict variant of +validate_counterparty_hex!+ — lowercase hex only,
-      # mirroring the certificates pubkey-shape CHECK in migration 003
-      # (subject/certifier/verifier) and Engine::Transmission's
+      # mirroring the certificates +*_pubkey_shape+ CHECKs in
+      # +001_create_schema.rb+ (subject/certifier/verifier) and Engine::Transmission's
       # BRC43_COMPRESSED_LOWERCASE constant. Use this when the value is
       # destined for a column that has a lowercase-only CHECK; the looser
       # counterparty variant accepts mixed-case for derivation use.
@@ -58,8 +58,7 @@ module BSV
 
         raise BSV::Wallet::InvalidParameterError.new(
           param_name,
-          'lowercase-hex compressed pubkey (02|03 prefix + 64 hex chars; ' \
-          'matches the certificates schema CHECK in db/migrations/003)'
+          'lowercase-hex compressed pubkey (02|03 prefix + 64 hex chars)'
         )
       end
 
