@@ -271,5 +271,3 @@ The `.architecture/` directory contains the AI Software Architect framework:
 - **`decisions/adrs/`** — Architectural Decision Records
 - **`reviews/`** — architecture reviews and system analyses
 - **`config.yml`** — framework configuration
-
-Commands: `architecture-status`, `create-adr`, `specialist-review`, `architecture-review`, `list-members`
