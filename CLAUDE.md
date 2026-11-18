@@ -1,5 +1,13 @@
 # BSV Wallet — Project Instructions
 
+## Git
+
+Git tier: collaborative
+
+Git rules: `.claude/rules/git-workflow.md`, vendored from sgbett/dotfiles-claude; this repository's differences are below.
+
+- Releases: the version bump lands by PR and the tag is pushed after the merge; `/release wallet` runs in two parts, the first opening the release PR and the second, once it is merged, tagging the merge commit and publishing.
+
 ## Language Convention
 
 **Code identifiers** — American English. Method names, classes, schema columns, ENUM values, file names, constants. This is the only hard constraint: the BRC-100 spec defines `internalizeAction`, `randomizeOutputs`, etc., and mixing British Ruby identifiers (`internalise_action`) with American spec names creates confusion about which convention applies where.
